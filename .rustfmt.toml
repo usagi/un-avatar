@@ -1,0 +1,13 @@
+# stable `cargo fmt` 専用（rustfmt 1.8+）。
+# 旧来の nightly 限定オプションは削除。拡張ルールが必要ならローカルで
+# `rustfmt +nightly` や `cargo +nightly fmt` と別設定ファイルを使う運用に
+# 分離する。
+
+edition = "2021"
+max_width = 140
+newline_style = "Unix"
+hard_tabs = true
+use_field_init_shorthand = true
+use_try_shorthand = true
+force_explicit_abi = false
+merge_derives = true

@@ -1,0 +1,15 @@
+[package]
+name = "un-avatar-material"
+description = "UN Avatar — 材質モデル（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-types = { path = "../un-avatar-types" }
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+# tests/fixtures と同等の最小例（TOML）
+schema_version = "0.1"
+id = "network.usagi.un_avatar.plugin.sample_io"
+name = "Sample stdio plugin"
+version = "0.0.0"
+vendor = "USAGI.NETWORK"
+entry = "sample-io-plugin"
+protocol = "stdio-json-rpc"
+
+[[formats]]
+id = "io.un-avatar.example.avatar"
+extensions = ["exampleavatar"]
+can_import = true
+can_export = true

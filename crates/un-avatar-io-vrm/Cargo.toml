@@ -1,0 +1,21 @@
+[package]
+name = "un-avatar-io-vrm"
+description = "UN Avatar — VRM 0.x / VRM 1.0 import (glTF + extension parse)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { version = "0.32", features = ["bytemuck"] }
+gltf = { version = "1.4", features = ["import"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-io = { path = "../un-avatar-io" }
+un-avatar-io-gltf = { path = "../un-avatar-io-gltf" }
+un-avatar-types = { path = "../un-avatar-types" }
+
+[lints]
+workspace = true

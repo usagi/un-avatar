@@ -1,0 +1,19 @@
+[package]
+name = "un-avatar-core"
+description = "UN Avatar — UNA 内部表現の中核（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+un-avatar-types = { path = "../un-avatar-types" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

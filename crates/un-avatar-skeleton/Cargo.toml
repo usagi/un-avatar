@@ -1,0 +1,21 @@
+[package]
+name = "un-avatar-skeleton"
+description = "UN Avatar — SkeletonProfile / リターゲット（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+glam = { version = "0.32", features = ["bytemuck"] }
+serde = { workspace = true }
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-types = { path = "../un-avatar-types" }
+un-motion-frame = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

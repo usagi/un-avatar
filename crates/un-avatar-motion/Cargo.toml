@@ -1,0 +1,17 @@
+[package]
+name = "un-avatar-motion"
+description = "UN Avatar — UNMotionFrame / モーション入力（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-types = { path = "../un-avatar-types" }
+un-avatar-vmc = { path = "../un-avatar-vmc" }
+un-motion-frame = { workspace = true }
+
+[lints]
+workspace = true

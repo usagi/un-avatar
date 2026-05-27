@@ -1,0 +1,17 @@
+[package]
+name = "un-avatar-io-una"
+description = "UN Avatar — UNA 形式の読み書き（bootstrap / v0 TOML）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-io = { path = "../un-avatar-io" }
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,57 @@
+title = "Main Avatar"
+transparent = true
+input_passthrough = false
+decorations = false
+aa = "off"
+background_color = [0.0, 0.0, 0.0]
+show_fps_in_title = true
+
+[render_quality]
+aa = "off"
+texture_resolution_limit = "off"
+texture_compression = "source"
+mipmap_filter = "mitchell"
+render_backend = "dx12"
+block_compression_encoder = "gpu"
+block_compression_cpu_threads = 4
+processed_texture_cache = true
+
+[profile]
+id = "main-avatar"
+display_name = "Main Avatar"
+allow_multiple_renderers = false
+favorite = true
+tags = ["streaming", "main"]
+notes = "OBS用の通常配信設定"
+
+[window]
+visible = true
+drag_from_anywhere = true
+decorations = false
+transparent = true
+input_passthrough = false
+always_on_top = false
+width = 800
+height = 600
+
+[motion.vmc_udp]
+enabled = true
+address = "0.0.0.0:39539"
+
+[motion.unmotion_zenoh]
+enabled = false
+key = ""
+
+[output.spout2]
+enabled = true
+name = "UN Avatar Spout"
+width = 1280
+height = 720
+
+[debug]
+scene = false
+vmc = false
+morph = false
+
+[diagnostics]
+relax_iris_alpha = false

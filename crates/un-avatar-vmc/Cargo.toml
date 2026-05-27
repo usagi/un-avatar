@@ -1,0 +1,16 @@
+[package]
+name = "un-avatar-vmc"
+description = "UN Avatar — VMC Protocol (OSC/UDP) decode and UNMotionFrame assembly (Phase 1.7–1.8)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rosc = "0.11"
+serde = { workspace = true }
+un-motion-frame = { workspace = true }
+
+[lints]
+workspace = true

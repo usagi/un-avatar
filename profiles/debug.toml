@@ -1,0 +1,56 @@
+title = "Debug View"
+transparent = false
+input_passthrough = false
+decorations = true
+aa = "off"
+background_color = [0.12, 0.14, 0.18]
+show_fps_in_title = true
+
+[render_quality]
+aa = "off"
+texture_resolution_limit = "off"
+texture_compression = "source"
+mipmap_filter = "mitchell"
+render_backend = "dx12"
+block_compression_encoder = "gpu"
+block_compression_cpu_threads = 4
+processed_texture_cache = true
+
+[profile]
+id = "debug-view"
+display_name = "Debug View"
+allow_multiple_renderers = false
+favorite = false
+tags = ["debug"]
+notes = "Diagnostics and renderer inspection profile"
+
+[window]
+visible = true
+drag_from_anywhere = false
+decorations = true
+transparent = false
+input_passthrough = false
+always_on_top = false
+width = 800
+height = 600
+
+[motion.vmc_udp]
+enabled = false
+address = "0.0.0.0:39539"
+
+[motion.unmotion_zenoh]
+enabled = false
+key = ""
+
+[output.spout2]
+enabled = false
+name = "UN Avatar Debug"
+
+[debug]
+scene = true
+vmc = true
+morph = true
+material_dump = true
+
+[diagnostics]
+relax_iris_alpha = true

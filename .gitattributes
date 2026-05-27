@@ -1,0 +1,19 @@
+# Keep repository text files normalized to LF, including on Windows.
+* text=auto eol=lf
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.glb binary
+*.vrm binary
+*.fbx binary
+*.blend binary
+*.dll binary
+*.exe binary
+*.lib binary
+*.pdb binary
+*.spv binary

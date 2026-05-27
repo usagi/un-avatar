@@ -1,0 +1,42 @@
+[workspace]
+members = [
+ "apps/un-avatar-supervisor/src-tauri",
+ "crates/un-avatar-render-wgpu",
+ "crates/un-avatar-types",
+ "crates/un-avatar-core",
+ "crates/un-avatar-skeleton",
+ "crates/un-avatar-material",
+ "crates/un-avatar-motion",
+ "crates/un-avatar-vmc",
+ "crates/un-avatar-zenoh",
+ "crates/un-avatar-io",
+ "crates/un-avatar-io-gltf",
+ "crates/un-avatar-io-vrm",
+ "crates/un-avatar-io-una",
+ "crates/un-avatar-plugin-host",
+ "plugins/sample-io-plugin",
+ "crates/un-avatar-cli",
+ "xtask",
+]
+default-members = ["apps/un-avatar-supervisor/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+authors = ["usagi / USAGI.NETWORK"]
+license = "MIT"
+repository = "https://github.com/usagi/un-avatar"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+# https://crates.io/crates/un-motion-frame / un-motion-frame-zenoh (registry で統一)
+un-motion-frame = "1.1"
+un-motion-frame-zenoh = { version = "1.0", default-features = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+crossbeam-channel = "0.5"
+zenoh = { version = "1.9.0", default-features = false, features = ["transport_tcp", "transport_udp"] }

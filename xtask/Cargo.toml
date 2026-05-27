@@ -1,0 +1,20 @@
+[package]
+name = "xtask"
+description = "UN Avatar — 開発用タスク_runner（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+toml = { workspace = true }
+zip = { version = "2.3", default-features = false, features = ["deflate"] }
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"

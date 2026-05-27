@@ -1,0 +1,23 @@
+[package]
+name = "un-avatar-zenoh"
+description = "UN Avatar 側で UNMotionFrame を Zenoh から受信するための薄いランタイムラッパー。"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["zenoh-transport"]
+# 実 Zenoh セッション (`UnAvatarZenohReceiver::declare_zenoh_default`) を有効化する。
+# OFF にすれば In-Memory / Replay バックエンド経由のみで使えるので、テスト build や
+# Zenoh をリンクしたくない CI 用の build で軽量化できる。
+zenoh-transport = ["un-motion-frame-zenoh/zenoh-transport"]
+
+[dependencies]
+un-motion-frame = { workspace = true }
+un-motion-frame-zenoh = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[lints]
+workspace = true

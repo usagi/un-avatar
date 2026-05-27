@@ -1,0 +1,17 @@
+# fmt --check → check --workspace → test --workspace（`xtask ci` と同等）
+name: CI
+
+on:
+  push:
+    branches: [init, main]
+  pull_request:
+    branches: [init, main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo xtask ci (fmt/check/test + CLI smoke)
+        run: cargo run --locked -p xtask -- ci

@@ -1,0 +1,215 @@
+import type {
+  MotionLabelData,
+  OutputLabelData,
+  WindowLabelData,
+} from "./profileLabels";
+import type {
+  RuntimeConnectionStatusLabelData,
+  RuntimeQualityStatusLabelData,
+  RuntimeStartupStatusLabelData,
+} from "./runtimeLabels";
+
+export type RendererState =
+  | "Starting"
+  | "Running"
+  | "Stopping"
+  | "Exited"
+  | "Crashed"
+  | "Degraded";
+
+export type PrimaryMotionSource = "vmc" | "unmotion_zenoh";
+
+export type TextureRuntimeSummary = {
+  image_count: number;
+  resized_count: number;
+  compression_mode: string | null;
+  compression_bc_supported: boolean;
+  compression_astc_supported: boolean;
+  compression_etc2_supported: boolean;
+  compressed_count: number;
+  compression_fallback_count: number;
+  compressed_mip_bytes: number;
+  cache_enabled: boolean;
+  cache_hits: number;
+  cache_misses: number;
+  cache_writes: number;
+  compressed_cache_hits: number;
+  compressed_cache_misses: number;
+  compressed_cache_writes: number;
+  source_bytes: number;
+  uploaded_mip_bytes: number;
+  max_source_dimension: number;
+  max_uploaded_dimension: number;
+  limit_max_dimension: number | null;
+};
+
+export type RendererPaneTab =
+  | "overview"
+  | "controls"
+  | "expressions"
+  | "diagnostics";
+
+export type RendererCameraSnapshot = {
+  target: [number, number, number];
+  longitude_deg: number;
+  latitude_deg: number;
+  radius: number;
+  diagonal_fov_deg: number;
+};
+
+export type RendererWindowPatch = {
+  decorations?: boolean;
+  transparent?: boolean;
+  inputPassthrough?: boolean;
+  alwaysOnTop?: boolean;
+  minimized?: boolean;
+};
+
+export type RendererRef = {
+  id: number;
+  pid: number | null;
+};
+
+export type RendererIdentityView = RendererRef & {
+  name: string;
+  state: string;
+  avatar_path: string | null;
+  manifest_path: string | null;
+};
+
+export type RendererOutputView = RendererIdentityView
+  & MotionLabelData
+  & OutputLabelData;
+
+export type RendererStageView = RendererOutputView & WindowLabelData;
+
+export type RendererTableView = RendererOutputView & {
+  exit_code: number | null;
+};
+
+export type RendererInstance = RendererStageView & {
+  pid: number | null;
+  uptime_secs: number;
+  avatar_path: string | null;
+  manifest_path: string | null;
+  spout_width: number | null;
+  spout_height: number | null;
+  aa: string;
+  window_width: number;
+  window_height: number;
+  last_stderr: string | null;
+  stderr_tail: string[];
+  exit_code: number | null;
+  primary_motion_source: PrimaryMotionSource;
+};
+
+export type RendererRuntimeStatus = {
+  id: number;
+  state: RendererState;
+  pid: number | null;
+  connected: boolean;
+  protocol: string | null;
+  control_capabilities: string[];
+  uptime_secs: number;
+  fps: number | null;
+  cpu_ms: number | null;
+  gpu_ms: number | null;
+  ram_mb: number | null;
+  surface_width: number | null;
+  surface_height: number | null;
+  aa: string | null;
+  texture_resolution_limit: string | null;
+  texture_compression: string | null;
+  mipmap_filter: string | null;
+  processed_texture_cache: boolean | null;
+  texture_summary: TextureRuntimeSummary | null;
+  spout_available: boolean;
+  spout_enabled: boolean;
+  spout_name: string | null;
+  spout_width: number | null;
+  spout_height: number | null;
+  spout_frames_attempted: number;
+  spout_frames_sent: number;
+  spout_frame_failures: number;
+  spout_consecutive_failures: number;
+  spout_last_send_ok: boolean | null;
+  spout_last_readback_ms: number | null;
+  spout_last_send_ms: number | null;
+  spout_last_total_ms: number | null;
+  spout_sender_initialized: boolean | null;
+  spout_sender_width: number | null;
+  spout_sender_height: number | null;
+  expression_presets: string[];
+  look_at_enabled: boolean;
+  look_at_clamp_deg: number | null;
+  apply_vmc_root_translation: boolean;
+  unmotion_zenoh_enabled: boolean;
+  unmotion_zenoh_key: string;
+  unmotion_zenoh_received_frames: number;
+  motion_applied_frames: number;
+  unmotion_zenoh_received_fps?: number;
+  motion_applied_fps?: number;
+  primary_motion_source: PrimaryMotionSource;
+  show_axes: boolean;
+  show_bone_colliders: boolean;
+  bone_collider_count: number;
+  bone_collider_source: string;
+  camera_locked: boolean;
+  window_focused: boolean;
+  window_activation_seq: number;
+  minimized: boolean;
+  camera: RendererCameraSnapshot | null;
+  clear_color: [number, number, number, number];
+  transparent_window: boolean;
+  input_passthrough: boolean;
+  startup_phase: string | null;
+  startup_progress: [number, number] | null;
+  startup_message: string | null;
+  window_position: [number, number] | null;
+  window_inner_size: [number, number] | null;
+  note: string | null;
+};
+
+export type RendererOverviewMotionStatus = Omit<Pick<
+  RendererRuntimeStatus,
+  | "unmotion_zenoh_enabled"
+  | "unmotion_zenoh_received_frames"
+  | "unmotion_zenoh_received_fps"
+  | "motion_applied_frames"
+  | "motion_applied_fps"
+>, "unmotion_zenoh_received_fps" | "motion_applied_fps"> & {
+  unmotion_zenoh_received_fps?: number | null;
+  motion_applied_fps?: number | null;
+};
+
+export type RendererDiagnosticsData = Pick<
+  RendererInstance,
+  "last_stderr" | "stderr_tail" | "exit_code"
+>;
+
+export type RendererRuntimeDiagnosticsData = Pick<RendererRuntimeStatus, "note">;
+
+export type RendererStageActionData = Pick<
+  RendererInstance,
+  "id" | "pid" | "manifest_path"
+>;
+
+export type RendererStageProfile = {
+  id: string;
+};
+
+export type RendererOverviewData = MotionLabelData & Pick<
+  RendererInstance,
+  "name" | "pid" | "uptime_secs" | "manifest_path"
+>;
+
+export type RendererOverviewRuntimeStatus =
+  & RuntimeConnectionStatusLabelData
+  & RuntimeStartupStatusLabelData
+  & Pick<RendererRuntimeStatus, "control_capabilities" | "note">;
+
+export type RendererOverviewStatus =
+  & RendererOverviewRuntimeStatus
+  & RuntimeQualityStatusLabelData
+  & RendererOverviewMotionStatus
+  & Pick<RendererRuntimeStatus, "uptime_secs">;

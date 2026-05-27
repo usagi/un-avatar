@@ -1,0 +1,14 @@
+# Sample IO plugin — オンディスク manifest 正本（docs/development-guidelines.md の TOML 優先方針）
+schema_version = "0.1"
+id = "network.usagi.un_avatar.plugin.sample_io"
+name = "Sample IO plugin (stdio)"
+version = "0.0.0"
+vendor = "USAGI.NETWORK"
+entry = "sample-io-plugin"
+protocol = "stdio-json-rpc"
+
+[[formats]]
+id = "io.un-avatar.example.avatar"
+extensions = ["exampleavatar"]
+can_import = true
+can_export = true

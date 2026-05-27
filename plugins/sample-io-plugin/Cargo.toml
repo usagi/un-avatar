@@ -1,0 +1,23 @@
+[package]
+name = "sample-io-plugin"
+description = "UN Avatar — Commit 2.5 検証用・stdio JSON-RPC 外部 IO サンプル"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sample-io-plugin"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+un-avatar-io = { path = "../../crates/un-avatar-io" }
+
+[dev-dependencies]
+un-avatar-plugin-host = { path = "../../crates/un-avatar-plugin-host" }
+
+[lints]
+workspace = true

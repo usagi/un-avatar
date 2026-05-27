@@ -1,0 +1,14 @@
+title = "startup-failure-fixture"
+avatar_path = "fixtures/startup-failure/invalid-avatar.glb"
+decorations = true
+transparent = false
+clear_color = [0.0, 0.0, 0.0, 1.0]
+
+[window]
+width = 960
+height = 720
+
+[render_quality]
+texture_compression = "source"
+processed_texture_cache = true
+

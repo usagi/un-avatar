@@ -1,0 +1,758 @@
+//! UN Avatar — UNA 内部表現の中核（bootstrap）。
+//!
+//! 設計: `docs/crate-io-plugin-plan.md` §4.2
+
+#![forbid(unsafe_code)]
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use un_avatar_types::{FormatId, HumanoidProfile};
+
+/// 材質のシェーディング種別（MaterialPolicy v0・レンダラーが解釈）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaShadingModel {
+	/// 簡易ライト（Lambert）＋ベース色テクスチャ。
+	#[default]
+	LitLambert,
+	/// `KHR_materials_unlit` 相当。
+	Unlit,
+	/// MToon の完全再現ではなく、セル寄りトーンで破綻しにくく見せる。
+	MToonLike,
+}
+
+impl UnaShadingModel {
+	/// WGSL `drawu.params.x` 用の判別子。
+	pub fn as_draw_discriminant(self) -> f32 {
+		match self {
+			UnaShadingModel::LitLambert => 0.0,
+			UnaShadingModel::Unlit => 1.0,
+			UnaShadingModel::MToonLike => 2.0,
+		}
+	}
+}
+
+/// glTF `alphaMode` 相当（`MASK` は `alphaCutoff` による切り抜き）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaAlphaMode {
+	#[default]
+	Opaque,
+	Mask,
+	Blend,
+}
+
+impl UnaAlphaMode {
+	/// WGSL `drawu.params.y`: `OPAQUE` = 0、`MASK` = 1（discard + 不透明出し）、`BLEND` = 2（テクスチャ α をそのまま出す・ブレンドパス用）。
+	pub fn as_shader_alpha_kind(self) -> f32 {
+		match self {
+			UnaAlphaMode::Opaque => 0.0,
+			UnaAlphaMode::Mask => 1.0,
+			UnaAlphaMode::Blend => 2.0,
+		}
+	}
+}
+
+/// 1 モーフターゲット分のデルタ（頂点数はベース `UnaMeshBuffers::positions` と一致）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaMorphTargetDeltas {
+	pub position_deltas: Vec<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub normal_deltas: Option<Vec<[f32; 3]>>,
+}
+
+/// VRM の式プリセット 1 件（BlendShapeClip / Expression に対応する正規化形）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaExpressionPreset {
+	pub name: String,
+	#[serde(default)]
+	pub binds: Vec<UnaMorphTargetBind>,
+}
+
+/// 式ウェイト 1.0 のときに効くモーフバインド（mesh / primitive / morph index）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaMorphTargetBind {
+	pub mesh_index: usize,
+	pub primitive_index: usize,
+	pub morph_target_index: usize,
+	#[serde(default = "one_f32")]
+	pub weight_scale: f32,
+}
+
+/// VRM から構造化した式カタログ（`source` JSON からの投影。正本は引き続き `UnaVrmExtension::source`）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaExpressionCatalog {
+	#[serde(default)]
+	pub presets: Vec<UnaExpressionPreset>,
+}
+
+/// ランタイムの式プリセットウェイト（0..=1 推奨）。キーは `UnaExpressionPreset::name`。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaExpressionWeights {
+	#[serde(default)]
+	pub preset_weights: BTreeMap<String, f32>,
+}
+
+/// VRM Secondary Animation / SpringBone の 1 チェーン（bootstrap）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSpringBoneGroup {
+	#[serde(default)]
+	pub comment: String,
+	/// UN Avatar 側で推定・編集する SpringBone 物理カテゴリ。
+	///
+	/// 永続 schema では固定 enum にしない。GUI の表示名変更やユーザー定義カテゴリ追加で
+	/// 既存ファイルを壊さないため、文字列 ID を正本にする。
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub category: String,
+	/// VRM 0 の `stiffiness` / 1 の関節剛性に相当（大きいほど理想姿勢に引く）。
+	#[serde(default = "one_f32")]
+	pub stiffness: f32,
+	#[serde(default)]
+	pub gravity_power: f32,
+	#[serde(default = "default_spring_gravity_dir")]
+	pub gravity_dir: [f32; 3],
+	#[serde(default = "default_spring_drag")]
+	pub drag_force: f32,
+	/// VRM 0 `center` が非負のときのノードインデックス。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub center_node: Option<usize>,
+	#[serde(default)]
+	pub hit_radius: f32,
+	/// glTF ノードインデックスのチェーン（親→子）。
+	pub bone_node_indices: Vec<usize>,
+}
+
+fn default_spring_gravity_dir() -> [f32; 3] {
+	[0.0, -1.0, 0.0]
+}
+
+fn default_spring_drag() -> f32 {
+	0.4
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaSpringBoneSettings {
+	#[serde(default)]
+	pub groups: Vec<UnaSpringBoneGroup>,
+}
+
+/// glTF メッシュ default + 表情プリセットから、当該 primitive のモーフウェイトを合成する。
+pub fn morph_weights_for_primitive(
+	mesh_bufs: &UnaMeshBuffers,
+	catalog: Option<&UnaExpressionCatalog>,
+	w_expr: Option<&UnaExpressionWeights>,
+	mesh_index: usize,
+	primitive_index: usize,
+) -> Vec<f32> {
+	let n = mesh_bufs.morph_targets.len();
+	if n == 0 {
+		return Vec::new();
+	}
+	let mut w = if mesh_bufs.default_morph_weights.len() == n {
+		mesh_bufs.default_morph_weights.clone()
+	} else {
+		let mut v = mesh_bufs.default_morph_weights.clone();
+		v.resize(n, 0.0);
+		v.truncate(n);
+		v
+	};
+	let Some(cat) = catalog else { return w };
+	let Some(ew) = w_expr else { return w };
+	for preset in &cat.presets {
+		let pw = ew.preset_weights.get(&preset.name).copied().unwrap_or(0.0);
+		if pw == 0.0 {
+			continue;
+		}
+		for b in &preset.binds {
+			if b.mesh_index != mesh_index || b.primitive_index != primitive_index {
+				continue;
+			}
+			let Some(slot) = w.get_mut(b.morph_target_index) else {
+				continue;
+			};
+			*slot = (*slot + pw * b.weight_scale).clamp(0.0, 1.0);
+		}
+	}
+	w
+}
+
+/// UNA ドキュメント。`scene` はインポート済みシーンのスナップショット（スキーマは段階的に拡張）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaDocument {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub scene: Option<UnaSceneSnapshot>,
+	/// VRM 0.x / VRM 1.0 拡張ブロック（インポート時のみ）。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub vrm: Option<UnaVrmExtension>,
+	/// Humanoid ボーン → glTF ノードインデックス（リターゲット用・VRM 等が設定）。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub humanoid_profile: Option<HumanoidProfile>,
+	/// VRM 式→モーフバインド（表示・VMC 先の参照用）。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub expression_catalog: Option<UnaExpressionCatalog>,
+	/// 式プリセットの現在ウェイト。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub expression_weights: Option<UnaExpressionWeights>,
+	/// VRM SpringBone / secondaryAnimation から取り込んだ揺れもの用チェーン（ランタイムで更新）。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub spring_bones: Option<UnaSpringBoneSettings>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaNodeConstraintAxis {
+	X,
+	Y,
+	Z,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaNodeConstraintAimAxis {
+	PositiveX,
+	NegativeX,
+	PositiveY,
+	NegativeY,
+	PositiveZ,
+	NegativeZ,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaNodeConstraintKind {
+	Roll { axis: UnaNodeConstraintAxis },
+	Aim { axis: UnaNodeConstraintAimAxis },
+	Rotation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaNodeConstraint {
+	pub target_node: usize,
+	pub source_node: usize,
+	#[serde(default = "one_f32")]
+	pub weight: f32,
+	pub kind: UnaNodeConstraintKind,
+}
+
+/// VRM 固有メタ／Humanoid／MToon ヒントと、拡張 JSON 正本（ブレンドシェイプ・表情・SpringBone 等は `source` に完全保持）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaVrmExtension {
+	pub spec_version: String,
+	#[serde(default)]
+	pub meta: Value,
+	/// 正規化ボーン名（小文字）→ ノードインデックス。
+	#[serde(default)]
+	pub humanoid_bones: BTreeMap<String, usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub mtoon_materials_v0: Vec<UnaVrm0MtoonMaterialEntry>,
+	/// glTF `materials` 配列インデックス（`VRMC_materials_mtoon` 付き）。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub mtoon_material_indices_v1: Vec<usize>,
+	pub source: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaVrm0MtoonMaterialEntry {
+	pub material_index: usize,
+	pub shader_name: String,
+	pub raw: Value,
+}
+
+/// シーンの読み取り専用スナップショット（glTF 等からの bootstrap 用）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnaSceneSnapshot {
+	/// `nodes[*].mesh` が参照するメッシュ（1 要素 = glTF mesh、内側ベクトル = primitive）。
+	pub meshes: Vec<Vec<UnaMeshBuffers>>,
+	pub materials: Vec<UnaMaterialPbr>,
+	pub images: Vec<UnaImageRgba>,
+	/// glTF `skins` と同順。joint の番号はこの配列内のインデックス（頂点 JOINTS は 0 始まり・スキン局所）。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub skins: Vec<UnaSkin>,
+	pub nodes: Vec<UnaSceneNode>,
+	pub roots: Vec<usize>,
+	/// VRM 1 `VRMC_node_constraint` 由来のノード拘束。target/source は `nodes` インデックス。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub node_constraints: Vec<UnaNodeConstraint>,
+}
+
+/// 1 スキン分のジョイントノード（シーン `nodes` のインデックス）と逆バインド行列（列主序 16 floats・`transform` と同じ並び）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaSkin {
+	pub joint_nodes: Vec<usize>,
+	pub inverse_bind_matrices: Vec<[f32; 16]>,
+}
+
+/// ノード局所変換（列主序 4×4・WGSL / glTF と同趣）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneNode {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	#[serde(with = "col16")]
+	pub transform: [f32; 16],
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub children: Vec<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mesh: Option<usize>,
+	/// glTF `skin` インデックス（`UnaSceneSnapshot::skins`）。メッシュ付きノードのみ。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub skin: Option<usize>,
+}
+
+mod col16 {
+	use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+	pub fn serialize<S>(v: &[f32; 16], s: S) -> Result<S::Ok, S::Error>
+	where
+		S: Serializer,
+	{
+		v.as_slice().serialize(s)
+	}
+
+	pub fn deserialize<'de, D>(d: D) -> Result<[f32; 16], D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		<[f32; 16]>::deserialize(d)
+	}
+}
+
+/// メッシュ 1 primitive 分。`joints` / `weights` が無い場合は剛体メッシュ（JOINTS_0 はパレット 0 のみ使用）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaMeshBuffers {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	pub positions: Vec<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub normals: Option<Vec<[f32; 3]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tex_coords_0: Option<Vec<[f32; 2]>>,
+	/// スキン内ジョイントインデックス（頂点ごと 4 本）。未使用スロットは 0。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub joints: Option<Vec<[u16; 4]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub weights: Option<Vec<[f32; 4]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub indices: Option<Vec<u32>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub material_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub morph_targets: Vec<UnaMorphTargetDeltas>,
+	/// glTF `mesh.weights` のコピー（長さは `morph_targets` と一致する想定）。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub default_morph_weights: Vec<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaMaterialPbr {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	#[serde(default)]
+	pub double_sided: bool,
+	pub base_color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub base_color_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub normal_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub normal_texture_scale: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub occlusion_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub occlusion_texture_strength: f32,
+	#[serde(default)]
+	pub emissive_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub emissive_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub metallic_factor: f32,
+	#[serde(default = "one_f32")]
+	pub roughness_factor: f32,
+	#[serde(default)]
+	pub shading: UnaShadingModel,
+	#[serde(default)]
+	pub alpha_mode: UnaAlphaMode,
+	/// glTF `alphaCutoff`（`MASK` 時。未指定の既定は 0.5）。
+	#[serde(default = "default_alpha_cutoff")]
+	pub alpha_cutoff: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mtoon: Option<UnaMtoonMaterial>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum UnaMtoonOutlineWidthMode {
+	#[default]
+	None,
+	WorldCoordinates,
+	ScreenCoordinates,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaMtoonMaterial {
+	#[serde(default)]
+	pub transparent_with_z_write: bool,
+	#[serde(default)]
+	pub render_queue_offset_number: i32,
+	#[serde(default)]
+	pub shade_color_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub shade_multiply_texture_index: Option<usize>,
+	#[serde(default)]
+	pub shading_shift_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub shading_shift_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub shading_shift_texture_scale: f32,
+	#[serde(default = "default_mtoon_shading_toony")]
+	pub shading_toony_factor: f32,
+	#[serde(default = "default_mtoon_gi_equalization")]
+	pub gi_equalization_factor: f32,
+	#[serde(default = "one_vec3")]
+	pub matcap_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub matcap_texture_index: Option<usize>,
+	#[serde(default)]
+	pub parametric_rim_color_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rim_multiply_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub rim_lighting_mix_factor: f32,
+	#[serde(default = "default_mtoon_rim_fresnel_power")]
+	pub parametric_rim_fresnel_power_factor: f32,
+	#[serde(default)]
+	pub parametric_rim_lift_factor: f32,
+	#[serde(default)]
+	pub outline_width_mode: UnaMtoonOutlineWidthMode,
+	#[serde(default)]
+	pub outline_width_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub outline_width_multiply_texture_index: Option<usize>,
+	#[serde(default)]
+	pub outline_color_factor: [f32; 3],
+	#[serde(default = "one_f32")]
+	pub outline_lighting_mix_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub uv_animation_mask_texture_index: Option<usize>,
+	#[serde(default)]
+	pub uv_animation_scroll_x_speed_factor: f32,
+	#[serde(default)]
+	pub uv_animation_scroll_y_speed_factor: f32,
+	#[serde(default)]
+	pub uv_animation_rotation_speed_factor: f32,
+}
+
+impl Default for UnaMtoonMaterial {
+	fn default() -> Self {
+		Self {
+			transparent_with_z_write: false,
+			render_queue_offset_number: 0,
+			shade_color_factor: [0.0, 0.0, 0.0],
+			shade_multiply_texture_index: None,
+			shading_shift_factor: 0.0,
+			shading_shift_texture_index: None,
+			shading_shift_texture_scale: 1.0,
+			shading_toony_factor: default_mtoon_shading_toony(),
+			gi_equalization_factor: default_mtoon_gi_equalization(),
+			matcap_factor: one_vec3(),
+			matcap_texture_index: None,
+			parametric_rim_color_factor: [0.0, 0.0, 0.0],
+			rim_multiply_texture_index: None,
+			rim_lighting_mix_factor: 1.0,
+			parametric_rim_fresnel_power_factor: default_mtoon_rim_fresnel_power(),
+			parametric_rim_lift_factor: 0.0,
+			outline_width_mode: UnaMtoonOutlineWidthMode::None,
+			outline_width_factor: 0.0,
+			outline_width_multiply_texture_index: None,
+			outline_color_factor: [0.0, 0.0, 0.0],
+			outline_lighting_mix_factor: 1.0,
+			uv_animation_mask_texture_index: None,
+			uv_animation_scroll_x_speed_factor: 0.0,
+			uv_animation_scroll_y_speed_factor: 0.0,
+			uv_animation_rotation_speed_factor: 0.0,
+		}
+	}
+}
+
+fn one_f32() -> f32 {
+	1.0
+}
+
+fn one_vec3() -> [f32; 3] {
+	[1.0, 1.0, 1.0]
+}
+
+fn default_mtoon_shading_toony() -> f32 {
+	0.9
+}
+
+fn default_mtoon_gi_equalization() -> f32 {
+	0.9
+}
+
+fn default_mtoon_rim_fresnel_power() -> f32 {
+	5.0
+}
+
+fn default_alpha_cutoff() -> f32 {
+	0.5
+}
+
+impl Default for UnaMaterialPbr {
+	fn default() -> Self {
+		Self {
+			name: None,
+			double_sided: false,
+			base_color_factor: [1.0, 1.0, 1.0, 1.0],
+			base_color_texture_index: None,
+			normal_texture_index: None,
+			normal_texture_scale: 1.0,
+			occlusion_texture_index: None,
+			occlusion_texture_strength: 1.0,
+			emissive_factor: [0.0, 0.0, 0.0],
+			emissive_texture_index: None,
+			metallic_factor: 1.0,
+			roughness_factor: 1.0,
+			shading: UnaShadingModel::default(),
+			alpha_mode: UnaAlphaMode::default(),
+			alpha_cutoff: default_alpha_cutoff(),
+			mtoon: None,
+		}
+	}
+}
+
+/// 解読済み RGBA8（ベースカラー用）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaImageRgba {
+	pub width: u32,
+	pub height: u32,
+	pub rgba: Vec<u8>,
+}
+
+/// レポート行の重大度（`crate-io-plugin-plan.md` §7.4 の分類）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportSeverity {
+	Info,
+	Warning,
+	Error,
+	Fatal,
+}
+
+/// 機械可読な 1 行（コード・重大度付き）。`messages` と併置し、段階的に移行する。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportMessage {
+	pub severity: ReportSeverity,
+	pub text: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub code: Option<String>,
+}
+
+impl ReportMessage {
+	pub fn info(text: impl Into<String>) -> Self {
+		Self {
+			severity: ReportSeverity::Info,
+			text: text.into(),
+			code: None,
+		}
+	}
+
+	pub fn warning(text: impl Into<String>) -> Self {
+		Self {
+			severity: ReportSeverity::Warning,
+			text: text.into(),
+			code: None,
+		}
+	}
+}
+
+/// import 全体の成否（`crate-io-plugin-plan.md` §7.4）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportStatus {
+	#[default]
+	Success,
+	PartialSuccess,
+	Failed,
+}
+
+/// 拡張ブロブとして保持した範囲（§7.4・フィールドは段階的に増やす）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreservedExtension {
+	pub id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub note: Option<String>,
+}
+
+/// 近似変換の記録（§7.4）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approximation {
+	pub feature: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub detail: Option<String>,
+}
+
+/// 失われた機能の記録（§7.4）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LostFeature {
+	pub feature: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub detail: Option<String>,
+}
+
+/// import の集計レポート（§7.4。`messages` / `diagnostics` は運用上併用）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportReport {
+	/// 人間向けフラットメッセージ（ログ・後方互換用）。
+	pub messages: Vec<String>,
+	/// 構造化診断（JSON レポート・ツール連携用）。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub diagnostics: Vec<ReportMessage>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_format: Option<FormatId>,
+	#[serde(default, skip_serializing_if = "is_default_report_status")]
+	pub status: ReportStatus,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub preserved_extensions: Vec<PreservedExtension>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub approximations: Vec<Approximation>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub lost_features: Vec<LostFeature>,
+}
+
+fn is_default_report_status(s: &ReportStatus) -> bool {
+	matches!(s, ReportStatus::Success)
+}
+
+impl ImportReport {
+	pub fn push_info(&mut self, text: impl Into<String>) {
+		let t = text.into();
+		self.messages.push(t.clone());
+		self.diagnostics.push(ReportMessage::info(t));
+	}
+}
+
+/// export の集計レポート。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExportReport {
+	pub messages: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub diagnostics: Vec<ReportMessage>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub target_format: Option<FormatId>,
+	#[serde(default, skip_serializing_if = "is_default_report_status")]
+	pub status: ReportStatus,
+}
+
+impl ExportReport {
+	pub fn push_info(&mut self, text: impl Into<String>) {
+		let t = text.into();
+		self.messages.push(t.clone());
+		self.diagnostics.push(ReportMessage::info(t));
+	}
+}
+
+#[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn morph_weights_merge_expression_preset() {
+		let mesh = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tex_coords_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![UnaMorphTargetDeltas {
+				position_deltas: vec![[0.0; 3]],
+				normal_deltas: None,
+			}],
+			default_morph_weights: vec![0.0],
+		};
+		let cat = UnaExpressionCatalog {
+			presets: vec![UnaExpressionPreset {
+				name: "smile".into(),
+				binds: vec![UnaMorphTargetBind {
+					mesh_index: 0,
+					primitive_index: 0,
+					morph_target_index: 0,
+					weight_scale: 1.0,
+				}],
+			}],
+		};
+		let mut ew = UnaExpressionWeights::default();
+		ew.preset_weights.insert("smile".into(), 0.5);
+		let w = morph_weights_for_primitive(&mesh, Some(&cat), Some(&ew), 0, 0);
+		assert_eq!(w.len(), 1);
+		assert!((w[0] - 0.5).abs() < 1e-6);
+	}
+
+	#[test]
+	fn morph_weights_clamp() {
+		let mesh = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tex_coords_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![UnaMorphTargetDeltas {
+				position_deltas: vec![[0.0; 3]],
+				normal_deltas: None,
+			}],
+			default_morph_weights: vec![0.8],
+		};
+		let cat = UnaExpressionCatalog {
+			presets: vec![UnaExpressionPreset {
+				name: "x".into(),
+				binds: vec![UnaMorphTargetBind {
+					mesh_index: 0,
+					primitive_index: 0,
+					morph_target_index: 0,
+					weight_scale: 1.0,
+				}],
+			}],
+		};
+		let mut ew = UnaExpressionWeights::default();
+		ew.preset_weights.insert("x".into(), 0.5);
+		let w = morph_weights_for_primitive(&mesh, Some(&cat), Some(&ew), 0, 0);
+		assert!((w[0] - 1.0).abs() < 1e-6);
+	}
+
+	#[test]
+	fn import_report_serializes_source_format_when_set() {
+		let mut r = ImportReport::default();
+		r.source_format = Some(FormatId::new("io.un-avatar.una"));
+		r.status = ReportStatus::PartialSuccess;
+		r.preserved_extensions.push(PreservedExtension {
+			id: "ext".into(),
+			note: Some("blob".into()),
+		});
+		let v = serde_json::to_value(&r).unwrap();
+		assert_eq!(v["source_format"], "io.un-avatar.una");
+		assert_eq!(v["status"], "partial_success");
+		assert!(v["preserved_extensions"].is_array());
+	}
+
+	#[test]
+	fn import_report_serializes_diagnostics() {
+		let mut r = ImportReport::default();
+		r.push_info("loaded");
+		let v = serde_json::to_value(&r).unwrap();
+		assert_eq!(v["messages"], serde_json::json!(["loaded"]));
+		let d = v["diagnostics"].as_array().expect("diagnostics");
+		assert_eq!(d.len(), 1);
+		assert_eq!(d[0]["severity"], "info");
+		assert_eq!(d[0]["text"], "loaded");
+	}
+}

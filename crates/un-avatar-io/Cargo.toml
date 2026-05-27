@@ -1,0 +1,16 @@
+[package]
+name = "un-avatar-io"
+description = "UN Avatar — IO プラグイン trait とレジストリ境界（bootstrap）"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+un-avatar-core = { path = "../un-avatar-core" }
+un-avatar-types = { path = "../un-avatar-types" }
+
+[lints]
+workspace = true
