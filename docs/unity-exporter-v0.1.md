@@ -110,7 +110,7 @@ lilToon v0.1 優先項目。
 
 Alpha mode は glTF fallback material へも反映する。transparent queue / alpha mode は `BLEND`、cutout queue / `_Cutoff` は `MASK` として出し、髪・レース・服飾の alpha 抜けを Runtime 側で扱えるようにする。Cull mode は glTF が表現できる範囲で扱い、Cull Off は `doubleSided=true`、Cull Back は `doubleSided=false` にする。Cull Front は現段階では専用表現を持たない。
 
-Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime で自然に見える `una_toon` / MToon-like parameter へ正規化する。
+Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime で自然に見える `UNToon` parameter へ正規化する。v2 の `UNToon` は lilToon-compatible を基準にし、MToon はそこへ変換する入力 profile として扱う。実装上 `mtoon` という JSON key や Rust 型名が残る段階でも、それを MToon-like 設計正本とは見なさない。
 
 ## 7. Modular Avatar And Wardrobe Sets
 

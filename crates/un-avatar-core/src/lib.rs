@@ -19,7 +19,8 @@ pub enum UnaShadingModel {
 	LitLambert,
 	/// `KHR_materials_unlit` 相当。
 	Unlit,
-	/// MToon の完全再現ではなく、セル寄りトーンで破綻しにくく見せる。
+	/// Legacy name for the avatar toon path. In v2 this evolves into UNToon:
+	/// lilToon-compatible first, with VRM/MToon converted into that model.
 	MToonLike,
 }
 

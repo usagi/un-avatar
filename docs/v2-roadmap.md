@@ -31,7 +31,8 @@ v1.0.0 時点の実装で確認できる重要な前提。
 - v2 の外部アバター資産形式は新規拡張子 `.unavatar` とし、中身は valid GLB 2.0 + U.N. Avatar glTF extensions とする。
 - `.unavatar` は `un-avatar-format` に schema / parser / validator を置き、`un-avatar-io-unavatar` に `IoRegistry` integration を置く。
 - 初期実装は分割 extension 群ではなく単一 `UN_avatar` extension を正本にする。安定後に `UN_avatar_manifest` などへ分割できる JSON 構造にしておく。
-- `UNA Toon Material` は既存 `UnaMtoonMaterial` / `UnaMaterialPbr` の上に足す。MToon と別系統の material model を急に増やさない。
+- `UNToon` は v1 の MToon 互換 shader を出発点にするが、v2 では lilToon 互換を主軸に再定義する。MToon / VRM material は lilToon 寄りの UNToon 表現へ変換する入力であり、lilToon 表現を MToon 互換の範囲に押し込めない。
+- `UNA Toon Material` は既存 `UnaMtoonMaterial` / `UnaMaterialPbr` の実装資産を活用して段階移行する。ただし設計上の基準は MToon-like ではなく UNToon/lilToon-compatible とする。
 - PhysBone は新 physics engine として作り直すのではなく、まず既存 SpringBone runtime primitive へ近似変換する。
 - Expressions は現状 morph 中心。material color、texture switch、node visibility、variant は v2 で `UnaDocument` と renderer control へ拡張する対象。
 - Unity Exporter MVP は repo 内 Rust exporter の完成を待たず、Unity 側で GLB + `UN_avatar` extension を書ける構成を許容する。
@@ -205,11 +206,12 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - material color / emission binding を最小実装する。
 - Supervisor から expression / toggle を操作できる runtime control を広げる。
 
-### Milestone 5: lilToon major parameters
+### Milestone 5: UNToon v2 / lilToon major parameters
 
 - lilToon 検出。
 - main texture、shade texture、normal、matcap、rim、emission、outline、alpha、cull / render queue 相当を抽出する。
-- Runtime の既存 MToon-like shader / material path に寄せて描画する。
+- Runtime の toon shader / material path を UNToon v2 として拡張し、lilToon の概ねの表現を可能にする。
+- VRM0/VRM1 MToon は UNToon v2 へ変換して描画する。MToon 由来の shade、rim、matcap、outline は維持するが、内部表現の基準は lilToon-compatible 側へ寄せる。
 
 ### Milestone 6: PhysBone to U.N. dynamics
 

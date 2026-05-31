@@ -111,6 +111,8 @@ v0.1 parser は `humanBones` を `HumanoidProfile` へ正規化する。bone nam
 
 v0.1 は glTF PBR material を必ず fallback とし、`UN_avatar.materials` は toon / VRC source hint として扱う。
 
+UNToon v2 の基準は lilToon-compatible 表現である。v1 の MToon 互換 shader / `UnaMtoonMaterial` は実装上の出発点として使うが、`.unavatar` v2 では lilToon の主要表現を MToon 互換枠へ押し込めない。VRM0/VRM1 MToon は UNToon v2 へ変換される入力 profile として扱い、shade / matcap / rim / emission / outline / alpha / cull / render queue などを UNToon 側の共通表現へ正規化する。
+
 ```json
 {
   "materials": [
@@ -155,7 +157,7 @@ v0.1 の優先順。
 8. outline
 9. alpha / cull / render queue hint
 
-Runtime 側は既存 `UnaMaterialPbr` / `UnaMtoonMaterial` へ寄せて実装し、最初から別の巨大 material system を作らない。
+Runtime 側は既存 `UnaMaterialPbr` / `UnaMtoonMaterial` の実装資産を使って段階移行する。ただし設計上の正本は UNToon v2 であり、MToon-like は legacy 実装名または VRM 入力 profile を指す。
 
 ### Texture Storage
 
