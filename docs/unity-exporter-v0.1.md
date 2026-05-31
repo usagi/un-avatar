@@ -202,6 +202,8 @@ Report に含めるもの。
 
 Prototype の report は、人間が調整相談しやすいことを優先する。JSON report に加え、Unity Editor window 上にも exported / approximated / unsupported / lost を短く表示する。
 
+Runtime / CLI 側の `diagnose` は、再エクスポート要否を判断できる warning を出す。特に lilToon material で `renderQueue`、`floatParams`、`colorParams` が欠けている場合は旧 exporter 生成物と見なし、UNToon 互換調整前に再エクスポートを促す。`MASK` かつ通常 cutoff の lilToon material、完全透明 helper material も warning として出し、alpha / draw skip / authoring helper の切り分けに使う。
+
 Texture report は次を記録する。
 
 - exported texture count

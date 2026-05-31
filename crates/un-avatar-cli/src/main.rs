@@ -953,6 +953,36 @@ fn texture_alpha_summary(scene: &UnaSceneSnapshot, image_index: Option<usize>) -
 	})
 }
 
+fn material_source_shader_is_liltoon(material: &UnaMaterialPbr) -> bool {
+	material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("sourceShader"))
+		.and_then(|v| v.as_str())
+		.is_some_and(|shader| shader.to_ascii_lowercase().contains("liltoon"))
+		|| material
+			.unavatar_material
+			.as_ref()
+			.and_then(|m| m.get("family"))
+			.and_then(|v| v.as_str())
+			.is_some_and(|family| family.eq_ignore_ascii_case("liltoon"))
+}
+
+fn material_has_source_params(material: &UnaMaterialPbr) -> bool {
+	material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("floatParams"))
+		.and_then(|v| v.as_object())
+		.is_some_and(|params| !params.is_empty())
+		|| material
+			.unavatar_material
+			.as_ref()
+			.and_then(|m| m.get("colorParams"))
+			.and_then(|v| v.as_object())
+			.is_some_and(|params| !params.is_empty())
+}
+
 fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
 	let source_shader = material
 		.unavatar_material
@@ -1201,9 +1231,37 @@ fn build_diagnose_report(
 		let mut alpha_counts = BTreeMap::new();
 		let mut eye_like_material_indices = Vec::new();
 		let mut materials = Vec::new();
+		let mut liltoon_material_count = 0usize;
+		let mut liltoon_missing_render_queue = 0usize;
+		let mut liltoon_missing_source_params = 0usize;
+		let mut suspicious_liltoon_masks = Vec::new();
+		let mut fully_transparent_visible_materials = Vec::new();
 		for (i, material) in sc.materials.iter().enumerate() {
 			bump_count(&mut shading_counts, format!("{:?}", material.shading));
 			bump_count(&mut alpha_counts, format!("{:?}", material.alpha_mode));
+			if material_source_shader_is_liltoon(material) {
+				liltoon_material_count += 1;
+				if material
+					.unavatar_material
+					.as_ref()
+					.and_then(|m| m.get("renderQueue").or_else(|| m.get("render_queue")))
+					.is_none()
+				{
+					liltoon_missing_render_queue += 1;
+				}
+				if !material_has_source_params(material) {
+					liltoon_missing_source_params += 1;
+				}
+				if material.alpha_mode == UnaAlphaMode::Mask && material.alpha_cutoff > 0.01 {
+					suspicious_liltoon_masks.push(i);
+				}
+			}
+			if matches!(material.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
+				&& material.base_color_factor[3] <= 0.001
+				&& texture_alpha_summary(sc, material.base_color_texture_index).is_some_and(|alpha| alpha.max_alpha == 0)
+			{
+				fully_transparent_visible_materials.push(i);
+			}
 			if eye_like_material_name(material.name.as_deref()) {
 				eye_like_material_indices.push(i);
 				if material.alpha_mode == UnaAlphaMode::Mask && material.base_color_factor[3] <= 0.001 {
@@ -1213,6 +1271,28 @@ fn build_diagnose_report(
 				}
 			}
 			materials.push(material_summary(i, material, sc));
+		}
+		if liltoon_material_count > 0 && liltoon_missing_render_queue > 0 {
+			warnings.push(format!(
+				"lilToon material source payload is missing renderQueue on {liltoon_missing_render_queue}/{liltoon_material_count} materials; re-export with the current Unity exporter to improve alpha/order diagnostics"
+			));
+		}
+		if liltoon_material_count > 0 && liltoon_missing_source_params > 0 {
+			warnings.push(format!(
+				"lilToon material source payload is missing floatParams/colorParams on {liltoon_missing_source_params}/{liltoon_material_count} materials; re-export with the current Unity exporter before UNToon compatibility tuning"
+			));
+		}
+		if !suspicious_liltoon_masks.is_empty() {
+			warnings.push(format!(
+				"lilToon materials with MASK alpha and cutoff > 0.01: {:?}; verify these are actual Cutout materials, not ordinary Opaque shaders with _Cutoff",
+				suspicious_liltoon_masks
+			));
+		}
+		if !fully_transparent_visible_materials.is_empty() {
+			warnings.push(format!(
+				"fully transparent alpha materials are present: {:?}; renderer may skip these draws unless used as authoring helpers",
+				fully_transparent_visible_materials
+			));
 		}
 		if doc.vrm.is_some() && !sc.materials.is_empty() && !sc.materials.iter().any(|m| m.shading == UnaShadingModel::MToonLike) {
 			warnings.push("VRM document has no MToonLike materials after import".to_string());
