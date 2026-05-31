@@ -1,6 +1,7 @@
 export function isLaunchTimeRendererField(field: string): boolean {
   return (
     field === "avatar_path" ||
+    field === "wardrobe_set" ||
     field === "icon_path" ||
     field === "profile.display_name" ||
     field.startsWith("render_quality.") ||
@@ -38,6 +39,7 @@ export function canApplyWithoutRestart(field: string): boolean {
 
 export function profileFieldLabel(field: string): string {
   if (field === "avatar_path") return "Avatar File";
+  if (field === "wardrobe_set") return "Wardrobe";
   if (field === "icon_path") return "Icon";
   if (field === "profile.display_name") return "Name";
   if (field === "profile.group") return "Group";

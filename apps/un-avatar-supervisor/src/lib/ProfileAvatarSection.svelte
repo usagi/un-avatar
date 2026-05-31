@@ -1,9 +1,14 @@
 <script lang="ts">
-  import type { AvatarFileSetting, ProfileSettingValue } from "./profileTypes";
+  import type {
+    AvatarFileSetting,
+    ProfileSettingValue,
+    UnavatarWardrobeOptions,
+  } from "./profileTypes";
   import { _ } from "svelte-i18n";
   import { FolderOpen } from "lucide-svelte";
 
   export let setting: AvatarFileSetting;
+  export let wardrobeOptions: UnavatarWardrobeOptions | null = null;
   export let busy = false;
   export let onBrowseAvatar: () => void | Promise<void>;
   export let onReviewMetadata: () => void | Promise<void>;
@@ -46,4 +51,23 @@
       >
     {/if}</label
   >
+  {#if wardrobeOptions?.available}
+    <label class="select-field"
+      ><span>{$_("profiles.editor.wardrobe")}</span
+      ><select
+        value={setting.wardrobe_set ?? ""}
+        disabled={busy}
+        onchange={(event) =>
+          onUpdateSettingValue(
+            "wardrobe_set",
+            (event.currentTarget as HTMLSelectElement).value,
+          )}
+      >
+        <option value="">{wardrobeOptions.base_label || "Base"}</option>
+        {#each wardrobeOptions.sets as set}
+          <option value={set.id}>{set.name || set.id}</option>
+        {/each}
+      </select></label
+    >
+  {/if}
 </section>

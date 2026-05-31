@@ -45,6 +45,7 @@ let avatarSettings = [
     storage: "user",
     manifest_path: "profiles/main.toml",
     avatar_path: "assets/example/main.vrm",
+    wardrobe_set: null,
     vmc_address: "0.0.0.0:39539",
     vmc_port: 39539,
     motion_vmc_enabled: true,
@@ -164,6 +165,7 @@ let avatarSettings = [
     storage: "user",
     manifest_path: "profiles/debug.toml",
     avatar_path: "assets/example/debug.vrm",
+    wardrobe_set: null,
     vmc_address: "0.0.0.0:39540",
     vmc_port: 39540,
     motion_vmc_enabled: true,
@@ -343,6 +345,16 @@ export function installDevIpcMock(): void {
             { label: "Redistribution", value: "false" },
           ],
         };
+      case "read_unavatar_wardrobe_options":
+        return {
+          available: true,
+          base_label: "Base",
+          sets: [
+            { id: "original", name: "Original" },
+            { id: "noble1", name: "Noble 1" },
+            { id: "noble13", name: "Noble 13" },
+          ],
+        };
       case "save_avatar_thumbnail_icon": {
         const id = String(args.settingId ?? "");
         const setting = avatarSettings.find((item) => item.id === id) ?? avatarSettings[0];
@@ -356,6 +368,10 @@ export function installDevIpcMock(): void {
         const setting = avatarSettings.find((item) => item.id === id);
         if (setting && field === "avatar_path") {
           setting.avatar_path = String(args.value ?? "");
+        }
+        if (setting && field === "wardrobe_set") {
+          (setting as { wardrobe_set: string | null }).wardrobe_set =
+            String(args.value ?? "") || null;
         }
         if (setting && field === "environment.color.exposure") {
           setting.color_exposure = Number(args.value ?? 0);

@@ -109,6 +109,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
   sort_order: number;
   storage: "seed" | "user";
   manifest_path: string;
+  wardrobe_set: string | null;
   look_at_enabled: boolean;
   look_at_clamp_deg: number | null;
   primary_motion_source: PrimaryMotionSource;
@@ -229,7 +230,18 @@ export type IdentitySetting = Pick<
   | "notes"
 >;
 
-export type AvatarFileSetting = Pick<AvatarSetting, "avatar_path">;
+export type WardrobeSetOption = {
+  id: string;
+  name: string;
+};
+
+export type UnavatarWardrobeOptions = {
+  available: boolean;
+  base_label: string;
+  sets: WardrobeSetOption[];
+};
+
+export type AvatarFileSetting = Pick<AvatarSetting, "avatar_path" | "wardrobe_set">;
 
 export type WindowSetting = Pick<
   AvatarSetting,

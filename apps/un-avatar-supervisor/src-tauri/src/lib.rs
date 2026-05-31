@@ -340,6 +340,19 @@ struct VrmMetadataInfo {
 	permissions: Vec<VrmMetadataField>,
 }
 
+#[derive(Clone, Serialize)]
+struct UnavatarWardrobeOptions {
+	available: bool,
+	base_label: String,
+	sets: Vec<UnavatarWardrobeSetOption>,
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarWardrobeSetOption {
+	id: String,
+	name: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct RendererCameraSnapshot {
 	target: [f32; 3],
@@ -823,6 +836,7 @@ struct AvatarSetting {
 	storage: ProfileStorage,
 	manifest_path: String,
 	avatar_path: Option<String>,
+	wardrobe_set: Option<String>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion_vmc_enabled: bool,
@@ -1551,6 +1565,7 @@ struct ManifestContactShadow {
 struct AvatarManifestSummary {
 	title: Option<String>,
 	avatar_path: Option<PathBuf>,
+	wardrobe_set: Option<String>,
 	icon_path: Option<PathBuf>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
@@ -1672,6 +1687,7 @@ pub fn run() {
 			stop_renderer,
 			stop_all_renderers,
 			sync_app_settings,
+			read_unavatar_wardrobe_options,
 			set_last_selected_setting_id,
 			update_avatar_setting_path,
 			update_avatar_setting_value,
@@ -2709,6 +2725,61 @@ fn read_vrm_metadata(path: String, manifest_path: Option<String>) -> Result<Opti
 	}))
 }
 
+#[tauri::command]
+fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -> Result<UnavatarWardrobeOptions, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let bytes = fs::read(&resolved).map_err(|e| format!("read {}: {e}", resolved.display()))?;
+	let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let Some(wardrobe) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("wardrobe"))
+		.and_then(|wardrobe| wardrobe.as_object())
+	else {
+		return Ok(UnavatarWardrobeOptions {
+			available: false,
+			base_label: "Base".to_string(),
+			sets: Vec::new(),
+		});
+	};
+	let base_label = wardrobe
+		.get("baseLabel")
+		.or_else(|| wardrobe.get("baseName"))
+		.and_then(|value| value.as_str())
+		.unwrap_or("Base")
+		.to_string();
+	let sets = wardrobe
+		.get("sets")
+		.and_then(|value| value.as_array())
+		.into_iter()
+		.flatten()
+		.filter_map(|set| {
+			let id = set.get("id").and_then(|value| value.as_str())?.trim();
+			if id.is_empty() {
+				return None;
+			}
+			let name = set
+				.get("name")
+				.and_then(|value| value.as_str())
+				.map(str::trim)
+				.filter(|name| !name.is_empty())
+				.unwrap_or(id);
+			Some(UnavatarWardrobeSetOption {
+				id: id.to_string(),
+				name: name.to_string(),
+			})
+		})
+		.collect::<Vec<_>>();
+	Ok(UnavatarWardrobeOptions {
+		available: true,
+		base_label,
+		sets,
+	})
+}
+
 fn resolve_avatar_metadata_path(path: &str, manifest_path: Option<&str>) -> PathBuf {
 	let trimmed = path.trim();
 	let path = PathBuf::from(trimmed);
@@ -3559,6 +3630,9 @@ fn apply_avatar_setting_value(
 				"avatar_path",
 				avatar_path_for_manifest_value(&path, Path::new(&setting.manifest_path)),
 			)?;
+		}
+		"wardrobe_set" => {
+			set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string())?;
 		}
 		"icon_path" => {
 			let path = json_string(&value, field)?;
@@ -6145,6 +6219,10 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		avatar_path: manifest
 			.avatar_path
 			.map(|avatar_path| avatar_path_for_manifest_value(&avatar_path.display().to_string(), path)),
+		wardrobe_set: manifest.wardrobe_set.and_then(|set| {
+			let set = set.trim().to_string();
+			(!set.is_empty()).then_some(set)
+		}),
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
 		motion_vmc_enabled: motion.motion_vmc_enabled,
@@ -8815,6 +8893,27 @@ display_name = "New Avatar"
 "#;
 		let manifest = parse_manifest_value(text, Path::new("new-avatar.toml")).unwrap();
 		assert_eq!(manifest.get("title").and_then(toml::Value::as_str), Some("New Avatar"));
+	}
+
+	#[test]
+	fn wardrobe_setting_writes_root_set_and_empty_removes_it() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+wardrobe_set = "old"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("noble1")).unwrap();
+		assert_eq!(manifest.get("wardrobe_set").and_then(toml::Value::as_str), Some("noble1"));
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
+		assert!(manifest.get("wardrobe_set").is_none());
 	}
 
 	#[test]

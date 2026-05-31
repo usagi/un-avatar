@@ -26,6 +26,7 @@
     ProfileSettingValue,
     RenderQualityRecommendation,
     SpoutResolutionPreset,
+    UnavatarWardrobeOptions,
   } from "./lib/profileTypes";
   import type { ProfileSectionNavItem } from "./lib/profileStageTypes";
   import RendererDetailsPanel from "./lib/RendererDetailsPanel.svelte";
@@ -253,6 +254,8 @@
   let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
   let diagnosticsExports = $state<DiagnosticsExportEntry[]>([]);
   let avatarSettings = $state<AvatarSetting[]>([]);
+  let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
+  let wardrobeOptionsKey = $state("");
   let selectedRendererId = $state<number | null>(null);
   /// Selected Renderer 詳細パネルのサブタブ。Overview = 状態 + コントロール、
   /// Expressions = 表情プレビュー、Diagnostics = stderr など。タブ分割で縦長解消。
@@ -570,6 +573,7 @@
       storage: "seed",
       manifest_path: "profiles/main.toml",
       avatar_path: null,
+      wardrobe_set: null,
       vmc_address: "0.0.0.0:39539",
       vmc_port: 39539,
       motion_vmc_enabled: true,
@@ -693,6 +697,7 @@
       storage: "seed",
       manifest_path: "profiles/debug.toml",
       avatar_path: null,
+      wardrobe_set: null,
       vmc_address: "0.0.0.0:39539",
       vmc_port: null,
       motion_vmc_enabled: false,
@@ -2392,6 +2397,34 @@
       message = String(error);
     }
   }
+
+  async function refreshWardrobeOptionsForSetting(setting: AvatarSetting | null): Promise<void> {
+    const key = setting?.avatar_path
+      ? `${setting.manifest_path}\n${setting.avatar_path}`
+      : "";
+    wardrobeOptionsKey = key;
+    if (!key || !setting?.avatar_path || !hasTauriRuntime()) {
+      wardrobeOptions = null;
+      return;
+    }
+    try {
+      const options = await invoke<UnavatarWardrobeOptions>(
+        "read_unavatar_wardrobe_options",
+        {
+          path: setting.avatar_path,
+          manifestPath: setting.manifest_path,
+        },
+      );
+      if (wardrobeOptionsKey === key) {
+        wardrobeOptions = options.available ? options : null;
+      }
+    } catch {
+      if (wardrobeOptionsKey === key) {
+        wardrobeOptions = null;
+      }
+    }
+  }
+
   function updateBackgroundColorValue(value: [number, number, number]): void {
     void updateSettingValue("window.background_color", value);
   }
@@ -2868,6 +2901,10 @@
     queueMicrotask(scrollLogsToBottom);
   });
 
+  $effect(() => {
+    void refreshWardrobeOptionsForSetting(selectedSetting);
+  });
+
   /// selectedSettingId が変わるたびに Tauri 側へ保存し、次回起動時に復元できるようにする。
   /// 初期化フェーズ (backendAppSettingsReady 前) や記録済み値と一致する場合はスキップ。
   $effect(() => {
@@ -3252,6 +3289,7 @@
 
                 <ProfileAvatarSection
                   setting={selectedSetting}
+                  {wardrobeOptions}
                   {busy}
                   onBrowseAvatar={() => browseSettingPath("avatar_path", "avatar")}
                   onReviewMetadata={() => reviewSelectedVrmMetadata()}
