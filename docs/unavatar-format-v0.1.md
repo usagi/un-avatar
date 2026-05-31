@@ -358,6 +358,8 @@ wardrobe set の適用順。
 
 この規則により、`Color 1` 全体を ON にしつつ `Color 1/Armature.1` だけ OFF にできる。
 
+Unity Exporter の preview 実装では、wardrobe operations は bake 後 snapshot から再生成しない。`base` も non-base set も Unity 上で capture した authored state / diff を正本にする。Modular Avatar bake は export mesh を整える処理であり、wardrobe の意味論を上書きする正本ではない。
+
 ### Asset Groups And Lazy Loading
 
 `.unavatar` は全資産を保持するが、Runtime は最初から `assetGroups` 単位の lazy upload / unload を前提にする。

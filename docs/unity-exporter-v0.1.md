@@ -156,6 +156,8 @@ v0.1 では Animator Controller の完全評価はしない。配信で使う衣
 
 v0.1 の Modular Avatar 方針は、MA / NDMF を再実装せず、MA が提供する bake entrypoint で複製 avatar を bake してから export する。wardrobe 候補は bake 前の Modular Avatar MenuItem / ObjectToggle / active state / VRC Expression Menu から抽出し、最終的な set は capture diff で人間が確認できる形にする。
 
+preview exporter では per-set bake を行わない。Export 対象 clone は Base を適用して Modular Avatar bake するが、`wardrobe.base` と各 `wardrobe.sets` の operations は bake 後 snapshot ではなく、ユーザーが Unity 上で capture した authored snapshot / diff を正本にする。Modular Avatar bake が active state を再構成する場合でも、Renderer 側の Base / set 切替は capture した状態を復元できなければならない。
+
 ### Runtime Asset Group Assumption
 
 `.unavatar` は全衣装を保持できるが、Runtime は最初から outfit group 単位の lazy upload / unload を前提にする。Exporter は wardrobe set が参照する outfit group を metadata として出す。

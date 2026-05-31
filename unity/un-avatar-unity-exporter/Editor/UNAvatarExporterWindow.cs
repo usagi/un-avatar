@@ -941,6 +941,13 @@ namespace UNAvatar.UnityExporter
                         transform.gameObject.SetActive(false);
                     }
                 }
+                else if (operation.type == "rendererEnabled" || operation.type == "rendererVisibility")
+                {
+                    foreach (var renderer in transform.GetComponents<Renderer>())
+                    {
+                        renderer.enabled = operation.boolValue;
+                    }
+                }
                 else if (operation.type == "blendShapeWeight" && !string.IsNullOrEmpty(operation.name))
                 {
                     foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
@@ -1014,10 +1021,14 @@ namespace UNAvatar.UnityExporter
                 var tempGlb = exportResult.Path;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Patching UN_avatar extension", 0.8f);
-                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, bakedBaseSnapshot, bakedWardrobeSets, exportResult.TextureAssets);
+                // Wardrobe sets are currently stored as authored capture diffs, not per-set baked diffs.
+                // Keep Base authored as well; post-bake snapshots can be altered by Modular Avatar and are
+                // only safe as the wardrobe baseline once per-set baked snapshots are enabled again.
+                var wardrobeBaseSnapshot = bakedWardrobeSets != null ? bakedBaseSnapshot : null;
+                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.TextureAssets);
                 GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets);
 
-                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, bakedBaseSnapshot, bakedWardrobeSets, exportResult.Textures);
+                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.Textures);
                 File.WriteAllText(reportPath, MiniJson.Serialize(report), new UTF8Encoding(false));
 
                 AssetDatabase.Refresh();
