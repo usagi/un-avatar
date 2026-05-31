@@ -2710,6 +2710,14 @@ namespace UNAvatar.UnityExporter
 
             private static bool IsAlphaBlendMaterial(Material material, Color baseColor)
             {
+                if (IsLilToonCutoutShader(material))
+                {
+                    return false;
+                }
+                if (IsLilToonBlendShader(material))
+                {
+                    return true;
+                }
                 if (baseColor.a < 0.999f || material.renderQueue >= 3000)
                 {
                     return true;
@@ -2722,6 +2730,10 @@ namespace UNAvatar.UnityExporter
 
             private static bool IsAlphaMaskMaterial(Material material)
             {
+                if (IsLilToonCutoutShader(material))
+                {
+                    return true;
+                }
                 if (material.renderQueue >= 2450 && material.renderQueue < 3000)
                 {
                     return true;
@@ -2731,6 +2743,22 @@ namespace UNAvatar.UnityExporter
                     ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
+            }
+
+            private static bool IsLilToonBlendShader(Material material)
+            {
+                var shaderName = material.shader != null ? material.shader.name : "";
+                return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            private static bool IsLilToonCutoutShader(Material material)
+            {
+                var shaderName = material.shader != null ? material.shader.name : "";
+                return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0;
             }
 
             private static bool IsDoubleSidedMaterial(Material material)

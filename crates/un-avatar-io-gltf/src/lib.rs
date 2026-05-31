@@ -902,11 +902,12 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 				UnaShadingModel::LitLambert
 			};
 			let alpha_cutoff = m.alpha_cutoff().unwrap_or(0.5);
-			let alpha_mode = match m.alpha_mode() {
+			let gltf_alpha_mode = match m.alpha_mode() {
 				gltf::material::AlphaMode::Opaque => UnaAlphaMode::Opaque,
 				gltf::material::AlphaMode::Mask => UnaAlphaMode::Mask,
 				gltf::material::AlphaMode::Blend => UnaAlphaMode::Blend,
 			};
+			let alpha_mode = unavatar_material_inferred_alpha_mode(extras.as_ref()).unwrap_or(gltf_alpha_mode);
 			UnaMaterialPbr {
 				name,
 				double_sided,
@@ -933,6 +934,24 @@ fn unavatar_material_extras(material: &gltf::Material<'_>) -> Option<Value> {
 	let raw = material.extras().as_ref()?;
 	let value = serde_json::from_str::<Value>(raw.get()).ok()?;
 	value.get("UN_avatar_material").cloned()
+}
+
+fn unavatar_material_inferred_alpha_mode(extras: Option<&Value>) -> Option<UnaAlphaMode> {
+	let extras = extras?;
+	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
+	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
+	if !family.eq_ignore_ascii_case("liltoon") && !source_shader.to_ascii_lowercase().contains("liltoon") {
+		return None;
+	}
+
+	let shader = source_shader.to_ascii_lowercase();
+	if shader.contains("cutout") {
+		Some(UnaAlphaMode::Mask)
+	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
+		Some(UnaAlphaMode::Blend)
+	} else {
+		None
+	}
 }
 
 fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
@@ -1929,5 +1948,25 @@ mod tests {
 			.iter()
 			.any(|m| m.contains(".unavatar humanoid: resolved_bones=1")));
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn infers_liltoon_alpha_mode_from_source_shader() {
+		let transparent = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTransparentOutline"
+		});
+		let cutout = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonCutout"
+		});
+		let opaque = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon"
+		});
+
+		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&transparent)), Some(UnaAlphaMode::Blend));
+		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&cutout)), Some(UnaAlphaMode::Mask));
+		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&opaque)), None);
 	}
 }
