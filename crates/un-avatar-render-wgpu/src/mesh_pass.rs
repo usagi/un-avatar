@@ -1450,17 +1450,12 @@ impl SceneMeshes {
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
-			if texture_max_dimension.is_none()
-				&& skin_tone_override.is_none()
-				&& texture_compression != TextureCompressionMode::Compat
-				&& compression_preference_for_role(texture_compression, texture_compression_advanced, role)
-					== TextureCompressionPreference::Source
-			{
+			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
 				if let Some(source_upload) = source_texture_upload(im) {
 					report(
 						"gpu-upload",
 						format!(
-							"Uploading source texture {}/{} {}x{} {:?} ({role:?})",
+							"Uploading precision-preserving source texture {}/{} {}x{} {:?} ({role:?})",
 							image_index + 1,
 							scene.images.len(),
 							source_upload.width,

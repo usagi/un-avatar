@@ -235,7 +235,7 @@ Texture compression policy は user/profile 設定として 4 段階を持つ。
 - `memory`: 表現力低下や変換を許容し、GPU memory / disk cache 削減を優先する。
 - `compat`: GPU 互換性と失敗しにくさを優先し、RGBA8/RGBA16F 等の広く扱える形式へ寄せる。
 
-圧縮有効時でも、source の表現力を BCn 等で安全に表現できない場合は、policy と GPU capability に応じて native upload を維持する。圧縮を優先して source 情報を落とすか、表現力を優先して非圧縮/native upload するかは material role と policy で決める。
+圧縮有効時でも、source の表現力を BCn 等で安全に表現できない場合は、policy と GPU capability に応じて native upload を維持する。フォールバックは原則として精度を落とさない。`R16G16B16`、`RGB16F`、`RGBA16F` などを安易に RGBA8 へ変換せず、wgpu が直接持てない RGB 系だけ upload 境界で `RGBA16Unorm` / `RGBA16Float` のような同等以上の精度を持つ形式へ拡張する。RGBA8 互換変換は compatibility mode または source/native upload が不可能な最後の fallback に限る。
 
 ## 7. Expressions
 

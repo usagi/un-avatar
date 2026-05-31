@@ -1703,6 +1703,33 @@ mod tests {
 	}
 
 	#[test]
+	fn source_upload_preserves_r16_rgb_precision_as_rgba16_unorm() {
+		let r = 0x1234u16;
+		let g = 0x5678u16;
+		let b = 0x9abcu16;
+		let mut pixels = Vec::new();
+		pixels.extend_from_slice(&r.to_ne_bytes());
+		pixels.extend_from_slice(&g.to_ne_bytes());
+		pixels.extend_from_slice(&b.to_ne_bytes());
+
+		let image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R16G16B16,
+			pixels,
+		};
+		let upload = source_texture_upload(&image).expect("R16G16B16 should use precision-preserving source upload");
+
+		let mut expected = Vec::new();
+		for value in [r, g, b, u16::MAX] {
+			expected.extend_from_slice(&value.to_ne_bytes());
+		}
+		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Unorm);
+		assert_eq!(upload.bytes_per_row, 8);
+		assert_eq!(upload.data, expected);
+	}
+
+	#[test]
 	fn block_compression_encoder_emits_one_block_for_small_color_mips() {
 		let rgba = [255, 64, 32, 255].repeat(2 * 2);
 		let (w, h, bc1) = encode_block_compressed_rgba_mip_cpu(TextureUploadKind::Bc1Srgb, &rgba, 2, 2, 1);
