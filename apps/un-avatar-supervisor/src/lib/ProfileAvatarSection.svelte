@@ -17,6 +17,11 @@
     value: ProfileSettingValue,
   ) => void | Promise<void>;
   export let onActivate: () => void = () => {};
+
+  $: isUnavatar = (setting.avatar_path ?? "")
+    .trim()
+    .toLowerCase()
+    .endsWith(".unavatar");
 </script>
 
 <section
@@ -69,5 +74,9 @@
         {/each}
       </select></label
     >
+  {:else if isUnavatar}
+    <div class="profile-inline-note profile-inline-note-warning">
+      Wardrobe unavailable{wardrobeOptions?.error ? `: ${wardrobeOptions.error}` : ""}
+    </div>
   {/if}
 </section>

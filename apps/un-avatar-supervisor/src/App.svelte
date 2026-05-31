@@ -2416,11 +2416,16 @@
         },
       );
       if (wardrobeOptionsKey === key) {
-        wardrobeOptions = options.available ? options : null;
+        wardrobeOptions = options;
       }
-    } catch {
+    } catch (error) {
       if (wardrobeOptionsKey === key) {
-        wardrobeOptions = null;
+        wardrobeOptions = {
+          available: false,
+          base_label: "Base",
+          sets: [],
+          error: String(error),
+        };
       }
     }
   }

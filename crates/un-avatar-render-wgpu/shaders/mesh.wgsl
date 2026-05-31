@@ -149,7 +149,7 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 		return o;
 	}
 	let n = normalize(o.wn);
-	let mask = textureSampleLevel(outline_width_tex, samp, o.uv, 0.0).g;
+	let mask = textureSampleLevel(outline_width_tex, samp, o.uv, 0.0).r;
 	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask;
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;

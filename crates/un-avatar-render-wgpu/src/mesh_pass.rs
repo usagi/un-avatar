@@ -619,6 +619,25 @@ fn mesh_draw_capacity(scene: &UnaSceneSnapshot) -> usize {
 		.sum()
 }
 
+fn scene_effective_visibility(scene: &UnaSceneSnapshot) -> Vec<bool> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let visible = parent_visible && node.visible;
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = visible;
+		}
+		for &child in &node.children {
+			visit(scene, child, visible, out);
+		}
+	}
+
+	let mut out = vec![false; scene.nodes.len()];
+	for &root in &scene.roots {
+		visit(scene, root, true, &mut out);
+	}
+	out
+}
+
 fn skin_palette_capacity(scene: &UnaSceneSnapshot) -> usize {
 	scene.nodes.iter().filter(|node| node.mesh.is_some()).count()
 }
@@ -1686,11 +1705,12 @@ impl SceneMeshes {
 
 		let expression_names = expression_names(catalog);
 		let expression_bindings = expression_binding_index(catalog);
+		let effective_visibility = scene_effective_visibility(scene);
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		for (ni, node) in scene.nodes.iter().enumerate() {
-			if !node.visible {
+			if !effective_visibility.get(ni).copied().unwrap_or(false) {
 				continue;
 			}
 			let Some(mesh_i) = node.mesh else { continue };
@@ -2266,6 +2286,7 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use un_avatar_core::UnaSceneNode;
 
 	#[test]
 	fn skin_tone_matching_disables_mtoon_shade_color_on_skin_materials() {
@@ -2299,6 +2320,35 @@ mod tests {
 		assert!(!expression_bindings_have_active_weight(&bindings, None));
 		assert!(!expression_bindings_have_active_weight(&bindings, Some(&[0.8, 0.0])));
 		assert!(expression_bindings_have_active_weight(&bindings, Some(&[0.0, 0.8])));
+	}
+
+	#[test]
+	fn effective_visibility_inherits_hidden_parent_state() {
+		let identity = Mat4::IDENTITY.to_cols_array();
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("root".to_string()),
+					visible: false,
+					transform: identity,
+					children: vec![1],
+					mesh: None,
+					skin: None,
+				},
+				UnaSceneNode {
+					name: Some("child".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+
+		assert_eq!(scene_effective_visibility(&scene), vec![false, false]);
 	}
 
 	#[test]

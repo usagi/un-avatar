@@ -3325,6 +3325,22 @@ dd {
  order: 1;
 }
 
+.profile-inline-note {
+ grid-column: 1 / -1;
+ padding: 10px 12px;
+ border: 1px solid var(--border);
+ border-radius: 8px;
+ color: var(--muted);
+ font-size: 12px;
+ line-height: 1.45;
+}
+
+.profile-inline-note-warning {
+ border-color: color-mix(in srgb, var(--warning) 36%, var(--border));
+ background: color-mix(in srgb, var(--warning) 10%, transparent);
+ color: color-mix(in srgb, var(--warning) 72%, var(--text));
+}
+
 .render-quality-section {
  order: 2;
 }

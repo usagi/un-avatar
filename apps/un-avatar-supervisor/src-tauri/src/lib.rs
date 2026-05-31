@@ -345,6 +345,8 @@ struct UnavatarWardrobeOptions {
 	available: bool,
 	base_label: String,
 	sets: Vec<UnavatarWardrobeSetOption>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	error: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2743,8 +2745,10 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 			available: false,
 			base_label: "Base".to_string(),
 			sets: Vec::new(),
+			error: None,
 		});
 	};
+	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).unwrap_or("base");
 	let base_label = wardrobe
 		.get("baseLabel")
 		.or_else(|| wardrobe.get("baseName"))
@@ -2758,11 +2762,12 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 		.flatten()
 		.filter_map(|set| {
 			let id = set.get("id").and_then(|value| value.as_str())?.trim();
-			if id.is_empty() {
+			if id.is_empty() || id == base_set_id {
 				return None;
 			}
 			let name = set
 				.get("name")
+				.or_else(|| set.get("displayName"))
 				.and_then(|value| value.as_str())
 				.map(str::trim)
 				.filter(|name| !name.is_empty())
@@ -2777,6 +2782,7 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 		available: true,
 		base_label,
 		sets,
+		error: None,
 	})
 }
 
@@ -8484,7 +8490,7 @@ mod tests {
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, data_image_base64_parts, diagnostics_archive_path,
 		diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_vrm_metadata, repo_root,
+		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
 		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
 		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name,
 		unique_profile_id, validate_spout_dimension, AvatarSetting, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
@@ -8914,6 +8920,45 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_reads_sets_and_hides_base_duplicate() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		fs::write(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"baseSet": "base",
+							"sets": [
+								{"id": "base", "displayName": "Base"},
+								{"id": "original", "displayName": "Original"},
+								{"id": "noble13", "name": "Noble 13"}
+							]
+						}
+					}
+				}
+			}"#,
+		)
+		.unwrap();
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.base_label, "Base");
+		assert_eq!(options.error, None);
+		assert_eq!(options.sets.len(), 2);
+		assert_eq!(options.sets[0].id, "original");
+		assert_eq!(options.sets[0].name, "Original");
+		assert_eq!(options.sets[1].id, "noble13");
+		assert_eq!(options.sets[1].name, "Noble 13");
+		let _ = fs::remove_dir_all(&dir);
 	}
 
 	#[test]

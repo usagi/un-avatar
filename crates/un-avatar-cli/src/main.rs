@@ -17,7 +17,7 @@ use un_avatar_io::{
 	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
 	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
 };
-use un_avatar_io_gltf::register_gltf_importer;
+use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer};
 use un_avatar_io_una::{io_registry_with_una, read_una_any, UnaFileV0};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
@@ -99,6 +99,17 @@ struct DiagnoseSceneSummary {
 	alpha_counts: BTreeMap<String, usize>,
 	eye_like_material_indices: Vec<usize>,
 	materials: Vec<DiagnoseMaterialSummary>,
+	visible_mesh_nodes: Vec<DiagnoseVisibleMeshNodeSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseVisibleMeshNodeSummary {
+	node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
+	mesh: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	skin: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -467,6 +478,9 @@ enum Commands {
 		/// 使う importer の FormatId。省略時はパスから probe
 		#[arg(long, value_name = "FORMAT_ID")]
 		input_format: Option<String>,
+		/// Base 適用後に重ねる `.unavatar` wardrobe set id
+		#[arg(long, value_name = "SET_ID")]
+		wardrobe_set: Option<String>,
 		/// 結果を JSON で stdout に出す
 		#[arg(long)]
 		json: bool,
@@ -591,7 +605,12 @@ fn run(cli: Cli) -> Result<(), String> {
 		} => run_convert(&plugin_dirs, input, output, input_format, output_format, json_report),
 		Commands::Validate { path, input_format, json } => run_validate(&plugin_dirs, path, input_format, json),
 		Commands::Inspect { path, json } => run_inspect(path, json),
-		Commands::Diagnose { path, input_format, json } => run_diagnose(&plugin_dirs, path, input_format, json),
+		Commands::Diagnose {
+			path,
+			input_format,
+			wardrobe_set,
+			json,
+		} => run_diagnose(&plugin_dirs, path, input_format, wardrobe_set, json),
 		Commands::Vmc { command } => run_vmc(command),
 	}
 }
@@ -868,6 +887,25 @@ fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterial
 	}
 }
 
+fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<bool> {
+	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let visible = parent_visible && node.visible;
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = visible;
+		}
+		for &child in &node.children {
+			visit(scene, child, visible, out);
+		}
+	}
+
+	let mut out = vec![false; scene.nodes.len()];
+	for &root in &scene.roots {
+		visit(scene, root, true, &mut out);
+	}
+	out
+}
+
 fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
 	value.and_then(|v| v.as_str()).map(str::to_owned)
 }
@@ -1017,6 +1055,21 @@ fn build_diagnose_report(
 				source.mime_type.as_deref().unwrap_or("unknown").to_string(),
 			);
 		}
+		let effective_visibility = scene_effective_visibility(sc);
+		let visible_mesh_nodes = sc
+			.nodes
+			.iter()
+			.enumerate()
+			.filter(|(idx, _)| effective_visibility.get(*idx).copied().unwrap_or(false))
+			.filter_map(|(idx, node)| {
+				node.mesh.map(|mesh| DiagnoseVisibleMeshNodeSummary {
+					node: idx,
+					name: node.name.clone(),
+					mesh,
+					skin: node.skin,
+				})
+			})
+			.collect();
 		DiagnoseSceneSummary {
 			has_scene: true,
 			mesh_count: sc.meshes.len(),
@@ -1042,6 +1095,7 @@ fn build_diagnose_report(
 			alpha_counts,
 			eye_like_material_indices,
 			materials,
+			visible_mesh_nodes,
 		}
 	} else {
 		warnings.push("imported document has no scene".to_string());
@@ -1066,6 +1120,7 @@ fn build_diagnose_report(
 			alpha_counts: BTreeMap::new(),
 			eye_like_material_indices: Vec::new(),
 			materials: Vec::new(),
+			visible_mesh_nodes: Vec::new(),
 		}
 	};
 
@@ -1196,7 +1251,13 @@ fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyPr
 	})
 }
 
-fn run_diagnose(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<String>, json: bool) -> Result<(), String> {
+fn run_diagnose(
+	plugin_dirs: &[PathBuf],
+	path: PathBuf,
+	input_format: Option<String>,
+	wardrobe_set: Option<String>,
+	json: bool,
+) -> Result<(), String> {
 	let reg = io_registry_for_cli(plugin_dirs)?;
 	let importer: &dyn AvatarImporter = if let Some(ref s) = input_format {
 		let id = FormatId::new(s.as_str());
@@ -1212,13 +1273,20 @@ fn run_diagnose(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 	};
-	let imported = importer
+	let mut imported = importer
 		.import(
 			&mut ictx,
 			import_input_for_path(&path, &desc.id, cached_binary_import_bytes(&path)),
 			ImportOptions,
 		)
 		.map_err(|e| e.to_string())?;
+	if let Some(set_id) = wardrobe_set.as_deref().filter(|set_id| !set_id.trim().is_empty()) {
+		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
+		imported.report.push_info(format!(
+			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
+			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
+		));
+	}
 	let report = build_diagnose_report(&path, desc.id.0, desc.provider_plugin_id, imported.report, imported.document);
 	if json {
 		println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);

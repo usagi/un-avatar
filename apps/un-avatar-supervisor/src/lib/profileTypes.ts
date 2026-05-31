@@ -239,6 +239,7 @@ export type UnavatarWardrobeOptions = {
   available: boolean;
   base_label: string;
   sets: WardrobeSetOption[];
+  error?: string | null;
 };
 
 export type AvatarFileSetting = Pick<AvatarSetting, "avatar_path" | "wardrobe_set">;

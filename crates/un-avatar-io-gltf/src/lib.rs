@@ -736,6 +736,32 @@ fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_
 	set.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)
 }
 
+fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
+	let Some(variants) = unavatar.source.get("variants").and_then(|v| v.as_array()) else {
+		return;
+	};
+	let Some(current_state) = variants.iter().find(|variant| {
+		variant.get("source").and_then(|v| v.as_str()) == Some("unity-active-state")
+			|| variant.get("id").and_then(|v| v.as_str()) == Some("current-state")
+	}) else {
+		return;
+	};
+	let Some(operations) = current_state.get("operations").and_then(|v| v.as_array()) else {
+		return;
+	};
+	let applied = apply_unavatar_wardrobe_operations(scene, operations);
+	report.push_info(format!(
+		".unavatar unity active state: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
+		applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
+	));
+	if !applied.missing_visibility_paths.is_empty() {
+		report.push_info(format!(
+			".unavatar unity active state missing visibility paths: {}",
+			applied.missing_visibility_paths.join(", ")
+		));
+	}
+}
+
 pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> Result<WardrobeApplyReport, String> {
 	let Some(unavatar) = document.unavatar.as_ref() else {
 		return Err("document has no .unavatar extension".to_string());
@@ -911,6 +937,20 @@ fn unavatar_material_extras(material: &gltf::Material<'_>) -> Option<Value> {
 
 fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	let mtoon = extras.get("mtoon")?;
+	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
+	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
+	let outline_width_unit = mtoon
+		.get("outlineWidthFactorUnit")
+		.or_else(|| mtoon.get("outline_width_factor_unit"))
+		.and_then(|v| v.as_str())
+		.unwrap_or("");
+	let liltoon_outline_width_scale = if outline_width_unit.eq_ignore_ascii_case("meters") {
+		1.0
+	} else if family.eq_ignore_ascii_case("liltoon") || source_shader.to_ascii_lowercase().contains("liltoon") {
+		0.01
+	} else {
+		1.0
+	};
 	let mut out = UnaMtoonMaterial::default();
 	if let Some(value) = json_bool(mtoon.get("transparentWithZWrite").or_else(|| mtoon.get("transparent_with_z_write"))) {
 		out.transparent_with_z_write = value;
@@ -987,7 +1027,7 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 		};
 	}
 	if let Some(value) = json_f32(mtoon.get("outlineWidthFactor").or_else(|| mtoon.get("outline_width_factor"))) {
-		out.outline_width_factor = value;
+		out.outline_width_factor = value * liltoon_outline_width_scale;
 	}
 	if let Some(value) = json_usize(
 		mtoon
@@ -1351,6 +1391,7 @@ impl AvatarImporter for GltfImporter {
 		}
 		let unavatar = root_json.as_ref().and_then(unavatar_extension_from_root);
 		if let Some(unavatar) = &unavatar {
+			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
 			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
 		}
 		let humanoid_profile = unavatar
@@ -1794,13 +1835,23 @@ mod tests {
 			],
 			"buffers": [{"byteLength": 12}],
 			"nodes": [
-				{"name": "root", "children": [1]},
-				{"name": "Hidden", "mesh": 0}
+				{"name": "root", "children": [1, 2]},
+				{"name": "Hidden", "mesh": 0},
+				{"name": "UnityInactive", "mesh": 0}
 			],
 			"extensionsUsed": ["UN_avatar"],
 			"extensions": {
 				"UN_avatar": {
 					"specVersion": "0.1-preview",
+					"variants": [{
+						"id": "current-state",
+						"source": "unity-active-state",
+						"operations": [{
+							"op": "nodeEnabled",
+							"path": "UnityInactive",
+							"visible": false
+						}]
+					}],
 					"humanoid": {
 						"Hips": "Hidden"
 					},
@@ -1852,6 +1903,7 @@ mod tests {
 		let scene = got.document.scene.as_ref().unwrap();
 		assert!(scene.nodes[0].visible);
 		assert!(!scene.nodes[1].visible);
+		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::MToonLike);
@@ -1859,7 +1911,7 @@ mod tests {
 		assert_eq!(mtoon.shade_color_factor, [0.7, 0.8, 0.9]);
 		assert_eq!(mtoon.shading_shift_factor, -0.1);
 		assert_eq!(mtoon.outline_width_mode, UnaMtoonOutlineWidthMode::WorldCoordinates);
-		assert_eq!(mtoon.outline_width_factor, 0.03);
+		assert!((mtoon.outline_width_factor - 0.0003).abs() < 1e-8);
 		let applied = apply_unavatar_wardrobe_set(&mut got.document, "visible").unwrap();
 		assert_eq!(applied.visibility_applied, 1);
 		assert_eq!(applied.visibility_missing, 0);

@@ -20,6 +20,7 @@ commands.allow = [
 	"launch_renderer",
 	"new_avatar_setting",
 	"pick_file_path",
+	"read_unavatar_wardrobe_options",
 	"read_vrm_metadata",
 	"save_avatar_thumbnail_icon",
 	"read_diagnostics_export",

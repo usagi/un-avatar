@@ -2816,8 +2816,10 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "reflectionCubeTextureIndex", ReadTexture(material, "_ReflectionCubeTex"));
 
                 var outlineWidth = ReadFloat(material, "_OutlineWidth", 0.0f);
-                mtoon["outlineWidthMode"] = outlineWidth > 0.0f ? "world_coordinates" : "none";
-                mtoon["outlineWidthFactor"] = outlineWidth;
+                var outlineWidthFactor = lowerShader.Contains("liltoon") ? outlineWidth * 0.01f : outlineWidth;
+                mtoon["outlineWidthMode"] = outlineWidthFactor > 0.0f ? "world_coordinates" : "none";
+                mtoon["outlineWidthFactor"] = outlineWidthFactor;
+                mtoon["outlineWidthFactorUnit"] = "meters";
                 var outlineColor = ReadColor(material, "_OutlineColor", Color.black);
                 mtoon["outlineColorFactor"] = FloatArray(outlineColor.r, outlineColor.g, outlineColor.b);
                 mtoon["outlineLightingMixFactor"] = ReadFloat(material, "_OutlineEnableLighting", 1.0f);

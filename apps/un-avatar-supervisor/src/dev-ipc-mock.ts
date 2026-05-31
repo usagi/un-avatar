@@ -349,6 +349,7 @@ export function installDevIpcMock(): void {
         return {
           available: true,
           base_label: "Base",
+          error: null,
           sets: [
             { id: "original", name: "Original" },
             { id: "noble1", name: "Noble 1" },
