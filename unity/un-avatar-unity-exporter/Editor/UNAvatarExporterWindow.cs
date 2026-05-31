@@ -2751,6 +2751,14 @@ namespace UNAvatar.UnityExporter
                 {
                     return true;
                 }
+                if (IsLilToonMaterial(material))
+                {
+                    return ReadFloat(material, "_Cutoff", 0.5f) <= 0.01f ||
+                        ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
+                        ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
+                        ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
+                        ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
+                }
                 return material.HasProperty("_Cutoff") ||
                     ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
@@ -2772,6 +2780,12 @@ namespace UNAvatar.UnityExporter
                 var shaderName = material.shader != null ? material.shader.name : "";
                 return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                     shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            private static bool IsLilToonMaterial(Material material)
+            {
+                var shaderName = material.shader != null ? material.shader.name : "";
+                return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0;
             }
 
             private static bool IsDoubleSidedMaterial(Material material)

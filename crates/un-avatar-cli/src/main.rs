@@ -1581,9 +1581,12 @@ fn run_diagnose(
 	}
 	for material in &report.scene.materials {
 		println!(
-			"material[{}]: name={:?} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
+			"material[{}]: name={:?} source={:?}/{:?} rq={:?} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
 			material.index,
 			material.name,
+			material.material_family,
+			material.source_shader,
+			material.render_queue,
 			material.shading,
 			material.alpha_mode,
 			material.alpha_cutoff,
