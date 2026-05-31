@@ -2645,7 +2645,7 @@ namespace UNAvatar.UnityExporter
                 {
                     ["name"] = material.name,
                     ["pbrMetallicRoughness"] = pbr,
-                    ["doubleSided"] = true
+                    ["doubleSided"] = IsDoubleSidedMaterial(material)
                 };
                 var normalTexture = ReadTexture(material, "_BumpMap") ?? ReadTexture(material, "_NormalMap");
                 if (normalTexture != null)
@@ -2725,6 +2725,20 @@ namespace UNAvatar.UnityExporter
                     ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
+            }
+
+            private static bool IsDoubleSidedMaterial(Material material)
+            {
+                var cull = ReadFloat(material, "_Cull", ReadFloat(material, "_CullMode", -1.0f));
+                if (cull >= 1.5f)
+                {
+                    return false;
+                }
+                if (cull >= 0.0f && cull < 0.5f)
+                {
+                    return true;
+                }
+                return true;
             }
 
             private int ExportDefaultMaterial()

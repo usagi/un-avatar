@@ -108,7 +108,7 @@ lilToon v0.1 優先項目。
 - cull mode
 - render queue hint
 
-Alpha mode は glTF fallback material へも反映する。transparent queue / alpha mode は `BLEND`、cutout queue / `_Cutoff` は `MASK` として出し、髪・レース・服飾の alpha 抜けを Runtime 側で扱えるようにする。
+Alpha mode は glTF fallback material へも反映する。transparent queue / alpha mode は `BLEND`、cutout queue / `_Cutoff` は `MASK` として出し、髪・レース・服飾の alpha 抜けを Runtime 側で扱えるようにする。Cull mode は glTF が表現できる範囲で扱い、Cull Off は `doubleSided=true`、Cull Back は `doubleSided=false` にする。Cull Front は現段階では専用表現を持たない。
 
 Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime で自然に見える `una_toon` / MToon-like parameter へ正規化する。
 
