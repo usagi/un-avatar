@@ -183,6 +183,43 @@ v0.1 の優先順。
 
 Runtime 側は既存 `UnaMaterialPbr` / `UnaMtoonMaterial` の実装資産を使って段階移行する。ただし設計上の正本は UNToon v2 であり、MToon-like は legacy 実装名または VRM 入力 profile を指す。
 
+glTF material には `extras.UN_avatar_material` を付与できる。これは glTF PBR fallback では表現しきれない Unity / VRC / lilToon 由来の source hint と、UNToon へ正規化した初期値を保持する material-local extension である。Runtime importer はこの payload を `UnaMaterialPbr.unavatar_material` に保持し、段階的な UNToon/lilToon 互換実装で参照できるようにする。
+
+```json
+{
+  "materials": [
+    {
+      "name": "body_b",
+      "pbrMetallicRoughness": {},
+      "extras": {
+        "UN_avatar_material": {
+          "sourceShader": "Hidden/lilToonOutline",
+          "family": "liltoon",
+          "unMaterialModel": "UNToon",
+          "renderQueue": 2450,
+          "floatParams": {
+            "_Cutoff": 0.001,
+            "_UseShadow": 1,
+            "_OutlineWidth": 0.08
+          },
+          "colorParams": {
+            "_ShadeColor": [0.9, 0.86, 0.88, 1.0]
+          },
+          "mtoon": {
+            "shadeColorFactor": [0.9, 0.86, 0.88],
+            "outlineWidthMode": "world_coordinates",
+            "outlineWidthFactor": 0.0008,
+            "outlineWidthFactorUnit": "meters"
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+`floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `mtoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `mtoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。
+
 ### Texture Storage
 
 v0.1 exporter は texture asset の source bytes を優先して `.unavatar` に埋め込む。Exporter は重い texture transcode / recompress / resize を行わない。Unity Editor 上で形式変換するほど品質劣化、世代劣化、encoder 差、export 時間増加、検証困難化のリスクが増えるためである。

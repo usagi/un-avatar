@@ -114,6 +114,8 @@ Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime �
 
 lilToon 由来 material では、本家 shader の `_UseShadow`、`_UseMatCap`、`_UseRim`、`_UseEmission` を尊重する。OFF の機能は texture / color が残っていても UNToon 側で寄与させない。`_MatCapMainStrength` / `_MatCapBlend`、`_RimMainStrength`、`_EmissionMainStrength` は v0.1 では各 color factor へ乗算して近似する。
 
+Exporter は glTF material の `extras.UN_avatar_material` に `sourceShader`、`family`、`renderQueue`、raw `floatParams` / `colorParams`、および初期 UNToon 正規化値を保持する。Runtime は正規化値で即時表示し、raw params は lilToon 互換性を段階的に上げるための診断・再解釈用 source hint とする。全 texture property を無差別に export すると未使用 texture を膨らませるため、v0.1 では main / shade / normal / matcap / rim / emission / outline mask / reflection など実際に使う slot だけを texture index または texture asset id として保持する。
+
 ## 7. Modular Avatar And Wardrobe Sets
 
 VRC 向け衣装対応は v2 の重要機能として扱う。
