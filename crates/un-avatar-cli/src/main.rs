@@ -107,6 +107,10 @@ struct DiagnoseVisibleMeshNodeSummary {
 	node: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_node_id: Option<String>,
 	mesh: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	skin: Option<usize>,
@@ -887,6 +891,32 @@ fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterial
 	}
 }
 
+fn scene_node_paths_by_index(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<Option<String>> {
+	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent: &str, out: &mut [Option<String>]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let segment = node.name.as_deref().unwrap_or("");
+		let path = if parent.is_empty() {
+			segment.to_string()
+		} else if segment.is_empty() {
+			parent.to_string()
+		} else {
+			format!("{parent}/{segment}")
+		};
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = (!path.is_empty()).then_some(path.clone());
+		}
+		for &child in &node.children {
+			visit(scene, child, &path, out);
+		}
+	}
+
+	let mut out = vec![None; scene.nodes.len()];
+	for &root in &scene.roots {
+		visit(scene, root, "", &mut out);
+	}
+	out
+}
+
 fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<bool> {
 	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
 		let Some(node) = scene.nodes.get(idx) else { return };
@@ -1056,6 +1086,7 @@ fn build_diagnose_report(
 			);
 		}
 		let effective_visibility = scene_effective_visibility(sc);
+		let node_paths_by_index = scene_node_paths_by_index(sc);
 		let visible_mesh_nodes = sc
 			.nodes
 			.iter()
@@ -1065,6 +1096,8 @@ fn build_diagnose_report(
 				node.mesh.map(|mesh| DiagnoseVisibleMeshNodeSummary {
 					node: idx,
 					name: node.name.clone(),
+					path: node_paths_by_index.get(idx).cloned().flatten(),
+					source_node_id: node.source_node_id.clone(),
 					mesh,
 					skin: node.skin,
 				})
