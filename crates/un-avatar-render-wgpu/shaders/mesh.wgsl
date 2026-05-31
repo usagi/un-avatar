@@ -389,7 +389,7 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 	let samp_tex = textureSample(tex, samp, i.uv);
 	let a = samp_tex.a * drawu.base_color.a;
 	mask_discard_mtoon(samp_tex.rgb, a, drawu.params.y, drawu.params.z);
-	let mask = textureSample(outline_width_tex, samp, i.uv).g;
+	let mask = textureSample(outline_width_tex, samp, i.uv).r;
 	if (mask <= 0.001) {
 		discard;
 	}
