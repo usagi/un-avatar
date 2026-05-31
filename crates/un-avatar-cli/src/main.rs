@@ -17,7 +17,7 @@ use un_avatar_io::{
 	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
 	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
 };
-use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer};
+use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer, WardrobeApplyReport};
 use un_avatar_io_una::{io_registry_with_una, read_una_any, UnaFileV0};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
@@ -74,6 +74,8 @@ struct DiagnoseReport {
 	vrm: Option<DiagnoseVrmSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	unavatar: Option<DiagnoseUnavatarSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
 	warnings: Vec<String>,
 }
 
@@ -300,6 +302,40 @@ struct DiagnoseUnavatarWardrobeSetSummary {
 	asset_groups: Vec<String>,
 	operation_count: usize,
 	operation_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseWardrobeProbeSummary {
+	set_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	display_name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	visibility_applied: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	visibility_missing: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	blendshape_applied: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	blendshape_missing: Option<usize>,
+	visible_mesh_node_count: usize,
+	visible_mesh_paths: Vec<String>,
+	nonzero_morph_weight_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	nonzero_morph_weights: Vec<DiagnoseWardrobeProbeMorphSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	missing_visibility_paths: Vec<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	missing_blendshapes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseWardrobeProbeMorphSummary {
+	mesh: usize,
+	primitive: usize,
+	index: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
+	weight: f32,
 }
 
 #[derive(Serialize)]
@@ -532,6 +568,9 @@ enum Commands {
 		/// Base 適用後に重ねる `.unavatar` wardrobe set id
 		#[arg(long, value_name = "SET_ID")]
 		wardrobe_set: Option<String>,
+		/// Base と全 wardrobe set の可視メッシュ／blendshape 状態を比較表示する
+		#[arg(long)]
+		wardrobe_probe_all: bool,
 		/// 結果を JSON で stdout に出す
 		#[arg(long)]
 		json: bool,
@@ -660,8 +699,9 @@ fn run(cli: Cli) -> Result<(), String> {
 			path,
 			input_format,
 			wardrobe_set,
+			wardrobe_probe_all,
 			json,
-		} => run_diagnose(&plugin_dirs, path, input_format, wardrobe_set, json),
+		} => run_diagnose(&plugin_dirs, path, input_format, wardrobe_set, wardrobe_probe_all, json),
 		Commands::Vmc { command } => run_vmc(command),
 	}
 }
@@ -1131,6 +1171,127 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 		.collect()
 }
 
+fn unavatar_wardrobe_sets(doc: &UnaDocument) -> Vec<(String, Option<String>)> {
+	doc.unavatar
+		.as_ref()
+		.and_then(|ext| ext.source.get("wardrobe"))
+		.and_then(|wardrobe| wardrobe.get("sets"))
+		.and_then(|sets| sets.as_array())
+		.map(|sets| {
+			sets.iter()
+				.filter_map(|set| {
+					let id = set.get("id").and_then(|v| v.as_str())?.to_owned();
+					let display_name = json_string(set.get("displayName"));
+					Some((id, display_name))
+				})
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+fn unavatar_base_set_id(doc: &UnaDocument) -> String {
+	doc.unavatar
+		.as_ref()
+		.and_then(|ext| ext.source.get("wardrobe"))
+		.and_then(|wardrobe| wardrobe.get("baseSet"))
+		.and_then(|v| v.as_str())
+		.unwrap_or("base")
+		.to_owned()
+}
+
+fn wardrobe_probe_for_document(
+	set_id: String,
+	display_name: Option<String>,
+	doc: &UnaDocument,
+	apply_report: Option<WardrobeApplyReport>,
+) -> DiagnoseWardrobeProbeSummary {
+	let mut visible_mesh_paths = Vec::new();
+	let mut nonzero_morph_weights = Vec::new();
+	if let Some(scene) = doc.scene.as_ref() {
+		let effective_visibility = scene_effective_visibility(scene);
+		let node_paths_by_index = scene_node_paths_by_index(scene);
+		for (node_index, node) in scene.nodes.iter().enumerate() {
+			if !effective_visibility.get(node_index).copied().unwrap_or(false) {
+				continue;
+			}
+			if node.mesh.is_some() {
+				let path = node_paths_by_index
+					.get(node_index)
+					.cloned()
+					.flatten()
+					.or_else(|| node.name.clone())
+					.unwrap_or_else(|| format!("#{node_index}"));
+				visible_mesh_paths.push(path);
+			}
+		}
+		for (mesh_index, primitives) in scene.meshes.iter().enumerate() {
+			for (primitive_index, primitive) in primitives.iter().enumerate() {
+				for (weight_index, &weight) in primitive.default_morph_weights.iter().enumerate() {
+					if weight.abs() > 0.000001 {
+						nonzero_morph_weights.push(DiagnoseWardrobeProbeMorphSummary {
+							mesh: mesh_index,
+							primitive: primitive_index,
+							index: weight_index,
+							name: primitive.morph_target_names.get(weight_index).cloned(),
+							weight,
+						});
+					}
+				}
+			}
+		}
+	}
+	let (visibility_applied, visibility_missing, blendshape_applied, blendshape_missing, missing_visibility_paths, missing_blendshapes) =
+		if let Some(report) = apply_report {
+			(
+				Some(report.visibility_applied),
+				Some(report.visibility_missing),
+				Some(report.blendshape_applied),
+				Some(report.blendshape_missing),
+				report.missing_visibility_paths,
+				report.missing_blendshapes,
+			)
+		} else {
+			(None, None, None, None, Vec::new(), Vec::new())
+		};
+	DiagnoseWardrobeProbeSummary {
+		set_id,
+		display_name,
+		visibility_applied,
+		visibility_missing,
+		blendshape_applied,
+		blendshape_missing,
+		visible_mesh_node_count: visible_mesh_paths.len(),
+		visible_mesh_paths,
+		nonzero_morph_weight_count: nonzero_morph_weights.len(),
+		nonzero_morph_weights,
+		missing_visibility_paths,
+		missing_blendshapes,
+	}
+}
+
+fn build_wardrobe_probes(base_doc: &UnaDocument) -> Result<Vec<DiagnoseWardrobeProbeSummary>, String> {
+	if base_doc.unavatar.is_none() {
+		return Ok(Vec::new());
+	}
+	let base_id = unavatar_base_set_id(base_doc);
+	let sets = unavatar_wardrobe_sets(base_doc);
+	let mut probes = Vec::new();
+	let base_display_name = sets
+		.iter()
+		.find(|(id, _)| id == &base_id)
+		.and_then(|(_, display_name)| display_name.clone());
+	probes.push(wardrobe_probe_for_document(base_id.clone(), base_display_name, base_doc, None));
+	for (set_id, display_name) in sets {
+		if set_id == base_id {
+			continue;
+		}
+		let mut doc = base_doc.clone();
+		let apply_report = apply_unavatar_wardrobe_set(&mut doc, &set_id)?;
+		probes.push(wardrobe_probe_for_document(set_id, display_name, &doc, Some(apply_report)));
+	}
+	Ok(probes)
+}
+
 fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
 	value.and_then(|v| v.as_str()).map(str::to_owned)
 }
@@ -1224,6 +1385,7 @@ fn build_diagnose_report(
 	provider_plugin_id: Option<String>,
 	import_report: ImportReport,
 	doc: UnaDocument,
+	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
 ) -> DiagnoseReport {
 	let mut warnings = Vec::new();
 	let scene = if let Some(sc) = doc.scene.as_ref() {
@@ -1448,6 +1610,7 @@ fn build_diagnose_report(
 		expressions,
 		vrm,
 		unavatar,
+		wardrobe_probes,
 		warnings,
 	}
 }
@@ -1535,6 +1698,7 @@ fn run_diagnose(
 	path: PathBuf,
 	input_format: Option<String>,
 	wardrobe_set: Option<String>,
+	wardrobe_probe_all: bool,
 	json: bool,
 ) -> Result<(), String> {
 	let reg = io_registry_for_cli(plugin_dirs)?;
@@ -1559,6 +1723,7 @@ fn run_diagnose(
 			ImportOptions,
 		)
 		.map_err(|e| e.to_string())?;
+	let base_document_for_probes = imported.document.clone();
 	if let Some(set_id) = wardrobe_set.as_deref().filter(|set_id| !set_id.trim().is_empty()) {
 		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
 		imported.report.push_info(format!(
@@ -1566,7 +1731,19 @@ fn run_diagnose(
 			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
 		));
 	}
-	let report = build_diagnose_report(&path, desc.id.0, desc.provider_plugin_id, imported.report, imported.document);
+	let wardrobe_probes = if wardrobe_probe_all {
+		build_wardrobe_probes(&base_document_for_probes)?
+	} else {
+		Vec::new()
+	};
+	let report = build_diagnose_report(
+		&path,
+		desc.id.0,
+		desc.provider_plugin_id,
+		imported.report,
+		imported.document,
+		wardrobe_probes,
+	);
 	if json {
 		println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
 		return Ok(());
@@ -1601,6 +1778,36 @@ fn run_diagnose(
 				"wardrobe_set[{}]: name={:?} source={:?} ops={} {:?} groups={:?}",
 				set.id, set.display_name, set.source, set.operation_count, set.operation_counts, set.asset_groups
 			);
+		}
+		for probe in &report.wardrobe_probes {
+			println!(
+				"wardrobe_probe[{}]: name={:?} visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} missing=vis {} blend {}",
+				probe.set_id,
+				probe.display_name,
+				probe.visible_mesh_node_count,
+				probe.nonzero_morph_weight_count,
+				probe.visibility_applied,
+				probe.visibility_missing,
+				probe.blendshape_applied,
+				probe.blendshape_missing,
+				probe.missing_visibility_paths.len(),
+				probe.missing_blendshapes.len()
+			);
+			for path in probe.visible_mesh_paths.iter().take(24) {
+				println!("  visible: {path}");
+			}
+			if probe.visible_mesh_paths.len() > 24 {
+				println!("  visible: ... {} more", probe.visible_mesh_paths.len() - 24);
+			}
+			for morph in probe.nonzero_morph_weights.iter().take(12) {
+				println!(
+					"  morph: mesh={} primitive={} index={} name={:?} weight={}",
+					morph.mesh, morph.primitive, morph.index, morph.name, morph.weight
+				);
+			}
+			if probe.nonzero_morph_weights.len() > 12 {
+				println!("  morph: ... {} more", probe.nonzero_morph_weights.len() - 12);
+			}
 		}
 	} else {
 		println!("unavatar: none");
@@ -1933,6 +2140,7 @@ mod tests {
 			None,
 			ImportReport::default(),
 			doc,
+			Vec::new(),
 		);
 
 		assert_eq!(report.scene.material_count, 2);
