@@ -345,7 +345,7 @@ struct ExpressionBinding {
 	weight_scale: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawPipelineKind {
 	OpaqueLit,
 	OpaqueUnlit,
@@ -366,6 +366,18 @@ fn draw_batch(pipeline: DrawPipelineKind, capacity: usize) -> DrawBatch {
 		pipeline,
 		draw_indices: Vec::with_capacity(capacity),
 	}
+}
+
+fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelineKind, draw_index: usize, batch_capacity: usize) {
+	if let Some(last) = batches.last_mut() {
+		if last.pipeline == pipeline {
+			last.draw_indices.push(draw_index);
+			return;
+		}
+	}
+	let mut batch = draw_batch(pipeline, batch_capacity);
+	batch.draw_indices.push(draw_index);
+	batches.push(batch);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -443,11 +455,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueMtoon, batch_capacity),
 	];
-	let mut blended_batches = vec![
-		draw_batch(DrawPipelineKind::BlendLit, batch_capacity),
-		draw_batch(DrawPipelineKind::BlendUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::BlendMtoon, batch_capacity),
-	];
+	let mut blended_batches = Vec::new();
 
 	for (draw_index, draw) in draws.iter().enumerate() {
 		let shading = effective_mesh_shading(draw, opts);
@@ -468,9 +476,16 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaAlphaMode::Mask => opaque_batches[3 + shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Blend if draw.mtoon.transparent_with_z_write && shading == UnaShadingModel::MToonLike => {
 				transparent_zwrite_draw_indices.push(draw_index);
-				blended_batches[shading_index].draw_indices.push(draw_index);
+				append_ordered_draw_batch(&mut blended_batches, DrawPipelineKind::BlendMtoon, draw_index, batch_capacity);
 			}
-			UnaAlphaMode::Blend => blended_batches[shading_index].draw_indices.push(draw_index),
+			UnaAlphaMode::Blend => {
+				let pipeline = match shading {
+					UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
+					UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
+					UnaShadingModel::MToonLike => DrawPipelineKind::BlendMtoon,
+				};
+				append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
+			}
 		}
 	}
 
@@ -481,7 +496,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
-	blended_batches.retain(|batch| !batch.draw_indices.is_empty());
 	(
 		outline_draw_indices,
 		opaque_batches,
@@ -2376,6 +2390,23 @@ mod tests {
 		};
 
 		assert_eq!(scene_effective_visibility(&scene), vec![false, false]);
+	}
+
+	#[test]
+	fn ordered_draw_batches_preserve_transparent_sequence() {
+		let mut batches = Vec::new();
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 0, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 1, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 2, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 3, 1);
+
+		assert_eq!(batches.len(), 3);
+		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendMtoon);
+		assert_eq!(batches[0].draw_indices, vec![0]);
+		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendLit);
+		assert_eq!(batches[1].draw_indices, vec![1]);
+		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendMtoon);
+		assert_eq!(batches[2].draw_indices, vec![2, 3]);
 	}
 
 	#[test]
