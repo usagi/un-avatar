@@ -2674,11 +2674,16 @@ namespace UNAvatar.UnityExporter
                 {
                     gltfMaterial["emissiveFactor"] = FloatArray(emissionColor.r, emissionColor.g, emissionColor.b);
                 }
-                if (baseColor.a < 0.999f || material.renderQueue >= 3000)
+                if (IsAlphaBlendMaterial(material, baseColor))
                 {
                     gltfMaterial["alphaMode"] = "BLEND";
                 }
-                if (material.HasProperty("_Cutoff"))
+                else if (IsAlphaMaskMaterial(material))
+                {
+                    gltfMaterial["alphaMode"] = "MASK";
+                    gltfMaterial["alphaCutoff"] = ReadFloat(material, "_Cutoff", 0.5f);
+                }
+                else if (material.HasProperty("_Cutoff"))
                 {
                     gltfMaterial["alphaCutoff"] = ReadFloat(material, "_Cutoff", 0.5f);
                 }
@@ -2695,6 +2700,31 @@ namespace UNAvatar.UnityExporter
                 var index = materials.Count - 1;
                 materialIndices[material] = index;
                 return index;
+            }
+
+            private static bool IsAlphaBlendMaterial(Material material, Color baseColor)
+            {
+                if (baseColor.a < 0.999f || material.renderQueue >= 3000)
+                {
+                    return true;
+                }
+                return ReadFloat(material, "_TransparentMode", 0.0f) >= 1.5f ||
+                    ReadFloat(material, "_AlphaMode", 0.0f) >= 1.5f ||
+                    ReadFloat(material, "_BlendMode", 0.0f) >= 1.5f ||
+                    ReadFloat(material, "_Mode", 0.0f) >= 1.5f;
+            }
+
+            private static bool IsAlphaMaskMaterial(Material material)
+            {
+                if (material.renderQueue >= 2450 && material.renderQueue < 3000)
+                {
+                    return true;
+                }
+                return material.HasProperty("_Cutoff") ||
+                    ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
+                    ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
+                    ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
+                    ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
             }
 
             private int ExportDefaultMaterial()
