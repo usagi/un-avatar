@@ -49,6 +49,7 @@ v1 は **VRM / glTF avatar renderer + Supervisor Console + UNMF/Z / VMC input + 
 
 必要性が見えた順に検討する。
 
+- v2 planning: `.unavatar` GLB 互換形式、VRC / Unity Exporter、lilToon / PhysBone / expressions / variants 対応は [`v2-roadmap.md`](v2-roadmap.md) を正とする
 - Release QA: DPI / small window / long profile name / first-run profile storage の確認を増やす
 - Documentation: ユーザー向け導入手順、OBS + Spout2 の短い手順、トラブルシュート
 - Renderer performance: 実測ベースで startup / frame CPU / GPU time を継続改善

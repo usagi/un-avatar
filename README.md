@@ -87,6 +87,7 @@ Renderer だけを smoke test する場合:
 
 ```sh
 cargo xtask render-smoke
+cargo xtask unity-exporter-package
 ```
 
 Supervisor の UI を編集する場合:
@@ -103,6 +104,7 @@ npm run dev
 
 - [Documentation Index](docs/README.md): 公開文書と開発メモの索引
 - [Roadmap](docs/roadmap.md): 実装状況、v1 境界、次の候補
+- [v2 Roadmap](docs/v2-roadmap.md): `.unavatar` / VRC Unity Exporter を中核にした v2 計画
 - [Runtime MVP](docs/runtime-mvp.md): VRM / VMC / MToon / wgpu / Spout2 runtime
 - [Profile Settings UI v1 Design](docs/profile-settings-ui-v1-design.md): Profiles / Renderers UI の情報設計メモ
 - [Render Quality Plan](docs/render-quality-plan.md): AA、mipmap、texture compression、描画品質

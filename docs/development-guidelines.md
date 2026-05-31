@@ -63,10 +63,12 @@ cargo xtask run-renderer --profile model2 -- --debug-material-dump
 
 ```sh
 cargo xtask spout2
+cargo xtask unity-exporter-package
 cargo xtask release-package --version 1.0.0
 ```
 
 `release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` を作る。
+`unity-exporter-package` は Unity Editor を起動せず、`unity/un-avatar-unity-exporter` を `target/unity/un-avatar-unity-exporter` へ UPM package layout としてコピーする。
 
 ## v1 リリース前の手動確認
 

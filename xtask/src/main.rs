@@ -12,6 +12,7 @@ use zip::{write::SimpleFileOptions, CompressionMethod};
 const SPOUT2_REPO_URL: &str = "https://github.com/leadedge/Spout2.git";
 const DEFAULT_SPOUT2_REF: &str = "2.007.017";
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
+const UNITY_EXPORTER_PACKAGE: &str = "un-avatar-unity-exporter";
 
 fn repo_root() -> &'static Path {
 	Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1009,6 +1010,56 @@ fn spout2_package_dir(repo: &Path) -> PathBuf {
 	repo.join("target").join("package").join("un-avatar")
 }
 
+fn unity_exporter_source_dir(repo: &Path) -> PathBuf {
+	repo.join("unity").join(UNITY_EXPORTER_PACKAGE)
+}
+
+fn stage_unity_exporter_package(repo: &Path, dst: &Path) -> bool {
+	let source = unity_exporter_source_dir(repo);
+	if !source.is_dir() {
+		eprintln!("unity-exporter-package: source directory not found: {}", source.display());
+		return false;
+	}
+	if dst.exists() {
+		if let Err(err) = fs::remove_dir_all(dst) {
+			eprintln!("unity-exporter-package: remove {}: {err}", dst.display());
+			return false;
+		}
+	}
+	if !copy_dir_contents(&source, dst) {
+		return false;
+	}
+	println!("unity-exporter-package: staged {}", dst.display());
+	true
+}
+
+fn run_unity_exporter_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut output_dir = None;
+	let mut iter = args.peekable();
+	while let Some(arg) = iter.next() {
+		match arg.as_str() {
+			"--output-dir" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-package: --output-dir には path が必要です");
+					return false;
+				};
+				output_dir = Some(PathBuf::from(value));
+			}
+			"help" | "--help" | "-h" => {
+				print_unity_exporter_package_usage();
+				return true;
+			}
+			other => {
+				eprintln!("unity-exporter-package: 不明な option: {other}");
+				print_unity_exporter_package_usage();
+				return false;
+			}
+		}
+	}
+	let dst = output_dir.unwrap_or_else(|| repo.join("target").join("unity").join(UNITY_EXPORTER_PACKAGE));
+	stage_unity_exporter_package(repo, &dst)
+}
+
 fn ensure_spout2_source(repo: &Path, git_ref: &str) -> bool {
 	let source = spout2_source_dir(repo);
 	if source.join(".git").is_dir() {
@@ -1439,7 +1490,8 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let package = spout2_package_dir(repo);
 	let ok = stage_exe(repo, "un-avatar-supervisor", &package, "un-avatar-supervisor")
 		&& stage_exe(repo, "un-avatar-renderer", &package, "un-avatar-renderer")
-		&& stage_package_docs(repo);
+		&& stage_package_docs(repo)
+		&& stage_unity_exporter_package(repo, &package.join("unity").join(UNITY_EXPORTER_PACKAGE));
 	if ok {
 		println!("package: staged {}", package.display());
 	}
@@ -1559,7 +1611,17 @@ fn print_package_usage() {
 		"cargo xtask package [--skip-spout2]\n\
 	\n\
 	Releaseビルドを行い、target/package/un-avatar に最小配布レイアウトを作る。\n\
+	Unity exporter package は target/package/un-avatar/unity/ に同梱する。\n\
 	既定では cargo xtask spout2 も実行し、spout-sdk feature付きでrendererをビルドする。"
+	);
+}
+
+fn print_unity_exporter_package_usage() {
+	eprintln!(
+		"cargo xtask unity-exporter-package [--output-dir <path>]\n\
+	\n\
+	unity/un-avatar-unity-exporter を UPM package layout としてコピーする。\n\
+	既定出力先は target/unity/un-avatar-unity-exporter。Unity Editor の compile は実行しない。"
 	);
 }
 
@@ -1621,6 +1683,7 @@ commands:\n\
 	acceptance-preflight MVP acceptance の実機確認前に必要な高速preflightを実行\n\
 	acceptance-prepare   MVP acceptance の証跡テンプレートと実測用manifestを生成\n\
   spout2       Spout2 を取得・CMake Release ビルドし、配布物へ配置\n\
+  unity-exporter-package Unity Editor exporter の UPM package layout を作る\n\
   package      Releaseビルドし、target/package/un-avatar に最小配布レイアウトを作る\n\
 	release-package target/package/un-avatar を release-packages/un-avatar-<version>.zip に固める\n\
   ci           fmt --check → check --workspace → test --workspace → smoke → render-smoke\n"
@@ -1647,6 +1710,7 @@ fn main() {
 		"acceptance-preflight" => run_acceptance_preflight(repo),
 		"acceptance-prepare" => run_acceptance_prepare(repo),
 		"spout2" => run_spout2(repo, args),
+		"unity-exporter-package" => run_unity_exporter_package(repo, args),
 		"package" => run_package(repo, args),
 		"release-package" | "make-release-package" => run_release_package(repo, args),
 		"ci" => {
