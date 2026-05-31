@@ -813,6 +813,16 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 	}
 }
 
+fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts) -> bool {
+	if opts.force_simple_basecolor || opts.debug_primitive_colors {
+		return false;
+	}
+	if opts.relax_iris_alpha && iris_like_material_name(mat.name.as_deref()) && mat.base_color_factor[3] <= 0.001 {
+		return false;
+	}
+	mat.base_color_factor[3] <= 0.001 && matches!(mat.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
+}
+
 fn mesh_draw_material_gpu(
 	mat: &UnaMaterialPbr,
 	mtoon: &UnaMtoonMaterial,
@@ -1747,6 +1757,12 @@ impl SceneMeshes {
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
+				let mi = buf.material_index.unwrap_or(0);
+				let mat = scene.materials.get(mi).cloned().unwrap_or_default();
+				if material_is_fully_invisible_for_draw(&mat, &opts) {
+					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
+					continue;
+				}
 				let Some(exp) = expand_primitive(buf) else { continue };
 				let ExpandedPrimitive {
 					mut verts,
@@ -1849,8 +1865,6 @@ impl SceneMeshes {
 					}),
 				};
 
-				let mi = buf.material_index.unwrap_or(0);
-				let mat = scene.materials.get(mi).cloned().unwrap_or_default();
 				let mtoon = mat.mtoon.clone().unwrap_or_default();
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let shade_view = texture_view_or(&image_views, mtoon.shade_multiply_texture_index, &white_view);
@@ -2407,6 +2421,24 @@ mod tests {
 		assert_eq!(batches[1].draw_indices, vec![1]);
 		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendMtoon);
 		assert_eq!(batches[2].draw_indices, vec![2, 3]);
+	}
+
+	#[test]
+	fn fully_transparent_blend_material_is_skipped_unless_debug_overrides_it() {
+		let mat = UnaMaterialPbr {
+			name: Some("toumei".to_string()),
+			alpha_mode: UnaAlphaMode::Blend,
+			base_color_factor: [1.0, 1.0, 1.0, 0.0],
+			..Default::default()
+		};
+		assert!(material_is_fully_invisible_for_draw(&mat, &SceneMeshLoadOpts::default()));
+		assert!(!material_is_fully_invisible_for_draw(
+			&mat,
+			&SceneMeshLoadOpts {
+				debug_primitive_colors: true,
+				..Default::default()
+			}
+		));
 	}
 
 	#[test]
