@@ -31,7 +31,7 @@
 - Alpha-to-Coverage は MSAA 有効時のみ意味があるため、MSAA 実装と同じ段階で扱う。
 - Mask材質や髪の細いalpha cutoutに有効だが、MToonの見た目を壊す場合があるので material policy でON/OFF可能にする。
 - Transparent材質は従来通り depth writeなしのblend pass を基本にする。
-- 透明描画順は `opaque -> mask -> outline -> transparent` を土台にし、transparentは将来的に camera distance sort を行う。
+- 透明描画順は `opaque -> mask -> outline -> transparent` を土台にする。transparent はまず authoring / glTF draw order を保持し、shader 種別で大きく並べ替えない。camera distance sort は VRC / lilToon 系の髪や半透明パーツで authoring order を壊すリスクがあるため、後段で material / mesh 単位の opt-in として評価する。
 - 髪マテリアルは特に破綻しやすいため、material name / VRM renderQueue / MToon transparent hints を使った order bucket を別途持つ。
 
 ## Mipmap / Texture LOD / Anisotropic Filtering
