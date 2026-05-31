@@ -964,13 +964,15 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			} else {
 				UnaShadingModel::LitLambert
 			};
-			let alpha_cutoff = m.alpha_cutoff().unwrap_or(0.5);
+			let alpha_cutoff_opt = m.alpha_cutoff();
+			let alpha_cutoff = alpha_cutoff_opt.unwrap_or(0.5);
 			let gltf_alpha_mode = match m.alpha_mode() {
 				gltf::material::AlphaMode::Opaque => UnaAlphaMode::Opaque,
 				gltf::material::AlphaMode::Mask => UnaAlphaMode::Mask,
 				gltf::material::AlphaMode::Blend => UnaAlphaMode::Blend,
 			};
-			let alpha_mode = unavatar_material_inferred_alpha_mode(extras.as_ref()).unwrap_or(gltf_alpha_mode);
+			let alpha_mode = unavatar_material_inferred_alpha_mode(extras.as_ref(), gltf_alpha_mode, alpha_cutoff_opt, tex.is_some())
+				.unwrap_or(gltf_alpha_mode);
 			UnaMaterialPbr {
 				name,
 				double_sided,
@@ -1010,7 +1012,12 @@ fn unavatar_node_id(node: &gltf::Node<'_>) -> Option<String> {
 		.map(str::to_string)
 }
 
-fn unavatar_material_inferred_alpha_mode(extras: Option<&Value>) -> Option<UnaAlphaMode> {
+fn unavatar_material_inferred_alpha_mode(
+	extras: Option<&Value>,
+	gltf_alpha_mode: UnaAlphaMode,
+	alpha_cutoff: Option<f32>,
+	has_base_color_texture: bool,
+) -> Option<UnaAlphaMode> {
 	let extras = extras?;
 	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
@@ -1023,6 +1030,8 @@ fn unavatar_material_inferred_alpha_mode(extras: Option<&Value>) -> Option<UnaAl
 		Some(UnaAlphaMode::Mask)
 	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
 		Some(UnaAlphaMode::Blend)
+	} else if gltf_alpha_mode == UnaAlphaMode::Opaque && has_base_color_texture && alpha_cutoff.is_some() {
+		Some(UnaAlphaMode::Mask)
 	} else {
 		None
 	}
@@ -2045,8 +2054,21 @@ mod tests {
 			"sourceShader": "lilToon"
 		});
 
-		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&transparent)), Some(UnaAlphaMode::Blend));
-		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&cutout)), Some(UnaAlphaMode::Mask));
-		assert_eq!(unavatar_material_inferred_alpha_mode(Some(&opaque)), None);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&cutout), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Mask)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Opaque, None, true),
+			None
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Opaque, Some(0.001), true),
+			Some(UnaAlphaMode::Mask)
+		);
 	}
 }
