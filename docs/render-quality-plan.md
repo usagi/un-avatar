@@ -33,6 +33,7 @@
 - Transparent材質は従来通り depth writeなしのblend pass を基本にする。
 - 透明描画順は `opaque -> mask -> outline -> transparent` を土台にする。transparent はまず authoring / glTF draw order を保持し、shader 種別で大きく並べ替えない。camera distance sort は VRC / lilToon 系の髪や半透明パーツで authoring order を壊すリスクがあるため、後段で material / mesh 単位の opt-in として評価する。
 - 髪マテリアルは特に破綻しやすいため、material name / VRM renderQueue / MToon transparent hints を使った order bucket を別途持つ。
+- 透明 PNG などで alpha=0 の texel に黒や白の未使用RGBが残っている場合、bilinear sampling で縁や穴に色漏れが出る。`.unavatar` の原本画像は変更せず、renderer の processed texture cache / GPU upload 用RGBAだけ transparent RGB bleed fill を適用し、近傍の不透明色で透明texelのRGBを補完する。
 
 ## Mipmap / Texture LOD / Anisotropic Filtering
 
@@ -102,6 +103,7 @@
 - draw uniform はstatic material uniformとdynamic transform uniformに分離し、VMC/retarget時のdraw更新はmodel行列のみを書き込む。
 - texture resolution limit は既定OFF。指定時はロード時にRGBAを上限へ縮小してからmipmapを生成する。`auto` はSpout解像度、なければwindow解像度の長辺から1K/2K/4K/8K tierを選ぶ。
 - processed texture cache は既定ON。`UN_AVATAR_TEXTURE_CACHE_DIR`、またはOS標準cache配下に、入力RGBA・寸法・resolution policy・cache versionでkey化したresize/mipmap済みRGBA mip chainを保存する。圧縮ON時はBC1 / BC5 / BC7の圧縮済みblock mip chainも同じcache配下へ保存し、再起動時のCPU圧縮を避ける。CLI `--no-processed-texture-cache` またはmanifest `render_quality.processed_texture_cache = false` で両方を無効化できる。
+- processed texture cache のRGBAはアップロード用派生物であり、透明texelのRGB補完など見た目安定化の処理を含めてよい。`.unavatar` 内の source bytes / MIME は optimizer など明示的な変換を除いて dirty にしない。
 - skin tone matching は既定OFFの実験機能。`render_quality.skin_tone_matching = true` のとき、ロード時に顔・体のbaseColorテクスチャから肌色クラスタを推定し、CIELAB上で首境界が目立ちにくい顔寄りの目標色へ寄せる。顔/体のサンプル色は、material名で対象primitiveを絞った上でモデル頂点position/UVから顔下端中央と体上端中央のテクスチャ座標を採る。UVサンプルが取れないモデルだけ全体肌色中央値へfallbackする。現段階ではON/OFFのみ。
 - texture compression は既定 `source`。`auto` はrole別の保守的な自動圧縮、`advanced` はmanifest詳細設定を有効化する。現在はBC1 sRGB、BC5 linear、BC7 sRGBを実upload形式として使い、非対応GPU・非対象role・顔/瞳/data系既定はRGBA pathへ戻す。KTX2/BasisUの実codec/transcodeとASTC/ETC2 uploadは後段。
 - BCn圧縮済みcacheはblock整列済みmip寸法を保存し、cache version変更なしに寸法解釈を変えない。

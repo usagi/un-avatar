@@ -2873,8 +2873,63 @@ namespace UNAvatar.UnityExporter
                     ["sourceShader"] = shaderName,
                     ["family"] = lowerShader.Contains("liltoon") ? "liltoon" : lowerShader.Contains("mtoon") ? "mtoon" : "toon",
                     ["unMaterialModel"] = "UNToon",
+                    ["renderQueue"] = material.renderQueue,
+                    ["floatParams"] = BuildMaterialFloatParams(material),
+                    ["colorParams"] = BuildMaterialColorParams(material),
                     ["mtoon"] = mtoon
                 };
+            }
+
+            private static Dictionary<string, object> BuildMaterialFloatParams(Material material)
+            {
+                var values = new Dictionary<string, object>();
+                var shader = material.shader;
+                if (shader == null)
+                {
+                    return values;
+                }
+                var count = shader.GetPropertyCount();
+                for (var i = 0; i < count; i++)
+                {
+                    var type = shader.GetPropertyType(i);
+                    if (type != UnityEngine.Rendering.ShaderPropertyType.Float &&
+                        type != UnityEngine.Rendering.ShaderPropertyType.Range)
+                    {
+                        continue;
+                    }
+                    var name = shader.GetPropertyName(i);
+                    if (!string.IsNullOrEmpty(name) && material.HasProperty(name))
+                    {
+                        values[name] = material.GetFloat(name);
+                    }
+                }
+                return values;
+            }
+
+            private static Dictionary<string, object> BuildMaterialColorParams(Material material)
+            {
+                var values = new Dictionary<string, object>();
+                var shader = material.shader;
+                if (shader == null)
+                {
+                    return values;
+                }
+                var count = shader.GetPropertyCount();
+                for (var i = 0; i < count; i++)
+                {
+                    if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Color)
+                    {
+                        continue;
+                    }
+                    var name = shader.GetPropertyName(i);
+                    if (string.IsNullOrEmpty(name) || !material.HasProperty(name))
+                    {
+                        continue;
+                    }
+                    var color = material.GetColor(name);
+                    values[name] = FloatArray(color.r, color.g, color.b, color.a);
+                }
+                return values;
             }
 
             private void AddTextureIndex(Dictionary<string, object> dst, string key, Texture texture)
