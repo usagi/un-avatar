@@ -25,6 +25,30 @@ avatar.unavatar
 - v0.1 では原則 `extensionsRequired` に入れない。
 - U.N. Avatar 拡張を無視した glTF viewer でも、最低限の見た目を表示できる状態を目指す。
 
+glTF node には必要に応じて `extras.UN_avatar_node` を付与する。これは標準 glTF viewer には無視されるが、U.N. Avatar Runtime は wardrobe / dynamics / diagnostics の stable target として使う。
+
+```json
+{
+  "nodes": [
+    {
+      "name": "Body_b",
+      "mesh": 5,
+      "skin": 5,
+      "extras": {
+        "UN_avatar_node": {
+          "nodeId": "node_0123456789abcdef",
+          "path": "Body_b"
+        }
+      }
+    }
+  ]
+}
+```
+
+- `nodeId` は Exporter が hierarchy path + sibling index から生成する stable id。
+- `path` は UI 表示と古い `.unavatar` の fallback 解決用。正本ではない。
+- v0.1 Runtime は `target.nodeId` を最優先し、node extras にない古いファイルでは root `extensions.UN_avatar.nodes[]` registry、最後に path fallback を使う。
+
 ## 3. Extension Layout
 
 v0.1 は単一 extension `UN_avatar` にまとめる。
