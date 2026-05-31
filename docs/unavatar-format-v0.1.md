@@ -220,7 +220,7 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 
 `floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `mtoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `mtoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。
 
-lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。
+lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は cutout hint として扱う。
 
 ### Texture Storage
 

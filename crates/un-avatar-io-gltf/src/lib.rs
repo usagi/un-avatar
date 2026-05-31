@@ -1022,6 +1022,14 @@ fn unavatar_material_inferred_alpha_mode(
 	}
 
 	let shader = source_shader.to_ascii_lowercase();
+	if let Some(render_queue) = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue"))) {
+		if render_queue >= 3000 {
+			return Some(UnaAlphaMode::Blend);
+		}
+		if (2450..3000).contains(&render_queue) {
+			return Some(UnaAlphaMode::Mask);
+		}
+	}
 	if shader.contains("cutout") {
 		Some(UnaAlphaMode::Mask)
 	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
@@ -1157,6 +1165,12 @@ fn json_f32(value: Option<&Value>) -> Option<f32> {
 
 fn json_usize(value: Option<&Value>) -> Option<usize> {
 	value.and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok())
+}
+
+fn json_i32(value: Option<&Value>) -> Option<i32> {
+	value
+		.and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())))
+		.and_then(|v| i32::try_from(v).ok())
 }
 
 fn json_vec3(value: Option<&Value>) -> Option<[f32; 3]> {
@@ -2062,6 +2076,16 @@ mod tests {
 			"family": "liltoon",
 			"sourceShader": "lilToon"
 		});
+		let queue_cutout = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"renderQueue": 2450
+		});
+		let queue_transparent = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"renderQueue": 3000
+		});
 
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
@@ -2082,6 +2106,14 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Opaque, Some(0.5), true),
 			None
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&queue_cutout), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Mask)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&queue_transparent), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
 		);
 	}
 }
