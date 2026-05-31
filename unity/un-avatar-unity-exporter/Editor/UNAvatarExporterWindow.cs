@@ -1993,17 +1993,18 @@ namespace UNAvatar.UnityExporter
         {
             if (root == target)
             {
-                return root.name + "[0]";
+                return "$root[0]";
             }
             var parts = new Stack<string>();
             var current = target;
             while (current != null)
             {
-                parts.Push(current.name + "[" + SiblingIndex(current).ToString(CultureInfo.InvariantCulture) + "]");
                 if (current == root)
                 {
+                    parts.Push("$root[0]");
                     break;
                 }
+                parts.Push(current.name + "[" + SiblingIndex(current).ToString(CultureInfo.InvariantCulture) + "]");
                 current = current.parent;
             }
             return string.Join("/", parts.ToArray());

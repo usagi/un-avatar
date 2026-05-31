@@ -45,7 +45,7 @@ glTF node には必要に応じて `extras.UN_avatar_node` を付与する。こ
 }
 ```
 
-- `nodeId` は Exporter が hierarchy path + sibling index から生成する stable id。
+- `nodeId` は Exporter が root 名を除いた hierarchy path + sibling index から生成する stable id。export 用 clone の root 名変更で変化してはいけない。
 - `path` は UI 表示と古い `.unavatar` の fallback 解決用。正本ではない。
 - v0.1 Runtime は `target.nodeId` を最優先し、node extras にない古いファイルでは root `extensions.UN_avatar.nodes[]` registry、最後に path fallback を使う。
 
