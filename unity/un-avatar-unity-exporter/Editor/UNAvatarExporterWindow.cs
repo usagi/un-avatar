@@ -2729,9 +2729,12 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var mtoon = new Dictionary<string, object>();
-                var shadeColor = ReadColor(material, "_ShadeColor", new Color(0.97f, 0.97f, 0.97f, 1.0f));
+                var shadeColor = ReadColor(material, "_ShadeColor", ReadColor(material, "_ShadowColor", new Color(0.97f, 0.97f, 0.97f, 1.0f)));
                 mtoon["shadeColorFactor"] = FloatArray(shadeColor.r, shadeColor.g, shadeColor.b);
-                AddTextureIndex(mtoon, "shadeMultiplyTextureIndex", ReadTexture(material, "_ShadeTex") ?? ReadTexture(material, "_1st_ShadeMap"));
+                AddTextureIndex(
+                    mtoon,
+                    "shadeMultiplyTextureIndex",
+                    ReadTexture(material, "_ShadeTex") ?? ReadTexture(material, "_1st_ShadeMap") ?? ReadTexture(material, "_ShadowColorTex"));
                 mtoon["shadingShiftFactor"] = ReadFloat(material, "_ShadeShift", ReadFloat(material, "_ShadowBorder", 0.0f));
                 mtoon["shadingToonyFactor"] = 1.0f - Mathf.Clamp01(ReadFloat(material, "_ShadowBlur", 0.0f));
 
