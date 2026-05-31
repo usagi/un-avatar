@@ -892,7 +892,8 @@ impl GpuState {
 					| wgpu::Features::TEXTURE_COMPRESSION_ETC2)
 		};
 		let timestamp_features = adapter_features & wgpu::Features::TIMESTAMP_QUERY;
-		let required_features = texture_compression_features | timestamp_features;
+		let texture_format_features = adapter_features & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+		let required_features = texture_compression_features | timestamp_features | texture_format_features;
 
 		let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 			label: Some("un-avatar-renderer"),
