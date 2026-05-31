@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaImagePixelFormat, UnaMaterialPbr, UnaShadingModel};
+use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaImagePixelFormat, UnaMaterialPbr, UnaSceneSnapshot, UnaShadingModel};
 use un_avatar_io::{
 	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
 	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
@@ -161,11 +161,28 @@ struct DiagnoseMaterialSummary {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_color_texture_index: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	base_color_texture_alpha: Option<DiagnoseTextureAlphaSummary>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	normal_texture_index: Option<usize>,
 	normal_texture_scale: f32,
 	eye_like_name: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	mtoon: Option<DiagnoseMToonSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseTextureAlphaSummary {
+	image: usize,
+	width: u32,
+	height: u32,
+	pixel_format: UnaImagePixelFormat,
+	has_alpha_channel: bool,
+	min_alpha: u8,
+	max_alpha: u8,
+	transparent_pixels: usize,
+	translucent_pixels: usize,
+	opaque_pixels: usize,
+	coverage: f32,
 }
 
 #[derive(Serialize)]
@@ -866,7 +883,58 @@ fn bump_count(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
 	*map.entry(key.into()).or_insert(0) += 1;
 }
 
-fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterialSummary {
+fn pixel_format_has_alpha(format: UnaImagePixelFormat) -> bool {
+	matches!(
+		format,
+		UnaImagePixelFormat::R8G8
+			| UnaImagePixelFormat::R8G8B8A8
+			| UnaImagePixelFormat::R16G16B16A16
+			| UnaImagePixelFormat::R16G16B16A16Float
+			| UnaImagePixelFormat::R32G32B32A32Float
+	)
+}
+
+fn texture_alpha_summary(scene: &UnaSceneSnapshot, image_index: Option<usize>) -> Option<DiagnoseTextureAlphaSummary> {
+	let image_index = image_index?;
+	let image = scene.images.get(image_index)?;
+	let pixels = image.rgba8_compat_pixels();
+	let mut min_alpha = u8::MAX;
+	let mut max_alpha = u8::MIN;
+	let mut transparent_pixels = 0usize;
+	let mut translucent_pixels = 0usize;
+	let mut opaque_pixels = 0usize;
+	for pixel in pixels.chunks_exact(4) {
+		let alpha = pixel[3];
+		min_alpha = min_alpha.min(alpha);
+		max_alpha = max_alpha.max(alpha);
+		match alpha {
+			0 => transparent_pixels += 1,
+			255 => opaque_pixels += 1,
+			_ => translucent_pixels += 1,
+		}
+	}
+	let total_pixels = transparent_pixels + translucent_pixels + opaque_pixels;
+	let coverage = if total_pixels == 0 {
+		0.0
+	} else {
+		(opaque_pixels as f32 + translucent_pixels as f32) / total_pixels as f32
+	};
+	Some(DiagnoseTextureAlphaSummary {
+		image: image_index,
+		width: image.width,
+		height: image.height,
+		pixel_format: image.pixel_format,
+		has_alpha_channel: pixel_format_has_alpha(image.pixel_format),
+		min_alpha: if total_pixels == 0 { 0 } else { min_alpha },
+		max_alpha: if total_pixels == 0 { 0 } else { max_alpha },
+		transparent_pixels,
+		translucent_pixels,
+		opaque_pixels,
+		coverage,
+	})
+}
+
+fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
 	let mtoon = material.mtoon.as_ref().map(|m| DiagnoseMToonSummary {
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
@@ -895,6 +963,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterial
 		double_sided: material.double_sided,
 		base_color_factor: material.base_color_factor,
 		base_color_texture_index: material.base_color_texture_index,
+		base_color_texture_alpha: texture_alpha_summary(scene, material.base_color_texture_index),
 		normal_texture_index: material.normal_texture_index,
 		normal_texture_scale: material.normal_texture_scale,
 		eye_like_name: eye_like_material_name(material.name.as_deref()),
@@ -1079,7 +1148,7 @@ fn build_diagnose_report(
 					));
 				}
 			}
-			materials.push(material_summary(i, material));
+			materials.push(material_summary(i, material, sc));
 		}
 		if doc.vrm.is_some() && !sc.materials.is_empty() && !sc.materials.iter().any(|m| m.shading == UnaShadingModel::MToonLike) {
 			warnings.push("VRM document has no MToonLike materials after import".to_string());
