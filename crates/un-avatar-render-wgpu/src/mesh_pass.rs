@@ -353,7 +353,6 @@ enum DrawPipelineKind {
 	BlendLit,
 	BlendUnlit,
 	BlendMtoon,
-	BlendZWriteMtoon,
 }
 
 #[derive(Clone, Debug)]
@@ -432,8 +431,9 @@ fn group_draw_indices_by_skin_palette(draws: &[MeshDraw], draw_indices: &mut [us
 	draw_indices.sort_by_key(|&draw_index| draws[draw_index].skin_palette_index);
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<DrawBatch>) {
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
+	let mut transparent_zwrite_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -447,7 +447,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		draw_batch(DrawPipelineKind::BlendLit, batch_capacity),
 		draw_batch(DrawPipelineKind::BlendUnlit, batch_capacity),
 		draw_batch(DrawPipelineKind::BlendMtoon, batch_capacity),
-		draw_batch(DrawPipelineKind::BlendZWriteMtoon, batch_capacity),
 	];
 
 	for (draw_index, draw) in draws.iter().enumerate() {
@@ -468,20 +467,22 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Mask => opaque_batches[3 + shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Blend if draw.mtoon.transparent_with_z_write && shading == UnaShadingModel::MToonLike => {
-				blended_batches[3].draw_indices.push(draw_index)
+				transparent_zwrite_draw_indices.push(draw_index);
+				blended_batches[shading_index].draw_indices.push(draw_index);
 			}
 			UnaAlphaMode::Blend => blended_batches[shading_index].draw_indices.push(draw_index),
 		}
 	}
 
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut transparent_zwrite_draw_indices);
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
 	blended_batches.retain(|batch| !batch.draw_indices.is_empty());
-	(outline_draw_indices, opaque_batches, blended_batches)
+	(outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches)
 }
 
 pub(crate) struct SceneMeshes {
@@ -492,7 +493,7 @@ pub(crate) struct SceneMeshes {
 	pipeline_blend_lit: wgpu::RenderPipeline,
 	pipeline_blend_unlit: wgpu::RenderPipeline,
 	pipeline_blend_mtoon: wgpu::RenderPipeline,
-	pipeline_blend_zwrite_mtoon: wgpu::RenderPipeline,
+	pipeline_transparent_zprepass_mtoon: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_bind_group: wgpu::BindGroup,
@@ -504,6 +505,7 @@ pub(crate) struct SceneMeshes {
 	skin_palettes: Vec<SkinPalette>,
 	outline_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
+	transparent_zwrite_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
@@ -930,6 +932,7 @@ impl SceneMeshes {
 		vertex_entry: &'static str,
 		fragment_entry: &'static str,
 		color_blend: Option<wgpu::BlendState>,
+		color_write_mask: wgpu::ColorWrites,
 		depth_write: bool,
 		depth_compare: wgpu::CompareFunction,
 		cull_mode: Option<wgpu::Face>,
@@ -952,7 +955,7 @@ impl SceneMeshes {
 				targets: &[Some(wgpu::ColorTargetState {
 					format,
 					blend: color_blend,
-					write_mask: wgpu::ColorWrites::ALL,
+					write_mask: color_write_mask,
 				})],
 			}),
 			primitive: wgpu::PrimitiveState {
@@ -1296,6 +1299,7 @@ impl SceneMeshes {
 			"vs_outline",
 			"fs_outline",
 			None,
+			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,
 			Some(wgpu::Face::Front),
@@ -1311,6 +1315,7 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_lit",
 			None,
+			wgpu::ColorWrites::ALL,
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1326,6 +1331,7 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_unlit",
 			None,
+			wgpu::ColorWrites::ALL,
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1341,6 +1347,7 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_mtoon",
 			None,
+			wgpu::ColorWrites::ALL,
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1357,6 +1364,7 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_lit",
 			blend,
+			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1372,6 +1380,7 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_unlit",
 			blend,
+			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1387,21 +1396,23 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_mtoon",
 			blend,
+			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
 			sample_count,
 		);
-		let pipeline_blend_zwrite_mtoon = Self::create_mesh_pipeline(
+		let pipeline_transparent_zprepass_mtoon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_blend_zwrite_mtoon",
+			"mesh_transparent_zprepass_mtoon",
 			"vs_main",
 			"fs_mtoon",
-			blend,
+			None,
+			wgpu::ColorWrites::empty(),
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -1985,7 +1996,7 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&draws, &opts);
+		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) = build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_mtoon,
@@ -1995,7 +2006,7 @@ impl SceneMeshes {
 			pipeline_blend_lit,
 			pipeline_blend_unlit,
 			pipeline_blend_mtoon,
-			pipeline_blend_zwrite_mtoon,
+			pipeline_transparent_zprepass_mtoon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_bind_group,
@@ -2005,6 +2016,7 @@ impl SceneMeshes {
 			skin_palettes,
 			outline_draw_indices,
 			opaque_batches,
+			transparent_zwrite_draw_indices,
 			blended_batches,
 			texture_summary,
 			expression_names,
@@ -2109,9 +2121,10 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&self.draws, &self.opts);
+		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) = build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.opaque_batches = opaque_batches;
+		self.transparent_zwrite_draw_indices = transparent_zwrite_draw_indices;
 		self.blended_batches = blended_batches;
 		self.rewrite_avatar_materials(queue);
 	}
@@ -2164,7 +2177,6 @@ impl SceneMeshes {
 			DrawPipelineKind::BlendLit => &self.pipeline_blend_lit,
 			DrawPipelineKind::BlendUnlit => &self.pipeline_blend_unlit,
 			DrawPipelineKind::BlendMtoon => &self.pipeline_blend_mtoon,
-			DrawPipelineKind::BlendZWriteMtoon => &self.pipeline_blend_zwrite_mtoon,
 		}
 	}
 
@@ -2181,12 +2193,19 @@ impl SceneMeshes {
 		}
 	}
 
-	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。深度書き込みなし・SrcAlpha 合成。
+	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。transparent z-write は
+	/// color write なしの alpha-tested depth prepass 後に、通常の SrcAlpha 合成で描く。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
 		if self.blended_batches.is_empty() {
 			return;
 		}
 		let mut state = DrawBindState::default();
+		if !self.transparent_zwrite_draw_indices.is_empty() {
+			pass.set_pipeline(&self.pipeline_transparent_zprepass_mtoon);
+			for &draw_index in &self.transparent_zwrite_draw_indices {
+				self.draw_inner(pass, &mut state, draw_index);
+			}
+		}
 		for batch in &self.blended_batches {
 			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
 			for &draw_index in &batch.draw_indices {

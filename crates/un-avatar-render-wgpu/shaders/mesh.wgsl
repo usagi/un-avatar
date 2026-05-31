@@ -196,6 +196,12 @@ fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {
 	return base_color_a;
 }
 
+fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwrite: f32) {
+	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a <= 0.001 {
+		discard;
+	}
+}
+
 fn discard_backface_if_single_sided(front_facing: bool, flags: u32) {
 	if !front_facing && (flags & MAT_DOUBLE_SIDED) == 0u {
 		discard;
@@ -276,6 +282,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
 	mask_discard_lit_unlit(alb, a, alpha_kind, cutoff);
+	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
@@ -299,6 +306,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
 	mask_discard_lit_unlit(alb, a, alpha_kind, cutoff);
+	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	return vec4<f32>(base, out_a);
@@ -315,6 +323,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
 	mask_discard_mtoon(alb, a, alpha_kind, cutoff);
+	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
