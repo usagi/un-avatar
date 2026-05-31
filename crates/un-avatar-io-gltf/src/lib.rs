@@ -777,10 +777,16 @@ fn apply_unavatar_wardrobe_operations(
 				if let Some(idx) = lookup_operation_target(&node_ids, &registry_paths, &paths, &normalized_paths, op) {
 					if apply_blend_shape_weight(scene, idx, name, value as f32) {
 						report.blendshape_applied += 1;
+					} else if value.abs() <= 0.001 {
+						// Exporter may omit morph targets whose only recorded base value is zero.
+						// Applying zero to a missing target is a no-op, not a compatibility failure.
+						continue;
 					} else {
 						report.blendshape_missing += 1;
 						report.missing_blendshapes.push(format!("{path}::{name}"));
 					}
+				} else if value.abs() <= 0.001 {
+					continue;
 				} else {
 					report.blendshape_missing += 1;
 					report.missing_blendshapes.push(format!("{path}::{name}"));
