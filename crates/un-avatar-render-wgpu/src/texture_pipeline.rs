@@ -349,6 +349,70 @@ pub(crate) fn normalized_rgba_base(rgba: &[u8], width: u32, height: u32) -> Vec<
 	}
 }
 
+fn has_fully_transparent_pixels(rgba: &[u8]) -> bool {
+	rgba.chunks_exact(4).any(|px| px[3] == 0)
+}
+
+fn alpha_safe_rgba_base(rgba: &[u8], width: u32, height: u32, role: TextureRole) -> Vec<u8> {
+	let mut base = normalized_rgba_base(rgba, width, height);
+	if !texture_role_uses_alpha_weighted_rgb_mips(role) || !has_fully_transparent_pixels(&base) {
+		return base;
+	}
+	bleed_transparent_rgb(&mut base, width.max(1), height.max(1));
+	base
+}
+
+fn bleed_transparent_rgb(rgba: &mut [u8], width: u32, height: u32) {
+	let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+	if rgba.len() != expected || width == 0 || height == 0 {
+		return;
+	}
+	let mut scratch = rgba.to_vec();
+	for _ in 0..8 {
+		let mut changed = false;
+		scratch.copy_from_slice(rgba);
+		for y in 0..height {
+			for x in 0..width {
+				let i = ((y * width + x) as usize) * 4;
+				if rgba[i + 3] != 0 {
+					continue;
+				}
+				let mut rgb = [0u32; 3];
+				let mut count = 0u32;
+				let y0 = y.saturating_sub(1);
+				let y1 = (y + 1).min(height - 1);
+				let x0 = x.saturating_sub(1);
+				let x1 = (x + 1).min(width - 1);
+				for ny in y0..=y1 {
+					for nx in x0..=x1 {
+						if nx == x && ny == y {
+							continue;
+						}
+						let ni = ((ny * width + nx) as usize) * 4;
+						if rgba[ni + 3] == 0 {
+							continue;
+						}
+						rgb[0] += u32::from(rgba[ni]);
+						rgb[1] += u32::from(rgba[ni + 1]);
+						rgb[2] += u32::from(rgba[ni + 2]);
+						count += 1;
+					}
+				}
+				if count > 0 {
+					scratch[i] = (rgb[0] / count) as u8;
+					scratch[i + 1] = (rgb[1] / count) as u8;
+					scratch[i + 2] = (rgb[2] / count) as u8;
+					changed = true;
+				}
+			}
+		}
+		if !changed {
+			break;
+		}
+		rgba.copy_from_slice(&scratch);
+	}
+}
+
 #[derive(Clone, Copy)]
 struct RowStripe {
 	start: u32,
@@ -673,12 +737,13 @@ fn resize_rgba_to_max_dimension(rgba: &[u8], width: u32, height: u32, max_dimens
 }
 
 const PROCESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATXC1\0";
-const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 4;
+const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 5;
 // v2 (2026-05-14): 圧縮 mip の width/height を block 整列 (4 の倍数) サイズで記録するよう変更。
 // 旧 v1 では width=1023 等を保存していたが、wgpu の `write_texture` validation が block 整列値を要求するため、
 // magic を bump して旧キャッシュを使わせない（自動的に再エンコードしてキャッシュを書き直す）。
 // v3 (2026-05-22): clothing atlas textures keep only the base mip to avoid low-LOD UV island bleed.
 // v4 (2026-05-22): mipmap_filter is part of the processed texture cache key.
+// v5 (2026-06-01): transparent base-color RGB is alpha-bleed filled before upload/mips.
 const COMPRESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATBC2\0";
 const COMPRESSED_TEXTURE_CACHE_VERSION: u64 = 5;
 // v3 (2026-05-27): compressed cache keys are derived from the source texture key and processing settings.
@@ -947,9 +1012,10 @@ fn build_processed_texture(
 ) -> ProcessedTexture {
 	let src_width = width.max(1);
 	let src_height = height.max(1);
+	let base = alpha_safe_rgba_base(rgba, src_width, src_height, role);
 	let (width, height, rgba) = max_dimension
-		.map(|max_dimension| resize_rgba_to_max_dimension(rgba, src_width, src_height, max_dimension))
-		.unwrap_or_else(|| (src_width, src_height, normalized_rgba_base(rgba, src_width, src_height)));
+		.map(|max_dimension| resize_rgba_to_max_dimension(&base, src_width, src_height, max_dimension))
+		.unwrap_or((src_width, src_height, base));
 	let mips = if texture_role_uses_mips(role) {
 		let alpha_weighted_rgb = texture_role_needs_alpha_weighted_rgb_mips(role, &rgba);
 		build_rgba_mips_from_base(rgba, width, height, mipmap_filter, alpha_weighted_rgb)
@@ -1615,7 +1681,7 @@ mod tests {
 	}
 
 	#[test]
-	fn color_role_mips_ignore_transparent_rgb_bleed() {
+	fn color_role_mips_alpha_weight_rgb() {
 		let rgba = vec![
 			0, 0, 0, 255, 255, 255, 255, 0, //
 			255, 255, 255, 0, 255, 255, 255, 0,
@@ -1623,6 +1689,21 @@ mod tests {
 		let processed = build_processed_texture(&rgba, 2, 2, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2);
 		assert_eq!(processed.mips.len(), 2);
 		assert_eq!(processed.mips[1].2, vec![0, 0, 0, 63]);
+	}
+
+	#[test]
+	fn transparent_rgb_is_filled_for_base_upload() {
+		let rgba = vec![
+			10, 20, 30, 255, 0, 0, 0, 0, //
+			0, 0, 0, 0, 0, 0, 0, 0,
+		];
+		let processed = build_processed_texture(&rgba, 2, 2, None, TextureRole::Clothing, TextureMipmapFilter::Box2x2);
+		assert_eq!(processed.mips.len(), 1);
+		for pixel in processed.mips[0].2.chunks_exact(4) {
+			assert_eq!(&pixel[..3], &[10, 20, 30]);
+		}
+		assert_eq!(processed.mips[0].2[3], 255);
+		assert_eq!(processed.mips[0].2[7], 0);
 	}
 
 	#[test]
