@@ -114,6 +114,17 @@ struct DiagnoseVisibleMeshNodeSummary {
 	mesh: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	skin: Option<usize>,
+	materials: Vec<DiagnoseVisibleMaterialSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseVisibleMaterialSummary {
+	primitive: usize,
+	index: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
+	shading: UnaShadingModel,
+	alpha_mode: UnaAlphaMode,
 }
 
 #[derive(Serialize)]
@@ -936,6 +947,27 @@ fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<b
 	out
 }
 
+fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: usize) -> Vec<DiagnoseVisibleMaterialSummary> {
+	let Some(primitives) = scene.meshes.get(mesh_index) else {
+		return Vec::new();
+	};
+	primitives
+		.iter()
+		.enumerate()
+		.filter_map(|(primitive_index, primitive)| {
+			let material_index = primitive.material_index?;
+			let material = scene.materials.get(material_index)?;
+			Some(DiagnoseVisibleMaterialSummary {
+				primitive: primitive_index,
+				index: material_index,
+				name: material.name.clone(),
+				shading: material.shading,
+				alpha_mode: material.alpha_mode,
+			})
+		})
+		.collect()
+}
+
 fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
 	value.and_then(|v| v.as_str()).map(str::to_owned)
 }
@@ -1100,6 +1132,7 @@ fn build_diagnose_report(
 					source_node_id: node.source_node_id.clone(),
 					mesh,
 					skin: node.skin,
+					materials: visible_mesh_materials(sc, mesh),
 				})
 			})
 			.collect();
