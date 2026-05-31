@@ -717,6 +717,7 @@ mod tests {
 	fn unknown_node() -> UnaSceneNode {
 		UnaSceneNode {
 			name: None,
+			visible: true,
 			transform: Mat4::IDENTITY.to_cols_array(),
 			children: vec![],
 			mesh: None,

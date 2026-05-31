@@ -8,7 +8,6 @@
   import ProfileQualityBasicFields from "./ProfileQualityBasicFields.svelte";
   import ProfileQualityRecommendationRow from "./ProfileQualityRecommendationRow.svelte";
   import ProfileQualityTextureFields from "./ProfileQualityTextureFields.svelte";
-  import ProfileTextureCompressionAdvanced from "./ProfileTextureCompressionAdvanced.svelte";
   import { _ } from "svelte-i18n";
 
   export let setting: QualitySetting;
@@ -40,13 +39,6 @@
   </div>
   <ProfileQualityBasicFields {setting} {busy} {onUpdateSettingValue} />
   <ProfileQualityTextureFields {setting} {busy} {onUpdateSettingValue} />
-  {#if setting.texture_compression === "advanced"}
-    <ProfileTextureCompressionAdvanced
-      value={setting.texture_compression_advanced}
-      {busy}
-      {onUpdateSettingValue}
-    />
-  {/if}
   {#if showDeveloperControls}
     <ProfileDebugToggles {setting} {busy} {onUpdateSettingValue} />
   {/if}

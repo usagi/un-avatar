@@ -81,17 +81,21 @@ impl TextureResolutionLimit {
 	}
 }
 
-/// Texture compression policy. `Source` is the default because lossy compression can visibly degrade avatars.
+/// Texture upload / compression policy.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureCompressionMode {
-	/// Keep source-decoded RGBA fidelity and do not apply lossy texture compression.
-	#[default]
+	/// Prefer source/native upload fidelity and avoid lossy compression.
 	Source,
-	/// Let the renderer choose conservative compression by texture role and runtime GPU support.
-	Auto,
-	/// Enable compression and use the advanced per-role policy fields from the manifest.
-	Advanced,
+	/// Balanced default: conservative role-based compression/cache when safe.
+	#[default]
+	#[serde(alias = "auto", alias = "advanced")]
+	#[value(alias = "auto", alias = "advanced")]
+	Balanced,
+	/// Prefer smaller GPU/cache footprint even when that can reduce texture fidelity.
+	Memory,
+	/// Prefer broadly compatible upload formats and avoid GPU-specific compression.
+	Compat,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -129,7 +133,7 @@ pub enum BlockCompressionEncoder {
 	Gpu,
 }
 
-/// Per-role compression preference used when [`TextureCompressionMode::Advanced`] is selected.
+/// Per-role compression preference used as an advanced override for balanced/memory policies.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureCompressionPreference {
@@ -484,6 +488,8 @@ pub struct AvatarWindowOptions {
 	pub window_position: Option<[i32; 2]>,
 	/// 表示するモデル（glTF `.gltf` / `.glb` または VRM `.vrm` / VRM 入り `.glb`）。シーンがあればメッシュモード。
 	pub gltf_path: Option<PathBuf>,
+	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
+	pub wardrobe_set: Option<String>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
 	pub icon_path: Option<PathBuf>,
 	pub clear_color: wgpu::Color,
@@ -511,7 +517,7 @@ pub struct AvatarWindowOptions {
 	pub aa: AaMode,
 	/// Optional load-time texture clamp. Default OFF preserves source texture fidelity.
 	pub texture_resolution_limit: TextureResolutionLimit,
-	/// Optional lossy texture compression policy. Default Source preserves avatar texture fidelity.
+	/// Texture upload / compression policy. Default Balanced is conservative but cache-friendly.
 	pub texture_compression: TextureCompressionMode,
 	/// Mipmap generation filter. High-quality filters use pic-scale; box2x2 keeps the legacy path.
 	pub mipmap_filter: TextureMipmapFilter,
@@ -521,7 +527,7 @@ pub struct AvatarWindowOptions {
 	pub block_compression_encoder: BlockCompressionEncoder,
 	/// CPU BCn worker count. Clamped to the system logical CPU count at use sites.
 	pub block_compression_cpu_threads: usize,
-	/// Advanced texture compression preferences used only when texture_compression is Advanced.
+	/// Advanced texture compression preferences used by balanced/memory policies.
 	pub texture_compression_advanced: TextureCompressionAdvancedOptions,
 	/// Cache resized RGBA mip chains on disk so repeated launches skip CPU texture processing.
 	pub processed_texture_cache: bool,
@@ -627,6 +633,7 @@ impl Default for AvatarWindowOptions {
 				a: 1.0,
 			},
 			gltf_path: None,
+			wardrobe_set: None,
 			icon_path: None,
 			show_fps_in_title: true,
 			vmc_address: None,
@@ -640,7 +647,7 @@ impl Default for AvatarWindowOptions {
 			contact_shadow: ContactShadowOptions::default(),
 			aa: AaMode::Off,
 			texture_resolution_limit: TextureResolutionLimit::Off,
-			texture_compression: TextureCompressionMode::Source,
+			texture_compression: TextureCompressionMode::Balanced,
 			mipmap_filter: TextureMipmapFilter::default(),
 			render_backend: RenderBackend::Vulkan,
 			block_compression_encoder: BlockCompressionEncoder::Gpu,

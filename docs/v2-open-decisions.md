@@ -136,7 +136,7 @@ VRC / Modular Avatar 対応衣装の切替は `variants` ではなく `wardrobe.
 - `.unavatar` は全衣装資産を保持できる。
 - Runtime は最初から outfit group 単位の lazy GPU upload / unload を前提にする。
 - wardrobe set は base state からの差分 patch として持つ。
-- operation は `subtreeVisibility` / `nodeVisibility` / `rendererVisibility` / `blendShapeWeight` を初期対象にする。
+- operation は `subtreeEnabled` / `nodeEnabled` / `rendererEnabled` / `blendShapeWeight` を初期対象にする。
 - target は `nodeId` を保存上の正本、Unity hierarchy path を表示 / fallback とする。
 - 具体性の高い operation を優先し、同じ具体性なら後勝ちにする。
 - Supervisor profile のユーザー override は `.unavatar` 内蔵 set より後に適用する。
@@ -149,3 +149,25 @@ Unity Exporter は手入力ではなく capture diff workflow を主導線にす
 4. 色違い衣装は set 複製後、対象 outfit group / subtree の ON/OFF 差分を変更する。
 
 この方式なら、瑞希 + Noble Trace Color 1 / Color 13 のように、素体パーツ非表示、帽子非表示、Skirt / Pants 切替、Body_b のニーソ用 blendshape 変更を、最小の差分 operation として保持できる。
+
+## 5. Texture Source / GPU Upload / Compression Cache
+
+`.unavatar` 内部の texture は、任意 binary + MIME + 必要 metadata を正本にする。Exporter は texture format conversion / recompress / resize を行わない。Unity Editor exporter は source bytes を可能な限りそのまま埋め込み、source が取れない場合だけ fallback encode を行う。
+
+`.unavatar` は通常 runtime 処理では immutable source package として扱う。Runtime load、wardrobe 切替、profile 更新、local cache 生成で `.unavatar` 本体を dirty にしない。
+
+### 採用方針
+
+- `.unavatar` 内部: source binary + MIME + metadata。通常処理では変更しない。
+- Local cache: OS 標準 cache / app data 配下。source hash、MIME、material role、GPU backend、adapter / driver capability、quality policy、optimizer version を key にした派生データを置く。
+- Optimized package: ユーザーが `un-avatar-optimizer` 等を明示実行した場合のみ、軽量化・配布用 `.unavatar` を別名出力する。元ファイル上書きは既定にしない。
+- GPU upload: Source Native、Decoded Native、Optimized Cache、Fallback の順に選ぶ。
+
+GPU upload / compression policy は 4 段階にする。既定は `balanced`。
+
+- `source`: 忠実性優先。source/native upload を最優先し、cache / transcode は最小限。
+- `balanced`: 既定。安全に圧縮できる color / normal / mask は圧縮 cache を使い、HDR/float や表現力が落ちる texture は native を優先する。
+- `memory`: 容量・GPU memory 優先。表現力低下や変換を許容する。
+- `compat`: GPU 互換性優先。RGBA8/RGBA16F 等の広く扱える形式へ寄せる。
+
+圧縮が有効でも、BCn/KTX2 等で source の意味を安全に表現できない場合は、policy と GPU capability に応じて native upload を維持する。圧縮は絶対条件ではなく、material role、source format、GPU capability、policy の交点で決定する。

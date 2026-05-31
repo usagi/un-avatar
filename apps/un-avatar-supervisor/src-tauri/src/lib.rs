@@ -858,7 +858,7 @@ struct AvatarSetting {
 	block_compression_encoder: String,
 	block_compression_cpu_threads: usize,
 	/// Advanced モードで参照する、テクスチャ用途別の圧縮 preference。
-	/// `Source` / `Auto` 時は無視。8 役割 × 5 preference (source/auto/high_quality/small/gpu_native)。
+	/// 開発者向けの用途別 override。8 役割 × 5 preference (source/auto/high_quality/small/gpu_native)。
 	texture_compression_advanced: TextureCompressionAdvancedSetting,
 	processed_texture_cache: bool,
 	skin_tone_matching: bool,
@@ -2386,7 +2386,7 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 		toml::Value::Table(toml::map::Map::from_iter([
 			("aa".to_string(), toml::Value::String("off".to_string())),
 			("texture_resolution_limit".to_string(), toml::Value::String("off".to_string())),
-			("texture_compression".to_string(), toml::Value::String("source".to_string())),
+			("texture_compression".to_string(), toml::Value::String("balanced".to_string())),
 			("mipmap_filter".to_string(), toml::Value::String("mitchell".to_string())),
 			("render_backend".to_string(), toml::Value::String("dx12".to_string())),
 			("block_compression_encoder".to_string(), toml::Value::String("gpu".to_string())),
@@ -2606,7 +2606,7 @@ fn pick_file_path(kind: String, settings: State<'_, Mutex<AppRuntimeSettings>>) 
 	let mut dialog = rfd::FileDialog::new().set_directory(start_dir);
 	dialog = match kind.as_str() {
 		"avatar" => dialog
-			.add_filter("Avatar model", &["vrm", "gltf", "glb"])
+			.add_filter("Avatar model", &["vrm", "gltf", "glb", "unavatar"])
 			.add_filter("All files", &["*"]),
 		"icon" => dialog
 			.add_filter("Image", &["png", "jpg", "jpeg", "ico", "webp"])
@@ -6894,7 +6894,12 @@ fn json_texture_compression_preference(value: &serde_json::Value, field: &str) -
 }
 
 fn json_texture_compression_mode(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	json_lowercase_choice(value, field, &["source", "auto", "advanced"])
+	let mode = json_string(value, field)?;
+	match mode.as_str() {
+		"auto" | "advanced" => Ok("balanced".to_string()),
+		"source" | "balanced" | "memory" | "compat" => Ok(mode),
+		_ => Err(format!("{field} must be one of source, balanced, memory, compat")),
+	}
 }
 
 fn json_mipmap_filter(value: &serde_json::Value, field: &str) -> Result<String, String> {
@@ -7347,7 +7352,7 @@ fn render_quality_settings(render_quality: ManifestRenderQuality, legacy_aa: Opt
 	RenderQualitySettings {
 		aa: render_quality.aa.or(legacy_aa).unwrap_or_else(|| "off".to_string()),
 		texture_resolution_limit: render_quality.texture_resolution_limit.unwrap_or_else(|| "off".to_string()),
-		texture_compression: render_quality.texture_compression.unwrap_or_else(|| "source".to_string()),
+		texture_compression: render_quality.texture_compression.unwrap_or_else(|| "balanced".to_string()),
 		mipmap_filter: render_quality.mipmap_filter.unwrap_or_else(|| "mitchell".to_string()),
 		render_backend: render_quality.render_backend.unwrap_or_else(|| "vulkan".to_string()),
 		block_compression_encoder: render_quality.block_compression_encoder.unwrap_or_else(|| "gpu".to_string()),
@@ -8845,7 +8850,7 @@ processed_texture_cache = true
 			&mut manifest,
 			&setting,
 			"render_quality.texture_compression",
-			serde_json::json!("auto"),
+			serde_json::json!("balanced"),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
@@ -8897,7 +8902,7 @@ processed_texture_cache = true
 		);
 		assert_eq!(
 			render_quality.get("texture_compression").and_then(toml::Value::as_str),
-			Some("auto")
+			Some("balanced")
 		);
 		assert_eq!(render_quality.get("mipmap_filter").and_then(toml::Value::as_str), Some("lanczos3"));
 		assert_eq!(render_quality.get("render_backend").and_then(toml::Value::as_str), Some("dx12"));
@@ -8947,7 +8952,7 @@ id = "test"
 			serde_json::json!("lossless"),
 		)
 		.unwrap_err();
-		assert!(invalid_compression.contains("source, auto, advanced"));
+		assert!(invalid_compression.contains("source, balanced, memory, compat"));
 		let invalid_mipmap = apply_avatar_setting_value(
 			&mut manifest,
 			&setting,

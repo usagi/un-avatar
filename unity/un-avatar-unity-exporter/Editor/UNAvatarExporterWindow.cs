@@ -138,6 +138,88 @@ namespace UNAvatar.UnityExporter
         public List<WardrobeSetDraft> sets = new List<WardrobeSetDraft>();
     }
 
+    internal sealed class TextureDiagnostic
+    {
+        public string Name;
+        public string AssetPath;
+        public string Extension;
+        public long ByteLength;
+    }
+
+    internal sealed class ExportedTextureRecord
+    {
+        public string Name;
+        public string AssetPath;
+        public string SourceExtension;
+        public string SourceMimeType;
+        public long SourceByteLength;
+        public string OutputMimeType;
+        public int OutputByteLength;
+        public string ExportMode;
+        public string FallbackReason;
+
+        public Dictionary<string, object> ToJson()
+        {
+            return new Dictionary<string, object>
+            {
+                ["name"] = Name ?? "",
+                ["assetPath"] = AssetPath ?? "",
+                ["sourceExtension"] = SourceExtension ?? "",
+                ["sourceMimeType"] = SourceMimeType ?? "",
+                ["sourceByteLength"] = SourceByteLength,
+                ["outputMimeType"] = OutputMimeType ?? "",
+                ["outputByteLength"] = OutputByteLength,
+                ["exportMode"] = ExportMode ?? "",
+                ["fallbackReason"] = FallbackReason ?? ""
+            };
+        }
+    }
+
+    internal sealed class UnavatarTextureAssetRecord
+    {
+        public string Id;
+        public string Name;
+        public string AssetPath;
+        public string MimeType;
+        public string SourceExtension;
+        public string SourcePixelFormat;
+        public string ColorSpace;
+        public string Channels;
+        public int Width;
+        public int Height;
+        public byte[] Bytes;
+        public int BufferView = -1;
+
+        public Dictionary<string, object> ToJson()
+        {
+            var json = new Dictionary<string, object>
+            {
+                ["id"] = Id ?? "",
+                ["name"] = Name ?? "",
+                ["assetPath"] = AssetPath ?? "",
+                ["mimeType"] = MimeType ?? "",
+                ["sourceExtension"] = SourceExtension ?? "",
+                ["sourcePixelFormat"] = SourcePixelFormat ?? "",
+                ["colorSpace"] = ColorSpace ?? "linear",
+                ["channels"] = Channels ?? "",
+                ["byteLength"] = Bytes != null ? Bytes.Length : 0
+            };
+            if (Width > 0)
+            {
+                json["width"] = Width;
+            }
+            if (Height > 0)
+            {
+                json["height"] = Height;
+            }
+            if (BufferView >= 0)
+            {
+                json["bufferView"] = BufferView;
+            }
+            return json;
+        }
+    }
+
     public sealed class UNAvatarExporterWindow : EditorWindow
     {
         private const string ExtensionName = "UN_avatar";
@@ -151,12 +233,15 @@ namespace UNAvatar.UnityExporter
         [SerializeField] private bool hasBaseSnapshot = false;
         [SerializeField] private string wardrobeSetName = "New Outfit";
         [SerializeField] private WardrobeSnapshotDraft baseSnapshot = new WardrobeSnapshotDraft();
+        [SerializeField] private bool hasImportedBaseOperations = false;
         [SerializeField] private List<WardrobeOperationDraft> importedBaseOperations = new List<WardrobeOperationDraft>();
         [SerializeField] private List<WardrobeSetDraft> capturedWardrobeSets = new List<WardrobeSetDraft>();
         [SerializeField] private int selectedWardrobeSetIndex = -1;
+        [SerializeField] private bool developerMode = false;
 
         private Vector2 scroll;
         private string lastSummary = "";
+        private string developerDiagnosticsText = "";
 
         [MenuItem("Tools/U.N. Avatar/Export .unavatar")]
         public static void Open()
@@ -192,7 +277,7 @@ namespace UNAvatar.UnityExporter
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("Export Settings", EditorStyles.boldLabel);
             exportMode = (UNAvatarExportMode)EditorGUILayout.EnumPopup("Export Mode", exportMode);
-            forceIncludeInactiveObjects = EditorGUILayout.Toggle("Include Inactive Objects", forceIncludeInactiveObjects);
+            forceIncludeInactiveObjects = true;
 
             DrawWardrobeCaptureGui();
 
@@ -213,7 +298,157 @@ namespace UNAvatar.UnityExporter
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("Report", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(string.IsNullOrWhiteSpace(lastSummary) ? "No validation run yet." : lastSummary, MessageType.Info);
+
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("---");
+            developerMode = EditorGUILayout.ToggleLeft("Developer mode", developerMode);
+            if (developerMode)
+            {
+                EditorGUILayout.HelpBox(
+                    "Developer mode enables diagnostic logs and experimental tools while the exporter is under development.",
+                    MessageType.Warning);
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.Toggle("Force Enable All Before Bake", true);
+                }
+                EditorGUILayout.LabelField("Debug Hints", EditorStyles.boldLabel);
+                developerDiagnosticsText = BuildDeveloperDiagnostics();
+                EditorGUILayout.TextArea(developerDiagnosticsText, GUILayout.MinHeight(180));
+            }
             EditorGUILayout.EndScrollView();
+        }
+
+        private string BuildDeveloperDiagnostics()
+        {
+            if (avatarRoot == null)
+            {
+                return "Avatar Root is missing.";
+            }
+
+            var renderers = avatarRoot.GetComponentsInChildren<Renderer>(true);
+            var materials = renderers
+                .SelectMany(renderer => renderer.sharedMaterials)
+                .Where(material => material != null)
+                .Distinct()
+                .ToList();
+            var textures = CollectMaterialTextures(materials);
+            var sourceTextures = textures
+                .Where(texture => !string.IsNullOrEmpty(texture.AssetPath))
+                .ToList();
+            var generatedTextures = textures.Count - sourceTextures.Count;
+            var byExtension = sourceTextures
+                .GroupBy(texture => texture.Extension)
+                .OrderByDescending(group => group.Sum(texture => texture.ByteLength))
+                .Select(group => $"{group.Key}: {group.Count()} files, {FormatBytes(group.Sum(texture => texture.ByteLength))}");
+            var largest = sourceTextures
+                .OrderByDescending(texture => texture.ByteLength)
+                .Take(8)
+                .Select(texture => $"{FormatBytes(texture.ByteLength)}  {texture.Name}  ({texture.Extension})");
+            var fallbackExtensions = sourceTextures
+                .Where(texture => !IsV01DirectTextureSource(texture.AssetPath))
+                .GroupBy(texture => texture.Extension)
+                .OrderByDescending(group => group.Sum(texture => texture.ByteLength))
+                .Select(group => $"{group.Key}: {group.Count()} files, {FormatBytes(group.Sum(texture => texture.ByteLength))}");
+
+            var lines = new List<string>
+            {
+                $"Renderers: {renderers.Length}",
+                $"Materials: {materials.Count}",
+                $"Distinct material textures: {textures.Count}",
+                $"Source-backed textures: {sourceTextures.Count}",
+                $"Generated/fallback textures: {generatedTextures}",
+                "",
+                "Source texture bytes by extension:",
+                byExtension.Any() ? string.Join("\n", byExtension) : "(none)",
+                "",
+                "Largest source textures:",
+                largest.Any() ? string.Join("\n", largest) : "(none)",
+                "",
+                "Source extensions that will use PNG fallback in v0.1:",
+                fallbackExtensions.Any() ? string.Join("\n", fallbackExtensions) : "(none)",
+                "",
+                "Hints:",
+                "JPG/JPEG source bytes are usually worth preserving.",
+                "Large PNG normal/mask textures may be smaller after exporter PNG fallback or later optimizer transcode.",
+                "If generated/fallback textures are high, export time will include GPU readback and PNG encode."
+            };
+            return string.Join("\n", lines);
+        }
+
+        private static bool IsV01DirectTextureSource(string path)
+        {
+            var extension = Path.GetExtension(path).ToLowerInvariant();
+            return extension == ".png" || extension == ".jpg" || extension == ".jpeg";
+        }
+
+        private static List<TextureDiagnostic> CollectMaterialTextures(List<Material> materials)
+        {
+            var byKey = new Dictionary<string, TextureDiagnostic>(StringComparer.Ordinal);
+            foreach (var material in materials)
+            {
+                string[] texturePropertyNames;
+                try
+                {
+                    texturePropertyNames = material.GetTexturePropertyNames();
+                }
+                catch
+                {
+                    texturePropertyNames = Array.Empty<string>();
+                }
+
+                foreach (var propertyName in texturePropertyNames)
+                {
+                    var texture = material.GetTexture(propertyName);
+                    if (texture == null)
+                    {
+                        continue;
+                    }
+
+                    var assetPath = AssetDatabase.GetAssetPath(texture);
+                    var key = string.IsNullOrEmpty(assetPath) ? "texture:" + texture.GetInstanceID().ToString(CultureInfo.InvariantCulture) : "asset:" + assetPath;
+                    if (byKey.ContainsKey(key))
+                    {
+                        continue;
+                    }
+
+                    var byteLength = 0L;
+                    var extension = "(generated)";
+                    if (!string.IsNullOrEmpty(assetPath))
+                    {
+                        extension = Path.GetExtension(assetPath).ToLowerInvariant();
+                        var fullPath = Path.IsPathRooted(assetPath)
+                            ? assetPath
+                            : Path.Combine(Directory.GetCurrentDirectory(), assetPath);
+                        if (File.Exists(fullPath))
+                        {
+                            byteLength = new FileInfo(fullPath).Length;
+                        }
+                    }
+
+                    byKey[key] = new TextureDiagnostic
+                    {
+                        Name = texture.name,
+                        AssetPath = assetPath,
+                        Extension = string.IsNullOrEmpty(extension) ? "(none)" : extension,
+                        ByteLength = byteLength
+                    };
+                }
+            }
+
+            return byKey.Values.ToList();
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024L)
+            {
+                return (bytes / 1024.0 / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+            }
+            if (bytes >= 1024L)
+            {
+                return (bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " KB";
+            }
+            return bytes.ToString(CultureInfo.InvariantCulture) + " B";
         }
 
         private ExportValidation ValidateSelection()
@@ -259,7 +494,7 @@ namespace UNAvatar.UnityExporter
                         ApplyBaseToScene();
                     }
                 }
-                GUILayout.Label(hasBaseSnapshot ? $"{baseSnapshot.nodes.Count} nodes, {baseSnapshot.blendShapes.Count} blendshapes" : "not captured", GUILayout.Width(64 + 88 * 3 + 12));
+                GUILayout.Label(BaseStatusText(), GUILayout.Width(64 + 88 * 3 + 12));
             }
 
             EditorGUILayout.Space(8);
@@ -340,7 +575,7 @@ namespace UNAvatar.UnityExporter
                 lastSummary = "Avatar Root is missing.";
                 return;
             }
-            if (!hasBaseSnapshot && importedBaseOperations.Count == 0)
+            if (!hasBaseSnapshot && !hasImportedBaseOperations)
             {
                 lastSummary = "Capture Base or imported Base operations are missing.";
                 return;
@@ -373,6 +608,7 @@ namespace UNAvatar.UnityExporter
             }
             baseSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
             hasBaseSnapshot = true;
+            hasImportedBaseOperations = false;
             importedBaseOperations.Clear();
             selectedWardrobeSetIndex = BaseSelectionIndex;
             lastSummary = $"Captured base: {baseSnapshot.nodes.Count} nodes, {baseSnapshot.renderers.Count} renderers, {baseSnapshot.blendShapes.Count} blendshapes.";
@@ -488,6 +724,7 @@ namespace UNAvatar.UnityExporter
             wardrobeSetName = string.IsNullOrWhiteSpace(draft.setName) ? wardrobeSetName : draft.setName;
             hasBaseSnapshot = draft.hasBaseSnapshot;
             baseSnapshot = draft.baseSnapshot ?? new WardrobeSnapshotDraft();
+            hasImportedBaseOperations = false;
             importedBaseOperations.Clear();
             capturedWardrobeSets = draft.sets ?? new List<WardrobeSetDraft>();
             selectedWardrobeSetIndex = hasBaseSnapshot ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
@@ -506,8 +743,11 @@ namespace UNAvatar.UnityExporter
             {
                 var imported = UnavatarWardrobeImporter.Import(path);
                 importedBaseOperations = imported.baseOperations;
+                hasImportedBaseOperations = imported.hasBaseOperations;
+                hasBaseSnapshot = false;
+                baseSnapshot = new WardrobeSnapshotDraft();
                 capturedWardrobeSets = imported.sets;
-                selectedWardrobeSetIndex = importedBaseOperations.Count > 0 ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
+                selectedWardrobeSetIndex = hasImportedBaseOperations ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
                 wardrobeSetName = capturedWardrobeSets.Count > 0 ? capturedWardrobeSets[capturedWardrobeSets.Count - 1].displayName : wardrobeSetName;
                 lastSummary = $"Imported wardrobe sets from .unavatar: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}.";
             }
@@ -583,7 +823,22 @@ namespace UNAvatar.UnityExporter
         {
             return hasBaseSnapshot
                 ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot)
-                : importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList();
+                : hasImportedBaseOperations
+                ? importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList()
+                : new List<WardrobeOperationDraft>();
+        }
+
+        private string BaseStatusText()
+        {
+            if (hasBaseSnapshot)
+            {
+                return $"{baseSnapshot.nodes.Count} nodes, {baseSnapshot.blendShapes.Count} blendshapes";
+            }
+            if (hasImportedBaseOperations)
+            {
+                return $"imported: {importedBaseOperations.Count} ops";
+            }
+            return "not captured";
         }
 
         private bool EnsureCanApplyWardrobe()
@@ -593,7 +848,7 @@ namespace UNAvatar.UnityExporter
                 lastSummary = "Avatar Root is missing.";
                 return false;
             }
-            if (!hasBaseSnapshot && importedBaseOperations.Count == 0)
+            if (!hasBaseSnapshot && !hasImportedBaseOperations)
             {
                 lastSummary = "Capture Base or imported Base operations are missing.";
                 return false;
@@ -611,7 +866,7 @@ namespace UNAvatar.UnityExporter
                 }
                 return false;
             }
-            if (!hasBaseSnapshot && importedBaseOperations.Count == 0)
+            if (!hasBaseSnapshot && !hasImportedBaseOperations)
             {
                 if (updateSummary)
                 {
@@ -624,26 +879,51 @@ namespace UNAvatar.UnityExporter
 
         private void ApplyWardrobeOperations(IEnumerable<WardrobeOperationDraft> operations)
         {
-            var nodes = avatarRoot.GetComponentsInChildren<Transform>(true)
-                .ToDictionary(transform => WardrobeSnapshotCapture.NodeIdFor(avatarRoot.transform, transform), transform => transform);
+            ApplyWardrobeOperationsToRoot(avatarRoot, operations);
+        }
+
+        private static void ApplyWardrobeOperationsToRoot(GameObject root, IEnumerable<WardrobeOperationDraft> operations)
+        {
+            if (root == null || operations == null)
+            {
+                return;
+            }
+
+            var nodes = root.GetComponentsInChildren<Transform>(true)
+                .ToDictionary(transform => WardrobeSnapshotCapture.NodeIdFor(root.transform, transform), transform => transform);
+            var nodesByPath = root.GetComponentsInChildren<Transform>(true)
+                .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
+                .ToDictionary(group => group.Key, group => group.First());
 
             foreach (var operation in operations)
             {
-                if (operation == null || operation.target == null || !nodes.TryGetValue(operation.target.nodeId, out var transform))
+                if (operation == null || operation.target == null)
+                {
+                    continue;
+                }
+                var transform = default(Transform);
+                if (!string.IsNullOrEmpty(operation.target.nodeId))
+                {
+                    nodes.TryGetValue(operation.target.nodeId, out transform);
+                }
+                if (transform == null && !string.IsNullOrEmpty(operation.target.path))
+                {
+                    nodesByPath.TryGetValue(operation.target.path, out transform);
+                }
+                if (transform == null)
                 {
                     continue;
                 }
 
-                if (operation.type == "subtreeVisibility")
+                if (operation.type == "subtreeEnabled" || operation.type == "subtreeVisibility")
                 {
                     if (operation.boolValue)
                     {
                         transform.gameObject.SetActive(true);
-                        SceneVisibilityManager.instance.Show(transform.gameObject, true);
                     }
                     else
                     {
-                        SceneVisibilityManager.instance.Hide(transform.gameObject, true);
+                        transform.gameObject.SetActive(false);
                     }
                 }
                 else if (operation.type == "blendShapeWeight" && !string.IsNullOrEmpty(operation.name))
@@ -673,6 +953,7 @@ namespace UNAvatar.UnityExporter
 
             var normalizedPath = EnsureUnavatarExtension(exportPath);
             exportPath = normalizedPath;
+            forceIncludeInactiveObjects = true;
             var reportPath = normalizedPath + ".report.json";
             var tempDir = Path.Combine(Path.GetTempPath(), "un-avatar-unity-exporter-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -693,6 +974,7 @@ namespace UNAvatar.UnityExporter
                 {
                     SetActiveRecursive(clone.transform, true);
                 }
+                ApplyWardrobeOperationsToRoot(clone, CurrentBaseOperations());
 
                 var bakeAttempted = ModularAvatarBridge.IsAvailable;
                 var bakeSucceeded = false;
@@ -705,16 +987,22 @@ namespace UNAvatar.UnityExporter
                         Debug.LogWarning("[U.N. Avatar] Modular Avatar bake failed: " + bakeError);
                     }
                 }
+                var bakedBaseSnapshot = WardrobeSnapshotCapture.Capture(clone);
+                // Per-set Modular Avatar baking is too risky for the preview exporter: some VRC avatar
+                // projects can crash Unity during repeated bake/active-state mutation. Keep the exported
+                // model baked, but store wardrobe sets as authored capture diffs until the bake path is hardened.
+                List<WardrobeSetDraft> bakedWardrobeSets = null;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Exporting GLB", 0.55f);
                 var glbName = SanitizeFileName(avatarRoot.name);
-                var tempGlb = MinimalGltfExporter.ExportGlb(clone, tempDir, glbName);
+                var exportResult = MinimalGltfExporter.ExportGlb(clone, tempDir, glbName, ReferencedMorphTargetNamesForExport());
+                var tempGlb = exportResult.Path;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Patching UN_avatar extension", 0.8f);
-                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded);
-                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension);
+                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, bakedBaseSnapshot, bakedWardrobeSets, exportResult.TextureAssets);
+                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets);
 
-                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded);
+                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, bakedBaseSnapshot, bakedWardrobeSets, exportResult.Textures);
                 File.WriteAllText(reportPath, MiniJson.Serialize(report), new UTF8Encoding(false));
 
                 AssetDatabase.Refresh();
@@ -752,7 +1040,11 @@ namespace UNAvatar.UnityExporter
             List<VariantRecord> variants,
             Dictionary<string, string> humanoid,
             bool bakeAttempted,
-            bool bakeSucceeded)
+            bool bakeSucceeded,
+            GameObject registryRoot,
+            WardrobeSnapshotDraft exportBaseSnapshot,
+            List<WardrobeSetDraft> exportWardrobeSets,
+            List<UnavatarTextureAssetRecord> textureAssets)
         {
             return new Dictionary<string, object>
             {
@@ -766,9 +1058,13 @@ namespace UNAvatar.UnityExporter
                     ["createdUtc"] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
                 },
                 ["humanoid"] = humanoid,
-                ["nodes"] = BuildNodeRegistryPayload(),
+                ["nodes"] = BuildNodeRegistryPayload(registryRoot),
+                ["textureAssets"] = (textureAssets ?? new List<UnavatarTextureAssetRecord>())
+                    .Select(asset => asset.ToJson())
+                    .Cast<object>()
+                    .ToList(),
                 ["variants"] = variants.Select(v => v.ToJson()).ToList<object>(),
-                ["wardrobe"] = BuildWardrobePayload(variants),
+                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["provenance"] = new Dictionary<string, object>
                 {
                     ["unityVersion"] = Application.unityVersion,
@@ -787,14 +1083,54 @@ namespace UNAvatar.UnityExporter
             };
         }
 
+        private HashSet<string> ReferencedMorphTargetNamesForExport()
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in capturedWardrobeSets.SelectMany(set => set.operations))
+            {
+                if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name))
+                {
+                    names.Add(operation.name);
+                }
+            }
+            foreach (var operation in CurrentBaseOperations())
+            {
+                if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name) && Math.Abs(operation.floatValue) > 0.001f)
+                {
+                    names.Add(operation.name);
+                }
+            }
+            return names;
+        }
+
         private Dictionary<string, object> BuildReportPayload(
             ExportValidation validation,
             List<VariantRecord> variants,
             Dictionary<string, string> humanoid,
             string output,
             bool bakeAttempted,
-            bool bakeSucceeded)
+            bool bakeSucceeded,
+            WardrobeSnapshotDraft exportBaseSnapshot,
+            List<WardrobeSetDraft> exportWardrobeSets,
+            List<ExportedTextureRecord> exportedTextures)
         {
+            exportedTextures = exportedTextures ?? new List<ExportedTextureRecord>();
+            var fallbackTextures = exportedTextures
+                .Where(texture => texture.ExportMode == "png_fallback")
+                .ToList();
+            var textureSourceBytesByExtension = exportedTextures
+                .Where(texture => !string.IsNullOrEmpty(texture.SourceExtension))
+                .GroupBy(texture => texture.SourceExtension)
+                .OrderByDescending(group => group.Sum(texture => texture.SourceByteLength))
+                .Select(group => new Dictionary<string, object>
+                {
+                    ["extension"] = group.Key,
+                    ["count"] = group.Count(),
+                    ["sourceByteLength"] = group.Sum(texture => texture.SourceByteLength)
+                })
+                .Cast<object>()
+                .ToList();
+
             return new Dictionary<string, object>
             {
                 ["schema"] = "network.usagi.un-avatar.unity-exporter.report",
@@ -808,12 +1144,27 @@ namespace UNAvatar.UnityExporter
                 ["variantCount"] = variants.Count,
                 ["variants"] = variants.Select(v => v.ToJson()).ToList<object>(),
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
-                ["wardrobe"] = BuildWardrobePayload(variants),
+                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["bake"] = new Dictionary<string, object>
                 {
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
                     ["attempted"] = bakeAttempted,
                     ["succeeded"] = bakeSucceeded
+                },
+                ["textures"] = new Dictionary<string, object>
+                {
+                    ["count"] = exportedTextures.Count,
+                    ["fallbackCount"] = fallbackTextures.Count,
+                    ["sourceBytesByExtension"] = textureSourceBytesByExtension,
+                    ["fallbacks"] = fallbackTextures
+                        .OrderByDescending(texture => texture.SourceByteLength)
+                        .Select(texture => texture.ToJson())
+                        .Cast<object>()
+                        .ToList(),
+                    ["items"] = exportedTextures
+                        .Select(texture => texture.ToJson())
+                        .Cast<object>()
+                        .ToList()
                 },
                 ["unsupported"] = new List<object>
                 {
@@ -824,9 +1175,15 @@ namespace UNAvatar.UnityExporter
             };
         }
 
-        private Dictionary<string, object> BuildWardrobePayload(List<VariantRecord> variants)
+        private Dictionary<string, object> BuildWardrobePayload(
+            List<VariantRecord> variants,
+            WardrobeSnapshotDraft exportBaseSnapshot = null,
+            List<WardrobeSetDraft> exportWardrobeSets = null)
         {
-            var baseOperations = hasBaseSnapshot
+            var hasExportBaseSnapshot = exportBaseSnapshot != null && exportBaseSnapshot.nodes.Count > 0;
+            var baseOperations = hasExportBaseSnapshot
+                ? WardrobeSnapshotCapture.BaseOperations(exportBaseSnapshot)
+                : hasBaseSnapshot
                 ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot)
                 : importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList();
             var sets = new List<object>
@@ -835,17 +1192,18 @@ namespace UNAvatar.UnityExporter
                 {
                     id = "base",
                     displayName = "Base",
-                    source = hasBaseSnapshot ? "unity_capture_base" : importedBaseOperations.Count > 0 ? "imported_unavatar_base" : "implicit_current_state",
+                    source = hasExportBaseSnapshot ? "unity_baked_capture_base" : hasBaseSnapshot ? "unity_capture_base" : hasImportedBaseOperations ? "imported_unavatar_base" : "implicit_current_state",
                     operations = baseOperations
                 }.ToJson(true)
             };
 
-            foreach (var set in capturedWardrobeSets)
+            var nonBaseSets = exportWardrobeSets ?? capturedWardrobeSets;
+            foreach (var set in nonBaseSets)
             {
                 sets.Add(set.ToJson(false));
             }
 
-            if (capturedWardrobeSets.Count == 0 && variants != null)
+            if (nonBaseSets.Count == 0 && variants != null)
             {
                 foreach (var variant in variants.Where(v => v.Id != "current-state"))
                 {
@@ -864,24 +1222,79 @@ namespace UNAvatar.UnityExporter
             return new Dictionary<string, object>
             {
                 ["baseSet"] = "base",
-                ["captureBase"] = hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
+                ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
         }
 
-        private List<object> BuildNodeRegistryPayload()
+        private List<WardrobeSetDraft> BuildBakedWardrobeSets(WardrobeSnapshotDraft bakedBaseSnapshot, bool bakeWithModularAvatar)
+        {
+            var sets = new List<WardrobeSetDraft>();
+            if (avatarRoot == null || capturedWardrobeSets.Count == 0 || bakedBaseSnapshot == null || bakedBaseSnapshot.nodes.Count == 0)
+            {
+                return sets;
+            }
+
+            for (var i = 0; i < capturedWardrobeSets.Count; i++)
+            {
+                var source = capturedWardrobeSets[i];
+                GameObject setClone = null;
+                try
+                {
+                    EditorUtility.DisplayProgressBar(
+                        "U.N. Avatar Export",
+                        $"Baking wardrobe set {i + 1}/{capturedWardrobeSets.Count}: {source.displayName}",
+                        0.32f + 0.18f * ((float)i / Math.Max(1, capturedWardrobeSets.Count)));
+                    setClone = Instantiate(avatarRoot);
+                    setClone.name = avatarRoot.name + " (UNAvatar Wardrobe " + source.id + ")";
+                    setClone.hideFlags = HideFlags.HideAndDontSave;
+                    setClone.SetActive(true);
+                    if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentStateOnly)
+                    {
+                        SetActiveRecursive(setClone.transform, true);
+                    }
+                    ApplyWardrobeOperationsToRoot(setClone, CurrentBaseOperations());
+                    ApplyWardrobeOperationsToRoot(setClone, source.operations);
+                    if (bakeWithModularAvatar)
+                    {
+                        if (!ModularAvatarBridge.TryBake(setClone, out var bakeError))
+                        {
+                            Debug.LogWarning("[U.N. Avatar] Modular Avatar bake failed for wardrobe set " + source.displayName + ": " + bakeError);
+                        }
+                    }
+                    var snapshot = WardrobeSnapshotCapture.Capture(setClone);
+                    var baked = WardrobeSnapshotCapture.Diff(bakedBaseSnapshot, snapshot, source.displayName);
+                    baked.id = source.id;
+                    baked.displayName = source.displayName;
+                    baked.source = source.source + "_baked";
+                    baked.capturedSnapshot = snapshot;
+                    sets.Add(baked);
+                }
+                finally
+                {
+                    if (setClone != null)
+                    {
+                        DestroyImmediate(setClone);
+                    }
+                }
+            }
+            return sets;
+        }
+
+        private List<object> BuildNodeRegistryPayload(GameObject registryRoot = null)
         {
             var nodes = new List<object>();
-            if (avatarRoot == null)
+            var rootObject = registryRoot != null ? registryRoot : avatarRoot;
+            if (rootObject == null)
             {
                 return nodes;
             }
-            foreach (var transform in avatarRoot.GetComponentsInChildren<Transform>(true))
+            foreach (var transform in rootObject.GetComponentsInChildren<Transform>(true))
             {
                 nodes.Add(new Dictionary<string, object>
                 {
-                    ["nodeId"] = WardrobeSnapshotCapture.NodeIdFor(avatarRoot.transform, transform),
-                    ["path"] = VariantExtractor.TransformPath(avatarRoot.transform, transform),
+                    ["nodeId"] = WardrobeSnapshotCapture.NodeIdFor(rootObject.transform, transform),
+                    ["path"] = VariantExtractor.TransformPath(rootObject.transform, transform),
                     ["name"] = transform.name
                 });
             }
@@ -1130,7 +1543,7 @@ namespace UNAvatar.UnityExporter
             {
                 variant.Operations.Add(new Dictionary<string, object>
                 {
-                    ["op"] = "nodeVisibility",
+                    ["op"] = "nodeEnabled",
                     ["path"] = TransformPath(root.transform, renderer.transform),
                     ["visible"] = renderer.gameObject.activeInHierarchy && renderer.enabled
                 });
@@ -1168,7 +1581,7 @@ namespace UNAvatar.UnityExporter
                         {
                             record.Operations.Add(new Dictionary<string, object>
                             {
-                                ["op"] = "nodeVisibility",
+                                ["op"] = "nodeEnabled",
                                 ["path"] = TransformPath(root.transform, target.transform),
                                 ["visible"] = active
                             });
@@ -1354,7 +1767,7 @@ namespace UNAvatar.UnityExporter
                 {
                     set.operations.Add(new WardrobeOperationDraft
                     {
-                        type = "subtreeVisibility",
+                        type = "subtreeEnabled",
                         target = Target(node.nodeId, node.path),
                         boolValue = node.visible
                     });
@@ -1369,7 +1782,7 @@ namespace UNAvatar.UnityExporter
                 {
                     set.operations.Add(new WardrobeOperationDraft
                     {
-                        type = "rendererVisibility",
+                        type = "rendererEnabled",
                         target = Target(renderer.nodeId, renderer.path),
                         boolValue = renderer.enabled
                     });
@@ -1405,7 +1818,7 @@ namespace UNAvatar.UnityExporter
                 {
                     operations.Add(new WardrobeOperationDraft
                     {
-                        type = "subtreeVisibility",
+                        type = "subtreeEnabled",
                         target = Target(node.nodeId, node.path),
                         boolValue = false
                     });
@@ -1495,7 +1908,7 @@ namespace UNAvatar.UnityExporter
             var compressed = new List<WardrobeOperationDraft>();
             foreach (var operation in operations.OrderBy(OperationPathDepth))
             {
-                if (operation.type != "subtreeVisibility")
+                if (operation.type != "subtreeEnabled" && operation.type != "subtreeVisibility")
                 {
                     compressed.Add(operation);
                     continue;
@@ -1503,7 +1916,7 @@ namespace UNAvatar.UnityExporter
 
                 var path = operation.target != null ? operation.target.path ?? "" : "";
                 var isRedundant = compressed.Any(existing =>
-                    existing.type == "subtreeVisibility" &&
+                    (existing.type == "subtreeEnabled" || existing.type == "subtreeVisibility") &&
                     existing.boolValue == operation.boolValue &&
                     IsAncestorOrSelf(existing.target != null ? existing.target.path ?? "" : "", path));
                 if (!isRedundant)
@@ -1518,7 +1931,9 @@ namespace UNAvatar.UnityExporter
 
         private static int OperationPathDepth(WardrobeOperationDraft operation)
         {
-            if (operation.type != "subtreeVisibility" || operation.target == null || string.IsNullOrWhiteSpace(operation.target.path))
+            if ((operation.type != "subtreeEnabled" && operation.type != "subtreeVisibility") ||
+                operation.target == null ||
+                string.IsNullOrWhiteSpace(operation.target.path))
             {
                 return int.MaxValue;
             }
@@ -1551,12 +1966,7 @@ namespace UNAvatar.UnityExporter
 
         private static bool IsNodeVisible(Transform transform)
         {
-            if (!transform.gameObject.activeSelf)
-            {
-                return false;
-            }
-
-            return !SceneVisibilityManager.instance.IsHidden(transform.gameObject);
+            return transform.gameObject.activeInHierarchy;
         }
 
         public static string NodeIdFor(Transform root, Transform target)
@@ -1622,6 +2032,7 @@ namespace UNAvatar.UnityExporter
 
     internal sealed class ImportedWardrobeDraft
     {
+        public bool hasBaseOperations;
         public List<WardrobeOperationDraft> baseOperations = new List<WardrobeOperationDraft>();
         public List<WardrobeSetDraft> sets = new List<WardrobeSetDraft>();
     }
@@ -1643,6 +2054,7 @@ namespace UNAvatar.UnityExporter
             {
                 return result;
             }
+            var baseSetId = ReadString(wardrobe, "baseSet", "base");
 
             foreach (var item in sets)
             {
@@ -1653,8 +2065,11 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var set = ReadSet(map);
-                if (set.id == "base" || ReadBool(map, "default", false))
+                if (string.Equals(set.id, baseSetId, StringComparison.Ordinal) ||
+                    string.Equals(set.id, "base", StringComparison.OrdinalIgnoreCase) ||
+                    ReadBool(map, "default", false))
                 {
+                    result.hasBaseOperations = true;
                     result.baseOperations = set.operations;
                     continue;
                 }
@@ -1821,21 +2236,35 @@ namespace UNAvatar.UnityExporter
         private const uint BinChunkType = 0x004E4942;
         private const uint GlbMagic = 0x46546C67;
 
-        public static string ExportGlb(GameObject root, string directory, string fileName)
+        public sealed class ExportResult
         {
-            var writer = new Writer(root);
+            public string Path;
+            public List<ExportedTextureRecord> Textures = new List<ExportedTextureRecord>();
+            public List<UnavatarTextureAssetRecord> TextureAssets = new List<UnavatarTextureAssetRecord>();
+        }
+
+        public static ExportResult ExportGlb(GameObject root, string directory, string fileName, HashSet<string> morphTargetNames)
+        {
+            var writer = new Writer(root, morphTargetNames);
             var path = Path.Combine(directory, fileName + ".glb");
             writer.Export(path);
-            return path;
+            return new ExportResult
+            {
+                Path = path,
+                Textures = writer.ExportedTextures,
+                TextureAssets = writer.TextureAssets
+            };
         }
 
         private sealed class Writer
         {
             private readonly GameObject root;
             private readonly BinaryBuffer buffer = new BinaryBuffer();
+            private readonly HashSet<string> morphTargetNames;
             private readonly Dictionary<Transform, int> nodeIndices = new Dictionary<Transform, int>();
             private readonly Dictionary<Material, int> materialIndices = new Dictionary<Material, int>();
             private readonly Dictionary<Texture, int> textureIndices = new Dictionary<Texture, int>();
+            private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
             private int defaultMaterialIndex = -1;
             private readonly List<object> nodes = new List<object>();
             private readonly List<object> meshes = new List<object>();
@@ -1846,10 +2275,16 @@ namespace UNAvatar.UnityExporter
             private readonly List<object> images = new List<object>();
             private readonly List<object> textures = new List<object>();
             private readonly List<object> samplers = new List<object>();
+            private readonly List<ExportedTextureRecord> exportedTextures = new List<ExportedTextureRecord>();
+            private readonly List<UnavatarTextureAssetRecord> textureAssets = new List<UnavatarTextureAssetRecord>();
 
-            public Writer(GameObject root)
+            public List<ExportedTextureRecord> ExportedTextures => exportedTextures;
+            public List<UnavatarTextureAssetRecord> TextureAssets => textureAssets;
+
+            public Writer(GameObject root, HashSet<string> morphTargetNames)
             {
                 this.root = root;
+                this.morphTargetNames = morphTargetNames ?? new HashSet<string>(StringComparer.Ordinal);
                 samplers.Add(new Dictionary<string, object>
                 {
                     ["magFilter"] = 9729,
@@ -1915,10 +2350,12 @@ namespace UNAvatar.UnityExporter
             {
                 var index = nodes.Count;
                 nodeIndices[transform] = index;
+                var isExportRoot = transform == root.transform;
+                var translation = isExportRoot ? Vector3.zero : transform.localPosition;
                 var node = new Dictionary<string, object>
                 {
                     ["name"] = transform.name,
-                    ["translation"] = FloatArray(transform.localPosition.x, transform.localPosition.y, transform.localPosition.z),
+                    ["translation"] = FloatArray(translation.x, translation.y, translation.z),
                     ["rotation"] = FloatArray(transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w),
                     ["scale"] = FloatArray(transform.localScale.x, transform.localScale.y, transform.localScale.z)
                 };
@@ -1993,6 +2430,8 @@ namespace UNAvatar.UnityExporter
                 var colorAccessor = colors != null && colors.Length == vertices.Length ? AddColorAccessor(colors) : -1;
                 var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddJointsAccessor(boneWeights) : -1;
                 var weightsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddWeightsAccessor(boneWeights) : -1;
+                var morphTargets = BuildMorphTargets(mesh, vertices.Length);
+                var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>();
 
                 var primitives = new List<object>();
                 for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
@@ -2013,15 +2452,25 @@ namespace UNAvatar.UnityExporter
                         attributes["JOINTS_0"] = jointsAccessor;
                         attributes["WEIGHTS_0"] = weightsAccessor;
                     }
+                    var targets = new List<object>();
+                    foreach (var target in morphTargets)
+                    {
+                        targets.Add(target.ToJson());
+                    }
 
                     var material = sourceMaterials != null && submesh < sourceMaterials.Length ? sourceMaterials[submesh] : null;
-                    primitives.Add(new Dictionary<string, object>
+                    var primitive = new Dictionary<string, object>
                     {
                         ["attributes"] = attributes,
                         ["indices"] = AddIndicesAccessor(indices),
                         ["material"] = ExportMaterial(material),
                         ["mode"] = 4
-                    });
+                    };
+                    if (targets.Count > 0)
+                    {
+                        primitive["targets"] = targets;
+                    }
+                    primitives.Add(primitive);
                 }
                 if (primitives.Count == 0)
                 {
@@ -2033,8 +2482,81 @@ namespace UNAvatar.UnityExporter
                     ["name"] = mesh.name,
                     ["primitives"] = primitives
                 };
+                if (morphWeights.Count > 0)
+                {
+                    gltfMesh["weights"] = morphWeights;
+                }
+                if (morphTargets.Count > 0)
+                {
+                    gltfMesh["extras"] = new Dictionary<string, object>
+                    {
+                        ["targetNames"] = morphTargets.Select(target => (object)target.Name).ToList()
+                    };
+                }
                 meshes.Add(gltfMesh);
                 return meshes.Count - 1;
+            }
+
+            private List<MorphTargetRecord> BuildMorphTargets(Mesh mesh, int vertexCount)
+            {
+                var targets = new List<MorphTargetRecord>();
+                if (mesh == null || mesh.blendShapeCount <= 0 || vertexCount <= 0)
+                {
+                    return targets;
+                }
+
+                for (var i = 0; i < mesh.blendShapeCount; i++)
+                {
+                    var name = mesh.GetBlendShapeName(i);
+                    if (morphTargetNames.Count > 0 && !morphTargetNames.Contains(name))
+                    {
+                        continue;
+                    }
+                    var frameCount = mesh.GetBlendShapeFrameCount(i);
+                    if (frameCount <= 0)
+                    {
+                        continue;
+                    }
+                    var deltaVertices = new Vector3[vertexCount];
+                    var deltaNormals = new Vector3[vertexCount];
+                    var deltaTangents = new Vector3[vertexCount];
+                    mesh.GetBlendShapeFrameVertices(i, frameCount - 1, deltaVertices, deltaNormals, deltaTangents);
+                    var record = new MorphTargetRecord
+                    {
+                        Name = name,
+                        PositionAccessor = AddVec3Accessor(deltaVertices, false),
+                        NormalAccessor = HasAnyNonZero(deltaNormals) ? AddVec3Accessor(deltaNormals, false) : -1
+                    };
+                    targets.Add(record);
+                }
+                return targets;
+            }
+
+            private static List<object> BuildMorphWeights(Mesh mesh, SkinnedMeshRenderer skinned, List<MorphTargetRecord> morphTargets)
+            {
+                var weights = new List<object>();
+                foreach (var target in morphTargets)
+                {
+                    var index = mesh.GetBlendShapeIndex(target.Name);
+                    weights.Add(index >= 0 ? Mathf.Clamp01(skinned.GetBlendShapeWeight(index) / 100.0f) : 0.0f);
+                }
+                return weights;
+            }
+
+            private static bool HasAnyNonZero(Vector3[] values)
+            {
+                if (values == null)
+                {
+                    return false;
+                }
+                for (var i = 0; i < values.Length; i++)
+                {
+                    if (values[i].sqrMagnitude > 0.0f)
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             private int ExportSkin(SkinnedMeshRenderer renderer)
@@ -2110,9 +2632,48 @@ namespace UNAvatar.UnityExporter
                     ["pbrMetallicRoughness"] = pbr,
                     ["doubleSided"] = true
                 };
+                var normalTexture = ReadTexture(material, "_BumpMap") ?? ReadTexture(material, "_NormalMap");
+                if (normalTexture != null)
+                {
+                    var normalTextureIndex = ExportTexture(normalTexture);
+                    if (normalTextureIndex >= 0)
+                    {
+                        gltfMaterial["normalTexture"] = new Dictionary<string, object>
+                        {
+                            ["index"] = normalTextureIndex,
+                            ["scale"] = ReadFloat(material, "_BumpScale", 1.0f)
+                        };
+                    }
+                }
+                var emissionTexture = ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex");
+                var emissionColor = ReadColor(material, "_EmissionColor", Color.black);
+                if (emissionTexture != null)
+                {
+                    var emissionTextureIndex = ExportTexture(emissionTexture);
+                    if (emissionTextureIndex >= 0)
+                    {
+                        gltfMaterial["emissiveTexture"] = new Dictionary<string, object> { ["index"] = emissionTextureIndex };
+                    }
+                }
+                if (emissionColor.maxColorComponent > 0.0f)
+                {
+                    gltfMaterial["emissiveFactor"] = FloatArray(emissionColor.r, emissionColor.g, emissionColor.b);
+                }
                 if (baseColor.a < 0.999f || material.renderQueue >= 3000)
                 {
                     gltfMaterial["alphaMode"] = "BLEND";
+                }
+                if (material.HasProperty("_Cutoff"))
+                {
+                    gltfMaterial["alphaCutoff"] = ReadFloat(material, "_Cutoff", 0.5f);
+                }
+                var unAvatarMaterial = BuildUnAvatarMaterialExtras(material);
+                if (unAvatarMaterial != null)
+                {
+                    gltfMaterial["extras"] = new Dictionary<string, object>
+                    {
+                        ["UN_avatar_material"] = unAvatarMaterial
+                    };
                 }
 
                 materials.Add(gltfMaterial);
@@ -2142,6 +2703,72 @@ namespace UNAvatar.UnityExporter
                 return defaultMaterialIndex;
             }
 
+            private Dictionary<string, object> BuildUnAvatarMaterialExtras(Material material)
+            {
+                var shaderName = material.shader != null ? material.shader.name : "";
+                var lowerShader = shaderName.ToLowerInvariant();
+                var looksToon = lowerShader.Contains("liltoon") || lowerShader.Contains("mtoon") || material.HasProperty("_ShadeColor") || material.HasProperty("_ShadeTex");
+                if (!looksToon)
+                {
+                    return null;
+                }
+
+                var mtoon = new Dictionary<string, object>();
+                var shadeColor = ReadColor(material, "_ShadeColor", new Color(0.97f, 0.97f, 0.97f, 1.0f));
+                mtoon["shadeColorFactor"] = FloatArray(shadeColor.r, shadeColor.g, shadeColor.b);
+                AddTextureIndex(mtoon, "shadeMultiplyTextureIndex", ReadTexture(material, "_ShadeTex") ?? ReadTexture(material, "_1st_ShadeMap"));
+                mtoon["shadingShiftFactor"] = ReadFloat(material, "_ShadeShift", ReadFloat(material, "_ShadowBorder", 0.0f));
+                mtoon["shadingToonyFactor"] = 1.0f - Mathf.Clamp01(ReadFloat(material, "_ShadowBlur", 0.0f));
+
+                var matcapColor = ReadColor(material, "_MatCapColor", Color.white);
+                mtoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
+                AddTextureIndex(mtoon, "matcapTextureIndex", ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex"));
+
+                var rimColor = ReadColor(material, "_RimColor", Color.black);
+                mtoon["parametricRimColorFactor"] = FloatArray(rimColor.r, rimColor.g, rimColor.b);
+                mtoon["parametricRimFresnelPowerFactor"] = ReadFloat(material, "_RimFresnelPower", 5.0f);
+                mtoon["rimLightingMixFactor"] = ReadFloat(material, "_RimEnableLighting", 1.0f);
+                AddTextureIndex(mtoon, "rimMultiplyTextureIndex", ReadTexture(material, "_RimColorTex"));
+                AddTextureIndex(mtoon, "reflectionCubeTextureIndex", ReadTexture(material, "_ReflectionCubeTex"));
+
+                var outlineWidth = ReadFloat(material, "_OutlineWidth", 0.0f);
+                mtoon["outlineWidthMode"] = outlineWidth > 0.0f ? "world_coordinates" : "none";
+                mtoon["outlineWidthFactor"] = outlineWidth;
+                var outlineColor = ReadColor(material, "_OutlineColor", Color.black);
+                mtoon["outlineColorFactor"] = FloatArray(outlineColor.r, outlineColor.g, outlineColor.b);
+                mtoon["outlineLightingMixFactor"] = ReadFloat(material, "_OutlineEnableLighting", 1.0f);
+                AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", ReadTexture(material, "_OutlineWidthMask"));
+
+                mtoon["transparentWithZWrite"] = ReadFloat(material, "_ZWrite", 0.0f) > 0.5f || ReadFloat(material, "_ZWriteMode", 0.0f) > 0.5f;
+
+                return new Dictionary<string, object>
+                {
+                    ["sourceShader"] = shaderName,
+                    ["family"] = lowerShader.Contains("liltoon") ? "liltoon" : lowerShader.Contains("mtoon") ? "mtoon" : "toon",
+                    ["unMaterialModel"] = "UNToon",
+                    ["mtoon"] = mtoon
+                };
+            }
+
+            private void AddTextureIndex(Dictionary<string, object> dst, string key, Texture texture)
+            {
+                if (texture == null)
+                {
+                    return;
+                }
+                var textureIndex = ExportTexture(texture);
+                if (textureIndex >= 0)
+                {
+                    dst[key] = textureIndex;
+                    return;
+                }
+                var asset = ExportUnavatarTextureAsset(texture);
+                if (asset != null)
+                {
+                    dst[key + "Asset"] = asset.Id;
+                }
+            }
+
             private int ExportTexture(Texture texture)
             {
                 if (texture == null)
@@ -2153,18 +2780,39 @@ namespace UNAvatar.UnityExporter
                     return existing;
                 }
 
-                var png = EncodeTexturePng(texture);
-                if (png == null || png.Length == 0)
+                string fallbackReason;
+                var encoded = TryReadSourceTextureBytes(texture, out fallbackReason);
+                if (encoded == null && IsUnavatarExtensionOnlyTexture(MimeTypeFromPath(AssetDatabase.GetAssetPath(texture))))
+                {
+                    return -1;
+                }
+                if (encoded == null)
+                {
+                    encoded = EncodeTexturePng(texture, fallbackReason);
+                }
+                if (encoded == null || encoded.Bytes == null || encoded.Bytes.Length == 0)
                 {
                     return -1;
                 }
 
-                var view = AddBufferView(png);
+                var view = AddBufferView(encoded.Bytes);
                 images.Add(new Dictionary<string, object>
                 {
                     ["name"] = texture.name,
                     ["bufferView"] = view,
-                    ["mimeType"] = "image/png"
+                    ["mimeType"] = encoded.MimeType
+                });
+                exportedTextures.Add(new ExportedTextureRecord
+                {
+                    Name = texture.name,
+                    AssetPath = encoded.AssetPath,
+                    SourceExtension = encoded.SourceExtension,
+                    SourceMimeType = encoded.SourceMimeType,
+                    SourceByteLength = encoded.SourceByteLength,
+                    OutputMimeType = encoded.MimeType,
+                    OutputByteLength = encoded.Bytes.Length,
+                    ExportMode = encoded.ExportMode,
+                    FallbackReason = encoded.FallbackReason
                 });
                 textures.Add(new Dictionary<string, object>
                 {
@@ -2176,8 +2824,447 @@ namespace UNAvatar.UnityExporter
                 return index;
             }
 
-            private static byte[] EncodeTexturePng(Texture texture)
+            private sealed class EncodedTexture
             {
+                public byte[] Bytes;
+                public string MimeType;
+                public string AssetPath;
+                public string SourceExtension;
+                public string SourceMimeType;
+                public long SourceByteLength;
+                public string ExportMode;
+                public string FallbackReason;
+
+                public EncodedTexture(byte[] bytes, string mimeType)
+                {
+                    Bytes = bytes;
+                    MimeType = mimeType;
+                }
+            }
+
+            private static EncodedTexture TryReadSourceTextureBytes(Texture texture, out string fallbackReason)
+            {
+                fallbackReason = "";
+                var assetPath = AssetDatabase.GetAssetPath(texture);
+                if (string.IsNullOrEmpty(assetPath))
+                {
+                    fallbackReason = "generated_or_runtime_texture";
+                    return null;
+                }
+
+                var mimeType = GltfImageMimeTypeFromPath(assetPath);
+                if (string.IsNullOrEmpty(mimeType))
+                {
+                    fallbackReason = "unsupported_source_mime";
+                    return null;
+                }
+
+                var fullPath = Path.IsPathRooted(assetPath)
+                    ? assetPath
+                    : Path.Combine(Directory.GetCurrentDirectory(), assetPath);
+                if (!File.Exists(fullPath))
+                {
+                    fallbackReason = "source_file_not_found";
+                    return null;
+                }
+
+                try
+                {
+                    var bytes = File.ReadAllBytes(fullPath);
+                    if (bytes.Length <= 0)
+                    {
+                        fallbackReason = "empty_source_file";
+                        return null;
+                    }
+                    return new EncodedTexture(bytes, mimeType)
+                    {
+                        AssetPath = assetPath,
+                        SourceExtension = Path.GetExtension(assetPath).ToLowerInvariant(),
+                        SourceMimeType = mimeType,
+                        SourceByteLength = bytes.Length,
+                        ExportMode = "source",
+                        FallbackReason = ""
+                    };
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[U.N. Avatar] Source texture read failed for " + texture.name + ": " + ex.Message);
+                    fallbackReason = "source_read_failed";
+                    return null;
+                }
+            }
+
+            private static string MimeTypeFromPath(string path)
+            {
+                var extension = Path.GetExtension(path).ToLowerInvariant();
+                switch (extension)
+                {
+                    case ".png":
+                        return "image/png";
+                    case ".jpg":
+                    case ".jpeg":
+                        return "image/jpeg";
+                    case ".exr":
+                        return "image/exr";
+                    default:
+                        return null;
+                }
+            }
+
+            private static string GltfImageMimeTypeFromPath(string path)
+            {
+                var extension = Path.GetExtension(path).ToLowerInvariant();
+                switch (extension)
+                {
+                    case ".png":
+                        return "image/png";
+                    case ".jpg":
+                    case ".jpeg":
+                        return "image/jpeg";
+                    default:
+                        return null;
+                }
+            }
+
+            private UnavatarTextureAssetRecord ExportUnavatarTextureAsset(Texture texture)
+            {
+                if (textureAssetIndices.TryGetValue(texture, out var existing))
+                {
+                    return existing;
+                }
+                var assetPath = AssetDatabase.GetAssetPath(texture);
+                if (string.IsNullOrEmpty(assetPath))
+                {
+                    return null;
+                }
+                var mimeType = MimeTypeFromPath(assetPath);
+                if (!IsUnavatarExtensionOnlyTexture(mimeType))
+                {
+                    return null;
+                }
+                var fullPath = Path.IsPathRooted(assetPath)
+                    ? assetPath
+                    : Path.Combine(Directory.GetCurrentDirectory(), assetPath);
+                if (!File.Exists(fullPath))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    var bytes = File.ReadAllBytes(fullPath);
+                    if (bytes.Length == 0)
+                    {
+                        return null;
+                    }
+                    var metadata = TextureAssetMetadata.FromTexture(texture, assetPath, bytes);
+                    var asset = new UnavatarTextureAssetRecord
+                    {
+                        Id = "texture-asset-" + textureAssets.Count.ToString(CultureInfo.InvariantCulture),
+                        Name = texture.name,
+                        AssetPath = assetPath,
+                        MimeType = mimeType,
+                        SourceExtension = Path.GetExtension(assetPath).ToLowerInvariant(),
+                        SourcePixelFormat = metadata.SourcePixelFormat,
+                        ColorSpace = metadata.ColorSpace,
+                        Channels = metadata.Channels,
+                        Width = metadata.Width,
+                        Height = metadata.Height,
+                        Bytes = bytes
+                    };
+                    textureAssets.Add(asset);
+                    textureAssetIndices[texture] = asset;
+                    exportedTextures.Add(new ExportedTextureRecord
+                    {
+                        Name = texture.name,
+                        AssetPath = assetPath,
+                        SourceExtension = asset.SourceExtension,
+                        SourceMimeType = mimeType,
+                        SourceByteLength = bytes.Length,
+                        OutputMimeType = mimeType,
+                        OutputByteLength = bytes.Length,
+                        ExportMode = "unavatar_source_asset",
+                        FallbackReason = ""
+                    });
+                    return asset;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[U.N. Avatar] Source texture asset read failed for " + texture.name + ": " + ex.Message);
+                    return null;
+                }
+            }
+
+            private static bool IsUnavatarExtensionOnlyTexture(string mimeType)
+            {
+                return mimeType == "image/exr";
+            }
+
+            private sealed class TextureAssetMetadata
+            {
+                public string SourcePixelFormat = "";
+                public string ColorSpace = "linear";
+                public string Channels = "";
+                public int Width;
+                public int Height;
+
+                public static TextureAssetMetadata FromTexture(Texture texture, string assetPath, byte[] bytes)
+                {
+                    var extension = Path.GetExtension(assetPath).ToLowerInvariant();
+                    if (extension == ".exr")
+                    {
+                        var exr = TryReadExrMetadata(bytes);
+                        if (exr != null)
+                        {
+                            return exr;
+                        }
+                        return new TextureAssetMetadata
+                        {
+                            SourcePixelFormat = "unknown_float",
+                            ColorSpace = "linear",
+                            Channels = ""
+                        };
+                    }
+
+                    var pixelFormat = SourcePixelFormatHintFromTexture(texture, assetPath);
+                    return new TextureAssetMetadata
+                    {
+                        SourcePixelFormat = pixelFormat,
+                        ColorSpace = "linear",
+                        Channels = ChannelsHintFromPixelFormat(pixelFormat),
+                        Width = texture != null ? texture.width : 0,
+                        Height = texture != null ? texture.height : 0
+                    };
+                }
+
+                private static TextureAssetMetadata TryReadExrMetadata(byte[] bytes)
+                {
+                    try
+                    {
+                        if (bytes == null || bytes.Length < 12 || BitConverter.ToUInt32(bytes, 0) != 20000630u)
+                        {
+                            return null;
+                        }
+
+                        var offset = 8;
+                        var width = 0;
+                        var height = 0;
+                        var channelNames = new List<string>();
+                        var pixelTypes = new List<int>();
+
+                        while (offset < bytes.Length)
+                        {
+                            var name = ReadNullTerminatedAscii(bytes, ref offset);
+                            if (name == null)
+                            {
+                                return null;
+                            }
+                            if (name.Length == 0)
+                            {
+                                break;
+                            }
+                            var type = ReadNullTerminatedAscii(bytes, ref offset);
+                            if (type == null || offset + 4 > bytes.Length)
+                            {
+                                return null;
+                            }
+                            var size = BitConverter.ToInt32(bytes, offset);
+                            offset += 4;
+                            if (size < 0 || offset + size > bytes.Length)
+                            {
+                                return null;
+                            }
+
+                            if (name == "channels" && type == "chlist")
+                            {
+                                ReadExrChannels(bytes, offset, size, channelNames, pixelTypes);
+                            }
+                            else if (name == "dataWindow" && type == "box2i" && size >= 16)
+                            {
+                                var minX = BitConverter.ToInt32(bytes, offset);
+                                var minY = BitConverter.ToInt32(bytes, offset + 4);
+                                var maxX = BitConverter.ToInt32(bytes, offset + 8);
+                                var maxY = BitConverter.ToInt32(bytes, offset + 12);
+                                width = Math.Max(0, maxX - minX + 1);
+                                height = Math.Max(0, maxY - minY + 1);
+                            }
+
+                            offset += size;
+                        }
+
+                        var channels = CanonicalChannels(channelNames);
+                        var pixelFormat = PixelFormatFromExrChannels(channels, pixelTypes);
+                        return new TextureAssetMetadata
+                        {
+                            SourcePixelFormat = pixelFormat,
+                            ColorSpace = "linear",
+                            Channels = channels,
+                            Width = width,
+                            Height = height
+                        };
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                private static void ReadExrChannels(byte[] bytes, int start, int size, List<string> channelNames, List<int> pixelTypes)
+                {
+                    var offset = start;
+                    var end = start + size;
+                    while (offset < end)
+                    {
+                        var channelName = ReadNullTerminatedAscii(bytes, ref offset);
+                        if (channelName == null || channelName.Length == 0)
+                        {
+                            break;
+                        }
+                        if (offset + 16 > end)
+                        {
+                            break;
+                        }
+                        var pixelType = BitConverter.ToInt32(bytes, offset);
+                        offset += 16;
+                        channelNames.Add(channelName);
+                        pixelTypes.Add(pixelType);
+                    }
+                }
+
+                private static string ReadNullTerminatedAscii(byte[] bytes, ref int offset)
+                {
+                    if (offset >= bytes.Length)
+                    {
+                        return null;
+                    }
+                    var start = offset;
+                    while (offset < bytes.Length && bytes[offset] != 0)
+                    {
+                        offset++;
+                    }
+                    if (offset >= bytes.Length)
+                    {
+                        return null;
+                    }
+                    var value = Encoding.ASCII.GetString(bytes, start, offset - start);
+                    offset++;
+                    return value;
+                }
+
+                private static string CanonicalChannels(List<string> channelNames)
+                {
+                    if (channelNames == null || channelNames.Count == 0)
+                    {
+                        return "";
+                    }
+                    var names = new HashSet<string>(channelNames.Select(c => c.ToUpperInvariant()));
+                    if (names.SetEquals(new[] { "R", "G", "B", "A" }))
+                    {
+                        return "rgba";
+                    }
+                    if (names.SetEquals(new[] { "R", "G", "B" }))
+                    {
+                        return "rgb";
+                    }
+                    if (names.SetEquals(new[] { "R", "G" }))
+                    {
+                        return "rg";
+                    }
+                    if (names.SetEquals(new[] { "R" }) || names.SetEquals(new[] { "Y" }))
+                    {
+                        return "r";
+                    }
+                    return "";
+                }
+
+                private static string PixelFormatFromExrChannels(string channels, List<int> pixelTypes)
+                {
+                    if (string.IsNullOrEmpty(channels) || pixelTypes == null || pixelTypes.Count == 0)
+                    {
+                        return "unknown_float";
+                    }
+                    var distinctTypes = new HashSet<int>(pixelTypes);
+                    if (distinctTypes.Count != 1)
+                    {
+                        return "unknown_float";
+                    }
+
+                    string suffix;
+                    switch (pixelTypes[0])
+                    {
+                        case 0:
+                            suffix = "32U";
+                            break;
+                        case 1:
+                            suffix = "16F";
+                            break;
+                        case 2:
+                            suffix = "32F";
+                            break;
+                        default:
+                            return "unknown_float";
+                    }
+                    return channels.ToUpperInvariant() + suffix;
+                }
+            }
+
+            private static string SourcePixelFormatHintFromTexture(Texture texture, string assetPath)
+            {
+                var extension = Path.GetExtension(assetPath).ToLowerInvariant();
+                if (extension == ".exr")
+                {
+                    return "unknown_float";
+                }
+                if (texture != null && texture.graphicsFormat.ToString().IndexOf("16", StringComparison.Ordinal) >= 0)
+                {
+                    return texture.graphicsFormat.ToString();
+                }
+                return "";
+            }
+
+            private static string ChannelsHintFromPixelFormat(string pixelFormat)
+            {
+                if (string.IsNullOrEmpty(pixelFormat))
+                {
+                    return "";
+                }
+                var upper = pixelFormat.ToUpperInvariant();
+                if (upper.StartsWith("RGBA", StringComparison.Ordinal))
+                {
+                    return "rgba";
+                }
+                if (upper.StartsWith("RGB", StringComparison.Ordinal))
+                {
+                    return "rgb";
+                }
+                if (upper.StartsWith("RG", StringComparison.Ordinal))
+                {
+                    return "rg";
+                }
+                if (upper.StartsWith("R", StringComparison.Ordinal))
+                {
+                    return "r";
+                }
+                return "";
+            }
+
+            private static EncodedTexture EncodeTexturePng(Texture texture, string fallbackReason)
+            {
+                var assetPath = AssetDatabase.GetAssetPath(texture);
+                var sourceExtension = string.IsNullOrEmpty(assetPath) ? "" : Path.GetExtension(assetPath).ToLowerInvariant();
+                var sourceMimeType = string.IsNullOrEmpty(assetPath) ? "" : MimeTypeFromPath(assetPath) ?? "";
+                var sourceByteLength = 0L;
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    var fullPath = Path.IsPathRooted(assetPath)
+                        ? assetPath
+                        : Path.Combine(Directory.GetCurrentDirectory(), assetPath);
+                    if (File.Exists(fullPath))
+                    {
+                        sourceByteLength = new FileInfo(fullPath).Length;
+                    }
+                }
+
                 var oldActive = RenderTexture.active;
                 var temporary = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
                 try
@@ -2189,7 +3276,15 @@ namespace UNAvatar.UnityExporter
                     readable.Apply();
                     var png = readable.EncodeToPNG();
                     UnityEngine.Object.DestroyImmediate(readable);
-                    return png;
+                    return new EncodedTexture(png, "image/png")
+                    {
+                        AssetPath = assetPath,
+                        SourceExtension = sourceExtension,
+                        SourceMimeType = sourceMimeType,
+                        SourceByteLength = sourceByteLength,
+                        ExportMode = "png_fallback",
+                        FallbackReason = string.IsNullOrEmpty(fallbackReason) ? "source_bytes_unavailable" : fallbackReason
+                    };
                 }
                 catch (Exception ex)
                 {
@@ -2448,6 +3543,27 @@ namespace UNAvatar.UnityExporter
             }
         }
 
+        private sealed class MorphTargetRecord
+        {
+            public string Name;
+            public int PositionAccessor;
+            public int NormalAccessor;
+
+            public Dictionary<string, object> ToJson()
+            {
+                var json = new Dictionary<string, object>();
+                if (PositionAccessor >= 0)
+                {
+                    json["POSITION"] = PositionAccessor;
+                }
+                if (NormalAccessor >= 0)
+                {
+                    json["NORMAL"] = NormalAccessor;
+                }
+                return json;
+            }
+        }
+
         private sealed class BinaryBuffer
         {
             private readonly List<byte> bytes = new List<byte>();
@@ -2537,7 +3653,12 @@ namespace UNAvatar.UnityExporter
             return json.Substring(extensionStart, extensionEnd - extensionStart + 1);
         }
 
-        public static void PatchRootExtension(string sourceGlb, string destinationGlb, string extensionName, Dictionary<string, object> payload)
+        public static void PatchRootExtension(
+            string sourceGlb,
+            string destinationGlb,
+            string extensionName,
+            Dictionary<string, object> payload,
+            List<UnavatarTextureAssetRecord> textureAssets = null)
         {
             var bytes = File.ReadAllBytes(sourceGlb);
             if (bytes.Length < 20)
@@ -2574,11 +3695,169 @@ namespace UNAvatar.UnityExporter
                 throw new InvalidDataException("GLB JSON chunk was not found.");
             }
 
+            var binChunk = chunks.FirstOrDefault(c => c.Type == 0x004E4942);
+            if (binChunk == null)
+            {
+                binChunk = new GlbChunk { Type = 0x004E4942, Data = Array.Empty<byte>() };
+                chunks.Add(binChunk);
+            }
+
             var json = Encoding.UTF8.GetString(jsonChunk.Data).TrimEnd('\0', ' ', '\t', '\r', '\n');
+            if (textureAssets != null && textureAssets.Count > 0)
+            {
+                json = AppendTextureAssetBufferViews(json, binChunk, textureAssets);
+                payload["textureAssets"] = textureAssets
+                    .Select(asset => asset.ToJson())
+                    .Cast<object>()
+                    .ToList();
+            }
             json = PatchRootJson(json, extensionName, payload);
             jsonChunk.Data = Pad(Encoding.UTF8.GetBytes(json), 0x20);
 
             WriteGlb(destinationGlb, chunks);
+        }
+
+        private static string AppendTextureAssetBufferViews(string json, GlbChunk binChunk, List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            if (textureAssets == null || textureAssets.Count == 0)
+            {
+                return json;
+            }
+
+            var bin = new List<byte>(binChunk.Data ?? Array.Empty<byte>());
+            var viewJson = new List<string>();
+            foreach (var asset in textureAssets)
+            {
+                if (asset == null || asset.Bytes == null || asset.Bytes.Length == 0)
+                {
+                    continue;
+                }
+                while ((bin.Count & 3) != 0)
+                {
+                    bin.Add(0);
+                }
+                var byteOffset = bin.Count;
+                bin.AddRange(asset.Bytes);
+                while ((bin.Count & 3) != 0)
+                {
+                    bin.Add(0);
+                }
+                asset.BufferView = ExistingArrayLength(json, "bufferViews") + viewJson.Count;
+                viewJson.Add("{\"buffer\":0,\"byteOffset\":" + byteOffset.ToString(CultureInfo.InvariantCulture) + ",\"byteLength\":" + asset.Bytes.Length.ToString(CultureInfo.InvariantCulture) + "}");
+            }
+            binChunk.Data = Pad(bin.ToArray(), 0x00);
+            if (viewJson.Count == 0)
+            {
+                return UpdatePrimaryBufferByteLength(json, binChunk.Data.Length);
+            }
+            json = AppendRootArrayItems(json, "bufferViews", viewJson);
+            json = UpdatePrimaryBufferByteLength(json, binChunk.Data.Length);
+            return json;
+        }
+
+        private static int ExistingArrayLength(string json, string propertyName)
+        {
+            var keyIndex = json.IndexOf("\"" + propertyName + "\"", StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return 0;
+            }
+            var colon = json.IndexOf(':', keyIndex);
+            var arrayStart = json.IndexOf('[', colon);
+            var arrayEnd = FindMatchingBracket(json, arrayStart);
+            var inner = json.Substring(arrayStart + 1, arrayEnd - arrayStart - 1).Trim();
+            if (inner.Length == 0)
+            {
+                return 0;
+            }
+            var count = 1;
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+            for (var i = 0; i < inner.Length; i++)
+            {
+                var c = inner[i];
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (c == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (c == '"')
+                    {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inString = true;
+                }
+                else if (c == '[' || c == '{')
+                {
+                    depth++;
+                }
+                else if (c == ']' || c == '}')
+                {
+                    depth--;
+                }
+                else if (c == ',' && depth == 0)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static string AppendRootArrayItems(string json, string propertyName, List<string> items)
+        {
+            if (items == null || items.Count == 0)
+            {
+                return json;
+            }
+            var keyIndex = json.IndexOf("\"" + propertyName + "\"", StringComparison.Ordinal);
+            if (keyIndex < 0)
+            {
+                return InsertRootProperty(json, "\"" + propertyName + "\":[" + string.Join(",", items) + "]");
+            }
+            var colon = json.IndexOf(':', keyIndex);
+            var arrayStart = json.IndexOf('[', colon);
+            var arrayEnd = FindMatchingBracket(json, arrayStart);
+            var existing = json.Substring(arrayStart + 1, arrayEnd - arrayStart - 1).Trim();
+            var replacement = existing.Length == 0
+                ? "[" + string.Join(",", items) + "]"
+                : "[" + existing + "," + string.Join(",", items) + "]";
+            return json.Substring(0, arrayStart) + replacement + json.Substring(arrayEnd + 1);
+        }
+
+        private static string UpdatePrimaryBufferByteLength(string json, int byteLength)
+        {
+            var buffersIndex = json.IndexOf("\"buffers\"", StringComparison.Ordinal);
+            if (buffersIndex < 0)
+            {
+                return InsertRootProperty(json, "\"buffers\":[{\"byteLength\":" + byteLength.ToString(CultureInfo.InvariantCulture) + "}]");
+            }
+            var byteLengthIndex = json.IndexOf("\"byteLength\"", buffersIndex, StringComparison.Ordinal);
+            if (byteLengthIndex < 0)
+            {
+                return json;
+            }
+            var colon = json.IndexOf(':', byteLengthIndex);
+            var valueStart = colon + 1;
+            while (valueStart < json.Length && char.IsWhiteSpace(json[valueStart]))
+            {
+                valueStart++;
+            }
+            var valueEnd = valueStart;
+            while (valueEnd < json.Length && char.IsDigit(json[valueEnd]))
+            {
+                valueEnd++;
+            }
+            return json.Substring(0, valueStart) + byteLength.ToString(CultureInfo.InvariantCulture) + json.Substring(valueEnd);
         }
 
         private static string PatchRootJson(string json, string extensionName, Dictionary<string, object> payload)

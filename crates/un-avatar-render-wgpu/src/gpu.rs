@@ -882,7 +882,8 @@ impl GpuState {
 		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
 
 		let adapter_features = adapter.features();
-		let texture_compression_features = if texture_compression == TextureCompressionMode::Source {
+		let texture_compression_features = if matches!(texture_compression, TextureCompressionMode::Source | TextureCompressionMode::Compat)
+		{
 			wgpu::Features::empty()
 		} else {
 			adapter_features
@@ -2009,8 +2010,10 @@ impl GpuSceneBuildContext {
 					log_material_skin_report(&guard);
 				}
 				let mut gpu_texture_compression = if options.block_compression_encoder == BlockCompressionEncoder::Gpu
-					&& options.texture_compression != TextureCompressionMode::Source
-				{
+					&& !matches!(
+						options.texture_compression,
+						TextureCompressionMode::Source | TextureCompressionMode::Compat
+					) {
 					Some(crate::texture_pipeline::create_vulkan_gpu_texture_compression_context()?)
 				} else {
 					None

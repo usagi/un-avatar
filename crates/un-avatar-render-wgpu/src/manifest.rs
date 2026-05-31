@@ -24,6 +24,8 @@ pub(crate) struct RendererManifest {
 	pub input_passthrough: Option<bool>,
 	#[serde(alias = "gltf_path", alias = "model_path")]
 	pub avatar_path: Option<std::path::PathBuf>,
+	/// `.unavatar` wardrobe set id. Base は常に import 時に適用し、ここでは追加セットだけを指定する。
+	pub wardrobe_set: Option<String>,
 	#[serde(alias = "window_icon", alias = "icon")]
 	pub icon_path: Option<std::path::PathBuf>,
 	pub background_color: Option<[f64; 3]>,
@@ -432,6 +434,9 @@ impl RendererManifest {
 		}
 		if let Some(path) = self.avatar_path {
 			opts.gltf_path = Some(path);
+		}
+		if let Some(set_id) = self.wardrobe_set {
+			opts.wardrobe_set = Some(set_id);
 		}
 		if let Some(path) = self.icon_path {
 			opts.icon_path = Some(path);
@@ -1183,6 +1188,7 @@ mod tests {
 			r#"
 title = "Manifest Title"
 avatar_path = "target/tmp/model1.vrm"
+wardrobe_set = "noble1"
 icon_path = "assets/brand/un-avatar-artwork-renderer.png"
 vmc_address = "127.0.0.1:39539"
 transparent = true
@@ -1192,7 +1198,7 @@ clear_color = [0.0, 0.0, 0.0, 0.0]
 [render_quality]
 aa = "fxaa"
 texture_resolution_limit = "4k"
-texture_compression = "advanced"
+texture_compression = "balanced"
 mipmap_filter = "lanczos3"
 processed_texture_cache = false
 skin_tone_matching = true
@@ -1315,6 +1321,7 @@ constraint_iterations = 6
 
 		assert_eq!(opts.title, "Manifest Title");
 		assert_eq!(opts.gltf_path.as_deref(), Some(std::path::Path::new("target/tmp/model1.vrm")));
+		assert_eq!(opts.wardrobe_set.as_deref(), Some("noble1"));
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
@@ -1325,7 +1332,7 @@ constraint_iterations = 6
 		assert_eq!(opts.clear_color.a, 0.0);
 		assert_eq!(opts.aa, AaMode::Fxaa);
 		assert_eq!(opts.texture_resolution_limit, TextureResolutionLimit::K4);
-		assert_eq!(opts.texture_compression, TextureCompressionMode::Advanced);
+		assert_eq!(opts.texture_compression, TextureCompressionMode::Balanced);
 		assert_eq!(opts.mipmap_filter, TextureMipmapFilter::Lanczos3);
 		assert_eq!(
 			opts.texture_compression_advanced.clothing,

@@ -40,7 +40,7 @@ export type VrmMetadataTranslator = (
 
 export function looksLikeVrmPath(path: string): boolean {
   const lower = path.trim().toLowerCase();
-  return lower.endsWith(".vrm") || lower.endsWith(".glb") || lower.endsWith(".gltf");
+  return lower.endsWith(".vrm") || lower.endsWith(".glb") || lower.endsWith(".gltf") || lower.endsWith(".unavatar");
 }
 
 export function fallbackVrmMetadata(

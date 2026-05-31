@@ -184,12 +184,23 @@ Report に含めるもの。
 - exported renderer count / mesh count / material count / texture count
 - generated wardrobe sets
 - wardrobe source mapping
+- texture source / fallback summary
 - approximations
 - unsupported features
 - lost features
 - license / redistribution note
 
 Prototype の report は、人間が調整相談しやすいことを優先する。JSON report に加え、Unity Editor window 上にも exported / approximated / unsupported / lost を短く表示する。
+
+Texture report は次を記録する。
+
+- exported texture count
+- source extension / MIME / source byte length
+- output MIME / output byte length
+- source bytes をそのまま使ったか、PNG fallback したか
+- PNG fallback の理由
+
+これにより `.exr` や runtime generated texture が silent に PNG 化された場合も、`.unavatar.report.json` から追跡できるようにする。
 
 ## 10. User Flow
 
@@ -203,7 +214,28 @@ Prototype の report は、人間が調整相談しやすいことを優先す�
 6. `.unavatar` を export する。
 7. U.N. Avatar Runtime / Supervisor で読み込む。
 
-## 11. 非目標
+## 11. Texture Embedding Policy
+
+Exporter は原則として Unity の texture asset 元ファイルをそのまま `.unavatar` に埋め込む。
+
+- source bytes と MIME を保持する。PNG / JPEG に限定せず、`.unavatar` spec 側は任意 binary + MIME + metadata を受けられる前提にする。
+- 元ファイルを取得できない texture、または v0.1 writer がそのまま扱えない形式だけ fallback encode で埋め込む。
+- Exporter では重い再圧縮、WebP/KTX2/BCn 変換、resize を行わない。品質劣化、世代劣化、Unity 側 encoder 依存、export 時間増加を避ける。
+- Exporter が `.unavatar` 内部の texture を最適化目的で置換する機能は持たない。
+
+PNG / JPEG 非対応の pixel format は、PNG fallback だけで済ませない。
+
+- Asset-backed EXR / HDR / KTX2 / DDS: 元ファイル bytes を `UN_avatar` texture asset として保持し、glTF core image は必要な場合だけ fallback として別に出す。
+- Runtime-generated / unreadable texture: GPU readback で用途に合う形式へ取り出す。HDR / half float は `RGBAHalf` readback を優先し、KTX2 raw `RGBA16F` として格納する。
+- Normal / mask / data texture: sRGB 変換を避け、linear/data として metadata に記録する。
+- KTX2 encoder: v0.1 では最小 raw KTX2 writer を exporter 内蔵候補にする。BasisU / UASTC / BCn などの重い圧縮は optimizer 側の責務にする。
+- glTF compatibility: `KHR_texture_basisu` は BasisU/KTX2 圧縮互換の経路として使い、非圧縮 `RGBA16F` KTX2 は `UN_avatar` extension asset として扱う。
+
+v0.1 実装では asset-backed EXR を `UN_avatar.textureAssets` に保持する。EXR は glTF core `images` には入れず、LDR PNG fallback も自動生成しない。Exporter は EXR header の `channels` / `dataWindow` を読み、`sourcePixelFormat`、`channels`、`width`、`height` を metadata として記録する。material property は `matcapTextureIndexAsset` のように asset id を参照し、Runtime importer が decode 後に通常の texture index へ解決する。
+
+`.unavatar` の後段最適化は別途 `un-avatar-optimizer` のような専用 CLI で扱う。optimizer は WebP / KTX2 / BCn / texture resize / dedup / wardrobe asset group 単位の再配置を担当し、Supervisor からは Optimize ボタンで呼び出せる形にする。optimizer は既定で入力 `.unavatar` を上書きせず、別名の optimized package を出力する。
+
+## 12. 非目標
 
 - Unity Runtime player を作ること
 - U.N. Avatar Runtime を Unity に依存させること

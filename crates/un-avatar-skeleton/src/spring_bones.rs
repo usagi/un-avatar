@@ -795,6 +795,7 @@ mod tests {
 		let m = Mat4::from_scale_rotation_translation(Vec3::ONE, r, trans);
 		UnaSceneNode {
 			name: None,
+			visible: true,
 			transform: m.to_cols_array(),
 			children,
 			mesh: None,

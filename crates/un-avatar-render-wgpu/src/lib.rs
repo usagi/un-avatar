@@ -1548,6 +1548,7 @@ impl AvatarApp {
 		let Some(path) = self.opts.gltf_path.clone() else {
 			return;
 		};
+		let wardrobe_set = self.opts.wardrobe_set.clone();
 		self.startup_pending_document = true;
 		self.set_startup_progress("model", 0, 0, "Loading model");
 		let spawn_result = thread::Builder::new().name("un-avatar-startup-load".to_string()).spawn(move || {
@@ -1558,7 +1559,7 @@ impl AvatarApp {
 				total: 0,
 				message: startup_message("Loading model", startup_started),
 			});
-			let Some(document) = model_loader::load_document(&path) else {
+			let Some(document) = model_loader::load_document(&path, wardrobe_set.as_deref()) else {
 				let _ = proxy.send_event(RendererControlEvent::StartupFailed {
 					message: format!("Failed to load model {}", path.display()),
 				});
@@ -1618,7 +1619,11 @@ impl AvatarApp {
 	fn document_attach_options(&self) -> DocumentAttachOptions {
 		let (target_width, target_height) = self.startup_texture_target_size();
 		let texture_max_dimension = self.opts.texture_resolution_limit.max_dimension(target_width, target_height);
-		let bc_supported = cfg!(windows) && self.opts.texture_compression != TextureCompressionMode::Source;
+		let bc_supported = cfg!(windows)
+			&& !matches!(
+				self.opts.texture_compression,
+				TextureCompressionMode::Source | TextureCompressionMode::Compat
+			);
 		let mesh_diagnostics = self.scene_mesh_load_opts();
 		DocumentAttachOptions {
 			mesh_diagnostics,
@@ -3198,9 +3203,15 @@ pub fn run_cli() -> Result<(), RunError> {
 		#[arg(
 			long,
 			value_name = "PATH",
-			help = "表示するモデル: glTF（.gltf / .glb）または VRM（.vrm / VRM 拡張付き .glb）。メッシュ表示モード（空シーンのスカイに代わる）"
+			help = "表示するモデル: glTF（.gltf / .glb）または VRM（.vrm / VRM 拡張付き .glb）または .unavatar。メッシュ表示モード（空シーンのスカイに代わる）"
 		)]
 		gltf: Option<PathBuf>,
+		#[arg(
+			long,
+			value_name = "ID",
+			help = ".unavatar wardrobe set id。Base 適用後に指定セットを重ねてからロード"
+		)]
+		wardrobe_set: Option<String>,
 		#[arg(long, value_name = "PATH", help = "ウィンドウ・タスクバー用アイコン画像（PNG/JPEG等）")]
 		icon: Option<PathBuf>,
 		#[arg(long, value_name = "IP:PORT", help = "VMC Marionette: UDP 待受アドレス（例: 0.0.0.0:39539）")]
@@ -3230,8 +3241,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		#[arg(
 			long,
 			value_enum,
-			default_value_t = TextureCompressionMode::Source,
-			help = "テクスチャ圧縮方針: source / auto / advanced。sourceが既定"
+			default_value_t = TextureCompressionMode::Balanced,
+			help = "テクスチャ圧縮方針: source / balanced / memory / compat。既定はbalanced。旧auto/advancedはbalancedとして読む"
 		)]
 		texture_compression: TextureCompressionMode,
 		#[arg(
@@ -3407,6 +3418,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		window_position: None,
 		show_fps_in_title: !cli.no_fps_title,
 		gltf_path: cli.gltf,
+		wardrobe_set: cli.wardrobe_set,
 		icon_path: cli.icon,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
@@ -3554,7 +3566,7 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		if !path.is_file() {
 			return Err(format!("startup validation: model not found: {}", path.display()));
 		}
-		model_loader::load_document(path)
+		model_loader::load_document(path, opts.wardrobe_set.as_deref())
 			.map(|_| ())
 			.ok_or_else(|| format!("startup validation: model import failed: {}", path.display()))
 	} else {
@@ -3566,7 +3578,7 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err("skin tone matching dump: --gltf or manifest avatar_path is required".to_string());
 	};
-	let Some(document) = model_loader::load_document(path) else {
+	let Some(document) = model_loader::load_document(path, opts.wardrobe_set.as_deref()) else {
 		return Err(format!("skin tone matching dump: model import failed: {}", path.display()));
 	};
 	let Some(scene) = document.scene.as_ref() else {
@@ -3606,6 +3618,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.gltf_path.is_some() {
 		opts.gltf_path = cli.gltf_path;
+	}
+	if cli.wardrobe_set.is_some() {
+		opts.wardrobe_set = cli.wardrobe_set;
 	}
 	if cli.icon_path.is_some() {
 		opts.icon_path = cli.icon_path;

@@ -128,7 +128,7 @@ v0.1 での使い方。
 2. 複製側に MA / NDMF `ProcessAvatar` を実行する。
 3. bake 前 root から variant 候補を抽出する。
 4. bake 後 root から最終 mesh / transform / material / PhysBone 近似情報を抽出する。
-5. variant operation はまず `nodeVisibility` に限定する。
+5. variant operation はまず `nodeEnabled` に限定する。
 
 注意点。
 

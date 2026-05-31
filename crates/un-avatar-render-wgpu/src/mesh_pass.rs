@@ -18,8 +18,8 @@ use crate::skin_tone::{
 };
 use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compression_preference_for_role, estimated_processed_mip_count, load_or_build_processed_texture,
-	read_compressed_texture_cache, texture_cache_key, texture_upload_payload, GpuTextureCompressionContext, TextureCacheEvent, TextureRole,
-	TextureUploadKind,
+	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
+	texture_upload_payload, GpuTextureCompressionContext, TextureCacheEvent, TextureRole, TextureUploadKind,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -1155,6 +1155,16 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 13,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
 			],
 		});
 
@@ -1439,11 +1449,79 @@ impl SceneMeshes {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			let rgba = skin_tone_matched_images
-				.get(image_index)
-				.and_then(Option::as_deref)
-				.unwrap_or(&im.rgba);
-			let source_key = texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba);
+			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
+			if texture_max_dimension.is_none()
+				&& skin_tone_override.is_none()
+				&& texture_compression != TextureCompressionMode::Compat
+				&& compression_preference_for_role(texture_compression, texture_compression_advanced, role)
+					== TextureCompressionPreference::Source
+			{
+				if let Some(source_upload) = source_texture_upload(im) {
+					report(
+						"gpu-upload",
+						format!(
+							"Uploading source texture {}/{} {}x{} {:?} ({role:?})",
+							image_index + 1,
+							scene.images.len(),
+							source_upload.width,
+							source_upload.height,
+							source_upload.format
+						),
+					);
+					texture_summary.record_image(
+						src_w,
+						src_h,
+						source_upload.width,
+						source_upload.height,
+						source_upload.data.len() as u64,
+					);
+					let tex = device.create_texture(&wgpu::TextureDescriptor {
+						label: Some("gltf_image_source"),
+						size: wgpu::Extent3d {
+							width: source_upload.width,
+							height: source_upload.height,
+							depth_or_array_layers: 1,
+						},
+						mip_level_count: 1,
+						sample_count: 1,
+						dimension: wgpu::TextureDimension::D2,
+						format: source_upload.format,
+						usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+						view_formats: &[],
+					});
+					queue.write_texture(
+						wgpu::TexelCopyTextureInfo {
+							texture: &tex,
+							mip_level: 0,
+							origin: wgpu::Origin3d::ZERO,
+							aspect: wgpu::TextureAspect::All,
+						},
+						&source_upload.data,
+						wgpu::TexelCopyBufferLayout {
+							offset: 0,
+							bytes_per_row: Some(source_upload.bytes_per_row),
+							rows_per_image: Some(source_upload.height),
+						},
+						wgpu::Extent3d {
+							width: source_upload.width,
+							height: source_upload.height,
+							depth_or_array_layers: 1,
+						},
+					);
+					textures.push(tex);
+					continue;
+				}
+			}
+			let rgba_compat = im.rgba8_compat_pixels();
+			let rgba = skin_tone_override.unwrap_or(rgba_compat.as_ref());
+			let source_key = if skin_tone_override.is_none() {
+				scene.image_sources.get(image_index).and_then(Option::as_ref).map_or_else(
+					|| texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba),
+					|source| texture_cache_key_from_source_metadata(src_w, src_h, texture_max_dimension, role, mipmap_filter, source),
+				)
+			} else {
+				texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba)
+			};
 			let compressed_cache_lookup = processed_texture_cache.then(|| {
 				compressed_cache_lookup_from_source(
 					rgba,
@@ -1617,6 +1695,9 @@ impl SceneMeshes {
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		for (ni, node) in scene.nodes.iter().enumerate() {
+			if !node.visible {
+				continue;
+			}
 			let Some(mesh_i) = node.mesh else { continue };
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
@@ -1731,6 +1812,7 @@ impl SceneMeshes {
 				let shift_view = texture_view_or(&image_views, mtoon.shading_shift_texture_index, &black_view);
 				let matcap_view = texture_view_or(&image_views, mtoon.matcap_texture_index, &black_view);
 				let rim_view = texture_view_or(&image_views, mtoon.rim_multiply_texture_index, &white_view);
+				let reflection_view = texture_view_or(&image_views, mtoon.reflection_cube_texture_index, &black_view);
 				let emissive_view = texture_view_or(&image_views, mat.emissive_texture_index, &black_view);
 				let occlusion_view = texture_view_or(&image_views, mat.occlusion_texture_index, &white_view);
 				let outline_view = texture_view_or(&image_views, mtoon.outline_width_multiply_texture_index, &white_view);
@@ -1805,6 +1887,10 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 12,
 							resource: wgpu::BindingResource::TextureView(occlusion_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 13,
+							resource: wgpu::BindingResource::TextureView(reflection_view),
 						},
 					],
 				});

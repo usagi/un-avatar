@@ -132,7 +132,7 @@ Exporter は repo 内 `unity/un-avatar-unity-exporter/` に UPM package とし�
 
 複数衣装、アクセサリ、小物切替は `.unavatar` 内の `wardrobe.sets` として扱う。基本方針は 1 avatar = 1 `.unavatar`、中に複数 wardrobe set と必要資産を同梱すること。
 
-初期 operation は `subtreeVisibility` / `nodeVisibility` / `blendShapeWeight` を最優先にする。衣装 mesh / accessory mesh の ON/OFF と素体 shrink / sock / skin 表示用 blendshape 差分が切替機能の最小価値になる。その後、material override、expression weight、dynamics enable を足す。
+初期 operation は `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight` を最優先にする。衣装 mesh / accessory mesh の ON/OFF と素体 shrink / sock / skin 表示用 blendshape 差分が切替機能の最小価値になる。その後、material override、expression weight、dynamics enable を足す。
 
 `.unavatar` は全衣装資産を保持できるが、Runtime は最初から outfit group 単位の lazy GPU upload / unload を前提にする。数百着規模の衣装を 1 `.unavatar` に含める利用者を想定し、全衣装 mesh / texture の GPU 常駐を前提にしない。
 
@@ -156,7 +156,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - Physics regression: SpringBone と PhysBone 近似の揺れすぎ、めり込み、発散を検出する。
 - Startup UX: import failure の原因を Supervisor に短く出す。
 - License UX: VRM / VRC 由来 metadata と再配布注意を profile 選択時に確認できる。
-- Performance: texture cache / compression は v1 の資産を継続し、Unity Exporter 側でも texture resize / embedding policy を明示する。
+- Performance: texture cache / compression は v1 の資産を継続しつつ、v2 では `.unavatar` source package、GPU upload format、local optimized cache を明確に分離する。Unity Exporter は texture source bytes を基本として、形式変換や再圧縮をしない。
 
 ## 9. Milestones
 
@@ -186,8 +186,17 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - `un-avatar-format` と `un-avatar-io-unavatar` を追加する。
 - `.unavatar` extension probe を追加する。
 - `.unavatar` を GLB として読み、既存 `GltfImporter` の scene snapshot を再利用する。
+- texture は source binary + MIME を正本として読み、decode した RGBA8 を内部正本にしない。
 - `UN_avatar.humanoid` / `manifest` / `provenance` を読む。
 - Renderer の `model_loader` から `.unavatar` を読み込めるようにする。
+
+### Milestone 3.5: Texture upload / cache policy
+
+- GPU upload は Source Native、Decoded Native、Optimized Cache、Fallback の順に選ぶ。
+- texture compression policy は `source` / `balanced` / `memory` / `compat` の 4 段階にする。既定は `balanced`。
+- `.unavatar` 本体は通常 runtime 処理で dirty にしない。
+- 圧縮済み / 変換済み texture は local cache に保存し、source hash、MIME、material role、GPU backend、adapter / driver capability、quality policy、optimizer version を key にする。
+- `.unavatar` 内部 texture を置換・追加する最適化は `un-avatar-optimizer` の明示操作だけにする。既定は別名出力。
 
 ### Milestone 4: Expressions / wardrobe foundation
 
@@ -258,4 +267,4 @@ v2 初期では次をやらない。
 5. `.unavatar` probe と GLB import path を追加する。
 6. `UN_avatar` manifest / humanoid / provenance / variants parser を入れる。
 7. Renderer `model_loader` を `.unavatar` 対応にする。
-8. Wardrobe `subtreeVisibility` / `nodeVisibility` / `blendShapeWeight` の runtime representation を実装する。
+8. Wardrobe `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight` の runtime representation を実装する。

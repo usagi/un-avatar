@@ -24,8 +24,9 @@ export const TEXTURE_LIMIT_OPTIONS = [
 
 export const TEXTURE_COMPRESSION_OPTIONS = [
   ["source", "profiles.editor.options.compression_source"],
-  ["auto", "profiles.editor.options.compression_auto"],
-  ["advanced", "profiles.editor.options.compression_advanced"],
+  ["balanced", "profiles.editor.options.compression_balanced"],
+  ["memory", "profiles.editor.options.compression_memory"],
+  ["compat", "profiles.editor.options.compression_compat"],
 ] as const;
 
 /// Keep this in sync with renderer `TextureCompressionAdvancedOptions::default()`.

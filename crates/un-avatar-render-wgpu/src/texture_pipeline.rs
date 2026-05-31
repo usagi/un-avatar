@@ -12,6 +12,7 @@ use std::{
 use image::imageops::FilterType;
 use pic_scale::{ImageSize, ImageStore, ImageStoreMut, ResamplingFunction, Scaler, ThreadingPolicy};
 use serde::Serialize;
+use un_avatar_core::{UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata};
 
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -131,6 +132,14 @@ pub(crate) struct TextureUploadPayload {
 	pub(crate) mips: Vec<TextureUploadMip>,
 }
 
+pub(crate) struct SourceTextureUpload {
+	pub(crate) format: wgpu::TextureFormat,
+	pub(crate) width: u32,
+	pub(crate) height: u32,
+	pub(crate) bytes_per_row: u32,
+	pub(crate) data: Vec<u8>,
+}
+
 pub(crate) struct GpuTextureCompressionContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
@@ -149,6 +158,131 @@ impl TextureUploadPayload {
 	pub(crate) fn byte_len(&self) -> u64 {
 		self.mips.iter().map(|mip| mip.data.len() as u64).sum()
 	}
+}
+
+pub(crate) fn source_texture_upload(image: &UnaImageRgba) -> Option<SourceTextureUpload> {
+	let width = image.width.max(1);
+	let height = image.height.max(1);
+	let pixels = image.pixels.as_slice();
+	match image.pixel_format {
+		UnaImagePixelFormat::R16 => rgba16_unorm_upload(pixels, width, height, 1),
+		UnaImagePixelFormat::R16G16 => rgba16_unorm_upload(pixels, width, height, 2),
+		UnaImagePixelFormat::R16G16B16 => rgba16_unorm_upload(pixels, width, height, 3),
+		UnaImagePixelFormat::R16G16B16A16 => rgba16_unorm_upload(pixels, width, height, 4),
+		UnaImagePixelFormat::R16G16B16Float => rgba16_float_upload_from_half(pixels, width, height, 3),
+		UnaImagePixelFormat::R16G16B16A16Float => rgba16_float_upload_from_half(pixels, width, height, 4),
+		UnaImagePixelFormat::R32G32B32Float => rgba16_float_upload(pixels, width, height, 3),
+		UnaImagePixelFormat::R32G32B32A32Float => rgba16_float_upload(pixels, width, height, 4),
+		UnaImagePixelFormat::R8 | UnaImagePixelFormat::R8G8 | UnaImagePixelFormat::R8G8B8 | UnaImagePixelFormat::R8G8B8A8 => None,
+	}
+}
+
+fn rgba16_unorm_upload(pixels: &[u8], width: u32, height: u32, channels: usize) -> Option<SourceTextureUpload> {
+	let stride = channels.checked_mul(2)?;
+	if stride == 0 || pixels.len() % stride != 0 {
+		return None;
+	}
+	let expected_pixels = width.checked_mul(height)? as usize;
+	if pixels.len() / stride != expected_pixels {
+		return None;
+	}
+	let mut data = Vec::with_capacity(expected_pixels * 8);
+	for pixel in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> u16 {
+			if index >= channels {
+				return if index == 3 { u16::MAX } else { 0 };
+			}
+			let offset = index * 2;
+			u16::from_ne_bytes([pixel[offset], pixel[offset + 1]])
+		};
+		let r = channel(0);
+		let g = if channels == 1 { r } else { channel(1) };
+		let b = if channels == 1 {
+			r
+		} else if channels == 2 {
+			0
+		} else {
+			channel(2)
+		};
+		let a = if channels >= 4 { channel(3) } else { u16::MAX };
+		for value in [r, g, b, a] {
+			data.extend_from_slice(&value.to_ne_bytes());
+		}
+	}
+	Some(SourceTextureUpload {
+		format: wgpu::TextureFormat::Rgba16Unorm,
+		width,
+		height,
+		bytes_per_row: width * 8,
+		data,
+	})
+}
+
+fn rgba16_float_upload_from_half(pixels: &[u8], width: u32, height: u32, channels: usize) -> Option<SourceTextureUpload> {
+	let stride = channels.checked_mul(2)?;
+	if stride == 0 || pixels.len() % stride != 0 {
+		return None;
+	}
+	let expected_pixels = width.checked_mul(height)? as usize;
+	if pixels.len() / stride != expected_pixels {
+		return None;
+	}
+	let mut data = Vec::with_capacity(expected_pixels * 8);
+	let one = half::f16::ONE.to_bits().to_le_bytes();
+	for pixel in pixels.chunks_exact(stride) {
+		for index in 0..4 {
+			if index < channels {
+				let offset = index * 2;
+				data.extend_from_slice(&pixel[offset..offset + 2]);
+			} else if index == 3 {
+				data.extend_from_slice(&one);
+			} else {
+				data.extend_from_slice(&[0, 0]);
+			}
+		}
+	}
+	Some(SourceTextureUpload {
+		format: wgpu::TextureFormat::Rgba16Float,
+		width,
+		height,
+		bytes_per_row: width * 8,
+		data,
+	})
+}
+
+fn rgba16_float_upload(pixels: &[u8], width: u32, height: u32, channels: usize) -> Option<SourceTextureUpload> {
+	let stride = channels.checked_mul(4)?;
+	if stride == 0 || pixels.len() % stride != 0 {
+		return None;
+	}
+	let expected_pixels = width.checked_mul(height)? as usize;
+	if pixels.len() / stride != expected_pixels {
+		return None;
+	}
+	let mut data = Vec::with_capacity(expected_pixels * 8);
+	for pixel in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> f32 {
+			if index >= channels {
+				return if index == 3 { 1.0 } else { 0.0 };
+			}
+			let offset = index * 4;
+			f32::from_ne_bytes([pixel[offset], pixel[offset + 1], pixel[offset + 2], pixel[offset + 3]])
+		};
+		let r = channel(0);
+		let g = channel(1);
+		let b = if channels == 3 { channel(2) } else { channel(2) };
+		let a = if channels >= 4 { channel(3) } else { 1.0 };
+		for value in [r, g, b, a] {
+			data.extend_from_slice(&half::f16::from_f32(value).to_bits().to_ne_bytes());
+		}
+	}
+	Some(SourceTextureUpload {
+		format: wgpu::TextureFormat::Rgba16Float,
+		width,
+		height,
+		bytes_per_row: width * 8,
+		data,
+	})
 }
 
 pub(crate) fn create_vulkan_gpu_texture_compression_context() -> Result<GpuTextureCompressionContext, String> {
@@ -581,6 +715,32 @@ pub(crate) fn texture_cache_key(
 	fnv1a64_update(hash, rgba)
 }
 
+pub(crate) fn texture_cache_key_from_source_metadata(
+	width: u32,
+	height: u32,
+	max_dimension: Option<u32>,
+	role: TextureRole,
+	mipmap_filter: TextureMipmapFilter,
+	source: &UnaImageSourceMetadata,
+) -> u64 {
+	let mut hash = FNV64_OFFSET;
+	hash = fnv1a64_update(hash, b"un-avatar-processed-texture-cache");
+	hash = fnv1a64_update(hash, &PROCESSED_TEXTURE_CACHE_VERSION.to_le_bytes());
+	hash = fnv1a64_update(hash, &width.to_le_bytes());
+	hash = fnv1a64_update(hash, &height.to_le_bytes());
+	hash = fnv1a64_update(hash, &max_dimension.unwrap_or(0).to_le_bytes());
+	hash = fnv1a64_update(hash, &[role as u8, mipmap_filter as u8]);
+	hash = fnv1a64_update(hash, &source.byte_length.to_le_bytes());
+	hash = fnv1a64_update(hash, &source.source_hash.to_le_bytes());
+	if let Some(mime_type) = &source.mime_type {
+		hash = fnv1a64_update(hash, mime_type.as_bytes());
+	}
+	if let Some(uri) = &source.uri {
+		hash = fnv1a64_update(hash, uri.as_bytes());
+	}
+	hash
+}
+
 fn compressed_texture_cache_key(
 	source_key: u64,
 	processed_width: u32,
@@ -851,20 +1011,17 @@ pub(crate) fn compression_preference_for_role(
 ) -> TextureCompressionPreference {
 	match mode {
 		TextureCompressionMode::Source => TextureCompressionPreference::Source,
-		TextureCompressionMode::Auto => match role {
+		TextureCompressionMode::Compat => TextureCompressionPreference::Source,
+		TextureCompressionMode::Balanced => match role {
 			TextureRole::Face | TextureRole::Eyes | TextureRole::Data => TextureCompressionPreference::Source,
 			TextureRole::Normal | TextureRole::Occlusion => TextureCompressionPreference::GpuNative,
 			TextureRole::Emissive => TextureCompressionPreference::HighQuality,
 			TextureRole::Clothing | TextureRole::GenericColor => TextureCompressionPreference::Auto,
 		},
-		TextureCompressionMode::Advanced => match role {
-			TextureRole::Face => advanced.face,
-			TextureRole::Eyes => advanced.eyes,
-			TextureRole::Clothing => advanced.clothing,
-			TextureRole::Normal => advanced.normal,
-			TextureRole::Occlusion => advanced.occlusion,
-			TextureRole::Emissive => advanced.emissive,
-			TextureRole::GenericColor => advanced.generic_color,
+		TextureCompressionMode::Memory => match role {
+			TextureRole::Face | TextureRole::Eyes => TextureCompressionPreference::HighQuality,
+			TextureRole::Normal | TextureRole::Occlusion => TextureCompressionPreference::GpuNative,
+			TextureRole::Clothing | TextureRole::GenericColor | TextureRole::Emissive => TextureCompressionPreference::Small,
 			TextureRole::Data => advanced.data,
 		},
 	}
@@ -881,7 +1038,7 @@ fn should_try_bc1_source(
 	bc_supported: bool,
 	base_rgba: &[u8],
 ) -> bool {
-	if !bc_supported || mode == TextureCompressionMode::Source {
+	if !bc_supported || matches!(mode, TextureCompressionMode::Source | TextureCompressionMode::Compat) {
 		return false;
 	}
 	let preference = compression_preference_for_role(mode, advanced, role);
@@ -914,7 +1071,7 @@ fn should_try_bc5_normal(
 	role: TextureRole,
 	bc_supported: bool,
 ) -> bool {
-	if !bc_supported || mode == TextureCompressionMode::Source || role != TextureRole::Normal {
+	if !bc_supported || matches!(mode, TextureCompressionMode::Source | TextureCompressionMode::Compat) || role != TextureRole::Normal {
 		return false;
 	}
 	compression_preference_for_role(mode, advanced, role) != TextureCompressionPreference::Source
@@ -926,7 +1083,7 @@ fn should_try_bc7_color(
 	role: TextureRole,
 	bc_supported: bool,
 ) -> bool {
-	if !bc_supported || mode == TextureCompressionMode::Source {
+	if !bc_supported || matches!(mode, TextureCompressionMode::Source | TextureCompressionMode::Compat) {
 		return false;
 	}
 	let preference = compression_preference_for_role(mode, advanced, role);
@@ -1518,6 +1675,26 @@ mod tests {
 	}
 
 	#[test]
+	fn texture_cache_key_can_use_source_metadata_without_hashing_decoded_pixels() {
+		let source = UnaImageSourceMetadata {
+			name: Some("main".to_string()),
+			mime_type: Some("image/png".to_string()),
+			uri: None,
+			source_pixel_format: None,
+			channels: None,
+			color_space: None,
+			byte_length: 3,
+			source_hash: 0x1234,
+		};
+		let key_a = texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &source);
+		let mut changed_source = source.clone();
+		changed_source.source_hash = 0x5678;
+		let key_b =
+			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &changed_source);
+		assert_ne!(key_a, key_b);
+	}
+
+	#[test]
 	fn texture_cache_key_includes_mipmap_filter() {
 		let rgba = vec![128; 4 * 4 * 4];
 		let box2x2 = texture_cache_key(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &rgba);
@@ -1575,28 +1752,28 @@ mod tests {
 		let translucent_mips = build_rgba_mips(&translucent, 4, 4);
 
 		assert!(!should_try_bc1(
-			TextureCompressionMode::Auto,
+			TextureCompressionMode::Balanced,
 			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::Face,
 			true,
 			&opaque_mips
 		));
 		assert!(!should_try_bc1(
-			TextureCompressionMode::Auto,
+			TextureCompressionMode::Balanced,
 			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::GenericColor,
 			true,
 			&translucent_mips
 		));
 		assert!(should_try_bc1(
-			TextureCompressionMode::Auto,
+			TextureCompressionMode::Balanced,
 			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::GenericColor,
 			true,
 			&opaque_mips
 		));
 		assert!(should_try_bc5_normal(
-			TextureCompressionMode::Auto,
+			TextureCompressionMode::Balanced,
 			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::Normal,
 			true,
@@ -1611,39 +1788,29 @@ mod tests {
 
 	#[test]
 	fn high_quality_face_and_eye_textures_stay_source() {
-		let advanced = TextureCompressionAdvancedOptions {
-			face: TextureCompressionPreference::HighQuality,
-			eyes: TextureCompressionPreference::HighQuality,
-			..Default::default()
-		};
-
 		assert!(!should_try_bc7_color(
-			TextureCompressionMode::Advanced,
-			&advanced,
+			TextureCompressionMode::Balanced,
+			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::Face,
 			true,
 		));
 		assert!(!should_try_bc7_color(
-			TextureCompressionMode::Advanced,
-			&advanced,
+			TextureCompressionMode::Balanced,
+			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::Eyes,
 			true,
 		));
 	}
 
 	#[test]
-	fn high_quality_color_prefers_bc7_when_bc_is_supported() {
+	fn balanced_emissive_prefers_bc7_when_bc_is_supported() {
 		let rgba = [255, 64, 32, 255].repeat(4 * 4);
-		let processed = build_processed_texture(&rgba, 4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2);
-		let advanced = TextureCompressionAdvancedOptions {
-			generic_color: TextureCompressionPreference::HighQuality,
-			..Default::default()
-		};
+		let processed = build_processed_texture(&rgba, 4, 4, None, TextureRole::Emissive, TextureMipmapFilter::Box2x2);
 		let (payload, cache_event) = texture_upload_payload(
 			processed,
-			TextureCompressionMode::Advanced,
-			&advanced,
-			TextureRole::GenericColor,
+			TextureCompressionMode::Balanced,
+			&TextureCompressionAdvancedOptions::default(),
+			TextureRole::Emissive,
 			true,
 			BlockCompressionEncoder::Cpu,
 			1,

@@ -542,6 +542,7 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		matcap_texture_index: value_mtoon_texture_index(ext, "matcapTexture", root),
 		parametric_rim_color_factor: obj_vec3(obj, "parametricRimColorFactor", [0.0, 0.0, 0.0]),
 		rim_multiply_texture_index: value_mtoon_texture_index(ext, "rimMultiplyTexture", root),
+		reflection_cube_texture_index: None,
 		rim_lighting_mix_factor: obj_f32(obj, &["rimLightingMixFactor"], 1.0).clamp(0.0, 1.0),
 		parametric_rim_fresnel_power_factor: obj_f32(obj, &["parametricRimFresnelPowerFactor"], 5.0).max(0.00001),
 		parametric_rim_lift_factor: obj_f32(obj, &["parametricRimLiftFactor"], 0.0),
@@ -740,12 +741,11 @@ fn relax_mtoon_mask_for_likely_eye_materials(scene: &mut UnaSceneSnapshot) {
 }
 
 fn image_is_flat_neutral_normal(image: &UnaImageRgba) -> bool {
-	if image.width == 0 || image.height == 0 || image.rgba.is_empty() {
+	if image.width == 0 || image.height == 0 || image.pixels.is_empty() {
 		return false;
 	}
-	image
-		.rgba
-		.chunks_exact(4)
+	let rgba = image.rgba8_compat_pixels();
+	rgba.chunks_exact(4)
 		.all(|px| (127..=128).contains(&px[0]) && (127..=128).contains(&px[1]) && px[2] >= 254)
 }
 
@@ -1139,6 +1139,7 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	Ok(ImportResult {
 		document: UnaDocument {
 			scene: Some(scene),
+			unavatar: None,
 			vrm: Some(vrm_ext),
 			humanoid_profile,
 			expression_catalog,
@@ -1305,6 +1306,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![un_avatar_core::UnaSceneNode {
 				name: None,
+				visible: true,
 				transform: Mat4::IDENTITY.to_cols_array(),
 				children: vec![],
 				mesh: None,
@@ -2091,7 +2093,8 @@ mod tests {
 			images: vec![UnaImageRgba {
 				width: 2,
 				height: 1,
-				rgba: vec![127, 127, 255, 255, 128, 128, 255, 255],
+				pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+				pixels: vec![127, 127, 255, 255, 128, 128, 255, 255],
 			}],
 			skins: vec![],
 			nodes: vec![],
@@ -2122,6 +2125,7 @@ mod tests {
 				};
 				4
 			],
+			morph_target_names: vec![],
 			default_morph_weights: vec![],
 		};
 		let scene = UnaSceneSnapshot {
@@ -2175,6 +2179,7 @@ mod tests {
 				};
 				n
 			],
+			morph_target_names: vec![],
 			default_morph_weights: vec![],
 		};
 		let scene = UnaSceneSnapshot {

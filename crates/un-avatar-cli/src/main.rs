@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaMaterialPbr, UnaShadingModel};
+use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaImagePixelFormat, UnaMaterialPbr, UnaShadingModel};
 use un_avatar_io::{
 	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
 	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
@@ -72,6 +72,8 @@ struct DiagnoseReport {
 	expressions: Option<DiagnoseExpressionSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	vrm: Option<DiagnoseVrmSummary>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	unavatar: Option<DiagnoseUnavatarSummary>,
 	warnings: Vec<String>,
 }
 
@@ -80,15 +82,44 @@ struct DiagnoseSceneSummary {
 	has_scene: bool,
 	mesh_count: usize,
 	primitive_count: usize,
+	morph_target_count: usize,
 	node_count: usize,
+	hidden_node_count: usize,
 	skin_count: usize,
 	image_count: usize,
+	image_source_count: usize,
+	image_source_bytes: u64,
+	image_source_mime_counts: BTreeMap<String, usize>,
+	image_pixel_format_counts: BTreeMap<String, usize>,
+	non_rgba8_image_count: usize,
+	largest_image_sources: Vec<DiagnoseImageSourceSummary>,
 	material_count: usize,
 	node_constraint_count: usize,
 	shading_counts: BTreeMap<String, usize>,
 	alpha_counts: BTreeMap<String, usize>,
 	eye_like_material_indices: Vec<usize>,
 	materials: Vec<DiagnoseMaterialSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseImageSourceSummary {
+	index: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	mime_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	uri: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_pixel_format: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	channels: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	color_space: Option<String>,
+	byte_length: u64,
+	pixel_format: UnaImagePixelFormat,
+	width: u32,
+	height: u32,
 }
 
 #[derive(Serialize)]
@@ -123,6 +154,7 @@ struct DiagnoseMToonSummary {
 	matcap_texture_index: Option<usize>,
 	parametric_rim_color_factor: [f32; 3],
 	rim_multiply_texture_index: Option<usize>,
+	reflection_cube_texture_index: Option<usize>,
 	outline_width_mode: un_avatar_core::UnaMtoonOutlineWidthMode,
 	outline_width_factor: f32,
 	outline_width_multiply_texture_index: Option<usize>,
@@ -173,6 +205,39 @@ struct DiagnoseVrmSummary {
 	mtoon_materials_v0: usize,
 	mtoon_material_indices_v1: Vec<usize>,
 	spring_group_count: usize,
+}
+
+#[derive(Serialize)]
+struct DiagnoseUnavatarSummary {
+	spec_version: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	generator: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	manifest_name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_type: Option<String>,
+	extension_node_count: usize,
+	variant_count: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	base_set: Option<String>,
+	wardrobe_set_count: usize,
+	wardrobe_set_ids: Vec<String>,
+	wardrobe_sets: Vec<DiagnoseUnavatarWardrobeSetSummary>,
+	base_operation_count: usize,
+	base_operation_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseUnavatarWardrobeSetSummary {
+	id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	display_name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	asset_groups: Vec<String>,
+	operation_count: usize,
+	operation_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Serialize)]
@@ -270,7 +335,7 @@ fn io_registry_for_cli(cli_plugin_dirs: &[PathBuf]) -> Result<IoRegistry, String
 
 fn cached_binary_import_bytes(path: &Path) -> Option<Arc<[u8]>> {
 	let ext = path.extension().and_then(|e| e.to_str())?;
-	if !ext.eq_ignore_ascii_case("vrm") && !ext.eq_ignore_ascii_case("glb") {
+	if !ext.eq_ignore_ascii_case("vrm") && !ext.eq_ignore_ascii_case("glb") && !ext.eq_ignore_ascii_case("unavatar") {
 		return None;
 	}
 	std::fs::read(path).ok().map(Arc::<[u8]>::from)
@@ -469,7 +534,12 @@ fn looks_like_input_path(arg: &OsStr) -> bool {
 	let import_ext = p
 		.extension()
 		.and_then(OsStr::to_str)
-		.map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "vrm" | "glb" | "gltf" | "una" | "exampleavatar"))
+		.map(|ext| {
+			matches!(
+				ext.to_ascii_lowercase().as_str(),
+				"vrm" | "glb" | "gltf" | "unavatar" | "una" | "exampleavatar"
+			)
+		})
 		.unwrap_or(false);
 	pathish || import_ext
 }
@@ -774,6 +844,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterial
 		matcap_texture_index: m.matcap_texture_index,
 		parametric_rim_color_factor: m.parametric_rim_color_factor,
 		rim_multiply_texture_index: m.rim_multiply_texture_index,
+		reflection_cube_texture_index: m.reflection_cube_texture_index,
 		outline_width_mode: m.outline_width_mode,
 		outline_width_factor: m.outline_width_factor,
 		outline_width_multiply_texture_index: m.outline_width_multiply_texture_index,
@@ -794,6 +865,93 @@ fn material_summary(index: usize, material: &UnaMaterialPbr) -> DiagnoseMaterial
 		normal_texture_scale: material.normal_texture_scale,
 		eye_like_name: eye_like_material_name(material.name.as_deref()),
 		mtoon,
+	}
+}
+
+fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
+	value.and_then(|v| v.as_str()).map(str::to_owned)
+}
+
+fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnavatarSummary {
+	let source = &ext.source;
+	let wardrobe = source.get("wardrobe");
+	let sets = wardrobe.and_then(|w| w.get("sets")).and_then(|v| v.as_array());
+	let base_set = json_string(wardrobe.and_then(|w| w.get("baseSet")));
+	let base = sets.and_then(|sets| {
+		sets.iter().find(|set| {
+			let is_named_base = base_set
+				.as_deref()
+				.is_some_and(|base_set| set.get("id").and_then(|v| v.as_str()) == Some(base_set));
+			let is_default = set.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
+			is_named_base || is_default
+		})
+	});
+	let base_operations = base.and_then(|set| set.get("operations")).and_then(|v| v.as_array());
+	let mut base_operation_counts = BTreeMap::new();
+	if let Some(base_operations) = base_operations {
+		for op in base_operations {
+			let ty = op
+				.get("type")
+				.or_else(|| op.get("op"))
+				.and_then(|v| v.as_str())
+				.unwrap_or("unknown");
+			bump_count(&mut base_operation_counts, ty);
+		}
+	}
+	let wardrobe_set_ids = sets
+		.map(|sets| {
+			sets.iter()
+				.filter_map(|set| set.get("id").and_then(|v| v.as_str()).map(str::to_owned))
+				.collect()
+		})
+		.unwrap_or_default();
+	let wardrobe_sets = sets
+		.map(|sets| {
+			sets.iter()
+				.map(|set| {
+					let operations = set.get("operations").and_then(|v| v.as_array());
+					let mut operation_counts = BTreeMap::new();
+					if let Some(operations) = operations {
+						for op in operations {
+							let ty = op
+								.get("type")
+								.or_else(|| op.get("op"))
+								.and_then(|v| v.as_str())
+								.unwrap_or("unknown");
+							bump_count(&mut operation_counts, ty);
+						}
+					}
+					let asset_groups = set
+						.get("assetGroups")
+						.and_then(|v| v.as_array())
+						.map(|groups| groups.iter().filter_map(|g| g.as_str().map(str::to_owned)).collect())
+						.unwrap_or_default();
+					DiagnoseUnavatarWardrobeSetSummary {
+						id: set.get("id").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+						display_name: json_string(set.get("displayName")),
+						source: json_string(set.get("source")),
+						asset_groups,
+						operation_count: operations.map(Vec::len).unwrap_or(0),
+						operation_counts,
+					}
+				})
+				.collect()
+		})
+		.unwrap_or_default();
+
+	DiagnoseUnavatarSummary {
+		spec_version: ext.spec_version.clone(),
+		generator: json_string(source.get("generator")),
+		manifest_name: json_string(source.get("manifest").and_then(|m| m.get("name"))),
+		source_type: json_string(source.get("manifest").and_then(|m| m.get("sourceType"))),
+		extension_node_count: source.get("nodes").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
+		variant_count: source.get("variants").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
+		base_set,
+		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
+		wardrobe_set_ids,
+		wardrobe_sets,
+		base_operation_count: base_operations.map(Vec::len).unwrap_or(0),
+		base_operation_counts,
 	}
 }
 
@@ -826,13 +984,58 @@ fn build_diagnose_report(
 		if doc.vrm.is_some() && !sc.materials.is_empty() && !sc.materials.iter().any(|m| m.shading == UnaShadingModel::MToonLike) {
 			warnings.push("VRM document has no MToonLike materials after import".to_string());
 		}
+		let mut image_source_mime_counts = BTreeMap::new();
+		let mut image_pixel_format_counts = BTreeMap::new();
+		let mut image_source_count = 0usize;
+		let mut image_source_bytes = 0u64;
+		let mut largest_image_sources = Vec::new();
+		for (index, image) in sc.images.iter().enumerate() {
+			bump_count(&mut image_pixel_format_counts, format!("{:?}", image.pixel_format));
+			if let Some(source) = sc.image_sources.get(index).and_then(Option::as_ref) {
+				largest_image_sources.push(DiagnoseImageSourceSummary {
+					index,
+					name: source.name.clone(),
+					mime_type: source.mime_type.clone(),
+					uri: source.uri.clone(),
+					source_pixel_format: source.source_pixel_format.clone(),
+					channels: source.channels.clone(),
+					color_space: source.color_space.clone(),
+					byte_length: source.byte_length,
+					pixel_format: image.pixel_format,
+					width: image.width,
+					height: image.height,
+				});
+			}
+		}
+		largest_image_sources.sort_by(|a, b| b.byte_length.cmp(&a.byte_length).then_with(|| a.index.cmp(&b.index)));
+		largest_image_sources.truncate(12);
+		for source in sc.image_sources.iter().flatten() {
+			image_source_count += 1;
+			image_source_bytes = image_source_bytes.saturating_add(source.byte_length);
+			bump_count(
+				&mut image_source_mime_counts,
+				source.mime_type.as_deref().unwrap_or("unknown").to_string(),
+			);
+		}
 		DiagnoseSceneSummary {
 			has_scene: true,
 			mesh_count: sc.meshes.len(),
 			primitive_count: sc.meshes.iter().map(Vec::len).sum(),
+			morph_target_count: sc.meshes.iter().flatten().map(|primitive| primitive.morph_targets.len()).sum(),
 			node_count: sc.nodes.len(),
+			hidden_node_count: sc.nodes.iter().filter(|node| !node.visible).count(),
 			skin_count: sc.skins.len(),
 			image_count: sc.images.len(),
+			image_source_count,
+			image_source_bytes,
+			image_source_mime_counts,
+			image_pixel_format_counts,
+			non_rgba8_image_count: sc
+				.images
+				.iter()
+				.filter(|image| image.pixel_format != UnaImagePixelFormat::R8G8B8A8)
+				.count(),
+			largest_image_sources,
 			material_count: sc.materials.len(),
 			node_constraint_count: sc.node_constraints.len(),
 			shading_counts,
@@ -846,9 +1049,17 @@ fn build_diagnose_report(
 			has_scene: false,
 			mesh_count: 0,
 			primitive_count: 0,
+			morph_target_count: 0,
 			node_count: 0,
+			hidden_node_count: 0,
 			skin_count: 0,
 			image_count: 0,
+			image_source_count: 0,
+			image_source_bytes: 0,
+			image_source_mime_counts: BTreeMap::new(),
+			image_pixel_format_counts: BTreeMap::new(),
+			non_rgba8_image_count: 0,
+			largest_image_sources: Vec::new(),
 			material_count: 0,
 			node_constraint_count: 0,
 			shading_counts: BTreeMap::new(),
@@ -891,6 +1102,7 @@ fn build_diagnose_report(
 		mtoon_material_indices_v1: vrm.mtoon_material_indices_v1.clone(),
 		spring_group_count: doc.spring_bones.as_ref().map(|s| s.groups.len()).unwrap_or(0),
 	});
+	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
 
 	DiagnoseReport {
 		path: path.to_string_lossy().to_string(),
@@ -901,6 +1113,7 @@ fn build_diagnose_report(
 		humanoid,
 		expressions,
 		vrm,
+		unavatar,
 		warnings,
 	}
 }
@@ -1021,16 +1234,69 @@ fn run_diagnose(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 	} else {
 		println!("vrm: none");
 	}
+	if let Some(unavatar) = &report.unavatar {
+		println!(
+			"unavatar: spec={} generator={:?} name={:?} source={:?}",
+			unavatar.spec_version, unavatar.generator, unavatar.manifest_name, unavatar.source_type
+		);
+		println!(
+			"wardrobe: base={:?} sets={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
+			unavatar.base_set,
+			unavatar.wardrobe_set_count,
+			unavatar.wardrobe_set_ids,
+			unavatar.base_operation_count,
+			unavatar.base_operation_counts,
+			unavatar.extension_node_count,
+			unavatar.variant_count
+		);
+		for set in &unavatar.wardrobe_sets {
+			println!(
+				"wardrobe_set[{}]: name={:?} source={:?} ops={} {:?} groups={:?}",
+				set.id, set.display_name, set.source, set.operation_count, set.operation_counts, set.asset_groups
+			);
+		}
+	} else {
+		println!("unavatar: none");
+	}
 	println!(
-		"scene: meshes={} primitives={} nodes={} skins={} images={} materials={}",
+		"scene: meshes={} primitives={} morph_targets={} nodes={} hidden_nodes={} skins={} images={} materials={}",
 		report.scene.mesh_count,
 		report.scene.primitive_count,
+		report.scene.morph_target_count,
 		report.scene.node_count,
+		report.scene.hidden_node_count,
 		report.scene.skin_count,
 		report.scene.image_count,
 		report.scene.material_count
 	);
 	println!("node_constraints: {}", report.scene.node_constraint_count);
+	println!(
+		"image_sources: {} / {} images, {} bytes, MIME {:?}",
+		report.scene.image_source_count, report.scene.image_count, report.scene.image_source_bytes, report.scene.image_source_mime_counts
+	);
+	println!(
+		"image_pixel_formats: {:?}, non_rgba8={}",
+		report.scene.image_pixel_format_counts, report.scene.non_rgba8_image_count
+	);
+	if !report.scene.largest_image_sources.is_empty() {
+		println!("largest_image_sources:");
+		for source in &report.scene.largest_image_sources {
+			println!(
+				"  image[{}]: {}x{} {:?} {} bytes mime={:?} source_format={:?} channels={:?} color_space={:?} name={:?} uri={:?}",
+				source.index,
+				source.width,
+				source.height,
+				source.pixel_format,
+				source.byte_length,
+				source.mime_type,
+				source.source_pixel_format,
+				source.channels,
+				source.color_space,
+				source.name,
+				source.uri
+			);
+		}
+	}
 	println!("shading: {:?}", report.scene.shading_counts);
 	println!("alpha: {:?}", report.scene.alpha_counts);
 	if let Some(h) = &report.humanoid {
@@ -1061,13 +1327,14 @@ fn run_diagnose(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 		);
 		if let Some(mtoon) = &material.mtoon {
 			println!(
-				"  mtoon: shade={:?} shade_tex={:?} shift={} toony={} rim={:?} matcap_tex={:?} outline={:?}/{} emissive={:?}",
+				"  mtoon: shade={:?} shade_tex={:?} shift={} toony={} rim={:?} matcap_tex={:?} reflection_tex={:?} outline={:?}/{} emissive={:?}",
 				mtoon.shade_color_factor,
 				mtoon.shade_multiply_texture_index,
 				mtoon.shading_shift_factor,
 				mtoon.shading_toony_factor,
 				mtoon.parametric_rim_color_factor,
 				mtoon.matcap_texture_index,
+				mtoon.reflection_cube_texture_index,
 				mtoon.outline_width_mode,
 				mtoon.outline_width_factor,
 				mtoon.emissive_factor

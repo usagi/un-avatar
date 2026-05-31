@@ -80,8 +80,9 @@
 ### Texture Compression Policy
 
 - `texture_compression = "source"` は既定。ソースをRGBAへ展開したあとの画質を維持し、lossy compressionは行わない。
-- `texture_compression = "auto"` は、テクスチャの使われどころと実行時GPU featureから保守的に選ぶ。WindowsではBCnを第一候補にする。現在は、BC対応GPUで服/generic系の不透明色テクスチャをBC1 sRGBへ圧縮し、normal mapをBC5 linearへ圧縮する。emissiveなど `high_quality` 扱いの色テクスチャはBC7 sRGBへ圧縮できる。顔・瞳・data・非対象画像はRGBAへfallbackする。
-- `texture_compression = "advanced"` はONにしたうえで、`texture_compression_advanced` の顔・瞳・服・normal・occlusion・emissive・generic_color・dataごとの設定を使う。
+- `texture_compression = "balanced"` は、テクスチャの使われどころと実行時GPU featureから保守的に選ぶ。WindowsではBCnを第一候補にする。現在は、BC対応GPUで服/generic系の不透明色テクスチャをBC1 sRGBへ圧縮し、normal mapをBC5 linearへ圧縮する。emissiveなど `high_quality` 扱いの色テクスチャはBC7 sRGBへ圧縮できる。顔・瞳・data・非対象画像はsource/nativeまたはRGBAへfallbackする。
+- `texture_compression = "memory"` は、容量とGPU memoryを優先して `balanced` より圧縮寄りに選ぶ。
+- `texture_compression = "compat"` は、BCnなどGPU固有圧縮を避け、広く扱えるupload形式へ寄せる。
 - UASTC / ETC1S はGPU upload形式そのものではなく、KTX2 / BasisU系のcache/intermediateとして扱う。現段階ではBC1 / BC5 / BC7の圧縮済みblock mip chainをcache artifactとして保存し、後続で同じartifact層へKTX2 / BasisU containerを追加する。UASTCは顔・瞳・emissiveなど高品質寄り、ETC1Sは小容量寄りの選択肢にする。
 - ASTC / ETC2 はGPU featureを検出してruntime summaryに出す。現段階ではCPU encoderをまだ持たないためRGBA fallbackし、BC非対応環境でKTX2 / BasisU transcodeを入れた時点でASTC / ETC2 upload候補へ昇格する。
 - 顔・瞳・UI的に見られやすい色テクスチャは `source` または `high_quality` を既定寄りにする。normal / occlusion / data系は、sRGBではなくlinear/data扱いを守ったうえでBC5 / BC4 / BC1系などruntime-native候補へ寄せる。

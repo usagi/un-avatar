@@ -157,6 +157,84 @@ v0.1 の優先順。
 
 Runtime 側は既存 `UnaMaterialPbr` / `UnaMtoonMaterial` へ寄せて実装し、最初から別の巨大 material system を作らない。
 
+### Texture Storage
+
+v0.1 exporter は texture asset の source bytes を優先して `.unavatar` に埋め込む。Exporter は重い texture transcode / recompress / resize を行わない。Unity Editor 上で形式変換するほど品質劣化、世代劣化、encoder 差、export 時間増加、検証困難化のリスクが増えるためである。
+
+`.unavatar` 内部の texture 正本は、任意 binary + MIME + 必要に応じた metadata とする。PNG / JPEG に限定しない。WebP、KTX2/BasisU、DDS/BCn、EXR、将来の独自圧縮を保持できる余地を残す。glTF core 互換だけで表現できない MIME / GPU compressed texture は、標準 extension または `UN_avatar` extension metadata で参照関係を持つ。
+
+PNG / JPEG で表現できない HDR / float / half float texture は、glTF core image へ無理に押し込まない。Exporter は次の優先順位で出力する。
+
+1. Source file bytes: EXR / HDR / KTX2 / DDS など、Unity asset の元ファイルが取得できる場合は source bytes を `UN_avatar` 側の texture asset として保持する。
+2. KTX2 raw fallback: RenderTexture や Unity 内生成 texture など source file bytes がない場合は、GPU readback で `RGBA16F` などへ正規化し、KTX2 に格納する。これは optimizer の圧縮 KTX2 ではなく、source fidelity を守るための container fallback とする。
+3. glTF fallback image: glTF core PBR material 用に必要な場合だけ、PNG/JPEG など低互換 fallback を別 image として持てる。ただし UNAvatar runtime の正本は `UN_avatar` 側の source / KTX2 asset を優先する。
+
+`KHR_texture_basisu` は Basis Universal / KTX2 圧縮済み texture との互換経路として使う。非圧縮 `RGBA16F` KTX2 や EXR source を無理に `KHR_texture_basisu` として扱わない。これらは `UN_avatar.textures` の source asset として表現し、runtime が直接 decode / upload する。
+
+`UN_avatar.textureAssets` は glTF core `images` では扱えない texture source の入口にする。`bufferView` は GLB BIN chunk 内の source bytes を指す。`sourcePixelFormat` は正本の実形式を記録し、GPU upload 形式ではない。例えば `RGB16F` EXR は source として `RGB16F` のまま記録し、wgpu backend が必要な場合だけ upload 時に `RGBA16Float` へ拡張する。
+
+`RGB16F` source を wgpu upload で `RGBA16Float` に拡張するのは、wgpu の portable `TextureFormat` に `RGB16Float` が無く、一般的な GPU API でも 3ch half float texture は 4ch half float より互換性が低いためである。`.unavatar` と CPU decoded representation は `RGB16F` を維持し、alpha=1 の追加は renderer upload boundary の明示的 fallback とする。
+
+```json
+{
+  "textureAssets": [
+    {
+      "id": "texture-asset-0",
+      "name": "cubemap2",
+      "mimeType": "image/exr",
+      "sourceExtension": ".exr",
+      "sourcePixelFormat": "RGB16F",
+      "colorSpace": "linear",
+      "channels": "rgb",
+      "width": 4096,
+      "height": 2048,
+      "bufferView": 42,
+      "byteLength": 26987131
+    }
+  ]
+}
+```
+
+Material 側は glTF texture index で表せない場合に asset id を参照する。
+
+```json
+{
+  "extras": {
+    "UN_avatar_material": {
+      "mtoon": {
+        "matcapTextureIndexAsset": "texture-asset-0",
+        "reflectionCubeTextureIndexAsset": "texture-asset-0"
+      }
+    }
+  }
+}
+```
+
+Renderer v0.1 は `reflectionCubeTextureIndexAsset` を decode 後の 2D texture として扱い、equirectangular reflection map 近似で UNToon に加算する。true cubemap / PMREM / roughness mip chain は後段課題とし、source asset metadata は将来の cube / array / KTX2 経路へ拡張できる形に保つ。
+
+`.unavatar` は通常処理では immutable source package として扱う。Runtime load、profile 変更、wardrobe 切替、cache 生成は `.unavatar` 本体を書き換えない。`.unavatar` は Unity project / `.unitypackage` から生成された派生物ではあるが、ユーザーにとっては配布・保存・再利用するアバターファイルでもあるため、source 忠実性とポータビリティーを優先する。
+
+後段最適化は 2 種類に分ける。
+
+- Local cache: `%APPDATA%/UN Avatar/...` または OS 標準 cache 配下に、source hash、MIME、material role、GPU backend、adapter / driver capability、quality policy、optimizer version を key として保持する。GPU 交換や別 PC 複製では再生成可能な派生データとする。
+- Optimized package: `un-avatar-optimizer input.unavatar output.unavatar` のような明示操作で、`.unavatar` 内部 binary を置換または追加する。元ファイル上書きではなく別名出力を基本にする。
+
+Runtime の GPU upload は次の順に判断する。
+
+1. Source Native: KTX2/BCn/ASTC/ETC2/DDS など、GPU が直接扱える source binary は再圧縮せず upload する。
+2. Decoded Native: PNG/JPEG/WebP/EXR 等を decode した結果が GPU 対応 format なら、RGBA8 固定にせずその format で upload する。
+3. Optimized Cache: quality policy に従い、ローカル cache の BC7/BC5/BC6H/KTX2 等を使う。
+4. Fallback: decoder / GPU capability / policy の都合で使えない場合に RGBA8、RGBA16F などへ変換し、diagnostics に記録する。
+
+Texture compression policy は user/profile 設定として 4 段階を持つ。既定は `balanced`。
+
+- `source`: source/native upload と忠実性を優先する。cache / transcode は最小限。
+- `balanced`: 既定。color は安全な範囲で BC7/KTX2 等、normal は BC5、HDR/float は native または BC6H/RGBA16F を優先する。
+- `memory`: 表現力低下や変換を許容し、GPU memory / disk cache 削減を優先する。
+- `compat`: GPU 互換性と失敗しにくさを優先し、RGBA8/RGBA16F 等の広く扱える形式へ寄せる。
+
+圧縮有効時でも、source の表現力を BCn 等で安全に表現できない場合は、policy と GPU capability に応じて native upload を維持する。圧縮を優先して source 情報を落とすか、表現力を優先して非圧縮/native upload するかは material role と policy で決める。
+
 ## 7. Expressions
 
 `expressions` は表情や配信用操作の単位を表す。v0.1 では morph binding を最小実装し、material / visibility は variants と同じ operation model を使う。
@@ -211,10 +289,10 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
         "source": "unity_capture_diff",
         "assetGroups": ["outfit:noble-trace-color-1"],
         "operations": [
-          { "type": "subtreeVisibility", "target": { "nodeId": "node_color_1", "path": "Color 1" }, "visible": true },
-          { "type": "subtreeVisibility", "target": { "nodeId": "node_color_13", "path": "Color 13" }, "visible": false },
-          { "type": "subtreeVisibility", "target": { "nodeId": "node_base_maid", "path": "Maid" }, "visible": false },
-          { "type": "subtreeVisibility", "target": { "nodeId": "node_color_1_hat", "path": "Color 1/Armature.1" }, "visible": false },
+          { "type": "subtreeEnabled", "target": { "nodeId": "node_color_1", "path": "Color 1" }, "visible": true },
+          { "type": "subtreeEnabled", "target": { "nodeId": "node_color_13", "path": "Color 13" }, "visible": false },
+          { "type": "subtreeEnabled", "target": { "nodeId": "node_base_maid", "path": "Maid" }, "visible": false },
+          { "type": "subtreeEnabled", "target": { "nodeId": "node_color_1_hat", "path": "Color 1/Armature.1" }, "visible": false },
           { "type": "blendShapeWeight", "target": { "nodeId": "node_body_b", "path": "Body_b" }, "name": "Knee socks____ニーソ専用", "value": 0.0 }
         ]
       }
@@ -225,15 +303,15 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
 
 v0.1 の operation 候補。
 
-- `subtreeVisibility`
-- `nodeVisibility`
-- `rendererVisibility`
+- `subtreeEnabled`
+- `nodeEnabled`
+- `rendererEnabled`
 - `blendShapeWeight`
 - `materialOverride`
 - `expressionWeight`
 - `dynamicsEnable`
 
-最初に実装するのは `subtreeVisibility` / `nodeVisibility` / `blendShapeWeight`。衣装 mesh / accessory mesh の ON/OFF と body shrink / sock / underwear などの blendshape 差分が切替機能の最小価値になる。
+最初に実装するのは `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight`。衣装 mesh / accessory mesh の ON/OFF と body shrink / sock / underwear などの blendshape 差分が切替機能の最小価値になる。
 
 ### Target Identity
 
@@ -248,7 +326,7 @@ wardrobe set の適用順。
 
 1. `.unavatar` の base state を適用する。
 2. 選択された `wardrobe.sets[].operations` を上から順に適用する。
-3. `subtreeVisibility` より `nodeVisibility` / `rendererVisibility` のような具体指定が優先する。
+3. `subtreeEnabled` より `nodeEnabled` / `rendererEnabled` のような具体指定が優先する。
 4. 同じ具体度なら後勝ち。
 5. Supervisor profile 側のユーザー override は `.unavatar` 内蔵 set より後に適用する。
 

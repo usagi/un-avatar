@@ -50,6 +50,7 @@ struct MorphU {
 @group(1) @binding(10) var<uniform> drawu: DrawMaterial;
 @group(1) @binding(11) var normal_tex: texture_2d<f32>;
 @group(1) @binding(12) var occlusion_tex: texture_2d<f32>;
+@group(1) @binding(13) var reflection_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -217,6 +218,13 @@ fn mtoon_matcap_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
 	return vec2<f32>(dot(world_view_x, n), dot(world_view_y, n)) * 0.495 + vec2<f32>(0.5, 0.5);
 }
 
+fn mtoon_reflection_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
+	let r = normalize(reflect(-v, n));
+	let u = atan2(r.z, r.x) * 0.15915494309189535 + 0.5;
+	let vv = acos(clamp(r.y, -1.0, 1.0)) * 0.3183098861837907;
+	return vec2<f32>(u, vv);
+}
+
 fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 	return clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
 }
@@ -350,12 +358,15 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let half_vec = normalize(l + v);
 	let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
 	let specular = vec3<f32>(specular_shape * specular_intensity);
+	let reflection_uv = mtoon_reflection_uv(n, v);
+	let reflection_fresnel = pow(clamp(1.0 - dot(n, v), 0.0, 1.0), 2.0);
+	let authored_reflection = textureSample(reflection_tex, samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
 	let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 	var rim = select(rim_base * drawu.rim_color.rgb, vec3<f32>(0.0, 0.0, 0.0), disable_rim);
 	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, samp, i.uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
-	lit = lit + matcap + specular + rim;
+	lit = lit + matcap + specular + authored_reflection + rim;
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
 	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, samp, i.uv).rgb;

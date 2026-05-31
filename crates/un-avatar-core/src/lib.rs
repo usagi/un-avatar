@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -183,6 +183,9 @@ pub fn morph_weights_for_primitive(
 pub struct UnaDocument {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub scene: Option<UnaSceneSnapshot>,
+	/// `.unavatar` / glTF `extensions.UN_avatar` の正本。v2 では wardrobe / VRC 由来 metadata の入口になる。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub unavatar: Option<UnaUnavatarExtension>,
 	/// VRM 0.x / VRM 1.0 拡張ブロック（インポート時のみ）。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub vrm: Option<UnaVrmExtension>,
@@ -198,6 +201,13 @@ pub struct UnaDocument {
 	/// VRM SpringBone / secondaryAnimation から取り込んだ揺れもの用チェーン（ランタイムで更新）。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub spring_bones: Option<UnaSpringBoneSettings>,
+}
+
+/// `.unavatar` 固有 metadata。現段階では raw JSON を正本として保持し、runtime 対応が進むごとに構造化する。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaUnavatarExtension {
+	pub spec_version: String,
+	pub source: Value,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,6 +278,10 @@ pub struct UnaSceneSnapshot {
 	pub meshes: Vec<Vec<UnaMeshBuffers>>,
 	pub materials: Vec<UnaMaterialPbr>,
 	pub images: Vec<UnaImageRgba>,
+	/// Source package metadata for `images`, without duplicating source bytes in memory.
+	/// The binary itself remains owned by the `.unavatar` / glTF package layer.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub image_sources: Vec<Option<UnaImageSourceMetadata>>,
 	/// glTF `skins` と同順。joint の番号はこの配列内のインデックス（頂点 JOINTS は 0 始まり・スキン局所）。
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub skins: Vec<UnaSkin>,
@@ -276,6 +290,24 @@ pub struct UnaSceneSnapshot {
 	/// VRM 1 `VRMC_node_constraint` 由来のノード拘束。target/source は `nodes` インデックス。
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub node_constraints: Vec<UnaNodeConstraint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaImageSourceMetadata {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mime_type: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub uri: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_pixel_format: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub channels: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color_space: Option<String>,
+	pub byte_length: u64,
+	pub source_hash: u64,
 }
 
 /// 1 スキン分のジョイントノード（シーン `nodes` のインデックス）と逆バインド行列（列主序 16 floats・`transform` と同じ並び）。
@@ -290,6 +322,9 @@ pub struct UnaSkin {
 pub struct UnaSceneNode {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
+	/// Runtime visibility. `.unavatar` wardrobe base / set operations can turn whole subtrees off before upload/draw.
+	#[serde(default = "default_true")]
+	pub visible: bool,
 	#[serde(with = "col16")]
 	pub transform: [f32; 16],
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -299,6 +334,10 @@ pub struct UnaSceneNode {
 	/// glTF `skin` インデックス（`UnaSceneSnapshot::skins`）。メッシュ付きノードのみ。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub skin: Option<usize>,
+}
+
+fn default_true() -> bool {
+	true
 }
 
 mod col16 {
@@ -340,6 +379,9 @@ pub struct UnaMeshBuffers {
 	pub material_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub morph_targets: Vec<UnaMorphTargetDeltas>,
+	/// glTF `mesh.extras.targetNames` 由来のモーフターゲット名。`.unavatar` wardrobe の blendShapeWeight 解決に使う。
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub morph_target_names: Vec<String>,
 	/// glTF `mesh.weights` のコピー（長さは `morph_targets` と一致する想定）。
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub default_morph_weights: Vec<f32>,
@@ -417,6 +459,8 @@ pub struct UnaMtoonMaterial {
 	pub parametric_rim_color_factor: [f32; 3],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub rim_multiply_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reflection_cube_texture_index: Option<usize>,
 	#[serde(default = "one_f32")]
 	pub rim_lighting_mix_factor: f32,
 	#[serde(default = "default_mtoon_rim_fresnel_power")]
@@ -459,6 +503,7 @@ impl Default for UnaMtoonMaterial {
 			matcap_texture_index: None,
 			parametric_rim_color_factor: [0.0, 0.0, 0.0],
 			rim_multiply_texture_index: None,
+			reflection_cube_texture_index: None,
 			rim_lighting_mix_factor: 1.0,
 			parametric_rim_fresnel_power_factor: default_mtoon_rim_fresnel_power(),
 			parametric_rim_lift_factor: 0.0,
@@ -522,12 +567,184 @@ impl Default for UnaMaterialPbr {
 	}
 }
 
-/// 解読済み RGBA8（ベースカラー用）。
+/// Decoded image pixel format as imported before renderer upload normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaImagePixelFormat {
+	R8,
+	R8G8,
+	R8G8B8,
+	R8G8B8A8,
+	R16,
+	R16G16,
+	R16G16B16,
+	R16G16B16A16,
+	R16G16B16Float,
+	R16G16B16A16Float,
+	R32G32B32Float,
+	R32G32B32A32Float,
+}
+
+impl UnaImagePixelFormat {
+	pub fn bytes_per_pixel(self) -> usize {
+		match self {
+			UnaImagePixelFormat::R8 => 1,
+			UnaImagePixelFormat::R8G8 => 2,
+			UnaImagePixelFormat::R8G8B8 => 3,
+			UnaImagePixelFormat::R8G8B8A8 => 4,
+			UnaImagePixelFormat::R16 => 2,
+			UnaImagePixelFormat::R16G16 => 4,
+			UnaImagePixelFormat::R16G16B16 => 6,
+			UnaImagePixelFormat::R16G16B16A16 => 8,
+			UnaImagePixelFormat::R16G16B16Float => 6,
+			UnaImagePixelFormat::R16G16B16A16Float => 8,
+			UnaImagePixelFormat::R32G32B32Float => 12,
+			UnaImagePixelFormat::R32G32B32A32Float => 16,
+		}
+	}
+
+	pub fn is_rgba8_upload_native(self) -> bool {
+		matches!(
+			self,
+			UnaImagePixelFormat::R8 | UnaImagePixelFormat::R8G8 | UnaImagePixelFormat::R8G8B8 | UnaImagePixelFormat::R8G8B8A8
+		)
+	}
+}
+
+fn default_image_pixel_format() -> UnaImagePixelFormat {
+	UnaImagePixelFormat::R8G8B8A8
+}
+
+/// Decoded image pixels. `pixel_format` + `pixels` is the single stored representation;
+/// RGBA8 compatibility buffers are generated only at processing boundaries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaImageRgba {
 	pub width: u32,
 	pub height: u32,
-	pub rgba: Vec<u8>,
+	#[serde(default = "default_image_pixel_format")]
+	pub pixel_format: UnaImagePixelFormat,
+	#[serde(alias = "rgba")]
+	pub pixels: Vec<u8>,
+}
+
+impl UnaImageRgba {
+	pub fn rgba8_compat_pixels(&self) -> Cow<'_, [u8]> {
+		match self.pixel_format {
+			UnaImagePixelFormat::R8G8B8A8 => Cow::Borrowed(&self.pixels),
+			UnaImagePixelFormat::R8 => {
+				let mut rgba = Vec::with_capacity(self.pixels.len() * 4);
+				for &r in &self.pixels {
+					rgba.extend_from_slice(&[r, r, r, 255]);
+				}
+				Cow::Owned(rgba)
+			}
+			UnaImagePixelFormat::R8G8 => {
+				let mut rgba = Vec::with_capacity(self.pixels.len() / 2 * 4);
+				for chunk in self.pixels.chunks_exact(2) {
+					rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
+				}
+				Cow::Owned(rgba)
+			}
+			UnaImagePixelFormat::R8G8B8 => {
+				let mut rgba = Vec::with_capacity(self.pixels.len() / 3 * 4);
+				for chunk in self.pixels.chunks_exact(3) {
+					rgba.extend_from_slice(chunk);
+					rgba.push(255);
+				}
+				Cow::Owned(rgba)
+			}
+			UnaImagePixelFormat::R16 => Cow::Owned(rgba8_from_u16_channels(&self.pixels, 1)),
+			UnaImagePixelFormat::R16G16 => Cow::Owned(rgba8_from_u16_channels(&self.pixels, 2)),
+			UnaImagePixelFormat::R16G16B16 => Cow::Owned(rgba8_from_u16_channels(&self.pixels, 3)),
+			UnaImagePixelFormat::R16G16B16A16 => Cow::Owned(rgba8_from_u16_channels(&self.pixels, 4)),
+			UnaImagePixelFormat::R16G16B16Float => Cow::Owned(rgba8_from_f16_channels(&self.pixels, 3)),
+			UnaImagePixelFormat::R16G16B16A16Float => Cow::Owned(rgba8_from_f16_channels(&self.pixels, 4)),
+			UnaImagePixelFormat::R32G32B32Float => Cow::Owned(rgba8_from_f32_channels(&self.pixels, 3)),
+			UnaImagePixelFormat::R32G32B32A32Float => Cow::Owned(rgba8_from_f32_channels(&self.pixels, 4)),
+		}
+	}
+}
+
+fn rgba8_from_f16_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
+	let stride = channels * 2;
+	if stride == 0 {
+		return Vec::new();
+	}
+	let mut rgba = Vec::with_capacity(pixels.len() / stride * 4);
+	for chunk in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> f32 {
+			if index >= channels {
+				return if index == 3 { 1.0 } else { 0.0 };
+			}
+			let offset = index * 2;
+			half::f16::from_bits(u16::from_le_bytes([chunk[offset], chunk[offset + 1]])).to_f32()
+		};
+		let r = channel(0);
+		let g = if channels == 1 { r } else { channel(1) };
+		let b = if channels == 1 {
+			r
+		} else if channels == 2 {
+			0.0
+		} else {
+			channel(2)
+		};
+		let a = if channels >= 4 { channel(3) } else { 1.0 };
+		for value in [r, g, b, a] {
+			rgba.push(float_to_u8(value));
+		}
+	}
+	rgba
+}
+
+fn rgba8_from_u16_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
+	let stride = channels * 2;
+	let mut rgba = Vec::with_capacity(pixels.len() / stride.max(1) * 4);
+	for pixel in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> u8 {
+			if index >= channels {
+				return if index == 3 { 255 } else { 0 };
+			}
+			let offset = index * 2;
+			(u16::from_ne_bytes([pixel[offset], pixel[offset + 1]]) >> 8) as u8
+		};
+		let r = channel(0);
+		let g = if channels == 1 { r } else { channel(1) };
+		let b = if channels == 1 {
+			r
+		} else if channels == 2 {
+			0
+		} else {
+			channel(2)
+		};
+		let a = if channels >= 4 { channel(3) } else { 255 };
+		rgba.extend_from_slice(&[r, g, b, a]);
+	}
+	rgba
+}
+
+fn float_to_u8(value: f32) -> u8 {
+	(value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn rgba8_from_f32_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
+	let stride = channels * 4;
+	let mut rgba = Vec::with_capacity(pixels.len() / stride.max(1) * 4);
+	for pixel in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> u8 {
+			if index >= channels {
+				return if index == 3 { 255 } else { 0 };
+			}
+			let offset = index * 4;
+			let value = f32::from_ne_bytes([pixel[offset], pixel[offset + 1], pixel[offset + 2], pixel[offset + 3]]);
+			float_to_u8(value)
+		};
+		let r = channel(0);
+		let g = channel(1);
+		let b = if channels == 2 { 0 } else { channel(2) };
+		let a = if channels >= 4 { channel(3) } else { 255 };
+		rgba.extend_from_slice(&[r, g, b, a]);
+	}
+	rgba
 }
 
 /// レポート行の重大度（`crate-io-plugin-plan.md` §7.4 の分類）。
@@ -675,6 +892,7 @@ mod tests {
 				position_deltas: vec![[0.0; 3]],
 				normal_deltas: None,
 			}],
+			morph_target_names: vec![],
 			default_morph_weights: vec![0.0],
 		};
 		let cat = UnaExpressionCatalog {
@@ -710,6 +928,7 @@ mod tests {
 				position_deltas: vec![[0.0; 3]],
 				normal_deltas: None,
 			}],
+			morph_target_names: vec![],
 			default_morph_weights: vec![0.8],
 		};
 		let cat = UnaExpressionCatalog {
