@@ -1305,6 +1305,7 @@ mod tests {
 	fn vrm0_basis_normalization_rotates_roots_to_una_positive_z_front() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![un_avatar_core::UnaSceneNode {
+				source_node_id: None,
 				name: None,
 				visible: true,
 				transform: Mat4::IDENTITY.to_cols_array(),

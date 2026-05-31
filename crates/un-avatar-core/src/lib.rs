@@ -323,6 +323,10 @@ pub struct UnaSkin {
 pub struct UnaSceneNode {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
+	/// `.unavatar` exporter が付与する stable node id。wardrobe operations はこれを正本にし、
+	/// path は表示と古いファイル向け fallback に使う。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_node_id: Option<String>,
 	/// Runtime visibility. `.unavatar` wardrobe base / set operations can turn whole subtrees off before upload/draw.
 	#[serde(default = "default_true")]
 	pub visible: bool,

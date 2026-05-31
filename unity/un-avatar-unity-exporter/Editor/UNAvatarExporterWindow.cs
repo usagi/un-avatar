@@ -2372,7 +2372,15 @@ namespace UNAvatar.UnityExporter
                     ["name"] = transform.name,
                     ["translation"] = FloatArray(translation.x, translation.y, translation.z),
                     ["rotation"] = FloatArray(transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w),
-                    ["scale"] = FloatArray(transform.localScale.x, transform.localScale.y, transform.localScale.z)
+                    ["scale"] = FloatArray(transform.localScale.x, transform.localScale.y, transform.localScale.z),
+                    ["extras"] = new Dictionary<string, object>
+                    {
+                        ["UN_avatar_node"] = new Dictionary<string, object>
+                        {
+                            ["nodeId"] = WardrobeSnapshotCapture.NodeIdFor(root.transform, transform),
+                            ["path"] = VariantExtractor.TransformPath(root.transform, transform)
+                        }
+                    }
                 };
                 nodes.Add(node);
 

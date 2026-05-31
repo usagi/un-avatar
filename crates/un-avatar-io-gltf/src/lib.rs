@@ -589,19 +589,6 @@ fn scene_node_normalized_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, Vec
 	out
 }
 
-fn lookup_scene_path(paths: &BTreeMap<String, usize>, normalized_paths: &BTreeMap<String, Vec<usize>>, path: &str) -> Option<usize> {
-	paths
-		.get(path)
-		.copied()
-		.or_else(|| {
-			normalized_paths
-				.get(&normalize_unavatar_path(path))
-				.and_then(|indices| indices.first())
-				.copied()
-		})
-		.or_else(|| lookup_scene_path_all(paths, normalized_paths, path).into_iter().next())
-}
-
 fn lookup_scene_path_all(paths: &BTreeMap<String, usize>, normalized_paths: &BTreeMap<String, Vec<usize>>, path: &str) -> Vec<usize> {
 	if let Some(&idx) = paths.get(path) {
 		return vec![idx];
@@ -626,6 +613,81 @@ fn lookup_scene_path_all(paths: &BTreeMap<String, usize>, normalized_paths: &BTr
 		}
 	}
 	Vec::new()
+}
+
+fn scene_node_ids(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
+	scene
+		.nodes
+		.iter()
+		.enumerate()
+		.filter_map(|(idx, node)| node.source_node_id.as_ref().map(|id| (id.clone(), idx)))
+		.collect()
+}
+
+fn unavatar_node_registry_paths(unavatar: Option<&UnaUnavatarExtension>) -> BTreeMap<String, String> {
+	let Some(unavatar) = unavatar else {
+		return BTreeMap::new();
+	};
+	let Some(nodes) = unavatar.source.get("nodes").and_then(|v| v.as_array()) else {
+		return BTreeMap::new();
+	};
+	nodes
+		.iter()
+		.filter_map(|node| {
+			let id = node.get("nodeId").and_then(|v| v.as_str())?;
+			let path = node.get("path").and_then(|v| v.as_str()).unwrap_or("");
+			(!id.is_empty() && !path.is_empty()).then(|| (id.to_string(), path.to_string()))
+		})
+		.collect()
+}
+
+fn operation_target_node_id(op: &Value) -> Option<&str> {
+	op.get("target")
+		.and_then(|t| t.get("nodeId"))
+		.or_else(|| op.get("nodeId"))
+		.and_then(|v| v.as_str())
+		.filter(|v| !v.is_empty())
+}
+
+fn operation_target_path(op: &Value) -> &str {
+	op.get("target")
+		.and_then(|t| t.get("path"))
+		.or_else(|| op.get("path"))
+		.and_then(|v| v.as_str())
+		.unwrap_or("")
+}
+
+fn lookup_operation_targets_all(
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	op: &Value,
+) -> Vec<usize> {
+	if let Some(node_id) = operation_target_node_id(op) {
+		if let Some(&idx) = node_ids.get(node_id) {
+			return vec![idx];
+		}
+		if let Some(path) = registry_paths.get(node_id) {
+			let resolved = lookup_scene_path_all(paths, normalized_paths, path);
+			if !resolved.is_empty() {
+				return resolved;
+			}
+		}
+	}
+	lookup_scene_path_all(paths, normalized_paths, operation_target_path(op))
+}
+
+fn lookup_operation_target(
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	op: &Value,
+) -> Option<usize> {
+	lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op)
+		.into_iter()
+		.next()
 }
 
 fn set_subtree_visibility(scene: &mut UnaSceneSnapshot, idx: usize, visible: bool) {
@@ -672,24 +734,25 @@ pub struct WardrobeApplyReport {
 	pub missing_blendshapes: Vec<String>,
 }
 
-fn apply_unavatar_wardrobe_operations(scene: &mut UnaSceneSnapshot, operations: &[Value]) -> WardrobeApplyReport {
+fn apply_unavatar_wardrobe_operations(
+	scene: &mut UnaSceneSnapshot,
+	operations: &[Value],
+	unavatar: Option<&UnaUnavatarExtension>,
+) -> WardrobeApplyReport {
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(unavatar);
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
 	let mut report = WardrobeApplyReport::default();
 	for op in operations {
 		let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
-		let path = op
-			.get("target")
-			.and_then(|t| t.get("path"))
-			.or_else(|| op.get("path"))
-			.and_then(|v| v.as_str())
-			.unwrap_or("");
+		let path = operation_target_path(op);
 		match ty {
 			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility" => {
 				let Some(visible) = op.get("visible").and_then(|v| v.as_bool()) else {
 					continue;
 				};
-				let indices = lookup_scene_path_all(&paths, &normalized_paths, path);
+				let indices = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
 				if !indices.is_empty() {
 					for idx in indices {
 						if ty == "subtreeEnabled" || ty == "subtreeVisibility" {
@@ -711,7 +774,7 @@ fn apply_unavatar_wardrobe_operations(scene: &mut UnaSceneSnapshot, operations: 
 				let Some(name) = op.get("name").and_then(|v| v.as_str()) else {
 					continue;
 				};
-				if let Some(idx) = lookup_scene_path(&paths, &normalized_paths, path) {
+				if let Some(idx) = lookup_operation_target(&node_ids, &registry_paths, &paths, &normalized_paths, op) {
 					if apply_blend_shape_weight(scene, idx, name, value as f32) {
 						report.blendshape_applied += 1;
 					} else {
@@ -749,7 +812,7 @@ fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: 
 	let Some(operations) = current_state.get("operations").and_then(|v| v.as_array()) else {
 		return;
 	};
-	let applied = apply_unavatar_wardrobe_operations(scene, operations);
+	let applied = apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar));
 	report.push_info(format!(
 		".unavatar unity active state: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
 		applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
@@ -772,7 +835,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(scene) = document.scene.as_mut() else {
 		return Err("document has no scene".to_string());
 	};
-	Ok(apply_unavatar_wardrobe_operations(scene, operations))
+	Ok(apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar)))
 }
 
 fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
@@ -792,7 +855,7 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 		return;
 	};
 
-	let applied = apply_unavatar_wardrobe_operations(scene, operations);
+	let applied = apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar));
 	if applied.visibility_applied > 0 || applied.visibility_missing > 0 || applied.blendshape_applied > 0 || applied.blendshape_missing > 0
 	{
 		report.push_info(format!(
@@ -934,6 +997,17 @@ fn unavatar_material_extras(material: &gltf::Material<'_>) -> Option<Value> {
 	let raw = material.extras().as_ref()?;
 	let value = serde_json::from_str::<Value>(raw.get()).ok()?;
 	value.get("UN_avatar_material").cloned()
+}
+
+fn unavatar_node_id(node: &gltf::Node<'_>) -> Option<String> {
+	let raw = node.extras().as_ref()?;
+	let value = serde_json::from_str::<Value>(raw.get()).ok()?;
+	value
+		.get("UN_avatar_node")
+		.and_then(|node| node.get("nodeId"))
+		.and_then(|v| v.as_str())
+		.filter(|id| !id.is_empty())
+		.map(str::to_string)
 }
 
 fn unavatar_material_inferred_alpha_mode(extras: Option<&Value>) -> Option<UnaAlphaMode> {
@@ -1270,6 +1344,7 @@ pub fn scene_snapshot_from_gltf(
 		let children: Vec<usize> = node.children().map(|c| c.index()).collect();
 		nodes.push(UnaSceneNode {
 			name: node.name().map(|s| s.to_string()),
+			source_node_id: unavatar_node_id(&node),
 			visible: true,
 			transform: transform_cols(node.transform()),
 			children,
@@ -1855,7 +1930,11 @@ mod tests {
 			"buffers": [{"byteLength": 12}],
 			"nodes": [
 				{"name": "root", "children": [1, 2]},
-				{"name": "Hidden", "mesh": 0},
+				{
+					"name": "Hidden",
+					"mesh": 0,
+					"extras": {"UN_avatar_node": {"nodeId": "node_hidden", "path": "Hidden"}}
+				},
 				{"name": "UnityInactive", "mesh": 0}
 			],
 			"extensionsUsed": ["UN_avatar"],
@@ -1881,12 +1960,12 @@ mod tests {
 							"operations": [
 								{
 									"type": "subtreeEnabled",
-									"target": {"path": "Hidden"},
+									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
 									"visible": false
 								},
 								{
 									"type": "blendShapeWeight",
-									"target": {"path": "Hidden"},
+									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
 									"name": "Shrink",
 									"value": 50
 								}
@@ -1896,12 +1975,12 @@ mod tests {
 							"operations": [
 								{
 									"type": "subtreeEnabled",
-									"target": {"path": "Hidden"},
+									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
 									"visible": true
 								},
 								{
 									"type": "blendShapeWeight",
-									"target": {"path": "Hidden"},
+									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
 									"name": "Shrink",
 									"value": 0
 								}
@@ -1921,6 +2000,7 @@ mod tests {
 		assert!(unavatar.source.get("wardrobe").is_some());
 		let scene = got.document.scene.as_ref().unwrap();
 		assert!(scene.nodes[0].visible);
+		assert_eq!(scene.nodes[1].source_node_id.as_deref(), Some("node_hidden"));
 		assert!(!scene.nodes[1].visible);
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);

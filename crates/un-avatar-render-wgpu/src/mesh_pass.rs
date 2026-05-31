@@ -482,7 +482,12 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
 	blended_batches.retain(|batch| !batch.draw_indices.is_empty());
-	(outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches)
+	(
+		outline_draw_indices,
+		opaque_batches,
+		transparent_zwrite_draw_indices,
+		blended_batches,
+	)
 }
 
 pub(crate) struct SceneMeshes {
@@ -2121,7 +2126,8 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) = build_draw_order(&self.draws, &self.opts);
+		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) =
+			build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.opaque_batches = opaque_batches;
 		self.transparent_zwrite_draw_indices = transparent_zwrite_draw_indices;
@@ -2347,6 +2353,7 @@ mod tests {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![
 				UnaSceneNode {
+					source_node_id: None,
 					name: Some("root".to_string()),
 					visible: false,
 					transform: identity,
@@ -2355,6 +2362,7 @@ mod tests {
 					skin: None,
 				},
 				UnaSceneNode {
+					source_node_id: None,
 					name: Some("child".to_string()),
 					visible: true,
 					transform: identity,

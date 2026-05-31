@@ -794,6 +794,7 @@ mod tests {
 		let r = Quat::from_rotation_y(rot_y_deg.to_radians());
 		let m = Mat4::from_scale_rotation_translation(Vec3::ONE, r, trans);
 		UnaSceneNode {
+			source_node_id: None,
 			name: None,
 			visible: true,
 			transform: m.to_cols_array(),
