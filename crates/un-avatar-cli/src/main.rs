@@ -1314,12 +1314,13 @@ fn run_diagnose(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 	}
 	for material in &report.scene.materials {
 		println!(
-			"material[{}]: name={:?} shading={:?} alpha={:?} cutoff={} tex={:?} normal={:?}/{} eye_like={}",
+			"material[{}]: name={:?} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
 			material.index,
 			material.name,
 			material.shading,
 			material.alpha_mode,
 			material.alpha_cutoff,
+			material.double_sided,
 			material.base_color_texture_index,
 			material.normal_texture_index,
 			material.normal_texture_scale,
