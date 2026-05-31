@@ -118,6 +118,15 @@ npm run dev
 - [U.N. Virtual Avatar Connect](https://github.com/usagi/un-virtual-avatar-connect): 仮想アバターと周辺アプリをつなぐデータフロー駆動のブリッジアプリ
 - [U.N. Virtual Eye Tracker](https://github.com/usagi/un-virtual-eye-tracker): 仮想アイトラッカー
 
+## Acknowledgements
+
+U.N. Avatar の toon rendering は独立した Rust / wgpu / WGSL 実装ですが、互換性検証と shader behavior の理解にあたり、MIT License で公開されている次の先行プロジェクトを重要な参考実装として扱います。
+
+- [lilToon](https://github.com/lilxyzw/lilToon): UNToon v2 / lilToon-compatible rendering の主要な参考実装
+- [MToon](https://github.com/Santarh/MToon): VRM / MToon material compatibility の参考実装
+
+これらの project 名は互換性の説明と謝辞のために記載しています。U.N. Avatar は各 project の公式派生物または公式実装ではありません。
+
 ## License
 
 [MIT](LICENSE)
