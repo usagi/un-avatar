@@ -166,6 +166,12 @@ struct DiagnoseMaterialSummary {
 	index: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_shader: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	material_family: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	render_queue: Option<i32>,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
@@ -948,6 +954,24 @@ fn texture_alpha_summary(scene: &UnaSceneSnapshot, image_index: Option<usize>) -
 }
 
 fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
+	let source_shader = material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("sourceShader"))
+		.and_then(|v| v.as_str())
+		.map(str::to_owned);
+	let material_family = material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("family"))
+		.and_then(|v| v.as_str())
+		.map(str::to_owned);
+	let render_queue = material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("renderQueue"))
+		.and_then(|v| v.as_i64())
+		.map(|v| v as i32);
 	let mtoon = material.mtoon.as_ref().map(|m| DiagnoseMToonSummary {
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
@@ -970,6 +994,9 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 	DiagnoseMaterialSummary {
 		index,
 		name: material.name.clone(),
+		source_shader,
+		material_family,
+		render_queue,
 		shading: material.shading,
 		alpha_mode: material.alpha_mode,
 		alpha_cutoff: material.alpha_cutoff,

@@ -426,6 +426,11 @@ pub struct UnaMaterialPbr {
 	pub alpha_cutoff: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub mtoon: Option<UnaMtoonMaterial>,
+	/// `.unavatar` material extension payload as authored/exported. Runtime
+	/// material importers may read this for UNToon/lilToon compatibility without
+	/// reparsing the source glTF JSON.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub unavatar_material: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -568,6 +573,7 @@ impl Default for UnaMaterialPbr {
 			alpha_mode: UnaAlphaMode::default(),
 			alpha_cutoff: default_alpha_cutoff(),
 			mtoon: None,
+			unavatar_material: None,
 		}
 	}
 }

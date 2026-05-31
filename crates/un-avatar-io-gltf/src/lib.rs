@@ -985,6 +985,7 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 				alpha_mode,
 				alpha_cutoff,
 				mtoon: unavatar_mtoon,
+				unavatar_material: extras,
 			}
 		})
 		.collect()
