@@ -125,6 +125,19 @@ struct DiagnoseVisibleMaterialSummary {
 	name: Option<String>,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
+	morph_target_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	nonzero_morph_weights: Vec<DiagnoseMorphWeightSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseMorphWeightSummary {
+	index: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	name: Option<String>,
+	weight: f32,
+	position_delta_abs_sum: f32,
+	normal_delta_abs_sum: f32,
 }
 
 #[derive(Serialize)]
@@ -1026,12 +1039,36 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 		.filter_map(|(primitive_index, primitive)| {
 			let material_index = primitive.material_index?;
 			let material = scene.materials.get(material_index)?;
+			let nonzero_morph_weights = primitive
+				.default_morph_weights
+				.iter()
+				.enumerate()
+				.filter(|(_, weight)| weight.abs() > 0.000001)
+				.map(|(index, &weight)| DiagnoseMorphWeightSummary {
+					index,
+					name: primitive.morph_target_names.get(index).cloned(),
+					weight,
+					position_delta_abs_sum: primitive
+						.morph_targets
+						.get(index)
+						.map(|target| target.position_deltas.iter().map(|v| v[0].abs() + v[1].abs() + v[2].abs()).sum())
+						.unwrap_or(0.0),
+					normal_delta_abs_sum: primitive
+						.morph_targets
+						.get(index)
+						.and_then(|target| target.normal_deltas.as_ref())
+						.map(|deltas| deltas.iter().map(|v| v[0].abs() + v[1].abs() + v[2].abs()).sum())
+						.unwrap_or(0.0),
+				})
+				.collect();
 			Some(DiagnoseVisibleMaterialSummary {
 				primitive: primitive_index,
 				index: material_index,
 				name: material.name.clone(),
 				shading: material.shading,
 				alpha_mode: material.alpha_mode,
+				morph_target_count: primitive.morph_targets.len(),
+				nonzero_morph_weights,
 			})
 		})
 		.collect()
