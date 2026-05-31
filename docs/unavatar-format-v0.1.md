@@ -311,7 +311,7 @@ v0.1 の operation 候補。
 - `expressionWeight`
 - `dynamicsEnable`
 
-最初に実装するのは `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight`。衣装 mesh / accessory mesh の ON/OFF と body shrink / sock / underwear などの blendshape 差分が切替機能の最小価値になる。
+最初に実装するのは `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight`。衣装 mesh / accessory mesh の ON/OFF と body shrink / sock / underwear などの blendshape 差分が切替機能の最小価値になる。旧 draft / prototype 由来の `subtreeVisibility` / `nodeVisibility` / `rendererVisibility` は importer では legacy alias として読むが、Exporter は出力時に `subtreeEnabled` / `nodeEnabled` / `rendererEnabled` へ正規化する。
 
 ### Target Identity
 

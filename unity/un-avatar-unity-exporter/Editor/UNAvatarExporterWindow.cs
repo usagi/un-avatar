@@ -47,7 +47,7 @@ namespace UNAvatar.UnityExporter
         {
             var json = new Dictionary<string, object>
             {
-                ["type"] = type ?? "",
+                ["type"] = NormalizeOperationType(type),
                 ["target"] = target != null ? target.ToJson() : new Dictionary<string, object>()
             };
             if (!string.IsNullOrEmpty(name))
@@ -63,6 +63,21 @@ namespace UNAvatar.UnityExporter
                 json["visible"] = boolValue;
             }
             return json;
+        }
+
+        private static string NormalizeOperationType(string value)
+        {
+            switch (value)
+            {
+                case "subtreeVisibility":
+                    return "subtreeEnabled";
+                case "nodeVisibility":
+                    return "nodeEnabled";
+                case "rendererVisibility":
+                    return "rendererEnabled";
+                default:
+                    return value ?? "";
+            }
         }
     }
 
