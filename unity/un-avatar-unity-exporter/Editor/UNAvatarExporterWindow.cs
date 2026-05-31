@@ -1741,7 +1741,7 @@ namespace UNAvatar.UnityExporter
                     nodeId = NodeIdFor(root.transform, transform),
                     path = path,
                     activeSelf = transform.gameObject.activeSelf,
-                    visible = IsNodeVisible(transform)
+                    visible = transform.gameObject.activeSelf
                 });
 
                 foreach (var renderer in transform.GetComponents<Renderer>())
@@ -1831,7 +1831,6 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            CompressVisibilityOperations(set);
             return set;
         }
 
@@ -1860,7 +1859,6 @@ namespace UNAvatar.UnityExporter
                     floatValue = shape.weight
                 });
             }
-            CompressVisibilityOperations(operations);
             return operations;
         }
 
@@ -1988,11 +1986,6 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return result;
-        }
-
-        private static bool IsNodeVisible(Transform transform)
-        {
-            return transform.gameObject.activeInHierarchy;
         }
 
         public static string NodeIdFor(Transform root, Transform target)

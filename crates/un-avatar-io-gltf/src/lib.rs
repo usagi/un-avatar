@@ -690,15 +690,6 @@ fn lookup_operation_target(
 		.next()
 }
 
-fn set_subtree_visibility(scene: &mut UnaSceneSnapshot, idx: usize, visible: bool) {
-	let Some(node) = scene.nodes.get_mut(idx) else { return };
-	node.visible = visible;
-	let children = node.children.clone();
-	for child in children {
-		set_subtree_visibility(scene, child, visible);
-	}
-}
-
 fn apply_blend_shape_weight(scene: &mut UnaSceneSnapshot, node_idx: usize, name: &str, value: f32) -> bool {
 	let Some(mesh_idx) = scene.nodes.get(node_idx).and_then(|node| node.mesh) else {
 		return false;
@@ -755,9 +746,7 @@ fn apply_unavatar_wardrobe_operations(
 				let indices = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
 				if !indices.is_empty() {
 					for idx in indices {
-						if ty == "subtreeEnabled" || ty == "subtreeVisibility" {
-							set_subtree_visibility(scene, idx, visible);
-						} else if let Some(node) = scene.nodes.get_mut(idx) {
+						if let Some(node) = scene.nodes.get_mut(idx) {
 							node.visible = visible;
 						}
 					}
@@ -1948,9 +1937,15 @@ mod tests {
 				{
 					"name": "Hidden",
 					"mesh": 0,
+					"children": [3],
 					"extras": {"UN_avatar_node": {"nodeId": "node_hidden", "path": "Hidden"}}
 				},
-				{"name": "UnityInactive", "mesh": 0}
+				{"name": "UnityInactive", "mesh": 0},
+				{
+					"name": "HiddenChild",
+					"mesh": 0,
+					"extras": {"UN_avatar_node": {"nodeId": "node_hidden_child", "path": "Hidden/HiddenChild"}}
+				}
 			],
 			"extensionsUsed": ["UN_avatar"],
 			"extensions": {
@@ -1976,6 +1971,11 @@ mod tests {
 								{
 									"type": "subtreeEnabled",
 									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
+									"visible": false
+								},
+								{
+									"type": "subtreeEnabled",
+									"target": {"nodeId": "node_hidden_child", "path": "Wrong Path"},
 									"visible": false
 								},
 								{
@@ -2017,6 +2017,7 @@ mod tests {
 		assert!(scene.nodes[0].visible);
 		assert_eq!(scene.nodes[1].source_node_id.as_deref(), Some("node_hidden"));
 		assert!(!scene.nodes[1].visible);
+		assert!(!scene.nodes[3].visible);
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
@@ -2033,6 +2034,7 @@ mod tests {
 		assert_eq!(applied.blendshape_missing, 0);
 		let scene = got.document.scene.as_ref().unwrap();
 		assert!(scene.nodes[1].visible);
+		assert!(!scene.nodes[3].visible);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
 		let humanoid = got.document.humanoid_profile.as_ref().expect("humanoid profile");
 		assert_eq!(humanoid.bone_node_indices.get("hips"), Some(&1));

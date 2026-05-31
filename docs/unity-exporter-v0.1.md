@@ -142,6 +142,8 @@ capture 対象。
 - SkinnedMeshRenderer blendshape weight
 - 将来: material property, dynamics enable
 
+GameObject active state は `activeSelf` を記録する。`activeInHierarchy` は親 OFF の影響を受ける実効状態であり、wardrobe の local state 正本には使わない。Base operations では親 OFF 配下の子 OFF も保持し、親を ON にする set で子の OFF が復元されるようにする。
+
 ### Variant Extraction Sources
 
 候補。
