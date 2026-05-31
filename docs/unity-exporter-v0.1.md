@@ -112,6 +112,8 @@ Alpha mode は glTF fallback material へも反映する。transparent queue / a
 
 Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime で自然に見える `UNToon` parameter へ正規化する。v2 の `UNToon` は lilToon-compatible を基準にし、MToon はそこへ変換する入力 profile として扱う。実装上 `mtoon` という JSON key や Rust 型名が残る段階でも、それを MToon-like 設計正本とは見なさない。
 
+lilToon 由来 material では、本家 shader の `_UseShadow`、`_UseMatCap`、`_UseRim`、`_UseEmission` を尊重する。OFF の機能は texture / color が残っていても UNToon 側で寄与させない。`_MatCapMainStrength` / `_MatCapBlend`、`_RimMainStrength`、`_EmissionMainStrength` は v0.1 では各 color factor へ乗算して近似する。
+
 ## 7. Modular Avatar And Wardrobe Sets
 
 VRC 向け衣装対応は v2 の重要機能として扱う。

@@ -2660,8 +2660,14 @@ namespace UNAvatar.UnityExporter
                         };
                     }
                 }
-                var emissionTexture = ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex");
-                var emissionColor = ReadColor(material, "_EmissionColor", Color.black);
+                var sourceEmissionColor = ReadColor(material, "_EmissionColor", Color.black);
+                var useEmission = IsMaterialFeatureEnabled(
+                    material,
+                    "_UseEmission",
+                    ReadTexture(material, "_EmissionMap") != null || ReadTexture(material, "_EmissionTex") != null || sourceEmissionColor.maxColorComponent > 0.0f);
+                var emissionTexture = useEmission ? ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex") : null;
+                var emissionMainStrength = ReadFloat(material, "_EmissionMainStrength", 1.0f);
+                var emissionColor = useEmission ? sourceEmissionColor * emissionMainStrength : Color.black;
                 if (emissionTexture != null)
                 {
                     var emissionTextureIndex = ExportTexture(emissionTexture);
@@ -2741,6 +2747,11 @@ namespace UNAvatar.UnityExporter
                 return true;
             }
 
+            private static bool IsMaterialFeatureEnabled(Material material, string property, bool fallback)
+            {
+                return material.HasProperty(property) ? ReadFloat(material, property, fallback ? 1.0f : 0.0f) > 0.5f : fallback;
+            }
+
             private int ExportDefaultMaterial()
             {
                 if (defaultMaterialIndex >= 0)
@@ -2773,24 +2784,35 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var mtoon = new Dictionary<string, object>();
-                var shadeColor = ReadColor(material, "_ShadeColor", ReadColor(material, "_ShadowColor", new Color(0.97f, 0.97f, 0.97f, 1.0f)));
+                var mainTexture = ReadTexture(material, "_BaseMap") ?? ReadTexture(material, "_MainTex");
+                var baseColor = ReadColor(material, "_BaseColor", ReadColor(material, "_Color", Color.white));
+                var useShadow = IsMaterialFeatureEnabled(material, "_UseShadow", material.HasProperty("_ShadeColor") || material.HasProperty("_ShadowColor"));
+                var shadeColor = useShadow
+                    ? ReadColor(material, "_ShadeColor", ReadColor(material, "_ShadowColor", new Color(0.97f, 0.97f, 0.97f, 1.0f)))
+                    : baseColor;
                 mtoon["shadeColorFactor"] = FloatArray(shadeColor.r, shadeColor.g, shadeColor.b);
                 AddTextureIndex(
                     mtoon,
                     "shadeMultiplyTextureIndex",
-                    ReadTexture(material, "_ShadeTex") ?? ReadTexture(material, "_1st_ShadeMap") ?? ReadTexture(material, "_ShadowColorTex"));
-                mtoon["shadingShiftFactor"] = ReadFloat(material, "_ShadeShift", ReadFloat(material, "_ShadowBorder", 0.0f));
-                mtoon["shadingToonyFactor"] = 1.0f - Mathf.Clamp01(ReadFloat(material, "_ShadowBlur", 0.0f));
+                    useShadow
+                        ? ReadTexture(material, "_ShadeTex") ?? ReadTexture(material, "_1st_ShadeMap") ?? ReadTexture(material, "_ShadowColorTex")
+                        : mainTexture);
+                mtoon["shadingShiftFactor"] = useShadow ? ReadFloat(material, "_ShadeShift", ReadFloat(material, "_ShadowBorder", 0.0f)) : 1.0f;
+                mtoon["shadingToonyFactor"] = useShadow ? 1.0f - Mathf.Clamp01(ReadFloat(material, "_ShadowBlur", 0.0f)) : 1.0f;
 
-                var matcapColor = ReadColor(material, "_MatCapColor", Color.white);
+                var useMatCap = IsMaterialFeatureEnabled(material, "_UseMatCap", ReadTexture(material, "_MatCapTex") != null || ReadTexture(material, "_MatcapTex") != null);
+                var matcapMainStrength = ReadFloat(material, "_MatCapMainStrength", ReadFloat(material, "_MatCapBlend", 1.0f));
+                var matcapColor = useMatCap ? ReadColor(material, "_MatCapColor", Color.white) * matcapMainStrength : Color.black;
                 mtoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
-                AddTextureIndex(mtoon, "matcapTextureIndex", ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex"));
+                AddTextureIndex(mtoon, "matcapTextureIndex", useMatCap ? ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex") : null);
 
-                var rimColor = ReadColor(material, "_RimColor", Color.black);
+                var useRim = IsMaterialFeatureEnabled(material, "_UseRim", material.HasProperty("_RimColor") || ReadTexture(material, "_RimColorTex") != null);
+                var rimMainStrength = ReadFloat(material, "_RimMainStrength", 1.0f);
+                var rimColor = useRim ? ReadColor(material, "_RimColor", Color.black) * rimMainStrength : Color.black;
                 mtoon["parametricRimColorFactor"] = FloatArray(rimColor.r, rimColor.g, rimColor.b);
                 mtoon["parametricRimFresnelPowerFactor"] = ReadFloat(material, "_RimFresnelPower", 5.0f);
-                mtoon["rimLightingMixFactor"] = ReadFloat(material, "_RimEnableLighting", 1.0f);
-                AddTextureIndex(mtoon, "rimMultiplyTextureIndex", ReadTexture(material, "_RimColorTex"));
+                mtoon["rimLightingMixFactor"] = useRim ? ReadFloat(material, "_RimEnableLighting", 1.0f) : 0.0f;
+                AddTextureIndex(mtoon, "rimMultiplyTextureIndex", useRim ? ReadTexture(material, "_RimColorTex") : null);
                 AddTextureIndex(mtoon, "reflectionCubeTextureIndex", ReadTexture(material, "_ReflectionCubeTex"));
 
                 var outlineWidth = ReadFloat(material, "_OutlineWidth", 0.0f);
