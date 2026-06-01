@@ -2753,8 +2753,7 @@ namespace UNAvatar.UnityExporter
                 }
                 if (IsLilToonMaterial(material))
                 {
-                    return ReadFloat(material, "_Cutoff", 0.5f) <= 0.01f ||
-                        ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
+                    return ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
                         ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
                         ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
                         ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
