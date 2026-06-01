@@ -1245,7 +1245,10 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			let normal_texture_scale = m.normal_texture().map(|t| t.scale()).unwrap_or(1.0);
 			let occlusion_texture_index = m.occlusion_texture().map(|t| t.texture().source().index());
 			let occlusion_texture_strength = m.occlusion_texture().map(|t| t.strength()).unwrap_or(1.0);
-			let emissive_factor = m.emissive_factor();
+			let emissive_factor = extras
+				.as_ref()
+				.and_then(unavatar_material_emissive_factor_from_source_params)
+				.unwrap_or_else(|| m.emissive_factor());
 			let emissive_texture_index = m.emissive_texture().map(|t| t.texture().source().index());
 			let unavatar_mtoon = extras.as_ref().and_then(unavatar_mtoon_from_extras);
 			let shading = if unavatar_mtoon.is_some() {
@@ -1385,6 +1388,18 @@ fn unavatar_material_cull_mode_from_source_params(extras: &Value) -> Option<UnaC
 	} else {
 		Some(UnaCullMode::Back)
 	}
+}
+
+fn unavatar_material_emissive_factor_from_source_params(extras: &Value) -> Option<[f32; 3]> {
+	if unavatar_material_feature_enabled(extras, "_UseEmission") == Some(false) {
+		return Some([0.0, 0.0, 0.0]);
+	}
+	let color = unavatar_material_color_param_rgb(extras, "_EmissionColor")?;
+	let strength = unavatar_material_float_param(extras, "_EmissionMainStrength")
+		.or_else(|| unavatar_material_float_param(extras, "_EmissionBlend"))
+		.unwrap_or(1.0)
+		.max(0.0);
+	Some([color[0] * strength, color[1] * strength, color[2] * strength])
 }
 
 fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
@@ -2753,6 +2768,20 @@ mod tests {
 				"floatParams": { "_CullMode": 2.0 }
 			})),
 			Some(UnaCullMode::Back)
+		);
+		assert_eq!(
+			unavatar_material_emissive_factor_from_source_params(&serde_json::json!({
+				"floatParams": { "_UseEmission": 1.0, "_EmissionMainStrength": 2.0 },
+				"colorParams": { "_EmissionColor": [0.1, 0.2, 0.3, 1.0] }
+			})),
+			Some([0.2, 0.4, 0.6])
+		);
+		assert_eq!(
+			unavatar_material_emissive_factor_from_source_params(&serde_json::json!({
+				"floatParams": { "_UseEmission": 0.0 },
+				"colorParams": { "_EmissionColor": [0.1, 0.2, 0.3, 1.0] }
+			})),
+			Some([0.0, 0.0, 0.0])
 		);
 	}
 

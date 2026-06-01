@@ -222,6 +222,8 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 
 lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は cutout hint として扱う。
 
+lilToon source の `_UseEmission`、`_EmissionColor`、`_EmissionMainStrength` は UNToon emission の source hint として読む。`_UseEmission = 0` は texture / color が残っていても emission 寄与を 0 とし、feature toggle を優先する。
+
 Cull mode は material 共通値として Cull Off / Front / Back を保持する。glTF `doubleSided` は Cull Off / Back しか直接表現できないため、`.unavatar` では `UN_avatar_material.floatParams` の `_Cull` / `_CullMode` を読み、Unity/lilToon の `0=Off`、`1=Front`、`2=Back` を Runtime の `cull_mode` へ正規化する。
 
 UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `mtoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
