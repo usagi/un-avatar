@@ -2285,6 +2285,7 @@ namespace UNAvatar.UnityExporter
             private readonly Dictionary<Material, int> materialIndices = new Dictionary<Material, int>();
             private readonly Dictionary<Texture, int> textureIndices = new Dictionary<Texture, int>();
             private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
+            private readonly Dictionary<string, int> samplerIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             private int defaultMaterialIndex = -1;
             private readonly List<object> nodes = new List<object>();
             private readonly List<object> meshes = new List<object>();
@@ -2305,13 +2306,6 @@ namespace UNAvatar.UnityExporter
             {
                 this.root = root;
                 this.morphTargetNames = morphTargetNames ?? new HashSet<string>(StringComparer.Ordinal);
-                samplers.Add(new Dictionary<string, object>
-                {
-                    ["magFilter"] = 9729,
-                    ["minFilter"] = 9987,
-                    ["wrapS"] = 10497,
-                    ["wrapT"] = 10497
-                });
             }
 
             public void Export(string path)
@@ -3011,12 +3005,52 @@ namespace UNAvatar.UnityExporter
                 });
                 textures.Add(new Dictionary<string, object>
                 {
-                    ["sampler"] = 0,
+                    ["sampler"] = ExportSampler(texture),
                     ["source"] = images.Count - 1
                 });
                 var index = textures.Count - 1;
                 textureIndices[texture] = index;
                 return index;
+            }
+
+            private int ExportSampler(Texture texture)
+            {
+                var magFilter = texture.filterMode == FilterMode.Point ? 9728 : 9729;
+                var minFilter = magFilter;
+                var wrapS = GltfWrapMode(texture.wrapModeU);
+                var wrapT = GltfWrapMode(texture.wrapModeV);
+                var key = magFilter.ToString(CultureInfo.InvariantCulture) + "/" +
+                    minFilter.ToString(CultureInfo.InvariantCulture) + "/" +
+                    wrapS.ToString(CultureInfo.InvariantCulture) + "/" +
+                    wrapT.ToString(CultureInfo.InvariantCulture);
+                if (samplerIndices.TryGetValue(key, out var existing))
+                {
+                    return existing;
+                }
+                samplers.Add(new Dictionary<string, object>
+                {
+                    ["magFilter"] = magFilter,
+                    ["minFilter"] = minFilter,
+                    ["wrapS"] = wrapS,
+                    ["wrapT"] = wrapT
+                });
+                var index = samplers.Count - 1;
+                samplerIndices[key] = index;
+                return index;
+            }
+
+            private static int GltfWrapMode(TextureWrapMode mode)
+            {
+                switch (mode)
+                {
+                    case TextureWrapMode.Clamp:
+                        return 33071;
+                    case TextureWrapMode.Mirror:
+                    case TextureWrapMode.MirrorOnce:
+                        return 33648;
+                    default:
+                        return 10497;
+                }
             }
 
             private sealed class EncodedTexture
