@@ -1493,6 +1493,8 @@ namespace UNAvatar.UnityExporter
                 .Cast<object>()
                 .ToList();
 
+            var unsupported = BuildUnsupportedReportItems();
+
             return new Dictionary<string, object>
             {
                 ["schema"] = "network.usagi.un-avatar.unity-exporter.report",
@@ -1528,13 +1530,100 @@ namespace UNAvatar.UnityExporter
                         .Cast<object>()
                         .ToList()
                 },
-                ["unsupported"] = new List<object>
-                {
-                    "Full FX Animator evaluation",
-                    "Full Poiyomi material reproduction",
-                    "Full VRC contacts/interactions"
-                }
+                ["unsupported"] = unsupported
             };
+        }
+
+        private List<object> BuildUnsupportedReportItems()
+        {
+            var items = new List<object>
+            {
+                "Full FX Animator evaluation",
+                "Full Poiyomi material reproduction",
+                "Full VRC contacts/interactions"
+            };
+            items.AddRange(BuildUnsupportedMaterialRenderStateItems());
+            return items;
+        }
+
+        private List<object> BuildUnsupportedMaterialRenderStateItems()
+        {
+            var reports = new Dictionary<string, UnsupportedMaterialPropertyReport>();
+            if (avatarRoot == null)
+            {
+                return new List<object>();
+            }
+
+            foreach (var renderer in avatarRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material == null)
+                    {
+                        continue;
+                    }
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilRef", 0.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilReadMask", 255.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilWriteMask", 255.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilComp", 8.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilPass", 0.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilFail", 0.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_StencilZFail", 0.0f, "stencil");
+                    AddUnsupportedMaterialFloat(reports, material, "_ColorMask", 15.0f, "color_mask");
+                    AddUnsupportedMaterialFloat(reports, material, "_OffsetFactor", 0.0f, "depth_offset");
+                    AddUnsupportedMaterialFloat(reports, material, "_OffsetUnits", 0.0f, "depth_offset");
+                    AddUnsupportedMaterialFloat(reports, material, "_OutlineColorMask", 15.0f, "outline_color_mask");
+                    AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetFactor", 0.0f, "outline_depth_offset");
+                    AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetUnits", 0.0f, "outline_depth_offset");
+                }
+            }
+
+            return reports.Values
+                .OrderBy(report => report.Category)
+                .ThenBy(report => report.Property)
+                .ThenBy(report => report.Value)
+                .Select(report => report.ToJson())
+                .Cast<object>()
+                .ToList();
+        }
+
+        private static void AddUnsupportedMaterialFloat(
+            Dictionary<string, UnsupportedMaterialPropertyReport> reports,
+            Material material,
+            string property,
+            float defaultValue,
+            string category)
+        {
+            if (!material.HasProperty(property))
+            {
+                return;
+            }
+            var value = ReadMaterialFloat(material, property, defaultValue);
+            if (Mathf.Approximately(value, defaultValue))
+            {
+                return;
+            }
+            var key = category + "\n" + property + "\n" + value.ToString("R", CultureInfo.InvariantCulture);
+            if (!reports.TryGetValue(key, out var report))
+            {
+                report = new UnsupportedMaterialPropertyReport
+                {
+                    Category = category,
+                    Property = property,
+                    Value = value
+                };
+                reports[key] = report;
+            }
+            report.Count++;
+            if (report.SampleMaterials.Count < 8 && !report.SampleMaterials.Contains(material.name))
+            {
+                report.SampleMaterials.Add(material.name);
+            }
+        }
+
+        private static float ReadMaterialFloat(Material material, string property, float fallback)
+        {
+            return material != null && material.HasProperty(property) ? material.GetFloat(property) : fallback;
         }
 
         private Dictionary<string, object> BuildWardrobePayload(
@@ -1857,6 +1946,28 @@ namespace UNAvatar.UnityExporter
             var chars = value.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
             var sanitized = new string(chars).Trim();
             return string.IsNullOrEmpty(sanitized) ? "avatar" : sanitized;
+        }
+    }
+
+    internal sealed class UnsupportedMaterialPropertyReport
+    {
+        public string Category;
+        public string Property;
+        public float Value;
+        public int Count;
+        public readonly List<string> SampleMaterials = new List<string>();
+
+        public Dictionary<string, object> ToJson()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "unsupported_material_render_state",
+                ["category"] = Category ?? "",
+                ["property"] = Property ?? "",
+                ["value"] = Value,
+                ["count"] = Count,
+                ["sampleMaterials"] = SampleMaterials.Cast<object>().ToList()
+            };
         }
     }
 

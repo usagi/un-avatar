@@ -155,7 +155,9 @@ Status legend:
   - done: `_AAStrength` を shadow / specular / rim の toon ramp blur へ反映し、light min/max と monochrome lighting を main toon direct light に反映する。
   - remaining: vertex light、GSAA、MatCap/specular/rim 個別 lighting path の min/max 適用を本家に合わせる。
 - `[ ]` render queue ordering: Unity renderQueue / lilToon queue conventions
-- `[ ]` stencil / color mask / offset: record and report unsupported use
+- `[~]` stencil / color mask / offset
+  - done: Unity Exporter report に non-default stencil / color mask / offset / outline color mask / outline offset を unsupported material render state として集約出力する。
+  - remaining: Runtime pipeline の stencil / color mask / depth offset 対応、material sorting との相互作用を設計する。
 
 ### Texture Coordinates
 
@@ -167,8 +169,12 @@ Status legend:
   - done: glTF fallback の baseColorTexture に `KHR_texture_transform` を出す。
   - remaining: baseColor 以外の textureInfo transform と `.unavatar` extension asset 参照時の transform 表現を揃える。
 - `[ ]` per-texture UV set selection / UV mode
-- `[ ]` lilToon `_MainTex_ScrollRotate`
-- `[ ]` UV animation mask
+- `[~]` lilToon `_MainTex_ScrollRotate`
+  - done: Unity Exporter が `_MainTex_ScrollRotate` を `uvAnimationScrollX/Y/RotationSpeedFactor` へ正規化し、Importer / Renderer が base UV animation として適用する。
+  - remaining: main texture 以外の slot 別 UV mode / UV transform との組み合わせを本家へ合わせる。
+- `[~]` UV animation mask
+  - done: Exporter / importer / renderer が `uvAnimationMaskTextureIndex` を保持し、animated UV の mask.r として使う。
+  - remaining: lilToon slot 別 mask / UV mode と scroll-rotate pivot の本家互換性を検証する。
 
 ### Main Color / Base Layer
 
