@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -1464,10 +1465,12 @@ namespace UNAvatar.UnityExporter
                 // Keep Base authored as well; post-bake snapshots can be altered by Modular Avatar and are
                 // only safe as the wardrobe baseline once per-set baked snapshots are enabled again.
                 var wardrobeBaseSnapshot = bakedWardrobeSets != null ? bakedBaseSnapshot : null;
-                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.TextureAssets);
-                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets, PreviewImagesForExport(bakedWardrobeSets));
+                var exportWardrobeSets = bakedWardrobeSets ?? WardrobeSetsForExport();
+                var exportPreviewImages = PreviewImagesForExport(exportWardrobeSets);
+                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.TextureAssets);
+                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets, exportPreviewImages);
 
-                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.Textures);
+                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.Textures);
                 File.WriteAllText(reportPath, MiniJson.Serialize(report), new UTF8Encoding(false));
 
                 AssetDatabase.Refresh();
@@ -1613,6 +1616,7 @@ namespace UNAvatar.UnityExporter
                 ["variants"] = variants.Select(v => v.ToJson()).ToList<object>(),
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
+                ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["bake"] = new Dictionary<string, object>
                 {
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
@@ -1636,6 +1640,57 @@ namespace UNAvatar.UnityExporter
                 },
                 ["unsupported"] = unsupported
             };
+        }
+
+        private Dictionary<string, object> BuildWardrobePreviewDiagnostics(List<WardrobeSetDraft> exportWardrobeSets)
+        {
+            var sets = new List<WardrobeSetDraft>
+            {
+                new WardrobeSetDraft
+                {
+                    id = "base",
+                    displayName = "Base",
+                    previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()
+                }
+            };
+            sets.AddRange(exportWardrobeSets ?? WardrobeSetsForExport());
+
+            return new Dictionary<string, object>
+            {
+                ["sets"] = sets.Select(set => new Dictionary<string, object>
+                {
+                    ["id"] = set.id ?? "",
+                    ["displayName"] = set.displayName ?? "",
+                    ["previewCount"] = set.previewImages != null ? set.previewImages.Count : 0,
+                    ["previews"] = (set.previewImages ?? new List<WardrobePreviewImageDraft>())
+                        .Select(image => new Dictionary<string, object>
+                        {
+                            ["view"] = image.view ?? "",
+                            ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
+                            ["sha256"] = Sha256Hex(image.pngBytes)
+                        })
+                        .Cast<object>()
+                        .ToList()
+                }).Cast<object>().ToList()
+            };
+        }
+
+        private static string Sha256Hex(List<byte> bytes)
+        {
+            if (bytes == null || bytes.Count == 0)
+            {
+                return "";
+            }
+            using (var sha = SHA256.Create())
+            {
+                var hash = sha.ComputeHash(bytes.ToArray());
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (var b in hash)
+                {
+                    sb.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+                }
+                return sb.ToString();
+            }
         }
 
         private List<object> BuildUnsupportedReportItems()
