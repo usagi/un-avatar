@@ -761,6 +761,30 @@ pub struct UnaLilToonLikeOutline {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeBacklight {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub color_factor: [f32; 4],
+	#[serde(default)]
+	pub main_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub normal_strength_factor: f32,
+	#[serde(default = "default_liltoon_rim_border")]
+	pub border_factor: f32,
+	#[serde(default = "default_liltoon_rim_blur")]
+	pub blur_factor: f32,
+	#[serde(default)]
+	pub directivity_factor: f32,
+	#[serde(default = "one_f32")]
+	pub view_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub receive_shadow_factor: f32,
+	#[serde(default = "one_f32")]
+	pub backface_mask_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeAlphaMask {
 	#[serde(default)]
 	pub mode_factor: f32,
@@ -788,6 +812,8 @@ pub struct UnaLilToonLikeMaterial {
 	pub emission: UnaLilToonLikeEmission,
 	#[serde(default)]
 	pub outline: UnaLilToonLikeOutline,
+	#[serde(default)]
+	pub backlight: UnaLilToonLikeBacklight,
 	#[serde(default)]
 	pub alpha_mask: UnaLilToonLikeAlphaMask,
 }
@@ -943,6 +969,23 @@ impl Default for UnaLilToonLikeOutline {
 	}
 }
 
+impl Default for UnaLilToonLikeBacklight {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [0.85, 0.8, 0.7, 1.0],
+			main_strength_factor: 0.0,
+			normal_strength_factor: 1.0,
+			border_factor: default_liltoon_rim_border(),
+			blur_factor: default_liltoon_rim_blur(),
+			directivity_factor: 5.0,
+			view_strength_factor: 1.0,
+			receive_shadow_factor: 1.0,
+			backface_mask_factor: 1.0,
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeAlphaMask {
 	fn default() -> Self {
 		Self {
@@ -964,6 +1007,7 @@ impl Default for UnaLilToonLikeMaterial {
 			rim: UnaLilToonLikeRim::default(),
 			emission: UnaLilToonLikeEmission::default(),
 			outline: UnaLilToonLikeOutline::default(),
+			backlight: UnaLilToonLikeBacklight::default(),
 			alpha_mask: UnaLilToonLikeAlphaMask::default(),
 		}
 	}

@@ -2061,6 +2061,37 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.rim.shade_normal_strength_factor = value.clamp(0.0, 1.0);
 	}
 
+	out.backlight.enabled_factor = unavatar_material_float_param(extras, "_UseBacklight")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_BacklightColor") {
+		out.backlight.color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightMainStrength") {
+		out.backlight.main_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightNormalStrength") {
+		out.backlight.normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightBorder") {
+		out.backlight.border_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightBlur") {
+		out.backlight.blur_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightDirectivity") {
+		out.backlight.directivity_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightViewStrength") {
+		out.backlight.view_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightReceiveShadow") {
+		out.backlight.receive_shadow_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BacklightBackfaceMask") {
+		out.backlight.backface_mask_factor = value.clamp(0.0, 1.0);
+	}
+
 	out.emission.enabled_factor = unavatar_material_float_param(extras, "_UseEmission").unwrap_or(0.0).clamp(0.0, 1.0);
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_EmissionColor") {
 		out.emission.color_factor = value;
@@ -3716,6 +3747,15 @@ mod tests {
 					"_RimShadeBlur": 0.22,
 					"_RimShadeFresnelPower": 2.5,
 					"_RimShadeNormalStrength": 0.62,
+					"_UseBacklight": 1.0,
+					"_BacklightMainStrength": 0.72,
+					"_BacklightNormalStrength": 0.82,
+					"_BacklightBorder": 0.32,
+					"_BacklightBlur": 0.23,
+					"_BacklightDirectivity": 7.0,
+					"_BacklightViewStrength": 0.62,
+					"_BacklightReceiveShadow": 0.52,
+					"_BacklightBackfaceMask": 0.42,
 					"_UseEmission": 1.0,
 					"_EmissionMainStrength": 0.45,
 					"_EmissionBlend": 0.55,
@@ -3745,6 +3785,7 @@ mod tests {
 					"_RimColor": [0.1, 0.2, 0.3, 1.0],
 					"_RimIndirColor": [0.4, 0.5, 0.6, 0.7],
 					"_RimShadeColor": [0.6, 0.5, 0.4, 0.7],
+					"_BacklightColor": [1.1, 1.2, 1.3, 0.8],
 					"_EmissionColor": [0.5, 0.4, 0.3, 0.8],
 					"_OutlineColor": [0.01, 0.02, 0.03, 1.0],
 					"_OutlineLitColor": [1.0, 0.2, 0.0, 0.4]
@@ -3862,6 +3903,16 @@ mod tests {
 		assert_eq!(liltoon_like.rim.shade_blur_factor, 0.22);
 		assert_eq!(liltoon_like.rim.shade_fresnel_power_factor, 2.5);
 		assert_eq!(liltoon_like.rim.shade_normal_strength_factor, 0.62);
+		assert_eq!(liltoon_like.backlight.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.backlight.color_factor, [1.1, 1.2, 1.3, 0.8]);
+		assert_eq!(liltoon_like.backlight.main_strength_factor, 0.72);
+		assert_eq!(liltoon_like.backlight.normal_strength_factor, 0.82);
+		assert_eq!(liltoon_like.backlight.border_factor, 0.32);
+		assert_eq!(liltoon_like.backlight.blur_factor, 0.23);
+		assert_eq!(liltoon_like.backlight.directivity_factor, 7.0);
+		assert_eq!(liltoon_like.backlight.view_strength_factor, 0.62);
+		assert_eq!(liltoon_like.backlight.receive_shadow_factor, 0.52);
+		assert_eq!(liltoon_like.backlight.backface_mask_factor, 0.42);
 		assert_eq!(liltoon_like.emission.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.emission.color_factor, [0.5, 0.4, 0.3, 0.8]);
 		assert_eq!(liltoon_like.emission.texture_index, Some(13));

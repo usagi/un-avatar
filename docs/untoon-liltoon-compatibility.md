@@ -458,7 +458,9 @@ Status legend:
 - `[~]` `_RimShadeNormalStrength`
   - done: source raw params を保持し、RimShade factor 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
   - remaining: `_RimShadeMask`、2nd normal map、backface behavior との順序を本家へ合わせる。
-- `[defer]` backlight: after rim basics
+- `[~]` backlight raw params
+  - done: `_UseBacklight`、`_BacklightColor`、`_BacklightMainStrength`、`_BacklightNormalStrength`、`_BacklightBorder`、`_BacklightBlur`、`_BacklightDirectivity`、`_BacklightViewStrength`、`_BacklightReceiveShadow`、`_BacklightBackfaceMask` を v2 material に保持する。
+  - remaining: sample では `_UseBacklight = 0` / `_BacklightMainStrength = 0` のため描画接続は deferred。Backlight 有効 material を用意してから本家 `lilGetBacklight` 相当へ接続する。
 
 ### Emission
 
