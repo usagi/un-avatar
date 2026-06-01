@@ -811,9 +811,27 @@ pub struct UnaLilToonLikeBlendState {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeRendering {
+	#[serde(default = "default_liltoon_light_min_limit")]
+	pub light_min_limit_factor: f32,
+	#[serde(default = "one_f32")]
+	pub light_max_limit_factor: f32,
+	#[serde(default)]
+	pub monochrome_lighting_factor: f32,
+	#[serde(default)]
+	pub vertex_light_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub aa_strength_factor: f32,
+	#[serde(default)]
+	pub gsaa_strength_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
+	#[serde(default)]
+	pub rendering: UnaLilToonLikeRendering,
 	#[serde(default)]
 	pub shadow: UnaLilToonLikeShadow,
 	#[serde(default)]
@@ -1025,10 +1043,24 @@ impl Default for UnaLilToonLikeBlendState {
 	}
 }
 
+impl Default for UnaLilToonLikeRendering {
+	fn default() -> Self {
+		Self {
+			light_min_limit_factor: default_liltoon_light_min_limit(),
+			light_max_limit_factor: 1.0,
+			monochrome_lighting_factor: 0.0,
+			vertex_light_strength_factor: 0.0,
+			aa_strength_factor: 1.0,
+			gsaa_strength_factor: 0.0,
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			rendering: UnaLilToonLikeRendering::default(),
 			shadow: UnaLilToonLikeShadow::default(),
 			matcap: UnaLilToonLikeMatcap::default(),
 			reflection: UnaLilToonLikeReflection::default(),
@@ -1214,6 +1246,10 @@ fn default_liltoon_outline_fix_width() -> f32 {
 
 fn default_liltoon_subpass_cutoff() -> f32 {
 	0.5
+}
+
+fn default_liltoon_light_min_limit() -> f32 {
+	0.05
 }
 
 fn default_mtoon_rim_fresnel_power() -> f32 {

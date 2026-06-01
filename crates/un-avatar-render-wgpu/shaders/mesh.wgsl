@@ -343,20 +343,22 @@ fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 fn lil_tooning_scale(value: f32, border: f32, blur: f32) -> f32 {
-	if (blur <= 0.00001) {
+	let aa_blur = blur * max(drawu.alpha_ext_params.y, 0.0);
+	if (aa_blur <= 0.00001) {
 		return select(0.0, 1.0, value >= border);
 	}
-	let border_min = clamp(border - blur * 0.5, 0.0, 1.0);
-	let border_max = clamp(border + blur * 0.5, 0.0, 1.0);
+	let border_min = clamp(border - aa_blur * 0.5, 0.0, 1.0);
+	let border_max = clamp(border + aa_blur * 0.5, 0.0, 1.0);
 	return linearstep(border_min, border_max, value);
 }
 
 fn lil_tooning_scale_range(value: f32, border: f32, blur: f32, border_range: f32) -> f32 {
-	if (blur <= 0.00001 && border_range <= 0.00001) {
+	let aa_blur = blur * max(drawu.alpha_ext_params.y, 0.0);
+	if (aa_blur <= 0.00001 && border_range <= 0.00001) {
 		return select(0.0, 1.0, value >= border);
 	}
-	let border_min = clamp(border - blur * 0.5 - border_range, 0.0, 1.0);
-	let border_max = clamp(border + blur * 0.5, 0.0, 1.0);
+	let border_min = clamp(border - aa_blur * 0.5 - border_range, 0.0, 1.0);
+	let border_max = clamp(border + aa_blur * 0.5, 0.0, 1.0);
 	return linearstep(border_min, border_max, value);
 }
 

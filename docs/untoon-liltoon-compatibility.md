@@ -150,6 +150,9 @@ Status legend:
 - `[~]` cull mode: `_Cull`, double-sided handling
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
   - remaining: outline pass cull、transparent/fur/refraction variant 固有の cull 差分を分離する。
+- `[~]` lighting / toon AA controls
+  - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持し、`_AAStrength` を shadow / specular / rim の toon ramp blur へ反映する。
+  - remaining: light min/max、monochrome lighting、vertex light、GSAA の本家 lighting path への接続を実装する。
 - `[ ]` render queue ordering: Unity renderQueue / lilToon queue conventions
 - `[ ]` stencil / color mask / offset: record and report unsupported use
 
@@ -361,11 +364,11 @@ Status legend:
   - done: v2 reflection parameter として保持し、enabled 時は specular highlight を toon scale path へ分岐する。
   - remaining: anisotropy path、normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。
 - `[~]` `_SpecularBorder`
-  - done: v2 reflection parameter として保持し、toon specular border に接続する。
-  - remaining: `_AAStrength` と roughness 変換を含めて本家係数域を検証する。
+	- done: v2 reflection parameter として保持し、toon specular border に接続する。
+	- remaining: roughness 変換を含めて本家係数域を検証する。
 - `[~]` `_SpecularBlur`
-  - done: v2 reflection parameter として保持し、toon specular blur に接続する。
-  - remaining: 本家の `lilTooningScale(_AAStrength, ...)` と同等の anti-alias 補正を実装する。
+	- done: v2 reflection parameter として保持し、`_AAStrength` を掛けた toon specular blur に接続する。
+	- remaining: 本家の `lilTooningScale` 係数域と一致するか検証する。
 - `[~]` `_SpecularNormalStrength`
   - done: source raw params を保持し、specular highlight 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
   - remaining: lilToon の `fd.N` と完全一致する tangent / view-space 入力、GSAA、backface behavior を検証する。
@@ -442,11 +445,11 @@ Status legend:
   - done: source raw params を保持し、indirect rim strength gate へ接続した。
   - remaining: 本家の indirect rim range と alpha/strength semantics を照合する。
 - `[~]` `_RimIndirBorder`
-  - done: source raw params を保持し、indirect rim toon border へ接続した。
-  - remaining: `_AAStrength` と blur の係数域を本家へ合わせる。
+	- done: source raw params を保持し、indirect rim toon border へ接続した。
+	- remaining: blur の係数域を本家へ合わせる。
 - `[~]` `_RimIndirBlur`
-  - done: source raw params を保持し、indirect rim toon blur へ接続した。
-  - remaining: `_AAStrength` と border の係数域を本家へ合わせる。
+	- done: source raw params を保持し、`_AAStrength` を掛けた indirect rim toon blur へ接続した。
+	- remaining: border の係数域を本家へ合わせる。
 - `[~]` `_RimBlendMode`
   - done: v2 rim parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体、RimShade / indirect rim との合成順を実装する。

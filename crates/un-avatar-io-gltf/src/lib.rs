@@ -1719,6 +1719,24 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		source_profile: UnaLilToonLikeSourceProfile::Liltoon,
 		..Default::default()
 	};
+	if let Some(value) = unavatar_material_float_param(extras, "_LightMinLimit") {
+		out.rendering.light_min_limit_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_LightMaxLimit") {
+		out.rendering.light_max_limit_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MonochromeLighting") {
+		out.rendering.monochrome_lighting_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_VertexLightStrength") {
+		out.rendering.vertex_light_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AAStrength") {
+		out.rendering.aa_strength_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GSAAStrength") {
+		out.rendering.gsaa_strength_factor = value.max(0.0);
+	}
 	out.shadow.enabled_factor = unavatar_material_float_param(extras, "_UseShadow").unwrap_or(1.0).clamp(0.0, 1.0);
 	if let Some(value) =
 		unavatar_material_color_param_rgb(extras, "_ShadeColor").or_else(|| unavatar_material_color_param_rgb(extras, "_ShadowColor"))
@@ -3791,7 +3809,13 @@ mod tests {
 					"_DstBlend": 10.0,
 					"_BlendOp": 0.0,
 					"_AlphaBoostFA": 10.0,
-					"_SubpassCutoff": 0.4
+					"_SubpassCutoff": 0.4,
+					"_LightMinLimit": 0.06,
+					"_LightMaxLimit": 0.9,
+					"_MonochromeLighting": 0.25,
+					"_VertexLightStrength": 0.35,
+					"_AAStrength": 1.25,
+					"_GSAAStrength": 0.5
 				},
 				"colorParams": {
 					"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
@@ -3836,6 +3860,12 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
+		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
+		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);
+		assert_eq!(liltoon_like.rendering.monochrome_lighting_factor, 0.25);
+		assert_eq!(liltoon_like.rendering.vertex_light_strength_factor, 0.35);
+		assert_eq!(liltoon_like.rendering.aa_strength_factor, 1.25);
+		assert_eq!(liltoon_like.rendering.gsaa_strength_factor, 0.5);
 		assert_eq!(liltoon_like.shadow.color_factor, [0.7, 0.8, 0.9]);
 		assert_eq!(liltoon_like.shadow.color_texture_index, Some(8));
 		assert_eq!(liltoon_like.shadow.strength_mask_texture_index, Some(9));

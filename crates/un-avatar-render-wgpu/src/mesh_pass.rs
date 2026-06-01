@@ -1272,8 +1272,15 @@ fn mesh_draw_material_gpu(
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
 	let alpha_ext_params = liltoon_like
-		.map(|u| [u.blend_state.subpass_cutoff_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
-		.unwrap_or([0.5, 0.0, 0.0, 0.0]);
+		.map(|u| {
+			[
+				u.blend_state.subpass_cutoff_factor.clamp(0.0, 1.0),
+				u.rendering.aa_strength_factor.max(0.0),
+				u.rendering.gsaa_strength_factor.max(0.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.5, 1.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
