@@ -247,8 +247,8 @@ Quick Set:
 
 | Button | 意図 | 代表値 |
 | --- | --- | --- |
-| `Light` | 低負荷 | FXAA、texture limit 2K/auto、compression auto |
-| `Balanced` | v1 既定 | SMAA、texture limit off or auto、compression auto/source policy |
+| `Light` | 低負荷 | FXAA、texture limit 2K/auto、compression compat or memory |
+| `Balanced` | v1/v2 既定 | SMAA、texture limit off or auto、compression balanced |
 | `Quality` | 高品質 | SMAA/MSAA、texture limit off、Mitchell/Lanczos、cache on |
 
 Advanced Controls:

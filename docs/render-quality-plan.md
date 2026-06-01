@@ -76,7 +76,7 @@
 3. [x] AA: OFF / FXAA / SMAA / MSAA。TAA系は当面対象外。
 4. [x] GPU morph。morph deltaはGPU-resident buffer化し、frame更新はweight buffer書き込みへ寄せる。
 5. [x] GPU skinningの次段最適化。skin単位palette共有、compact palette buffer、u16/u32 index buffer選択、draw時のframe/skin bind cache、opaque/mask draw grouping、static material / dynamic transform uniform分離まで実装済み。
-6. [~] Texture budget / cache / compression。LODは単体アバター用途では当面不要。テクスチャ解像度制限は劣化リスクがあるためmanifest既定OFF、明示時のみ `off` / `auto` / `8k` / `4k` / `2k` / `1k` から選ぶ。processed texture cacheは既定ONで、resize/mipmap済みRGBAをディスクキャッシュする。texture compressionはmanifest上で `source` / `auto` / `advanced` を選ぶ。既定はソース準拠の `source`。Supervisor Avatar Settingsからはこの3項目をlaunch-time texture policyとして編集できる。
+6. [~] Texture budget / cache / compression。LODは単体アバター用途では当面不要。テクスチャ解像度制限は劣化リスクがあるためmanifest既定OFF、明示時のみ `off` / `auto` / `8k` / `4k` / `2k` / `1k` から選ぶ。processed texture cacheは既定ONで、resize/mipmap済みRGBAをディスクキャッシュする。texture compressionはmanifest上で `source` / `balanced` / `memory` / `compat` を選ぶ。既定は `balanced`。旧 `auto` / `advanced` は移行互換 alias として `balanced` に読む。Supervisor Avatar Settingsからはこの3項目をlaunch-time texture policyとして編集できる。
 
 ### Texture Compression Policy
 
@@ -105,7 +105,7 @@
 - processed texture cache は既定ON。`UN_AVATAR_TEXTURE_CACHE_DIR`、またはOS標準cache配下に、入力RGBA・寸法・resolution policy・cache versionでkey化したresize/mipmap済みRGBA mip chainを保存する。圧縮ON時はBC1 / BC5 / BC7の圧縮済みblock mip chainも同じcache配下へ保存し、再起動時のCPU圧縮を避ける。CLI `--no-processed-texture-cache` またはmanifest `render_quality.processed_texture_cache = false` で両方を無効化できる。
 - processed texture cache のRGBAはアップロード用派生物であり、透明texelのRGB補完など見た目安定化の処理を含めてよい。`.unavatar` 内の source bytes / MIME は optimizer など明示的な変換を除いて dirty にしない。
 - skin tone matching は既定OFFの実験機能。`render_quality.skin_tone_matching = true` のとき、ロード時に顔・体のbaseColorテクスチャから肌色クラスタを推定し、CIELAB上で首境界が目立ちにくい顔寄りの目標色へ寄せる。顔/体のサンプル色は、material名で対象primitiveを絞った上でモデル頂点position/UVから顔下端中央と体上端中央のテクスチャ座標を採る。UVサンプルが取れないモデルだけ全体肌色中央値へfallbackする。現段階ではON/OFFのみ。
-- texture compression は既定 `source`。`auto` はrole別の保守的な自動圧縮、`advanced` はmanifest詳細設定を有効化する。現在はBC1 sRGB、BC5 linear、BC7 sRGBを実upload形式として使い、非対応GPU・非対象role・顔/瞳/data系既定はRGBA pathへ戻す。KTX2/BasisUの実codec/transcodeとASTC/ETC2 uploadは後段。
+- texture compression は既定 `balanced`。`source` は忠実性優先、`balanced` はrole別の保守的な自動圧縮、`memory` は容量優先、`compat` はGPU固有圧縮を避ける互換優先。現在はBC1 sRGB、BC5 linear、BC7 sRGBを実upload形式として使い、非対応GPU・非対象role・顔/瞳/data系既定はRGBA/native pathへ戻す。KTX2/BasisUの実codec/transcodeとASTC/ETC2 uploadは後段。
 - BCn圧縮済みcacheはblock整列済みmip寸法を保存し、cache version変更なしに寸法解釈を変えない。
 - runtime status はtexture policyとupload summaryを返す。summaryには画像枚数、縮小枚数、cache enabled/hit/miss/write、compressed cache hit/miss/write、compression mode / BC / ASTC / ETC2 support / compressed count / fallback count / compressed bytes、source RGBA bytes、mip込みupload bytes見積もり、source/upload最大長辺を含める。Supervisorはcompression fallbackが発生した場合、runtime noteとDiagnostics findingで圧縮がRGBAへ戻った理由を見えるようにする。
 - transparent / hair material の描画順が診断可能で、破綻時にdebug logへ出せる。

@@ -77,7 +77,7 @@ cargo xtask release-package --version 1.0.0
 - `cargo xtask ci`
 - `cargo xtask run --release`
 - model1 / model2 相当のプロファイル起動
-- texture compression `auto` / GPU encoder / 空の `UN_AVATAR_TEXTURE_CACHE_DIR` で model1 / model2 相当がReadyまで進むこと
+- texture compression `balanced` / GPU encoder / 空の `UN_AVATAR_TEXTURE_CACHE_DIR` で model1 / model2 相当がReadyまで進むこと。旧 `auto` / `advanced` は `balanced` alias として読む。
 - Profiles から Renderer 起動、停止、複製、削除
 - 実行中 Renderer への runtime 設定反映
 - 透過 ON/OFF と、再起動が必要な設定の表示

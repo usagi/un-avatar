@@ -686,3 +686,36 @@ impl Default for AvatarWindowOptions {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::TextureCompressionMode;
+
+	#[test]
+	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""source""#).unwrap(),
+			TextureCompressionMode::Source
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""balanced""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""memory""#).unwrap(),
+			TextureCompressionMode::Memory
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""compat""#).unwrap(),
+			TextureCompressionMode::Compat
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""auto""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""advanced""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+	}
+}
