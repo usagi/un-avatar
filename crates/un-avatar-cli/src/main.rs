@@ -191,6 +191,8 @@ struct DiagnoseMaterialSummary {
 	material_family: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	render_queue: Option<i32>,
+	source_float_param_count: usize,
+	source_color_param_count: usize,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
@@ -1044,18 +1046,16 @@ fn material_source_shader_is_liltoon(material: &UnaMaterialPbr) -> bool {
 }
 
 fn material_has_source_params(material: &UnaMaterialPbr) -> bool {
+	material_source_param_count(material, "floatParams") > 0 || material_source_param_count(material, "colorParams") > 0
+}
+
+fn material_source_param_count(material: &UnaMaterialPbr, key: &str) -> usize {
 	material
 		.unavatar_material
 		.as_ref()
-		.and_then(|m| m.get("floatParams"))
+		.and_then(|m| m.get(key).or_else(|| m.get(&key.replace("Params", "_params"))))
 		.and_then(|v| v.as_object())
-		.is_some_and(|params| !params.is_empty())
-		|| material
-			.unavatar_material
-			.as_ref()
-			.and_then(|m| m.get("colorParams"))
-			.and_then(|v| v.as_object())
-			.is_some_and(|params| !params.is_empty())
+		.map_or(0, |params| params.len())
 }
 
 fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
@@ -1103,6 +1103,8 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		source_shader,
 		material_family,
 		render_queue,
+		source_float_param_count: material_source_param_count(material, "floatParams"),
+		source_color_param_count: material_source_param_count(material, "colorParams"),
 		shading: material.shading,
 		alpha_mode: material.alpha_mode,
 		alpha_cutoff: material.alpha_cutoff,
@@ -2021,12 +2023,14 @@ fn run_diagnose(
 		.filter(|material| !visible_materials_only || visible_material_indices.contains(&material.index))
 	{
 		println!(
-			"material[{}]: name={:?} source={:?}/{:?} rq={:?} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
+			"material[{}]: name={:?} source={:?}/{:?} rq={:?} source_params=float:{} color:{} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
 			material.index,
 			material.name,
 			material.material_family,
 			material.source_shader,
 			material.render_queue,
+			material.source_float_param_count,
+			material.source_color_param_count,
 			material.shading,
 			material.alpha_mode,
 			material.alpha_cutoff,
