@@ -341,7 +341,7 @@ namespace UNAvatar.UnityExporter
 
                 string fallbackReason;
                 var encoded = TryReadSourceTextureBytes(texture, out fallbackReason);
-                if (encoded == null && IsUnavatarExtensionOnlyTexture(MimeTypeFromPath(AssetDatabase.GetAssetPath(texture))))
+                if (encoded == null && IsUnavatarExtensionOnlyTexture(GetTextureSourceInfo(texture).MimeType))
                 {
                     return -1;
                 }
@@ -429,9 +429,10 @@ namespace UNAvatar.UnityExporter
                 };
             }
 
-            private static Dictionary<string, object> BuildImageMetadataJson(Texture texture)
+            private Dictionary<string, object> BuildImageMetadataJson(Texture texture)
             {
-                var metadata = TextureAssetMetadata.FromTexture(texture, AssetDatabase.GetAssetPath(texture), null);
+                var source = GetTextureSourceInfo(texture);
+                var metadata = TextureAssetMetadata.FromTexture(texture, source.AssetPath, null, source.Importer);
                 var json = new Dictionary<string, object>
                 {
                     ["colorSpace"] = metadata.ColorSpace,
