@@ -1764,6 +1764,7 @@ mod tests {
 			source_pixel_format: None,
 			channels: None,
 			color_space: None,
+			sampler: None,
 			byte_length: 3,
 			source_hash: 0x1234,
 		};

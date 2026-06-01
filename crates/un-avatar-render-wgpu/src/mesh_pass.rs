@@ -6,7 +6,7 @@ use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
 	UnaAlphaMode, UnaExpressionCatalog, UnaExpressionWeights, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode,
-	UnaSceneSnapshot, UnaShadingModel,
+	UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
 };
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
@@ -544,7 +544,7 @@ pub(crate) struct SceneMeshes {
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_bind_group: wgpu::BindGroup,
 	#[allow(dead_code)]
-	sampler: wgpu::Sampler,
+	_samplers: Vec<wgpu::Sampler>,
 	#[allow(dead_code)]
 	_textures: Vec<wgpu::Texture>,
 	draws: Vec<MeshDraw>,
@@ -823,6 +823,57 @@ fn texture_view_or<'a>(views: &'a [wgpu::TextureView], index: Option<usize>, fal
 	match index {
 		Some(ti) if ti < views.len() => &views[ti],
 		_ => fallback,
+	}
+}
+
+fn texture_sampler_or<'a>(
+	samplers: &'a [wgpu::Sampler],
+	image_sampler_indices: &[usize],
+	index: Option<usize>,
+	fallback_index: usize,
+) -> &'a wgpu::Sampler {
+	let sampler_index = index
+		.and_then(|image_index| image_sampler_indices.get(image_index).copied())
+		.unwrap_or(fallback_index);
+	&samplers[sampler_index]
+}
+
+fn create_mesh_sampler(device: &wgpu::Device, label: &'static str, sampler: &UnaTextureSampler) -> wgpu::Sampler {
+	let mag_filter = wgpu_filter_mode(sampler.mag_filter);
+	let min_filter = wgpu_filter_mode(sampler.min_filter);
+	device.create_sampler(&wgpu::SamplerDescriptor {
+		label: Some(label),
+		address_mode_u: wgpu_address_mode(sampler.wrap_s),
+		address_mode_v: wgpu_address_mode(sampler.wrap_t),
+		address_mode_w: wgpu::AddressMode::ClampToEdge,
+		mag_filter,
+		min_filter,
+		mipmap_filter: if sampler.min_filter == UnaTextureFilterMode::Nearest {
+			wgpu::MipmapFilterMode::Nearest
+		} else {
+			wgpu::MipmapFilterMode::Linear
+		},
+		anisotropy_clamp: if mag_filter == wgpu::FilterMode::Linear && min_filter == wgpu::FilterMode::Linear {
+			4
+		} else {
+			1
+		},
+		..Default::default()
+	})
+}
+
+fn wgpu_address_mode(mode: UnaTextureWrapMode) -> wgpu::AddressMode {
+	match mode {
+		UnaTextureWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+		UnaTextureWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
+		UnaTextureWrapMode::Repeat => wgpu::AddressMode::Repeat,
+	}
+}
+
+fn wgpu_filter_mode(mode: UnaTextureFilterMode) -> wgpu::FilterMode {
+	match mode {
+		UnaTextureFilterMode::Nearest => wgpu::FilterMode::Nearest,
+		UnaTextureFilterMode::Linear => wgpu::FilterMode::Linear,
 	}
 }
 
@@ -1527,16 +1578,17 @@ impl SceneMeshes {
 			}],
 		});
 
-		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-			label: Some("mesh"),
-			address_mode_u: wgpu::AddressMode::ClampToEdge,
-			address_mode_v: wgpu::AddressMode::ClampToEdge,
-			mag_filter: wgpu::FilterMode::Linear,
-			min_filter: wgpu::FilterMode::Linear,
-			mipmap_filter: wgpu::MipmapFilterMode::Linear,
-			anisotropy_clamp: 4,
-			..Default::default()
-		});
+		let mut samplers = vec![create_mesh_sampler(device, "mesh_sampler_default", &UnaTextureSampler::default())];
+		let mut image_sampler_indices = Vec::with_capacity(scene.image_sources.len());
+		for source in &scene.image_sources {
+			let Some(sampler) = source.as_ref().and_then(|source| source.sampler.as_ref()) else {
+				image_sampler_indices.push(0);
+				continue;
+			};
+			let sampler_index = samplers.len();
+			samplers.push(create_mesh_sampler(device, "mesh_sampler_image", sampler));
+			image_sampler_indices.push(sampler_index);
+		}
 
 		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 3);
 
@@ -1933,6 +1985,7 @@ impl SceneMeshes {
 
 				let mtoon = mat.mtoon.clone().unwrap_or_default();
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
+				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let shade_view = texture_view_or(&image_views, mtoon.shade_multiply_texture_index, &white_view);
 				let shift_view = texture_view_or(&image_views, mtoon.shading_shift_texture_index, &black_view);
 				let matcap_view = texture_view_or(&image_views, mtoon.matcap_texture_index, &black_view);
@@ -1975,7 +2028,7 @@ impl SceneMeshes {
 						},
 						wgpu::BindGroupEntry {
 							binding: 2,
-							resource: wgpu::BindingResource::Sampler(&sampler),
+							resource: wgpu::BindingResource::Sampler(tex_sampler),
 						},
 						wgpu::BindGroupEntry {
 							binding: 3,
@@ -2110,7 +2163,7 @@ impl SceneMeshes {
 			frame_buffer,
 			frame_uploaded: None,
 			frame_bind_group,
-			sampler,
+			_samplers: samplers,
 			_textures: textures,
 			draws,
 			skin_palettes,
@@ -2411,6 +2464,18 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 mod tests {
 	use super::*;
 	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
+
+	#[test]
+	fn mesh_sampler_metadata_maps_to_wgpu_modes() {
+		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::ClampToEdge), wgpu::AddressMode::ClampToEdge);
+		assert_eq!(
+			wgpu_address_mode(UnaTextureWrapMode::MirroredRepeat),
+			wgpu::AddressMode::MirrorRepeat
+		);
+		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
+		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
+		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
 
 	#[test]
 	fn skin_tone_matching_disables_mtoon_shade_color_on_skin_materials() {

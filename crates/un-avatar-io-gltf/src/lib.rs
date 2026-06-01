@@ -14,7 +14,7 @@ use serde_json::Value;
 use un_avatar_core::{
 	Approximation, ReportStatus, UnaAlphaMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
 	UnaMeshBuffers, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
-	UnaSkin, UnaUnavatarExtension,
+	UnaSkin, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -87,9 +87,11 @@ fn collect_images(images_data: Vec<gltf::image::Data>, report: &mut ImportReport
 }
 
 fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Option<UnaImageSourceMetadata>> {
+	let samplers = image_samplers_from_document(document);
 	document
 		.images()
 		.map(|image| {
+			let sampler = samplers.get(image.index()).copied().flatten();
 			let name = image.name().map(str::to_string);
 			match image.source() {
 				gltf::image::Source::View { view, mime_type } => {
@@ -105,6 +107,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						source_pixel_format: None,
 						channels: None,
 						color_space: None,
+						sampler,
 						byte_length: bytes.len() as u64,
 						source_hash: fnv1a64(bytes),
 					})
@@ -116,6 +119,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					source_pixel_format: None,
 					channels: None,
 					color_space: None,
+					sampler,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
 				}),
@@ -129,9 +133,12 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 		return Vec::new();
 	};
 	let buffer_views = root.get("bufferViews").and_then(Value::as_array);
+	let samplers = image_samplers_from_root_json(root);
 	images
 		.iter()
-		.map(|image| {
+		.enumerate()
+		.map(|(image_index, image)| {
+			let sampler = samplers.get(image_index).copied().flatten();
 			let name = image.get("name").and_then(Value::as_str).map(str::to_string);
 			let mime_type = image.get("mimeType").and_then(Value::as_str).map(str::to_string);
 			if let Some(uri) = image.get("uri").and_then(Value::as_str) {
@@ -142,6 +149,7 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 					source_pixel_format: None,
 					channels: None,
 					color_space: None,
+					sampler,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
 				});
@@ -158,11 +166,108 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 				source_pixel_format: None,
 				channels: None,
 				color_space: None,
+				sampler,
 				byte_length: bytes.len() as u64,
 				source_hash: fnv1a64(bytes),
 			})
 		})
 		.collect()
+}
+
+fn image_samplers_from_document(document: &gltf::Document) -> Vec<Option<UnaTextureSampler>> {
+	let mut out = vec![None; document.images().len()];
+	for texture in document.textures() {
+		let image_index = texture.source().index();
+		if out.get(image_index).is_some_and(Option::is_some) {
+			continue;
+		}
+		if let Some(slot) = out.get_mut(image_index) {
+			let sampler = texture.sampler();
+			*slot = Some(UnaTextureSampler {
+				mag_filter: match sampler.mag_filter() {
+					Some(gltf::texture::MagFilter::Nearest) => UnaTextureFilterMode::Nearest,
+					Some(gltf::texture::MagFilter::Linear) | None => UnaTextureFilterMode::Linear,
+				},
+				min_filter: sampler
+					.min_filter()
+					.map(gltf_min_filter_mode)
+					.unwrap_or(UnaTextureFilterMode::Linear),
+				wrap_s: gltf_wrap_mode(sampler.wrap_s()),
+				wrap_t: gltf_wrap_mode(sampler.wrap_t()),
+			});
+		}
+	}
+	out
+}
+
+fn gltf_min_filter_mode(filter: gltf::texture::MinFilter) -> UnaTextureFilterMode {
+	match filter {
+		gltf::texture::MinFilter::Nearest
+		| gltf::texture::MinFilter::NearestMipmapNearest
+		| gltf::texture::MinFilter::NearestMipmapLinear => UnaTextureFilterMode::Nearest,
+		gltf::texture::MinFilter::Linear | gltf::texture::MinFilter::LinearMipmapNearest | gltf::texture::MinFilter::LinearMipmapLinear => {
+			UnaTextureFilterMode::Linear
+		}
+	}
+}
+
+fn gltf_wrap_mode(mode: gltf::texture::WrappingMode) -> UnaTextureWrapMode {
+	match mode {
+		gltf::texture::WrappingMode::ClampToEdge => UnaTextureWrapMode::ClampToEdge,
+		gltf::texture::WrappingMode::MirroredRepeat => UnaTextureWrapMode::MirroredRepeat,
+		gltf::texture::WrappingMode::Repeat => UnaTextureWrapMode::Repeat,
+	}
+}
+
+fn image_samplers_from_root_json(root: &Value) -> Vec<Option<UnaTextureSampler>> {
+	let image_count = root.get("images").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+	let mut out = vec![None; image_count];
+	let Some(textures) = root.get("textures").and_then(Value::as_array) else {
+		return out;
+	};
+	let samplers = root.get("samplers").and_then(Value::as_array);
+	for texture in textures {
+		let Some(source) = texture.get("source").and_then(Value::as_u64).map(|value| value as usize) else {
+			continue;
+		};
+		if out.get(source).is_some_and(Option::is_some) {
+			continue;
+		}
+		let sampler = texture
+			.get("sampler")
+			.and_then(Value::as_u64)
+			.and_then(|index| samplers?.get(index as usize))
+			.map(sampler_from_root_json)
+			.unwrap_or_default();
+		if let Some(slot) = out.get_mut(source) {
+			*slot = Some(sampler);
+		}
+	}
+	out
+}
+
+fn sampler_from_root_json(value: &Value) -> UnaTextureSampler {
+	UnaTextureSampler {
+		mag_filter: filter_from_gltf_constant(value.get("magFilter").and_then(Value::as_u64)),
+		min_filter: filter_from_gltf_constant(value.get("minFilter").and_then(Value::as_u64)),
+		wrap_s: wrap_from_gltf_constant(value.get("wrapS").and_then(Value::as_u64)),
+		wrap_t: wrap_from_gltf_constant(value.get("wrapT").and_then(Value::as_u64)),
+	}
+}
+
+fn filter_from_gltf_constant(value: Option<u64>) -> UnaTextureFilterMode {
+	match value {
+		Some(9728 | 9984 | 9986) => UnaTextureFilterMode::Nearest,
+		_ => UnaTextureFilterMode::Linear,
+	}
+}
+
+fn wrap_from_gltf_constant(value: Option<u64>) -> UnaTextureWrapMode {
+	match value {
+		Some(33071) => UnaTextureWrapMode::ClampToEdge,
+		Some(33648) => UnaTextureWrapMode::MirroredRepeat,
+		_ => UnaTextureWrapMode::Repeat,
+	}
 }
 
 fn append_unavatar_texture_assets(
@@ -215,6 +320,7 @@ fn append_unavatar_texture_assets(
 			source_pixel_format: source_pixel_format.map(str::to_string),
 			channels: channels.map(str::to_string),
 			color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
+			sampler: None,
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
 		}));
@@ -1774,6 +1880,34 @@ mod tests {
 			out.extend_from_slice(&bin_bytes);
 		}
 		out
+	}
+
+	#[test]
+	fn root_json_texture_samplers_map_to_image_sources() {
+		let root = serde_json::json!({
+			"images": [{}, {}],
+			"textures": [
+				{ "source": 0, "sampler": 0 },
+				{ "source": 1 }
+			],
+			"samplers": [
+				{ "magFilter": 9728, "minFilter": 9987, "wrapS": 33071, "wrapT": 33648 }
+			]
+		});
+
+		let samplers = image_samplers_from_root_json(&root);
+
+		assert_eq!(samplers.len(), 2);
+		assert_eq!(
+			samplers[0],
+			Some(UnaTextureSampler {
+				mag_filter: UnaTextureFilterMode::Nearest,
+				min_filter: UnaTextureFilterMode::Linear,
+				wrap_s: UnaTextureWrapMode::ClampToEdge,
+				wrap_t: UnaTextureWrapMode::MirroredRepeat,
+			})
+		);
+		assert_eq!(samplers[1], Some(UnaTextureSampler::default()));
 	}
 
 	#[test]

@@ -307,8 +307,36 @@ pub struct UnaImageSourceMetadata {
 	pub channels: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub color_space: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sampler: Option<UnaTextureSampler>,
 	pub byte_length: u64,
 	pub source_hash: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaTextureWrapMode {
+	ClampToEdge,
+	MirroredRepeat,
+	#[default]
+	Repeat,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaTextureFilterMode {
+	Nearest,
+	#[default]
+	Linear,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnaTextureSampler {
+	pub mag_filter: UnaTextureFilterMode,
+	pub min_filter: UnaTextureFilterMode,
+	pub wrap_s: UnaTextureWrapMode,
+	pub wrap_t: UnaTextureWrapMode,
 }
 
 /// 1 スキン分のジョイントノード（シーン `nodes` のインデックス）と逆バインド行列（列主序 16 floats・`transform` と同じ並び）。
