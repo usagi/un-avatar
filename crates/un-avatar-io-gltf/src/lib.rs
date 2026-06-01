@@ -1141,7 +1141,7 @@ fn unavatar_material_inferred_alpha_mode(
 		Some(UnaAlphaMode::Mask)
 	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
 		Some(UnaAlphaMode::Blend)
-	} else if gltf_alpha_mode == UnaAlphaMode::Mask && alpha_cutoff.is_some_and(|cutoff| cutoff <= 0.01) {
+	} else if gltf_alpha_mode == UnaAlphaMode::Mask && alpha_cutoff.is_some_and(|cutoff| cutoff <= 0.5) {
 		Some(UnaAlphaMode::Opaque)
 	} else {
 		None
@@ -2227,6 +2227,10 @@ mod tests {
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Mask, Some(0.001), true),
+			Some(UnaAlphaMode::Opaque)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Mask, Some(0.5), true),
 			Some(UnaAlphaMode::Opaque)
 		);
 		assert_eq!(
