@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -29,8 +28,18 @@ namespace UNAvatar.UnityExporter
                 ["property"] = Property ?? "",
                 ["value"] = Value,
                 ["count"] = Count,
-                ["sampleMaterials"] = SampleMaterials.Cast<object>().ToList()
+                ["sampleMaterials"] = SampleMaterialsToJson()
             };
+        }
+
+        private List<object> SampleMaterialsToJson()
+        {
+            var json = new List<object>(SampleMaterials.Count);
+            foreach (var material in SampleMaterials)
+            {
+                json.Add(material);
+            }
+            return json;
         }
     }
 

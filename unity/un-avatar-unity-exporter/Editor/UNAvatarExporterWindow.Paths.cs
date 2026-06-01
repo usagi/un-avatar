@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -82,7 +81,18 @@ namespace UNAvatar.UnityExporter
         private static string SanitizeFileName(string value)
         {
             var invalid = Path.GetInvalidFileNameChars();
-            var chars = value.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
+            var chars = value.ToCharArray();
+            for (var i = 0; i < chars.Length; i++)
+            {
+                for (var j = 0; j < invalid.Length; j++)
+                {
+                    if (chars[i] == invalid[j])
+                    {
+                        chars[i] = '_';
+                        break;
+                    }
+                }
+            }
             var sanitized = new string(chars).Trim();
             return string.IsNullOrEmpty(sanitized) ? "avatar" : sanitized;
         }
