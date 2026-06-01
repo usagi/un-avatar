@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -574,6 +574,9 @@ enum Commands {
 		/// Base と全 wardrobe set の可視メッシュ／blendshape 状態を比較表示する
 		#[arg(long)]
 		wardrobe_probe_all: bool,
+		/// 人間向け出力で、現在の wardrobe 状態から参照される material だけを表示する
+		#[arg(long)]
+		visible_materials_only: bool,
 		/// 結果を JSON で stdout に出す
 		#[arg(long)]
 		json: bool,
@@ -703,8 +706,17 @@ fn run(cli: Cli) -> Result<(), String> {
 			input_format,
 			wardrobe_set,
 			wardrobe_probe_all,
+			visible_materials_only,
 			json,
-		} => run_diagnose(&plugin_dirs, path, input_format, wardrobe_set, wardrobe_probe_all, json),
+		} => run_diagnose(
+			&plugin_dirs,
+			path,
+			input_format,
+			wardrobe_set,
+			wardrobe_probe_all,
+			visible_materials_only,
+			json,
+		),
 		Commands::Vmc { command } => run_vmc(command),
 	}
 }
@@ -1726,6 +1738,7 @@ fn run_diagnose(
 	input_format: Option<String>,
 	wardrobe_set: Option<String>,
 	wardrobe_probe_all: bool,
+	visible_materials_only: bool,
 	json: bool,
 ) -> Result<(), String> {
 	let reg = io_registry_for_cli(plugin_dirs)?;
@@ -1883,6 +1896,10 @@ fn run_diagnose(
 	println!("visible_shading: {:?}", report.scene.visible_shading_counts);
 	println!("visible_alpha: {:?}", report.scene.visible_alpha_counts);
 	println!("visible_materials: {:?}", report.scene.visible_material_indices);
+	let visible_material_indices: BTreeSet<usize> = report.scene.visible_material_indices.iter().copied().collect();
+	if visible_materials_only {
+		println!("materials: visible only ({} unique indices)", visible_material_indices.len());
+	}
 	if let Some(h) = &report.humanoid {
 		println!(
 			"humanoid: bones={} left_eye={:?} right_eye={:?}",
@@ -1896,7 +1913,12 @@ fn run_diagnose(
 	} else {
 		println!("expressions: none");
 	}
-	for material in &report.scene.materials {
+	for material in report
+		.scene
+		.materials
+		.iter()
+		.filter(|material| !visible_materials_only || visible_material_indices.contains(&material.index))
+	{
 		println!(
 			"material[{}]: name={:?} source={:?}/{:?} rq={:?} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
 			material.index,
