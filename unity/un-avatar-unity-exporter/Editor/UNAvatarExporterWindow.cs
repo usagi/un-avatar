@@ -16,7 +16,7 @@ namespace UNAvatar.UnityExporter
     {
         private const string ExtensionName = "UN_avatar";
         private const string SpecVersion = "0.1-preview";
-        private const string ExporterBuildMarker = "2026-06-02-diagnostics-texture-optimized";
+        private const string ExporterBuildMarker = "2026-06-02-linq-cleanup";
         private const int BaseSelectionIndex = -2;
 
         [SerializeField] private GameObject avatarRoot;

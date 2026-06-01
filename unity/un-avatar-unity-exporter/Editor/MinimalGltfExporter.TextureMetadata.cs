@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -194,7 +193,11 @@ namespace UNAvatar.UnityExporter
                     {
                         return "";
                     }
-                    var names = new HashSet<string>(channelNames.Select(c => c.ToUpperInvariant()));
+                    var names = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var channelName in channelNames)
+                    {
+                        names.Add(channelName.ToUpperInvariant());
+                    }
                     if (names.SetEquals(new[] { "R", "G", "B", "A" }))
                     {
                         return "rgba";
