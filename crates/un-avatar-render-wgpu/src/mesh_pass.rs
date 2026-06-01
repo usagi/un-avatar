@@ -1090,7 +1090,7 @@ fn mesh_draw_material_gpu(
 				0.0
 			},
 		],
-		uv_offset_scale: mtoon.uv_offset_scale,
+		uv_offset_scale: mat.uv_offset_scale,
 	}
 }
 

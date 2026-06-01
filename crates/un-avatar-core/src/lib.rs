@@ -458,6 +458,10 @@ pub struct UnaMaterialPbr {
 	/// glTF `alphaCutoff`（`MASK` 時。未指定の既定は 0.5）。
 	#[serde(default = "default_alpha_cutoff")]
 	pub alpha_cutoff: f32,
+	/// Base UV transform shared by the renderer for the primary material UV:
+	/// `[offset_x, offset_y, scale_x, scale_y]`.
+	#[serde(default = "default_uv_offset_scale")]
+	pub uv_offset_scale: [f32; 4],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub mtoon: Option<UnaMtoonMaterial>,
 	/// `.unavatar` material extension payload as authored/exported. Runtime
@@ -615,6 +619,7 @@ impl Default for UnaMaterialPbr {
 			shading: UnaShadingModel::default(),
 			alpha_mode: UnaAlphaMode::default(),
 			alpha_cutoff: default_alpha_cutoff(),
+			uv_offset_scale: default_uv_offset_scale(),
 			mtoon: None,
 			unavatar_material: None,
 		}

@@ -12,6 +12,7 @@ glam = { version = "0.32", features = ["bytemuck"] }
 gltf = { version = "1.4", features = [
  "import",
  "extras",
+ "KHR_texture_transform",
  "KHR_materials_unlit",
  "names",
 ] }

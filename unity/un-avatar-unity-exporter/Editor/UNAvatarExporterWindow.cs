@@ -2318,6 +2318,7 @@ namespace UNAvatar.UnityExporter
             private readonly List<object> samplers = new List<object>();
             private readonly List<ExportedTextureRecord> exportedTextures = new List<ExportedTextureRecord>();
             private readonly List<UnavatarTextureAssetRecord> textureAssets = new List<UnavatarTextureAssetRecord>();
+            private bool usesTextureTransform;
 
             public List<ExportedTextureRecord> ExportedTextures => exportedTextures;
             public List<UnavatarTextureAssetRecord> TextureAssets => textureAssets;
@@ -2365,6 +2366,10 @@ namespace UNAvatar.UnityExporter
                     gltf["images"] = images;
                     gltf["textures"] = textures;
                     gltf["samplers"] = samplers;
+                }
+                if (usesTextureTransform)
+                {
+                    gltf["extensionsUsed"] = new List<object> { "KHR_texture_transform" };
                 }
                 if (buffer.Length > 0)
                 {
@@ -2661,10 +2666,11 @@ namespace UNAvatar.UnityExporter
                 var mainTex = ReadTexture(material, "_BaseMap") ?? ReadTexture(material, "_MainTex");
                 if (mainTex != null)
                 {
+                    var mainTextureProperty = material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
                     var textureIndex = ExportTexture(mainTex);
                     if (textureIndex >= 0)
                     {
-                        pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex };
+                        pbr["baseColorTexture"] = TextureInfo(textureIndex, material, mainTextureProperty);
                     }
                 }
 
@@ -2813,6 +2819,34 @@ namespace UNAvatar.UnityExporter
                     return true;
                 }
                 return true;
+            }
+
+            private Dictionary<string, object> TextureInfo(int textureIndex, Material material, string property)
+            {
+                var info = new Dictionary<string, object> { ["index"] = textureIndex };
+                if (material == null || string.IsNullOrEmpty(property) || !material.HasProperty(property))
+                {
+                    return info;
+                }
+                var scale = material.GetTextureScale(property);
+                var offset = material.GetTextureOffset(property);
+                if (Mathf.Approximately(scale.x, 1.0f) &&
+                    Mathf.Approximately(scale.y, 1.0f) &&
+                    Mathf.Approximately(offset.x, 0.0f) &&
+                    Mathf.Approximately(offset.y, 0.0f))
+                {
+                    return info;
+                }
+                info["extensions"] = new Dictionary<string, object>
+                {
+                    ["KHR_texture_transform"] = new Dictionary<string, object>
+                    {
+                        ["offset"] = FloatArray(offset.x, offset.y),
+                        ["scale"] = FloatArray(scale.x, scale.y)
+                    }
+                };
+                usesTextureTransform = true;
+                return info;
             }
 
             private static bool IsMaterialFeatureEnabled(Material material, string property, bool fallback)

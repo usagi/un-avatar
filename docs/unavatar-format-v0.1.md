@@ -222,7 +222,7 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 
 lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は cutout hint として扱う。
 
-UV transform は UNToon 正規化値として `mtoon.uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、Renderer は shader 内で `uv * scale + offset` として適用する。
+UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `mtoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
 
 UV animation は `mtoon.uvAnimationScrollXSpeedFactor`、`mtoon.uvAnimationScrollYSpeedFactor`、`mtoon.uvAnimationRotationSpeedFactor`、`mtoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
 

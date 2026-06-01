@@ -1236,6 +1236,7 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			let pbr = m.pbr_metallic_roughness();
 			let factor = pbr.base_color_factor();
 			let tex = pbr.base_color_texture().map(|t| t.texture().source().index());
+			let gltf_uv_offset_scale = pbr.base_color_texture().and_then(texture_info_uv_offset_scale);
 			let normal_texture_index = m.normal_texture().map(|t| t.texture().source().index());
 			let normal_texture_scale = m.normal_texture().map(|t| t.scale()).unwrap_or(1.0);
 			let occlusion_texture_index = m.occlusion_texture().map(|t| t.texture().source().index());
@@ -1261,6 +1262,11 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			};
 			let alpha_mode = unavatar_material_inferred_alpha_mode(extras.as_ref(), gltf_alpha_mode, alpha_cutoff_opt, tex.is_some())
 				.unwrap_or(gltf_alpha_mode);
+			let uv_offset_scale = unavatar_mtoon
+				.as_ref()
+				.map(|mtoon| mtoon.uv_offset_scale)
+				.or(gltf_uv_offset_scale)
+				.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 			UnaMaterialPbr {
 				name,
 				double_sided,
@@ -1277,11 +1283,19 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 				shading,
 				alpha_mode,
 				alpha_cutoff,
+				uv_offset_scale,
 				mtoon: unavatar_mtoon,
 				unavatar_material: extras,
 			}
 		})
 		.collect()
+}
+
+fn texture_info_uv_offset_scale(info: gltf::texture::Info<'_>) -> Option<[f32; 4]> {
+	let transform = info.texture_transform()?;
+	let offset = transform.offset();
+	let scale = transform.scale();
+	Some([offset[0], offset[1], scale[0], scale[1]])
 }
 
 fn unavatar_material_extras(material: &gltf::Material<'_>) -> Option<Value> {
@@ -2861,5 +2875,31 @@ mod tests {
 		assert_eq!(mtoon.uv_animation_scroll_x_speed_factor, 0.25);
 		assert_eq!(mtoon.uv_animation_scroll_y_speed_factor, -0.5);
 		assert_eq!(mtoon.uv_animation_rotation_speed_factor, 0.75);
+	}
+
+	#[test]
+	fn imports_khr_texture_transform_as_material_uv_offset_scale() {
+		let json = r#"{
+			"asset": {"version": "2.0"},
+			"materials": [{
+				"pbrMetallicRoughness": {
+					"baseColorTexture": {
+						"index": 0,
+						"extensions": {
+							"KHR_texture_transform": {
+								"offset": [0.25, -0.5],
+								"scale": [2.0, 3.0]
+							}
+						}
+					}
+				}
+			}],
+			"textures": [{"source": 0}],
+			"images": [{"uri": "white.png"}]
+		}"#;
+		let gltf = gltf::Gltf::from_slice(&glb_bytes_with_bin(json, &[])).expect("gltf parses");
+		let materials = build_materials(&gltf.document);
+
+		assert_eq!(materials[0].uv_offset_scale, [0.25, -0.5, 2.0, 3.0]);
 	}
 }
