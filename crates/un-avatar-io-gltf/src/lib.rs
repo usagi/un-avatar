@@ -1568,9 +1568,6 @@ fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[
 			continue;
 		}
 		match material.alpha_mode {
-			UnaAlphaMode::Opaque if material.alpha_cutoff > 0.0 && material.alpha_cutoff <= 0.01 && has_transparent_alpha => {
-				material.alpha_mode = UnaAlphaMode::Mask;
-			}
 			UnaAlphaMode::Mask if material.alpha_cutoff <= 0.5 => {
 				if !has_transparent_alpha {
 					material.alpha_mode = UnaAlphaMode::Opaque;
@@ -3024,7 +3021,7 @@ mod tests {
 		assert_eq!(materials[0].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[1].alpha_mode, UnaAlphaMode::Mask);
 		assert_eq!(materials[2].alpha_mode, UnaAlphaMode::Blend);
-		assert_eq!(materials[3].alpha_mode, UnaAlphaMode::Mask);
+		assert_eq!(materials[3].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[4].alpha_mode, UnaAlphaMode::Mask);
 		assert_eq!(materials[4].alpha_cutoff, 1.0 / 255.0);
 	}

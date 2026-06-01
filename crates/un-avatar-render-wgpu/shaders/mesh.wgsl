@@ -210,6 +210,13 @@ fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {
 	return base_color_a;
 }
 
+fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32) -> vec3<f32> {
+	if alpha_kind > 1.5 {
+		return rgb * out_a;
+	}
+	return rgb;
+}
+
 fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwrite: f32) {
 	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a <= 0.001 {
 		discard;
@@ -217,7 +224,11 @@ fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwr
 }
 
 fn discard_transparent_zprepass(a: f32, alpha_kind: f32, cutoff: f32, transparent_zwrite: f32) {
-	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < cutoff {
+	// lilToon Transparent+ZWrite materials can author cutoff as 0.0.
+	// Still avoid writing depth for fully transparent texels; the color pass
+	// discards them and stale depth would incorrectly hide later surfaces.
+	let z_cutoff = max(cutoff, 1.0 / 255.0);
+	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < z_cutoff {
 		discard;
 	}
 }
@@ -372,7 +383,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
-		return vec4<f32>(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a);
+		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
 	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
@@ -424,7 +435,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, emissive_samp, uv).rgb;
 	let emission = select(emission_raw, vec3<f32>(0.0, 0.0, 0.0), disable_emissive);
 	lit = lit + emission;
-	return vec4<f32>(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a);
+	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
 }
 
 @fragment

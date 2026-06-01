@@ -133,6 +133,8 @@ Exporter は repo 内 `unity/un-avatar-unity-exporter/` に UPM package とし�
 
 複数衣装、アクセサリ、小物切替は `.unavatar` 内の `wardrobe.sets` として扱う。基本方針は 1 avatar = 1 `.unavatar`、中に複数 wardrobe set と必要資産を同梱すること。
 
+Wardrobe Set は衣装パッケージ単位ではなく、ユーザーが実際に見たい状態を表す見た目プリセットである。Modular Avatar 対応衣装は配布時点で色違い、パンツ / スカート、帽子、小物、演出用オブジェクトなどの細かな ON/OFF バリエーションを内包することが多い。したがって `wardrobe.sets` は、衣装 root、色、スタイル、小物 ON/OFF、素体側の貫通防止 blendshape を合成した差分 patch として扱う。`assetGroups` は lazy upload / unload のための資産単位であり、wardrobe set と 1:1 で対応するとは限らない。
+
 初期 operation は `subtreeEnabled` / `nodeEnabled` / `blendShapeWeight` を最優先にする。衣装 mesh / accessory mesh の ON/OFF と素体 shrink / sock / skin 表示用 blendshape 差分が切替機能の最小価値になる。その後、material override、expression weight、dynamics enable を足す。
 
 `.unavatar` は全衣装資産を保持できるが、Runtime は最初から outfit group 単位の lazy GPU upload / unload を前提にする。数百着規模の衣装を 1 `.unavatar` に含める利用者を想定し、全衣装 mesh / texture の GPU 常駐を前提にしない。

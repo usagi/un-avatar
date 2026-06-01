@@ -228,6 +228,8 @@ Cull mode は material 共通値として Cull Off / Front / Back を保持す�
 
 UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `mtoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
 
+Unity の Mesh UV と glTF の texture coordinate convention は V 方向の扱いが異なるため、Unity Exporter は `.unavatar` 出力時に `TEXCOORD_0.y = 1 - unityUv.y` へ変換する。Unity material の Tiling / Offset も同じ座標系へ変換し、`offset_y = 1 - scale_y - unity_offset_y` として `KHR_texture_transform` / `mtoon.uvOffsetScale` に書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
+
 UV animation は `mtoon.uvAnimationScrollXSpeedFactor`、`mtoon.uvAnimationScrollYSpeedFactor`、`mtoon.uvAnimationRotationSpeedFactor`、`mtoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
 
 ### Texture Storage

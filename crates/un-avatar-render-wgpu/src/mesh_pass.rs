@@ -1524,6 +1524,9 @@ impl SceneMeshes {
 			sample_count,
 		);
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
+		// lilToon Transparent uses SrcBlend=One, DstBlend=OneMinusSrcAlpha
+		// with shader-side premultiply. UNToon v2 follows that path for MToonLike.
+		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
 		let pipeline_blend_lit = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
@@ -1565,7 +1568,7 @@ impl SceneMeshes {
 			"mesh_blend_mtoon",
 			"vs_main",
 			"fs_mtoon",
-			blend,
+			premultiplied_blend,
 			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,

@@ -1125,6 +1125,7 @@ namespace UNAvatar.UnityExporter
             {
                 ["specVersion"] = SpecVersion,
                 ["generator"] = "U.N. Avatar Unity Exporter 0.1.0-preview",
+                ["textureCoordinateConvention"] = "gltf",
                 ["manifest"] = new Dictionary<string, object>
                 {
                     ["name"] = avatarRoot != null ? avatarRoot.name : "",
@@ -3062,7 +3063,7 @@ namespace UNAvatar.UnityExporter
                 {
                     ["KHR_texture_transform"] = new Dictionary<string, object>
                     {
-                        ["offset"] = FloatArray(offset.x, offset.y),
+                        ["offset"] = FloatArray(offset.x, GltfTextureOffsetY(offset.y, scale.y)),
                         ["scale"] = FloatArray(scale.x, scale.y)
                     }
                 };
@@ -3155,7 +3156,11 @@ namespace UNAvatar.UnityExporter
                     mainTextureScale = material.GetTextureScale(mainTextureProperty);
                     mainTextureOffset = material.GetTextureOffset(mainTextureProperty);
                 }
-                mtoon["uvOffsetScale"] = FloatArray(mainTextureOffset.x, mainTextureOffset.y, mainTextureScale.x, mainTextureScale.y);
+                mtoon["uvOffsetScale"] = FloatArray(
+                    mainTextureOffset.x,
+                    GltfTextureOffsetY(mainTextureOffset.y, mainTextureScale.y),
+                    mainTextureScale.x,
+                    mainTextureScale.y);
 
                 var lilMainScrollRotate = ReadVector(material, "_MainTex_ScrollRotate", Vector4.zero);
                 mtoon["uvAnimationScrollXSpeedFactor"] = ReadFloat(material, "_UvAnimScrollX", lilMainScrollRotate.x);
@@ -3969,11 +3974,16 @@ namespace UNAvatar.UnityExporter
                 for (var i = 0; i < values.Length; i++)
                 {
                     WriteFloat(bytes, i * 8, values[i].x);
-                    WriteFloat(bytes, i * 8 + 4, values[i].y);
+                    WriteFloat(bytes, i * 8 + 4, 1.0f - values[i].y);
                 }
                 var view = AddBufferView(bytes);
                 accessors.Add(Accessor(view, values.Length, 5126, "VEC2"));
                 return accessors.Count - 1;
+            }
+
+            private static float GltfTextureOffsetY(float unityOffsetY, float unityScaleY)
+            {
+                return 1.0f - unityScaleY - unityOffsetY;
             }
 
             private int AddColorAccessor(Color[] values)

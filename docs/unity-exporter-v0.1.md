@@ -116,6 +116,8 @@ lilToon 由来 material では、本家 shader の `_UseShadow`、`_UseMatCap`�
 
 Exporter は glTF material の `extras.UN_avatar_material` に `sourceShader`、`family`、`renderQueue`、raw `floatParams` / `colorParams`、および初期 UNToon 正規化値を保持する。Runtime は正規化値で即時表示し、raw params は lilToon 互換性を段階的に上げるための診断・再解釈用 source hint とする。全 texture property を無差別に export すると未使用 texture を膨らませるため、v0.1 では main / shade / normal / matcap / rim / emission / outline mask / reflection など実際に使う slot だけを texture index または texture asset id として保持する。
 
+Unity の Mesh UV はそのまま glTF / wgpu 側へ渡さない。Exporter は `TEXCOORD_0.y = 1 - unityUv.y` として glTF convention に変換し、main texture の Tiling / Offset も `offset_y = 1 - scale_y - unity_offset_y` に変換して `KHR_texture_transform` と `mtoon.uvOffsetScale` へ書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
+
 ## 7. Modular Avatar And Wardrobe Sets
 
 VRC 向け衣装対応は v2 の重要機能として扱う。
@@ -129,6 +131,12 @@ Exporter は 3 つの export mode を持つ。
 preview 実装では `Wardrobe (Split)` は Modular Avatar bake を実行せず、clone に Base operations も焼かない。inactive child も強制 ON にしない。GLB には Unity hierarchy の source graph をできるだけそのまま出し、`UN_avatar.wardrobe` に captured Base / set operations を保持する。Runtime 側の source graph resolver は未完成のため、この mode はまず `.unavatar` 出力と診断用である。
 
 短期 preview では `Wardrobe (Baked)` を残すが、`Wardrobe (Split)` のデータ量・編集性・runtime resolve/cache の利点が大きく、致命的な欠点がなければ v2 の唯一の wardrobe mode へ昇格する。その場合 `Wardrobe (Baked)` は開発停止し、UI から外す。
+
+2026-06-01 の実験サンプルでは、`Wardrobe (Split)` export は数秒で完了し、`Wardrobe (Baked)` の支配的コストは Modular Avatar bake だった。出力サイズも baked とほぼ同等で、texture payload が支配的なサンプルでは mode 差は 1MB 未満だった。Runtime 診断では debug build の `un-avatar-cli diagnose --wardrobe-probe-all` で import 約 25 秒、全 wardrobe probe 約 1.3 秒、各 set probe 約 300ms だった。これは診断用の document clone / visible mesh scan を含む値であり、wardrobe 合成そのものは load-time import より十分小さい。今後の本命は、Split graph から選択 set の render data を resolve/cache し、asset group 単位の lazy upload / unload へつなげること。
+
+注意点として、Split は bake 後結果ではなく captured operations を正本にする。set が衣装 root を ON にしたとき露出する子孫を OFF にしたい場合、その子孫の `nodeEnabled=false` / `subtreeEnabled=false` が set operation に含まれていなければ Runtime は推測しない。これは意図しない破壊を避けるためで、Baked 版との差分だけを正誤判定には使わない。
+
+Wardrobe Set は「衣装 root を 1 つ選ぶ」だけの機能ではない。Modular Avatar 対応衣装は、配布時点で色違い、パンツ / スカート、帽子、小物、演出用オブジェクトなどの細かな ON/OFF バリエーションを内包していることが多い。UNAvatar の `wardrobe.sets` は、素体側の貫通防止 blendshape、衣装 root、色、スタイル、小物 ON/OFF を合成した見た目プリセットとして扱う。`assetGroups` は lazy upload / unload のための資産単位であり、ユーザーが選ぶ wardrobe set とは 1:1 とは限らない。
 
 ### Capture Diff Workflow
 

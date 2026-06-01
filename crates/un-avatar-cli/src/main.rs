@@ -9,6 +9,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -64,6 +65,7 @@ struct DiagnoseReport {
 	import_format_id: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	import_provider_plugin_id: Option<String>,
+	timings: DiagnoseTimingSummary,
 	import_report: ImportReport,
 	scene: DiagnoseSceneSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +79,14 @@ struct DiagnoseReport {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
 	warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseTimingSummary {
+	import_ms: u128,
+	wardrobe_apply_ms: u128,
+	wardrobe_probe_ms: u128,
+	report_build_ms: u128,
 }
 
 #[derive(Serialize)]
@@ -330,6 +340,7 @@ struct DiagnoseWardrobeProbeSummary {
 	set_id: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	display_name: Option<String>,
+	probe_ms: u128,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	visibility_applied: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -1256,6 +1267,7 @@ fn wardrobe_probe_for_document(
 	display_name: Option<String>,
 	doc: &UnaDocument,
 	apply_report: Option<WardrobeApplyReport>,
+	probe_ms: u128,
 ) -> DiagnoseWardrobeProbeSummary {
 	let mut visible_mesh_paths = Vec::new();
 	let mut nonzero_morph_weights = Vec::new();
@@ -1308,6 +1320,7 @@ fn wardrobe_probe_for_document(
 	DiagnoseWardrobeProbeSummary {
 		set_id,
 		display_name,
+		probe_ms,
 		visibility_applied,
 		visibility_missing,
 		blendshape_applied,
@@ -1332,14 +1345,28 @@ fn build_wardrobe_probes(base_doc: &UnaDocument) -> Result<Vec<DiagnoseWardrobeP
 		.iter()
 		.find(|(id, _)| id == &base_id)
 		.and_then(|(_, display_name)| display_name.clone());
-	probes.push(wardrobe_probe_for_document(base_id.clone(), base_display_name, base_doc, None));
+	let started = Instant::now();
+	probes.push(wardrobe_probe_for_document(
+		base_id.clone(),
+		base_display_name,
+		base_doc,
+		None,
+		started.elapsed().as_millis(),
+	));
 	for (set_id, display_name) in sets {
 		if set_id == base_id {
 			continue;
 		}
+		let started = Instant::now();
 		let mut doc = base_doc.clone();
 		let apply_report = apply_unavatar_wardrobe_set(&mut doc, &set_id)?;
-		probes.push(wardrobe_probe_for_document(set_id, display_name, &doc, Some(apply_report)));
+		probes.push(wardrobe_probe_for_document(
+			set_id,
+			display_name,
+			&doc,
+			Some(apply_report),
+			started.elapsed().as_millis(),
+		));
 	}
 	Ok(probes)
 }
@@ -1435,6 +1462,7 @@ fn build_diagnose_report(
 	path: &Path,
 	import_format_id: String,
 	provider_plugin_id: Option<String>,
+	timings: DiagnoseTimingSummary,
 	import_report: ImportReport,
 	doc: UnaDocument,
 	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
@@ -1704,6 +1732,7 @@ fn build_diagnose_report(
 		path: path.to_string_lossy().to_string(),
 		import_format_id,
 		import_provider_plugin_id: provider_plugin_id,
+		timings,
 		import_report,
 		scene,
 		humanoid,
@@ -1818,6 +1847,7 @@ fn run_diagnose(
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 	};
+	let import_started = Instant::now();
 	let mut imported = importer
 		.import(
 			&mut ictx,
@@ -1825,33 +1855,58 @@ fn run_diagnose(
 			ImportOptions,
 		)
 		.map_err(|e| e.to_string())?;
+	let import_ms = import_started.elapsed().as_millis();
 	let base_document_for_probes = imported.document.clone();
+	let mut wardrobe_apply_ms = 0;
 	if let Some(set_id) = wardrobe_set.as_deref().filter(|set_id| !set_id.trim().is_empty()) {
+		let started = Instant::now();
 		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
+		wardrobe_apply_ms = started.elapsed().as_millis();
 		imported.report.push_info(format!(
 			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
 			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
 		));
 	}
+	let wardrobe_probe_started = Instant::now();
 	let wardrobe_probes = if wardrobe_probe_all {
 		build_wardrobe_probes(&base_document_for_probes)?
 	} else {
 		Vec::new()
 	};
+	let wardrobe_probe_ms = wardrobe_probe_started.elapsed().as_millis();
+	let report_build_started = Instant::now();
 	let report = build_diagnose_report(
 		&path,
 		desc.id.0,
 		desc.provider_plugin_id,
+		DiagnoseTimingSummary {
+			import_ms,
+			wardrobe_apply_ms,
+			wardrobe_probe_ms,
+			report_build_ms: 0,
+		},
 		imported.report,
 		imported.document,
 		wardrobe_probes,
 	);
+	let report_build_ms = report_build_started.elapsed().as_millis();
+	let report = DiagnoseReport {
+		timings: DiagnoseTimingSummary {
+			report_build_ms,
+			..report.timings
+		},
+		..report
+	};
 	if json {
 		println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
 		return Ok(());
 	}
 	println!("path: {}", report.path);
 	println!("importer: {}", report.import_format_id);
+	println!(
+		"timings: import={}ms wardrobe_apply={}ms wardrobe_probe={}ms report_build={}ms",
+		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
+	);
 	if let Some(vrm) = &report.vrm {
 		println!(
 			"vrm: spec={} mtoon_v0={} mtoon_v1={:?} spring_groups={}",
@@ -1883,9 +1938,10 @@ fn run_diagnose(
 		}
 		for probe in &report.wardrobe_probes {
 			println!(
-				"wardrobe_probe[{}]: name={:?} visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} missing=vis {} blend {}",
+				"wardrobe_probe[{}]: name={:?} probe={}ms visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} missing=vis {} blend {}",
 				probe.set_id,
 				probe.display_name,
+				probe.probe_ms,
 				probe.visible_mesh_node_count,
 				probe.nonzero_morph_weight_count,
 				probe.visibility_applied,
@@ -2299,6 +2355,12 @@ mod tests {
 			Path::new("avatar.vrm"),
 			"io.un-avatar.vrm".into(),
 			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
 			ImportReport::default(),
 			doc,
 			Vec::new(),
