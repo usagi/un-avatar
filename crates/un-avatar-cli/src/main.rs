@@ -134,6 +134,7 @@ struct DiagnoseVisibleMaterialSummary {
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
 	transparent_with_z_write: bool,
+	draw_skipped_fully_transparent: bool,
 	morph_target_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	nonzero_morph_weights: Vec<DiagnoseMorphWeightSummary>,
@@ -1162,6 +1163,9 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 		.filter_map(|(primitive_index, primitive)| {
 			let material_index = primitive.material_index?;
 			let material = scene.materials.get(material_index)?;
+			let draw_skipped_fully_transparent = matches!(material.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
+				&& material.base_color_factor[3] <= 0.001
+				&& texture_alpha_summary(scene, material.base_color_texture_index).is_some_and(|alpha| alpha.max_alpha == 0);
 			let nonzero_morph_weights = primitive
 				.default_morph_weights
 				.iter()
@@ -1198,6 +1202,7 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 				alpha_mode: material.alpha_mode,
 				alpha_cutoff: material.alpha_cutoff,
 				transparent_with_z_write: material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+				draw_skipped_fully_transparent,
 				morph_target_count: primitive.morph_targets.len(),
 				nonzero_morph_weights,
 			})
@@ -1942,7 +1947,7 @@ fn run_diagnose(
 			);
 			for material in &node.materials {
 				println!(
-					"    prim[{}]: material[{}] name={:?} source={:?} shading={:?} alpha={:?} cutoff={} zwrite={} morph_targets={} nonzero_morphs={}",
+					"    prim[{}]: material[{}] name={:?} source={:?} shading={:?} alpha={:?} cutoff={} zwrite={} skipped={} morph_targets={} nonzero_morphs={}",
 					material.primitive,
 					material.index,
 					material.name,
@@ -1951,6 +1956,7 @@ fn run_diagnose(
 					material.alpha_mode,
 					material.alpha_cutoff,
 					material.transparent_with_z_write,
+					material.draw_skipped_fully_transparent,
 					material.morph_target_count,
 					material.nonzero_morph_weights.len()
 				);
