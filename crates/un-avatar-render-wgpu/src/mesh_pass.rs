@@ -232,9 +232,16 @@ struct MeshDrawMaterialGpu {
 	shadow_params: [f32; 4],
 	shadow_ext_params: [f32; 4],
 	shadow_border_color: [f32; 4],
+	shadow2_color: [f32; 4],
+	shadow2_params: [f32; 4],
+	shadow3_color: [f32; 4],
+	shadow3_params: [f32; 4],
 	matcap_factor: [f32; 4],
 	matcap_params: [f32; 4],
 	matcap_ext_params: [f32; 4],
+	matcap2_factor: [f32; 4],
+	matcap2_params: [f32; 4],
+	matcap2_ext_params: [f32; 4],
 	reflection_color: [f32; 4],
 	reflection_control: [f32; 4],
 	reflection_params: [f32; 4],
@@ -250,6 +257,8 @@ struct MeshDrawMaterialGpu {
 	emission_params: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
+	outline_lit_color: [f32; 4],
+	outline_lit_params: [f32; 4],
 	alpha_mask_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
@@ -266,7 +275,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 464);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 608);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1045,26 +1054,53 @@ fn mesh_draw_material_gpu(
 	};
 	let liltoon_like = mat.liltoon_like.as_ref();
 	let outline = effective_mtoon_outline(mtoon, opts);
-	let (outline_mode, outline_width, outline_color, outline_lighting_mix) = if let Some(liltoon_like) = liltoon_like {
-		if liltoon_like.outline.enabled_factor > 0.5 && liltoon_like.outline.width_factor > 0.0 {
-			(
-				UnaMtoonOutlineWidthMode::WorldCoordinates,
-				liltoon_like.outline.width_factor,
-				[
-					liltoon_like.outline.color_factor[0],
-					liltoon_like.outline.color_factor[1],
-					liltoon_like.outline.color_factor[2],
-				],
-				liltoon_like.outline.enable_lighting_factor,
-			)
+	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
+		if let Some(liltoon_like) = liltoon_like {
+			if liltoon_like.outline.enabled_factor > 0.5 && liltoon_like.outline.width_factor > 0.0 {
+				(
+					UnaMtoonOutlineWidthMode::WorldCoordinates,
+					liltoon_like.outline.width_factor,
+					liltoon_like.outline.color_factor,
+					liltoon_like.outline.enable_lighting_factor,
+					liltoon_like.outline.lit_color_factor,
+					[
+						liltoon_like.outline.lit_scale_factor,
+						liltoon_like.outline.lit_offset_factor,
+						liltoon_like.outline.lit_apply_tex_factor,
+						liltoon_like.outline.lit_shadow_receive_factor,
+					],
+				)
+			} else {
+				(
+					UnaMtoonOutlineWidthMode::None,
+					0.0,
+					[0.0, 0.0, 0.0, 0.0],
+					0.0,
+					[0.0, 0.0, 0.0, 0.0],
+					[10.0, -8.0, 0.0, 0.0],
+				)
+			}
 		} else {
-			(UnaMtoonOutlineWidthMode::None, 0.0, [0.0, 0.0, 0.0], 0.0)
-		}
-	} else {
-		outline
-			.map(|o| (o.mode, o.width, o.color, o.lighting_mix))
-			.unwrap_or((UnaMtoonOutlineWidthMode::None, 0.0, [0.0, 0.0, 0.0], 0.0))
-	};
+			outline
+				.map(|o| {
+					(
+						o.mode,
+						o.width,
+						[o.color[0], o.color[1], o.color[2], 1.0],
+						o.lighting_mix,
+						[0.0, 0.0, 0.0, 0.0],
+						[10.0, -8.0, 0.0, 0.0],
+					)
+				})
+				.unwrap_or((
+					UnaMtoonOutlineWidthMode::None,
+					0.0,
+					[0.0, 0.0, 0.0, 0.0],
+					0.0,
+					[0.0, 0.0, 0.0, 0.0],
+					[10.0, -8.0, 0.0, 0.0],
+				))
+		};
 	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or(mtoon.shade_color_factor);
 	let shadow_params = liltoon_like
 		.map(|u| {
@@ -1096,6 +1132,28 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.1, 0.0, 1.0]);
+	let shadow2_color = liltoon_like.map(|u| u.shadow.second_color_factor).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let shadow2_params = liltoon_like
+		.map(|u| {
+			[
+				u.shadow.second_border_factor.clamp(0.0, 1.0),
+				u.shadow.second_blur_factor.clamp(0.0, 1.0),
+				u.shadow.second_normal_strength_factor.clamp(0.0, 1.0),
+				u.shadow.second_receive_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 0.0]);
+	let shadow3_color = liltoon_like.map(|u| u.shadow.third_color_factor).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let shadow3_params = liltoon_like
+		.map(|u| {
+			[
+				u.shadow.third_border_factor.clamp(0.0, 1.0),
+				u.shadow.third_blur_factor.clamp(0.0, 1.0),
+				u.shadow.third_normal_strength_factor.clamp(0.0, 1.0),
+				u.shadow.third_receive_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or(mtoon.matcap_factor);
 	let matcap_params = liltoon_like
 		.map(|u| {
@@ -1121,6 +1179,25 @@ fn mesh_draw_material_gpu(
 				0.0,
 			]
 		})
+		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let matcap2_factor = liltoon_like.map(|u| u.matcap.second_color_factor).unwrap_or([1.0, 1.0, 1.0, 0.0]);
+	let matcap2_params = liltoon_like
+		.map(|u| {
+			[
+				(u.matcap.second_enabled_factor * u.matcap.second_blend_factor).clamp(0.0, 1.0),
+				u.matcap.second_main_strength_factor.clamp(0.0, 1.0),
+				u.matcap.second_enable_lighting_factor.clamp(0.0, 1.0),
+				match u.matcap.second_blend_mode {
+					un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
+				},
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap2_ext_params = liltoon_like
+		.map(|u| [u.matcap.second_normal_strength_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_control = liltoon_like
@@ -1255,6 +1332,10 @@ fn mesh_draw_material_gpu(
 		shadow_params,
 		shadow_ext_params,
 		shadow_border_color,
+		shadow2_color,
+		shadow2_params,
+		shadow3_color,
+		shadow3_params,
 		matcap_factor: [
 			matcap_color[0],
 			matcap_color[1],
@@ -1263,6 +1344,9 @@ fn mesh_draw_material_gpu(
 		],
 		matcap_params,
 		matcap_ext_params,
+		matcap2_factor,
+		matcap2_params,
+		matcap2_ext_params,
 		reflection_color,
 		reflection_control,
 		reflection_params,
@@ -1281,13 +1365,15 @@ fn mesh_draw_material_gpu(
 		rim_shade_params,
 		emission_color,
 		emission_params,
-		outline_color: [outline_color[0], outline_color[1], outline_color[2], 0.0],
+		outline_color,
 		outline_params: [
 			outline_mode_gpu(outline_mode),
 			outline_width,
 			outline_lighting_mix,
 			if mtoon.transparent_with_z_write { 1.0 } else { 0.0 },
 		],
+		outline_lit_color,
+		outline_lit_params,
 		alpha_mask_params,
 		emissive_factor: [
 			mat.emissive_factor[0],

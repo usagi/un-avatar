@@ -242,7 +242,39 @@ Status legend:
 - `[~]` `_ShadowNormalStrength`
   - done: source raw params を保持し、1st shadow の `NdotL` に使う normal を geometry normal と normal-mapped normal の補間に接続する。
   - remaining: 2nd/3rd shadow normal strength、backface behavior、normal map scale との順序を本家へ合わせる。
-- `[defer]` 2nd / 3rd shadow layers: after first shadow is validated
+- `[~]` 2nd / 3rd shadow layers
+  - done: 2nd / 3rd shadow color、border、blur、normal strength の raw params を保持し、1st shadow branch へ近似接続した。
+  - remaining: 本家 `lilGetShading` の layer ordering、mask texture、feature gate、3rd shadow color alpha semantics を Unity reference で検証する。
+- `[~]` `_Shadow2ndColor`
+  - done: source raw color params を保持し、alpha を strength として 1st shadow の indirect color を 2nd shadow color へ寄せる近似へ接続した。
+  - remaining: `_UseShadow2nd` 相当の feature gate、texture alpha blend、2nd shadow color texture、3rd shadow との本家合成順を検証する。
+- `[~]` `_Shadow2ndBorder`
+  - done: source raw params を保持し、2nd shadow toon threshold へ接続した。
+  - remaining: 本家 `lilGetShading` の 1st / 2nd threshold 関係と mask 合成を照合する。
+- `[~]` `_Shadow2ndBlur`
+  - done: source raw params を保持し、2nd shadow toon blur へ接続した。
+  - remaining: mask、anti-alias strength、3rd shadow との関係を本家へ合わせる。
+- `[~]` `_Shadow2ndNormalStrength`
+  - done: source raw params を保持し、2nd shadow NdotL 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: 2nd normal map、backface behavior、normal map scale との順序を本家へ合わせる。
+- `[~]` `_Shadow2ndReceive`
+  - done: source raw params を保持する。
+  - remaining: Unity/lilToon の shadow attenuation 相当入力を UNAvatar lighting に追加して 2nd shadow receive へ接続する。
+- `[~]` `_Shadow3rdColor`
+  - done: source raw color params を保持し、alpha を strength として 2nd shadow 後の indirect color を 3rd shadow color へ寄せる近似へ接続した。
+  - remaining: `_UseShadow3rd` 相当の feature gate、texture alpha blend、2nd shadow との順序を本家へ合わせる。
+- `[~]` `_Shadow3rdBorder`
+  - done: source raw params を保持し、3rd shadow toon threshold へ接続した。
+  - remaining: 本家 `lilGetShading` の 2nd / 3rd threshold 関係と mask 合成を照合する。
+- `[~]` `_Shadow3rdBlur`
+  - done: source raw params を保持し、3rd shadow toon blur へ接続した。
+  - remaining: mask、anti-alias strength、3rd shadow color alpha の扱いを本家へ合わせる。
+- `[~]` `_Shadow3rdNormalStrength`
+  - done: source raw params を保持し、3rd shadow NdotL 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: 2nd normal map、backface behavior、normal map scale との順序を本家へ合わせる。
+- `[~]` `_Shadow3rdReceive`
+  - done: source raw params を保持する。
+  - remaining: Unity/lilToon の shadow attenuation 相当入力を UNAvatar lighting に追加して 3rd shadow receive へ接続する。
 - `[defer]` shadow AO masks: after base shadow model is stable
 
 ### Normal / Geometry Basis
@@ -290,7 +322,9 @@ Status legend:
 - `[~]` `_MatCapBlendMask`
   - done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
   - remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
-- `[defer]` 2nd MatCap: after 1st MatCap matches basic samples
+- `[~]` 2nd MatCap
+  - done: `_UseMatCap2nd`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength` を保持し、texture なし近似の 2nd MatCap contribution へ接続した。
+  - remaining: `_MatCap2ndTex` / `_MatCap2ndBlendMask` の texture binding、VR parallax、Z rotation cancel、1st MatCap との本家合成順を実装する。
 
 ### Reflection / Specular
 
@@ -422,7 +456,10 @@ Status legend:
   - remaining: screen/world mode、camera distance scaling を本家の単位系に合わせる。
 - `[~]` `_OutlineColor`
   - done: outline color factor として保持し、v2 authored outline color に接続する。
-  - remaining: `_OutlineTex`、`_OutlineLitColor`、alpha、lighting mix との合成を本家に合わせる。
+  - remaining: `_OutlineTex`、alpha、lighting mix との合成を本家に合わせる。
+- `[~]` `_OutlineLitColor`
+  - done: source raw color params を保持し、alpha がある場合は outline NdotL / `_OutlineLitScale` / `_OutlineLitOffset` による lit outline color への補間へ接続した。
+  - remaining: view-space outline NdotL、`_OutlineLitShadowReceive` の shadow attenuation、`_OutlineLitApplyTex` の texture source を本家へ合わせる。
 - `[~]` `_OutlineTex`
   - done: Exporter / importer / v2 material で texture reference を保持する。
   - remaining: outline fragment shader で color texture として sample する。
@@ -434,7 +471,7 @@ Status legend:
   - remaining: shader 側の fixed-width outline 計算へ接続する。
 - `[~]` `_OutlineEnableLighting`
   - done: v2 material parameter として保持し、既存 outline lighting mix に接続する。
-  - remaining: `_OutlineLitColor` / `_OutlineColor` との本家合成順に合わせる。
+  - remaining: `_OutlineLitColor` / `_OutlineColor` との本家合成順を Unity reference で検証する。
 - `[~]` `_OutlineZBias`
   - done: v2 material parameter として保持する。
   - remaining: outline depth bias / clip-space offset へ接続する。

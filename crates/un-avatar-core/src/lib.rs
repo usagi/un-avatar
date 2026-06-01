@@ -550,6 +550,26 @@ pub struct UnaLilToonLikeShadow {
 	pub normal_strength_factor: f32,
 	#[serde(default)]
 	pub receive_factor: f32,
+	#[serde(default)]
+	pub second_color_factor: [f32; 4],
+	#[serde(default)]
+	pub second_border_factor: f32,
+	#[serde(default)]
+	pub second_blur_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_normal_strength_factor: f32,
+	#[serde(default)]
+	pub second_receive_factor: f32,
+	#[serde(default)]
+	pub third_color_factor: [f32; 4],
+	#[serde(default)]
+	pub third_border_factor: f32,
+	#[serde(default)]
+	pub third_blur_factor: f32,
+	#[serde(default = "one_f32")]
+	pub third_normal_strength_factor: f32,
+	#[serde(default)]
+	pub third_receive_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -574,6 +594,20 @@ pub struct UnaLilToonLikeMatcap {
 	pub normal_strength_factor: f32,
 	#[serde(default)]
 	pub shadow_mask_factor: f32,
+	#[serde(default)]
+	pub second_enabled_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub second_color_factor: [f32; 4],
+	#[serde(default)]
+	pub second_main_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_blend_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_enable_lighting_factor: f32,
+	#[serde(default)]
+	pub second_blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default = "one_f32")]
+	pub second_normal_strength_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -672,6 +706,8 @@ pub struct UnaLilToonLikeOutline {
 	pub enabled_factor: f32,
 	#[serde(default)]
 	pub color_factor: [f32; 4],
+	#[serde(default)]
+	pub lit_color_factor: [f32; 4],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -682,6 +718,14 @@ pub struct UnaLilToonLikeOutline {
 	pub fix_width_factor: f32,
 	#[serde(default = "one_f32")]
 	pub enable_lighting_factor: f32,
+	#[serde(default)]
+	pub lit_scale_factor: f32,
+	#[serde(default)]
+	pub lit_offset_factor: f32,
+	#[serde(default)]
+	pub lit_apply_tex_factor: f32,
+	#[serde(default)]
+	pub lit_shadow_receive_factor: f32,
 	#[serde(default)]
 	pub z_bias_factor: f32,
 }
@@ -736,6 +780,16 @@ impl Default for UnaLilToonLikeShadow {
 			border_color_factor: default_liltoon_shadow_border_color(),
 			normal_strength_factor: 1.0,
 			receive_factor: 0.0,
+			second_color_factor: [0.0, 0.0, 0.0, 0.0],
+			second_border_factor: 0.0,
+			second_blur_factor: 0.0,
+			second_normal_strength_factor: 1.0,
+			second_receive_factor: 0.0,
+			third_color_factor: [0.0, 0.0, 0.0, 0.0],
+			third_border_factor: 0.0,
+			third_blur_factor: 0.0,
+			third_normal_strength_factor: 1.0,
+			third_receive_factor: 0.0,
 		}
 	}
 }
@@ -753,6 +807,13 @@ impl Default for UnaLilToonLikeMatcap {
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			normal_strength_factor: 1.0,
 			shadow_mask_factor: 0.0,
+			second_enabled_factor: 0.0,
+			second_color_factor: [1.0, 1.0, 1.0, 1.0],
+			second_main_strength_factor: 0.0,
+			second_blend_factor: 1.0,
+			second_enable_lighting_factor: 1.0,
+			second_blend_mode: UnaLilToonLikeBlendMode::default(),
+			second_normal_strength_factor: 1.0,
 		}
 	}
 }
@@ -822,11 +883,16 @@ impl Default for UnaLilToonLikeOutline {
 		Self {
 			enabled_factor: 0.0,
 			color_factor: [0.6, 0.56, 0.73, 1.0],
+			lit_color_factor: [1.0, 0.2, 0.0, 0.0],
 			texture_index: None,
 			width_mask_texture_index: None,
 			width_factor: 0.0,
 			fix_width_factor: default_liltoon_outline_fix_width(),
 			enable_lighting_factor: 1.0,
+			lit_scale_factor: 10.0,
+			lit_offset_factor: -8.0,
+			lit_apply_tex_factor: 0.0,
+			lit_shadow_receive_factor: 0.0,
 			z_bias_factor: 0.0,
 		}
 	}

@@ -26,9 +26,16 @@ struct DrawMaterial {
 	shadow_params: vec4<f32>,
 	shadow_ext_params: vec4<f32>,
 	shadow_border_color: vec4<f32>,
+	shadow2_color: vec4<f32>,
+	shadow2_params: vec4<f32>,
+	shadow3_color: vec4<f32>,
+	shadow3_params: vec4<f32>,
 	matcap_factor: vec4<f32>,
 	matcap_params: vec4<f32>,
 	matcap_ext_params: vec4<f32>,
+	matcap2_factor: vec4<f32>,
+	matcap2_params: vec4<f32>,
+	matcap2_ext_params: vec4<f32>,
 	reflection_color: vec4<f32>,
 	reflection_control: vec4<f32>,
 	reflection_params: vec4<f32>,
@@ -44,6 +51,8 @@ struct DrawMaterial {
 	emission_params: vec4<f32>,
 	outline_color: vec4<f32>,
 	outline_params: vec4<f32>,
+	outline_lit_color: vec4<f32>,
+	outline_lit_params: vec4<f32>,
 	alpha_mask_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
@@ -475,6 +484,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
 	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
+	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
+	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 
@@ -511,6 +522,24 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		let light_color = frame.light_color.rgb * frame.light_color.w;
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
+		let shadow2_value = dot(shadow2_n, l) * 0.5 + 0.5;
+		let shadow2 = lil_tooning_scale_range(
+			shadow2_value,
+			clamp(drawu.shadow2_params.x, 0.0, 1.0),
+			clamp(drawu.shadow2_params.y, 0.0, 1.0),
+			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+		);
+		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
+		indirect_col = mix(indirect_col, drawu.shadow2_color.rgb * light_color, shadow2_strength);
+		let shadow3_value = dot(shadow3_n, l) * 0.5 + 0.5;
+		let shadow3 = lil_tooning_scale_range(
+			shadow3_value,
+			clamp(drawu.shadow3_params.x, 0.0, 1.0),
+			clamp(drawu.shadow3_params.y, 0.0, 1.0),
+			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+		);
+		let shadow3_strength = clamp((1.0 - shadow3) * drawu.shadow3_color.a, 0.0, 1.0);
+		indirect_col = mix(indirect_col, drawu.shadow3_color.rgb * light_color, shadow3_strength);
 		indirect_col = mix(indirect_col, indirect_col * base, clamp(drawu.shadow_ext_params.y, 0.0, 1.0));
 		indirect_col = mix(
 			indirect_col,
@@ -553,6 +582,19 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
 		} else {
 			lit = lit + matcap_raw * drawu.matcap_factor.w;
+		}
+		if (drawu.matcap2_params.x > 0.0) {
+			let matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+			let matcap2_lighting = mix(
+				vec3<f32>(1.0, 1.0, 1.0),
+				frame.light_color.rgb * frame.light_color.w,
+				clamp(drawu.matcap2_params.z, 0.0, 1.0),
+			);
+			let matcap2_view = clamp(dot(matcap2_n, v) * 0.5 + 0.5, 0.0, 1.0);
+			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_lighting * matcap2_view;
+			let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
+			let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a, 0.0, 1.0);
+			lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 		}
 	}
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
@@ -667,8 +709,12 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 	let n = normalize(i.wn);
 	let l = normalize(frame.light_dir.xyz);
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
-	let color = drawu.outline_color.rgb * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.outline_params.z, 0.0, 1.0));
-	return vec4<f32>(color, 1.0);
+	let lit_base = drawu.outline_color.rgb * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.outline_params.z, 0.0, 1.0));
+	let outline_ndotl = dot(n, l) * 0.5 + 0.5;
+	let lit_factor = clamp(outline_ndotl * drawu.outline_lit_params.x + drawu.outline_lit_params.y, 0.0, 1.0) * clamp(drawu.outline_lit_color.a, 0.0, 1.0);
+	let lit_color = mix(drawu.outline_lit_color.rgb, samp_tex.rgb * drawu.outline_lit_color.rgb, clamp(drawu.outline_lit_params.z, 0.0, 1.0));
+	let color = mix(lit_base, lit_color, lit_factor);
+	return vec4<f32>(color, clamp(drawu.outline_color.a, 0.0, 1.0));
 }
 
 @fragment
