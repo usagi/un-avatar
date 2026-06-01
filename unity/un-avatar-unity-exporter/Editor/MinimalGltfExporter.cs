@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -313,11 +312,21 @@ namespace UNAvatar.UnityExporter
                 {
                     gltfMesh["extras"] = new Dictionary<string, object>
                     {
-                        ["targetNames"] = morphTargets.Select(target => (object)target.Name).ToList()
+                        ["targetNames"] = MorphTargetNames(morphTargets)
                     };
                 }
                 meshes.Add(gltfMesh);
                 return meshes.Count - 1;
+            }
+
+            private static List<object> MorphTargetNames(List<MorphTargetData> morphTargets)
+            {
+                var names = new List<object>(morphTargets.Count);
+                foreach (var target in morphTargets)
+                {
+                    names.Add(target.Name);
+                }
+                return names;
             }
 
             private static Vector3 UnityVectorToGltf(Vector3 value)
@@ -614,7 +623,12 @@ namespace UNAvatar.UnityExporter
 
             private static List<object> FloatArray(params float[] values)
             {
-                return values.Select(v => (object)v).ToList();
+                var result = new List<object>(values.Length);
+                foreach (var value in values)
+                {
+                    result.Add(value);
+                }
+                return result;
             }
 
             private static byte[] Pad(byte[] data, byte value)
