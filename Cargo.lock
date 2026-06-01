@@ -6876,6 +6876,7 @@ dependencies = [
  "half",
  "image",
  "memory-stats",
+ "naga",
  "pic-scale",
  "pollster",
  "serde",

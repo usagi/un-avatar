@@ -73,5 +73,8 @@ spout-rs = { version = "0.1.3", optional = true }
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+[dev-dependencies]
+naga = { version = "29.0.3", features = ["wgsl-in"] }
+
 [lints]
 workspace = true

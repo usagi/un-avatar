@@ -11,6 +11,8 @@ mod model_loader;
 mod options;
 mod post_process;
 mod scene_transform;
+#[cfg(test)]
+mod shader_validation;
 mod skin_tone;
 #[cfg(windows)]
 mod spout;
