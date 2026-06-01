@@ -1871,25 +1871,33 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
+            var previewBounds = CalculateWardrobePreviewBounds();
+
+            basePreviewImages = CapturePreviewImagesForState("base", null, previewBounds);
+            for (var i = 0; i < capturedWardrobeSets.Count; i++)
+            {
+                capturedWardrobeSets[i].previewImages = CapturePreviewImagesForState(capturedWardrobeSets[i].id, capturedWardrobeSets[i], previewBounds);
+            }
+        }
+
+        private List<WardrobePreviewImageDraft> CapturePreviewImagesForState(string label, WardrobeSetDraft set, Bounds previewBounds)
+        {
             GameObject previewClone = null;
             try
             {
-                previewClone = Instantiate(avatarRoot);
-                previewClone.name = avatarRoot.name + " (UNAvatar Preview Capture)";
-                previewClone.hideFlags = HideFlags.HideAndDontSave;
-                previewClone.SetActive(true);
-
-                var previewBounds = CalculateWardrobePreviewBounds(previewClone);
-
-                ApplyPreviewBaseStateToRoot(previewClone);
-                basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
-                AssignPreviewStateDigest(basePreviewImages, "base", previewClone);
-                for (var i = 0; i < capturedWardrobeSets.Count; i++)
+                previewClone = CreateWardrobePreviewClone(label);
+                if (set == null)
                 {
-                    ApplyPreviewWardrobeSetToRoot(previewClone, capturedWardrobeSets[i]);
-                    capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
-                    AssignPreviewStateDigest(capturedWardrobeSets[i].previewImages, capturedWardrobeSets[i].id, previewClone);
+                    ApplyPreviewBaseStateToRoot(previewClone);
                 }
+                else
+                {
+                    ApplyPreviewWardrobeSetToRoot(previewClone, set);
+                }
+                PrepareWardrobePreviewRenderers(previewClone);
+                var previews = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
+                AssignPreviewStateDigest(previews, label, previewClone);
+                return previews;
             }
             finally
             {
@@ -1897,6 +1905,24 @@ namespace UNAvatar.UnityExporter
                 {
                     DestroyImmediate(previewClone);
                 }
+            }
+        }
+
+        private GameObject CreateWardrobePreviewClone(string label)
+        {
+            var previewClone = Instantiate(avatarRoot);
+            previewClone.name = avatarRoot.name + " (UNAvatar Preview Capture " + (label ?? "state") + ")";
+            previewClone.hideFlags = HideFlags.HideAndDontSave;
+            previewClone.SetActive(true);
+            return previewClone;
+        }
+
+        private static void PrepareWardrobePreviewRenderers(GameObject root)
+        {
+            foreach (var skinned in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                skinned.updateWhenOffscreen = true;
+                skinned.forceMatrixRecalculationPerRender = true;
             }
         }
 
@@ -1947,14 +1973,12 @@ namespace UNAvatar.UnityExporter
             }
         }
 
-        private Bounds CalculateWardrobePreviewBounds(GameObject previewRoot)
+        private Bounds CalculateWardrobePreviewBounds()
         {
-            ApplyPreviewBaseStateToRoot(previewRoot);
-            var bounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
+            var bounds = CalculateWardrobePreviewBoundsForState(null);
             foreach (var set in capturedWardrobeSets)
             {
-                ApplyPreviewWardrobeSetToRoot(previewRoot, set);
-                var setBounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
+                var setBounds = CalculateWardrobePreviewBoundsForState(set);
                 if (bounds.size == Vector3.zero)
                 {
                     bounds = setBounds;
@@ -1965,6 +1989,32 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return bounds;
+        }
+
+        private Bounds CalculateWardrobePreviewBoundsForState(WardrobeSetDraft set)
+        {
+            GameObject previewClone = null;
+            try
+            {
+                previewClone = CreateWardrobePreviewClone(set != null ? set.id : "base-bounds");
+                if (set == null)
+                {
+                    ApplyPreviewBaseStateToRoot(previewClone);
+                }
+                else
+                {
+                    ApplyPreviewWardrobeSetToRoot(previewClone, set);
+                }
+                PrepareWardrobePreviewRenderers(previewClone);
+                return WardrobePreviewCapture.CalculateVisibleBounds(previewClone);
+            }
+            finally
+            {
+                if (previewClone != null)
+                {
+                    DestroyImmediate(previewClone);
+                }
+            }
         }
 
         private void ApplyPreviewBaseStateToRoot(GameObject root)
