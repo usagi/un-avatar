@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, collections::BTreeMap};
 
-use glam::{Mat4, Vec4};
+use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
 	UnaAlphaMode, UnaExpressionCatalog, UnaExpressionWeights, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode,
@@ -422,6 +422,7 @@ struct MeshDraw {
 	mtoon: UnaMtoonMaterial,
 	mesh_index: usize,
 	primitive_index: usize,
+	world_origin: Vec3,
 }
 
 #[derive(Default)]
@@ -441,6 +442,31 @@ fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingM
 
 fn group_draw_indices_by_skin_palette(draws: &[MeshDraw], draw_indices: &mut [usize]) {
 	draw_indices.sort_by_key(|&draw_index| draws[draw_index].skin_palette_index);
+}
+
+fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
+	match shading {
+		UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
+		UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
+		UnaShadingModel::MToonLike => DrawPipelineKind::BlendMtoon,
+	}
+}
+
+fn sorted_blended_batches(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, camera_pos: Vec3) -> Vec<DrawBatch> {
+	let batch_capacity = (draws.len() / 10).max(1);
+	let mut ordered: Vec<(usize, f32)> = draws
+		.iter()
+		.enumerate()
+		.filter(|(_, draw)| draw.alpha_mode == UnaAlphaMode::Blend)
+		.map(|(draw_index, draw)| (draw_index, draw.world_origin.distance_squared(camera_pos)))
+		.collect();
+	ordered.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+	let mut batches = Vec::new();
+	for (draw_index, _) in ordered {
+		let shading = effective_mesh_shading(&draws[draw_index], opts);
+		append_ordered_draw_batch(&mut batches, blend_pipeline_for_shading(shading), draw_index, batch_capacity);
+	}
+	batches
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
@@ -479,12 +505,12 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 				append_ordered_draw_batch(&mut blended_batches, DrawPipelineKind::BlendMtoon, draw_index, batch_capacity);
 			}
 			UnaAlphaMode::Blend => {
-				let pipeline = match shading {
-					UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
-					UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
-					UnaShadingModel::MToonLike => DrawPipelineKind::BlendMtoon,
-				};
-				append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
+				append_ordered_draw_batch(
+					&mut blended_batches,
+					blend_pipeline_for_shading(shading),
+					draw_index,
+					batch_capacity,
+				);
 			}
 		}
 	}
@@ -2029,6 +2055,7 @@ impl SceneMeshes {
 					mtoon,
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
+					world_origin: Vec3::ZERO,
 				});
 			}
 		}
@@ -2106,6 +2133,9 @@ impl SceneMeshes {
 		light_color: Vec4,
 		ambient_color: Vec4,
 	) {
+		if !self.blended_batches.is_empty() {
+			self.blended_batches = sorted_blended_batches(&self.draws, &self.opts, camera_pos.truncate());
+		}
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
 			light_dir: light_dir.to_array(),
@@ -2281,6 +2311,7 @@ impl SceneMeshes {
 
 		for d in &mut self.draws {
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
+			d.world_origin = mesh_world.transform_point3(Vec3::ZERO);
 
 			if !d.morph_pos.is_empty() {
 				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
