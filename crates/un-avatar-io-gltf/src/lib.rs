@@ -794,6 +794,86 @@ fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_
 	set.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)
 }
 
+fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
+	let path = normalize_unavatar_path(path);
+	let ancestor = normalize_unavatar_path(ancestor);
+	!ancestor.is_empty() && (path == ancestor || path.starts_with(&format!("{ancestor}/")))
+}
+
+fn unavatar_base_hidden_subtree_paths(unavatar: &UnaUnavatarExtension) -> Vec<String> {
+	let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) else {
+		return Vec::new();
+	};
+	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
+	let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) else {
+		return Vec::new();
+	};
+	let Some(base) = sets.iter().find(|set| {
+		set.get("id").and_then(|v| v.as_str()) == Some(base_set) || set.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
+	}) else {
+		return Vec::new();
+	};
+	base.get("operations")
+		.and_then(|v| v.as_array())
+		.map(|operations| {
+			operations
+				.iter()
+				.filter_map(|op| {
+					let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
+					let is_visibility = matches!(
+						ty,
+						"subtreeEnabled"
+							| "subtreeVisibility" | "nodeEnabled"
+							| "nodeVisibility" | "rendererEnabled"
+							| "rendererVisibility"
+					);
+					let hidden = op.get("visible").and_then(|v| v.as_bool()) == Some(false);
+					let path = operation_target_path(op);
+					(is_visibility && hidden && !path.is_empty()).then(|| path.to_owned())
+				})
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+fn current_state_operation_is_inherited_hidden_under_base(
+	op: &Value,
+	base_hidden_paths: &[String],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	paths_by_index: &[Option<String>],
+) -> bool {
+	let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
+	if !matches!(
+		ty,
+		"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
+	) || op.get("visible").and_then(|v| v.as_bool()) != Some(false)
+	{
+		return false;
+	}
+	let path = operation_target_path(op);
+	if path.is_empty()
+		|| !base_hidden_paths
+			.iter()
+			.any(|hidden| unavatar_path_is_same_or_descendant(path, hidden))
+	{
+		return false;
+	}
+	let resolved = lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op);
+	if resolved.is_empty() {
+		return true;
+	}
+	resolved.iter().all(|idx| {
+		paths_by_index.get(*idx).and_then(|p| p.as_deref()).is_some_and(|resolved_path| {
+			base_hidden_paths
+				.iter()
+				.any(|hidden| unavatar_path_is_same_or_descendant(resolved_path, hidden))
+		})
+	})
+}
+
 fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some(variants) = unavatar.source.get("variants").and_then(|v| v.as_array()) else {
 		return;
@@ -807,10 +887,37 @@ fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: 
 	let Some(operations) = current_state.get("operations").and_then(|v| v.as_array()) else {
 		return;
 	};
-	let applied = apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar));
+	let base_hidden_paths = unavatar_base_hidden_subtree_paths(unavatar);
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut paths_by_index = vec![None; scene.nodes.len()];
+	for (path, idx) in &paths {
+		if let Some(slot) = paths_by_index.get_mut(*idx) {
+			*slot = Some(path.clone());
+		}
+	}
+	let filtered_operations: Vec<Value> = operations
+		.iter()
+		.filter(|op| {
+			!current_state_operation_is_inherited_hidden_under_base(
+				op,
+				&base_hidden_paths,
+				&node_ids,
+				&registry_paths,
+				&paths,
+				&normalized_paths,
+				&paths_by_index,
+			)
+		})
+		.cloned()
+		.collect();
+	let skipped = operations.len().saturating_sub(filtered_operations.len());
+	let applied = apply_unavatar_wardrobe_operations(scene, &filtered_operations, Some(unavatar));
 	report.push_info(format!(
-		".unavatar unity active state: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
-		applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
+		".unavatar unity active state: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, inherited_hidden_skipped={}",
+		applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing, skipped
 	));
 	if !applied.missing_visibility_paths.is_empty() {
 		report.push_info(format!(
@@ -1973,6 +2080,10 @@ mod tests {
 							"op": "nodeEnabled",
 							"path": "UnityInactive",
 							"visible": false
+						}, {
+							"op": "nodeEnabled",
+							"path": "Hidden/HiddenChild",
+							"visible": false
 						}]
 					}],
 					"humanoid": {
@@ -1991,6 +2102,11 @@ mod tests {
 								{
 									"type": "subtreeEnabled",
 									"target": {"nodeId": "node_hidden_child", "path": "Wrong Path"},
+									"visible": false
+								},
+								{
+									"type": "subtreeEnabled",
+									"target": {"path": "Hidden"},
 									"visible": false
 								},
 								{
@@ -2054,6 +2170,12 @@ mod tests {
 		let humanoid = got.document.humanoid_profile.as_ref().expect("humanoid profile");
 		assert_eq!(humanoid.bone_node_indices.get("hips"), Some(&1));
 		assert!(got.report.messages.iter().any(|m| m.contains("UN_avatar specVersion=0.1-preview")));
+		assert!(got
+			.report
+			.messages
+			.iter()
+			.any(|m| m.contains(".unavatar unity active state: visibility_applied=1")));
+		assert!(got.report.messages.iter().any(|m| m.contains("inherited_hidden_skipped=1")));
 		assert!(got
 			.report
 			.messages
