@@ -5,7 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
@@ -909,6 +909,17 @@ pub struct WardrobeApplyReport {
 	pub missing_blendshapes: Vec<String>,
 }
 
+fn collect_node_subtree_indices(scene: &UnaSceneSnapshot, idx: usize, out: &mut BTreeSet<usize>) {
+	if !out.insert(idx) {
+		return;
+	}
+	if let Some(node) = scene.nodes.get(idx) {
+		for &child in &node.children {
+			collect_node_subtree_indices(scene, child, out);
+		}
+	}
+}
+
 fn apply_unavatar_wardrobe_operations(
 	scene: &mut UnaSceneSnapshot,
 	operations: &[Value],
@@ -929,7 +940,16 @@ fn apply_unavatar_wardrobe_operations(
 				};
 				let indices = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
 				if !indices.is_empty() {
+					let apply_subtree = matches!(ty, "subtreeEnabled" | "subtreeVisibility");
+					let mut targets = BTreeSet::new();
 					for idx in indices {
+						if apply_subtree {
+							collect_node_subtree_indices(scene, idx, &mut targets);
+						} else {
+							targets.insert(idx);
+						}
+					}
+					for idx in targets {
 						if let Some(node) = scene.nodes.get_mut(idx) {
 							node.visible = visible;
 						}
@@ -2639,7 +2659,7 @@ mod tests {
 		assert_eq!(applied.blendshape_missing, 0);
 		let scene = got.document.scene.as_ref().unwrap();
 		assert!(scene.nodes[1].visible);
-		assert!(!scene.nodes[3].visible);
+		assert!(scene.nodes[3].visible);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
 		let humanoid = got.document.humanoid_profile.as_ref().expect("humanoid profile");
 		assert_eq!(humanoid.bone_node_indices.get("hips"), Some(&1));

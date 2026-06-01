@@ -412,14 +412,14 @@ wardrobe set の適用順。
 
 1. `.unavatar` の base state を適用する。
 2. 選択された `wardrobe.sets[].operations` を上から順に適用する。
-3. `subtreeEnabled` / `nodeEnabled` は Unity の Inspector チェックボックス相当の local enabled state を変更する。実効可視は親 node の local enabled state を継承して Runtime が計算する。
+3. `subtreeEnabled` は対象 node と子孫全体の enabled state を変更する。`nodeEnabled` は対象 node だけを変更する。実効可視は親 node の local enabled state を継承して Runtime が計算する。
 4. 同じ具体度なら後勝ち。
 5. Supervisor profile 側のユーザー override は `.unavatar` 内蔵 set より後に適用する。
 
 この規則により、`Color 1` 全体を ON にしつつ `Color 1/Armature.1` だけ OFF にできる。
 
 Unity Exporter の preview 実装では、wardrobe operations は bake 後 snapshot から再生成しない。`base` も non-base set も Unity 上で capture した authored state / diff を正本にする。Modular Avatar bake は export mesh を整える処理であり、wardrobe の意味論を上書きする正本ではない。
-Exporter は `activeInHierarchy` ではなく `activeSelf` を capture する。親が OFF のため実効的に見えていない子でも、子自身の Inspector チェックボックス状態は維持する必要があるためである。Base operations は親 OFF 配下の子 OFF を「冗長」として圧縮しない。後から wardrobe set が親を ON にしたとき、子の local OFF が失われると `Pants` / `Skirt` のような相互排他部品が同時に表示される。
+Exporter は `activeInHierarchy` ではなく `activeSelf` を capture する。親が OFF のため実効的に見えていない子でも、子自身の Inspector チェックボックス状態は維持する必要があるためである。特定の子だけを落としたい場合は、親を `subtreeEnabled=true` した後に、その子へ `nodeEnabled=false` または `subtreeEnabled=false` を置く。
 
 ### Asset Groups And Lazy Loading
 
