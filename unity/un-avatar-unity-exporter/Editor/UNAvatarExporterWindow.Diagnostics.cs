@@ -349,9 +349,10 @@ namespace UNAvatar.UnityExporter
 
             if (avatarRoot != null)
             {
-                validation.RendererCount = avatarRoot.GetComponentsInChildren<Renderer>(true).Length;
-                validation.SkinnedMeshRendererCount = avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true).Length;
-                validation.MaterialCount = avatarRoot.GetComponentsInChildren<Renderer>(true)
+                var renderers = avatarRoot.GetComponentsInChildren<Renderer>(true);
+                validation.RendererCount = renderers.Length;
+                validation.SkinnedMeshRendererCount = renderers.Count(renderer => renderer is SkinnedMeshRenderer);
+                validation.MaterialCount = renderers
                     .SelectMany(r => r.sharedMaterials)
                     .Where(m => m != null)
                     .Distinct()
