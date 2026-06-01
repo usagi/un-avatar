@@ -263,6 +263,7 @@ struct MeshDrawMaterialGpu {
 	outline_params: [f32; 4],
 	outline_lit_color: [f32; 4],
 	outline_lit_params: [f32; 4],
+	outline_ext_params: [f32; 4],
 	alpha_mask_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
@@ -279,7 +280,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 672);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 688);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1269,6 +1270,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let outline_ext_params = liltoon_like
+		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let rim_color_factor = liltoon_like.map(|u| u.rim.color_factor);
 	let rim_color_gpu = rim_color_factor.unwrap_or([rim_color[0], rim_color[1], rim_color[2], 1.0]);
 	let rim_params = liltoon_like
@@ -1420,6 +1424,7 @@ fn mesh_draw_material_gpu(
 		],
 		outline_lit_color,
 		outline_lit_params,
+		outline_ext_params,
 		alpha_mask_params,
 		emissive_factor: [
 			mat.emissive_factor[0],

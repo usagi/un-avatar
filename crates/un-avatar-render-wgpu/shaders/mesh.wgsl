@@ -57,6 +57,7 @@ struct DrawMaterial {
 	outline_params: vec4<f32>,
 	outline_lit_color: vec4<f32>,
 	outline_lit_params: vec4<f32>,
+	outline_ext_params: vec4<f32>,
 	alpha_mask_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
@@ -214,6 +215,7 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask;
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;
+	o.clip.z = o.clip.z + drawu.outline_ext_params.y * o.clip.w;
 	return o;
 }
 

@@ -514,8 +514,8 @@ Status legend:
   - done: v2 material parameter として保持し、既存 outline lighting mix に接続する。
   - remaining: `_OutlineLitColor` / `_OutlineColor` との本家合成順を Unity reference で検証する。
 - `[~]` `_OutlineZBias`
-  - done: v2 material parameter として保持する。
-  - remaining: outline depth bias / clip-space offset へ接続する。
+  - done: v2 material parameter として保持し、outline vertex shader の clip-space depth bias へ接続する。
+  - remaining: Unity/lilToon の offset 符号・係数・near/far 依存を reference で検証する。
 - `[defer]` outline validation: keep OFF during early lilToon-like material matching
 
 ### Advanced / Deferred
