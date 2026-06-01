@@ -1,11 +1,7 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Security.Cryptography;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -172,27 +168,48 @@ namespace UNAvatar.UnityExporter
 
         public static List<WardrobeOperationDraft> FilterInheritedHiddenOperations(IEnumerable<WardrobeOperationDraft> operations)
         {
-            var list = operations?
-                .Where(operation => operation != null)
-                .Select(CloneOperation)
-                .ToList() ?? new List<WardrobeOperationDraft>();
-            var hiddenPaths = list
-                .Where(IsVisibilityFalseOperation)
-                .Select(operation => operation.target != null ? operation.target.path : null)
-                .Where(path => !string.IsNullOrEmpty(path))
-                .Distinct()
-                .ToList();
+            var list = new List<WardrobeOperationDraft>();
+            if (operations != null)
+            {
+                foreach (var operation in operations)
+                {
+                    if (operation != null)
+                    {
+                        list.Add(CloneOperation(operation));
+                    }
+                }
+            }
+
+            var hiddenPaths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in list)
+            {
+                if (!IsVisibilityFalseOperation(operation) || operation.target == null)
+                {
+                    continue;
+                }
+                var path = NormalizePath(operation.target.path);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    hiddenPaths.Add(path);
+                }
+            }
             if (hiddenPaths.Count == 0)
             {
                 return list;
             }
 
-            return list
-                .Where(operation => !IsInheritedHiddenOperation(operation, hiddenPaths))
-                .ToList();
+            var filtered = new List<WardrobeOperationDraft>(list.Count);
+            foreach (var operation in list)
+            {
+                if (!IsInheritedHiddenOperation(operation, hiddenPaths))
+                {
+                    filtered.Add(operation);
+                }
+            }
+            return filtered;
         }
 
-        private static bool IsInheritedHiddenOperation(WardrobeOperationDraft operation, IReadOnlyList<string> hiddenPaths)
+        private static bool IsInheritedHiddenOperation(WardrobeOperationDraft operation, IEnumerable<string> hiddenPaths)
         {
             if (!IsVisibilityFalseOperation(operation) || operation.target == null || string.IsNullOrEmpty(operation.target.path))
             {
@@ -200,13 +217,16 @@ namespace UNAvatar.UnityExporter
             }
 
             var path = NormalizePath(operation.target.path);
-            return hiddenPaths.Any(hidden =>
+            foreach (var hiddenPath in hiddenPaths)
             {
-                var hiddenPath = NormalizePath(hidden);
-                return !string.IsNullOrEmpty(hiddenPath)
+                if (!string.IsNullOrEmpty(hiddenPath)
                     && hiddenPath != path
-                    && path.StartsWith(hiddenPath + "/", StringComparison.Ordinal);
-            });
+                    && path.StartsWith(hiddenPath + "/", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static bool IsVisibilityFalseOperation(WardrobeOperationDraft operation)
@@ -416,7 +436,8 @@ namespace UNAvatar.UnityExporter
             {
                 return;
             }
-            var top = path.Split('/')[0].Trim();
+            var separator = path.IndexOf('/');
+            var top = (separator >= 0 ? path.Substring(0, separator) : path).Trim();
             if (string.IsNullOrWhiteSpace(top))
             {
                 return;
@@ -467,7 +488,15 @@ namespace UNAvatar.UnityExporter
             {
                 return int.MaxValue;
             }
-            return operation.target.path.Count(c => c == '/');
+            var depth = 0;
+            foreach (var c in operation.target.path)
+            {
+                if (c == '/')
+                {
+                    depth++;
+                }
+            }
+            return depth;
         }
 
         private static bool IsAncestorOrSelf(string ancestorPath, string path)
@@ -482,7 +511,7 @@ namespace UNAvatar.UnityExporter
 
         private static Dictionary<string, T> ToFirstDictionary<T>(IEnumerable<T> values, Func<T, string> keySelector)
         {
-            var result = new Dictionary<string, T>();
+            var result = new Dictionary<string, T>(StringComparer.Ordinal);
             foreach (var value in values)
             {
                 var key = keySelector(value) ?? "";
