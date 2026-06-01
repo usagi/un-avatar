@@ -92,6 +92,9 @@ struct DiagnoseSceneSummary {
 	image_source_count: usize,
 	image_source_bytes: u64,
 	image_source_mime_counts: BTreeMap<String, usize>,
+	image_source_color_space_counts: BTreeMap<String, usize>,
+	image_source_texture_type_counts: BTreeMap<String, usize>,
+	image_source_texture_shape_counts: BTreeMap<String, usize>,
 	image_pixel_format_counts: BTreeMap<String, usize>,
 	non_rgba8_image_count: usize,
 	largest_image_sources: Vec<DiagnoseImageSourceSummary>,
@@ -165,6 +168,12 @@ struct DiagnoseImageSourceSummary {
 	channels: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	color_space: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	texture_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	texture_shape: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	srgb: Option<bool>,
 	byte_length: u64,
 	pixel_format: UnaImagePixelFormat,
 	width: u32,
@@ -1499,6 +1508,9 @@ fn build_diagnose_report(
 			warnings.push("VRM document has no MToonLike materials after import".to_string());
 		}
 		let mut image_source_mime_counts = BTreeMap::new();
+		let mut image_source_color_space_counts = BTreeMap::new();
+		let mut image_source_texture_type_counts = BTreeMap::new();
+		let mut image_source_texture_shape_counts = BTreeMap::new();
 		let mut image_pixel_format_counts = BTreeMap::new();
 		let mut image_source_count = 0usize;
 		let mut image_source_bytes = 0u64;
@@ -1514,6 +1526,9 @@ fn build_diagnose_report(
 					source_pixel_format: source.source_pixel_format.clone(),
 					channels: source.channels.clone(),
 					color_space: source.color_space.clone(),
+					texture_type: source.texture_type.clone(),
+					texture_shape: source.texture_shape.clone(),
+					srgb: source.srgb,
 					byte_length: source.byte_length,
 					pixel_format: image.pixel_format,
 					width: image.width,
@@ -1529,6 +1544,18 @@ fn build_diagnose_report(
 			bump_count(
 				&mut image_source_mime_counts,
 				source.mime_type.as_deref().unwrap_or("unknown").to_string(),
+			);
+			bump_count(
+				&mut image_source_color_space_counts,
+				source.color_space.as_deref().unwrap_or("unknown").to_string(),
+			);
+			bump_count(
+				&mut image_source_texture_type_counts,
+				source.texture_type.as_deref().unwrap_or("unknown").to_string(),
+			);
+			bump_count(
+				&mut image_source_texture_shape_counts,
+				source.texture_shape.as_deref().unwrap_or("unknown").to_string(),
 			);
 		}
 		let effective_visibility = scene_effective_visibility(sc);
@@ -1580,6 +1607,9 @@ fn build_diagnose_report(
 			image_source_count,
 			image_source_bytes,
 			image_source_mime_counts,
+			image_source_color_space_counts,
+			image_source_texture_type_counts,
+			image_source_texture_shape_counts,
 			image_pixel_format_counts,
 			non_rgba8_image_count: sc
 				.images
@@ -1612,6 +1642,9 @@ fn build_diagnose_report(
 			image_source_count: 0,
 			image_source_bytes: 0,
 			image_source_mime_counts: BTreeMap::new(),
+			image_source_color_space_counts: BTreeMap::new(),
+			image_source_texture_type_counts: BTreeMap::new(),
+			image_source_texture_shape_counts: BTreeMap::new(),
 			image_pixel_format_counts: BTreeMap::new(),
 			non_rgba8_image_count: 0,
 			largest_image_sources: Vec::new(),
@@ -1894,6 +1927,12 @@ fn run_diagnose(
 		report.scene.image_source_count, report.scene.image_count, report.scene.image_source_bytes, report.scene.image_source_mime_counts
 	);
 	println!(
+		"image_source_metadata: color_space {:?}, texture_type {:?}, texture_shape {:?}",
+		report.scene.image_source_color_space_counts,
+		report.scene.image_source_texture_type_counts,
+		report.scene.image_source_texture_shape_counts
+	);
+	println!(
 		"image_pixel_formats: {:?}, non_rgba8={}",
 		report.scene.image_pixel_format_counts, report.scene.non_rgba8_image_count
 	);
@@ -1901,7 +1940,7 @@ fn run_diagnose(
 		println!("largest_image_sources:");
 		for source in &report.scene.largest_image_sources {
 			println!(
-				"  image[{}]: {}x{} {:?} {} bytes mime={:?} source_format={:?} channels={:?} color_space={:?} name={:?} uri={:?}",
+				"  image[{}]: {}x{} {:?} {} bytes mime={:?} source_format={:?} channels={:?} color_space={:?} texture_type={:?} texture_shape={:?} srgb={:?} name={:?} uri={:?}",
 				source.index,
 				source.width,
 				source.height,
@@ -1911,6 +1950,9 @@ fn run_diagnose(
 				source.source_pixel_format,
 				source.channels,
 				source.color_space,
+				source.texture_type,
+				source.texture_shape,
+				source.srgb,
 				source.name,
 				source.uri
 			);
