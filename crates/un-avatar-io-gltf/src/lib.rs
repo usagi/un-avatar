@@ -1350,6 +1350,8 @@ fn unavatar_material_inferred_alpha_mode(
 		Some(UnaAlphaMode::Mask)
 	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
 		Some(UnaAlphaMode::Blend)
+	} else if shader == "hidden/liltoonoutline" || shader == "hidden/liltoon" {
+		Some(UnaAlphaMode::Opaque)
 	} else {
 		None
 	}
@@ -2655,6 +2657,10 @@ mod tests {
 			"family": "liltoon",
 			"sourceShader": "lilToon"
 		});
+		let hidden_opaque = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonOutline"
+		});
 		let queue_cutout = serde_json::json!({
 			"family": "liltoon",
 			"sourceShader": "lilToon",
@@ -2703,6 +2709,10 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Opaque, Some(0.5), true),
 			None
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&hidden_opaque), UnaAlphaMode::Blend, Some(0.001), true),
+			Some(UnaAlphaMode::Opaque)
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&queue_cutout), UnaAlphaMode::Opaque, None, true),
