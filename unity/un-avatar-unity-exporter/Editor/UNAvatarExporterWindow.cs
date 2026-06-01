@@ -13,9 +13,12 @@ namespace UNAvatar.UnityExporter
 {
     internal enum UNAvatarExportMode
     {
-        AllVariantsInOne,
-        CurrentStateOnly,
-        SplitVariants
+        [InspectorName("Current Only")]
+        CurrentOnly = 1,
+        [InspectorName("Wardrobe (Baked)")]
+        WardrobeBaked = 0,
+        [InspectorName("Wardrobe (Split)")]
+        WardrobeSplit = 2
     }
 
     [Serializable]
@@ -263,7 +266,7 @@ namespace UNAvatar.UnityExporter
 
         [SerializeField] private GameObject avatarRoot;
         [SerializeField] private string exportPath = "";
-        [SerializeField] private UNAvatarExportMode exportMode = UNAvatarExportMode.AllVariantsInOne;
+        [SerializeField] private UNAvatarExportMode exportMode = UNAvatarExportMode.WardrobeBaked;
         [SerializeField] private bool forceIncludeInactiveObjects = true;
         [SerializeField] private bool hasBaseSnapshot = false;
         [SerializeField] private string wardrobeSetName = "New Outfit";
@@ -1033,7 +1036,7 @@ namespace UNAvatar.UnityExporter
                 var sourceVariants = VariantExtractor.Extract(avatarRoot, exportMode);
                 var humanoid = HumanoidExtractor.Extract(avatarRoot);
 
-                if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentStateOnly)
+                if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentOnly)
                 {
                     SetActiveRecursive(clone.transform, true);
                 }
@@ -1342,7 +1345,7 @@ namespace UNAvatar.UnityExporter
                     setClone.name = avatarRoot.name + " (UNAvatar Wardrobe " + source.id + ")";
                     setClone.hideFlags = HideFlags.HideAndDontSave;
                     setClone.SetActive(true);
-                    if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentStateOnly)
+                    if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentOnly)
                     {
                         SetActiveRecursive(setClone.transform, true);
                     }
@@ -1614,7 +1617,7 @@ namespace UNAvatar.UnityExporter
 
             variants.Add(MakeCurrentStateVariant(root));
 
-            if (mode == UNAvatarExportMode.CurrentStateOnly)
+            if (mode == UNAvatarExportMode.CurrentOnly)
             {
                 return variants;
             }

@@ -139,9 +139,11 @@ Exporter は repo 内 `unity/un-avatar-unity-exporter/` に UPM package とし�
 
 Unity Exporter の出力モード。
 
-- `All Wardrobe Sets In One .unavatar`: 複数衣装・小物を 1 ファイルに同梱し、Runtime で切り替える。最初からこの方式を MVP とする。
-- `Current State Only`: Unity 上で現在有効な見た目だけを bake して出す。fallback / debug export として残してよい。
-- `Split Wardrobe Sets Into Separate .unavatar Files`: 大型衣装や配布都合向け。
+- `Current Only`: Unity 上で現在有効な見た目だけを Modular Avatar bake して出す。fallback / debug export として残してよい。
+- `Wardrobe (Baked)`: 現行 preview mode。baked model と authored wardrobe operations を同じ `.unavatar` に入れる。
+- `Wardrobe (Split)`: v2 本命候補。ベイク前 source graph と wardrobe set を分けて保持し、選択 set を Runtime 側で resolve/cache する。多数衣装ではデータ量・編集性・lazy upload の面で `Wardrobe (Baked)` より有利な可能性が高い。
+
+`Wardrobe (Split)` の実験で致命的な欠点が出なければ、v2 では `Wardrobe (Baked)` の開発を停止し、UI から外して `Wardrobe (Split)` を唯一の wardrobe mode にする。
 
 Modular Avatar 対応衣装は、Unity 側で MA / VRC menu / active state を解釈し、Runtime 側では visibility / blendshape / material / dynamics 差分として軽く切り替える。
 
@@ -178,7 +180,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 
 - repo 内 `unity/un-avatar-unity-exporter/` に UPM package として隔離する。
 - 「瑞希」+ Modular Avatar 対応衣装を複数入れた Unity Project から `.unavatar` を出力できる仮実装を作る。
-- 最初から `All Wardrobe Sets In One .unavatar` で export する。
+- preview では `Wardrobe (Baked)` を使える状態にしつつ、`Wardrobe (Split)` を本命 mode として検証する。
 - export report で不足、近似、未対応を見えるようにする。
 - U.N. Avatar 配布パッケージへ展開済み package として同梱する方針を維持する。
 
@@ -265,7 +267,7 @@ v2 初期では次をやらない。
 ## 13. 直近の実装順
 
 1. `unity/un-avatar-unity-exporter/` の UPM package skeleton と `cargo xtask unity-exporter-package` を作る。
-2. Unity Project から `All Wardrobe Sets In One .unavatar` を出す exporter prototype を作る。
+2. Unity Project から `Wardrobe (Baked)` `.unavatar` を出す exporter prototype を作る。
 3. export report で過不足を検証できるようにする。
 4. `un-avatar-format` / `un-avatar-io-unavatar` の crate 境界を作る。
 5. `.unavatar` probe と GLB import path を追加する。

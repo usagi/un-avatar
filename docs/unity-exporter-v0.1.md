@@ -122,11 +122,11 @@ VRC 向け衣装対応は v2 の重要機能として扱う。
 
 Exporter は 3 つの export mode を持つ。
 
-- `All Wardrobe Sets In One .unavatar`: 複数衣装・小物を 1 ファイルに同梱し、`UN_avatar.wardrobe.sets` で切り替える。最初から MVP として実装する。
-- `Current State Only`: 現在 Unity 上で有効な状態だけを bake して出す。fallback / debug export。
-- `Split Wardrobe Sets Into Separate .unavatar Files`: wardrobe set ごとに別 `.unavatar` を生成する。
+- `Current Only`: 現在 Unity 上で有効な状態だけを Modular Avatar bake して出す。fallback / debug export。
+- `Wardrobe (Baked)`: 現行 preview の wardrobe mode。複数衣装・小物を 1 ファイルに同梱し、`UN_avatar.wardrobe.sets` で切り替える。現時点では baked model + authored wardrobe operations を同居させる。
+- `Wardrobe (Split)`: v2 本命候補。ベイク前の素体 / 衣装 / Modular Avatar 由来 source graph を保持し、wardrobe set ごとに runtime resolve / cache できる形へ寄せる。大型衣装や多数衣装で `Wardrobe (Baked)` より有利かを検証する実験 mode。
 
-MVP は `All Wardrobe Sets In One .unavatar`。Current State Only だけでは Modular Avatar 対応衣装の切替検証に不足するため、最初から wardrobe set を出す。
+短期 preview では `Wardrobe (Baked)` を残すが、`Wardrobe (Split)` のデータ量・編集性・runtime resolve/cache の利点が大きく、致命的な欠点がなければ v2 の唯一の wardrobe mode へ昇格する。その場合 `Wardrobe (Baked)` は開発停止し、UI から外す。
 
 ### Capture Diff Workflow
 

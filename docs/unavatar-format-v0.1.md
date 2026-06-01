@@ -445,9 +445,9 @@ Runtime は base state 適用時、親 OFF に由来する子孫の `false` を�
 
 Unity Exporter は次の出力モードを持つ。
 
-- `All Wardrobe Sets In One .unavatar`: 複数衣装・小物を 1 ファイルに同梱し、`wardrobe.sets` で切り替える。MVP。
-- `Current State Only`: Unity 上で現在有効な見た目だけを `.unavatar` に出す。fallback / debug export。
-- `Split Wardrobe Sets Into Separate .unavatar Files`: 大型衣装や配布都合向け。共有データ重複は許容する。
+- `Current Only`: Unity 上で現在有効な見た目だけを Modular Avatar bake して `.unavatar` に出す。fallback / debug export。
+- `Wardrobe (Baked)`: baked model と authored wardrobe operations を 1 `.unavatar` に同梱する現行 preview mode。
+- `Wardrobe (Split)`: ベイク前 source graph と wardrobe set を分けて保持し、Runtime 側で選択 set を resolve/cache する v2 本命候補。多数衣装でのデータ量、編集性、lazy upload / unload を検証する。
 
 ## 9. Dynamics
 
