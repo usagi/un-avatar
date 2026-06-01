@@ -252,6 +252,9 @@ struct MeshDrawMaterialGpu {
 	rim_params: [f32; 4],
 	rim_control: [f32; 4],
 	rim_ext_params: [f32; 4],
+	rim_indirect_color: [f32; 4],
+	rim_indirect_params: [f32; 4],
+	rim_indirect_ext_params: [f32; 4],
 	rim_shade_color: [f32; 4],
 	rim_shade_params: [f32; 4],
 	emission_color: [f32; 4],
@@ -276,7 +279,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 624);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 672);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1303,6 +1306,20 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let rim_indirect_color = liltoon_like.map(|u| u.rim.indirect_color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let rim_indirect_params = liltoon_like
+		.map(|u| {
+			[
+				u.rim.directional_strength_factor.clamp(0.0, 1.0),
+				u.rim.directional_range_factor.clamp(0.0, 1.0),
+				u.rim.indirect_range_factor.clamp(0.0, 1.0),
+				u.rim.indirect_border_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.5]);
+	let rim_indirect_ext_params = liltoon_like
+		.map(|u| [u.rim.indirect_blur_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.1, 0.0, 0.0, 0.0]);
 	let rim_shade_color = liltoon_like.map(|u| u.rim.shade_color_factor).unwrap_or([0.5, 0.5, 0.5, 1.0]);
 	let rim_shade_params = liltoon_like
 		.map(|u| {
@@ -1387,6 +1404,9 @@ fn mesh_draw_material_gpu(
 		rim_params,
 		rim_control,
 		rim_ext_params,
+		rim_indirect_color,
+		rim_indirect_params,
+		rim_indirect_ext_params,
 		rim_shade_color,
 		rim_shade_params,
 		emission_color,

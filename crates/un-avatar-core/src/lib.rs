@@ -689,6 +689,18 @@ pub struct UnaLilToonLikeRim {
 	#[serde(default = "one_f32")]
 	pub backface_mask_factor: f32,
 	#[serde(default)]
+	pub directional_strength_factor: f32,
+	#[serde(default)]
+	pub directional_range_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub indirect_color_factor: [f32; 4],
+	#[serde(default)]
+	pub indirect_range_factor: f32,
+	#[serde(default = "default_liltoon_rim_border")]
+	pub indirect_border_factor: f32,
+	#[serde(default = "default_liltoon_rim_blur")]
+	pub indirect_blur_factor: f32,
+	#[serde(default)]
 	pub shade_enabled_factor: f32,
 	#[serde(default = "default_liltoon_rim_shade_color")]
 	pub shade_color_factor: [f32; 4],
@@ -882,6 +894,12 @@ impl Default for UnaLilToonLikeRim {
 			shadow_mask_factor: 0.0,
 			normal_strength_factor: 1.0,
 			backface_mask_factor: 1.0,
+			directional_strength_factor: 0.0,
+			directional_range_factor: 0.0,
+			indirect_color_factor: [1.0, 1.0, 1.0, 1.0],
+			indirect_range_factor: 0.0,
+			indirect_border_factor: default_liltoon_rim_border(),
+			indirect_blur_factor: default_liltoon_rim_blur(),
 			shade_enabled_factor: 0.0,
 			shade_color_factor: default_liltoon_rim_shade_color(),
 			shade_border_factor: default_liltoon_rim_border(),

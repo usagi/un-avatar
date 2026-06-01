@@ -2024,6 +2024,24 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_RimBackfaceMask") {
 		out.rim.backface_mask_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimDirStrength") {
+		out.rim.directional_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimDirRange") {
+		out.rim.directional_range_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_RimIndirColor") {
+		out.rim.indirect_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimIndirRange") {
+		out.rim.indirect_range_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimIndirBorder") {
+		out.rim.indirect_border_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimIndirBlur") {
+		out.rim.indirect_blur_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_UseRimShade") {
 		out.rim.shade_enabled_factor = value.clamp(0.0, 1.0);
 	}
@@ -3688,6 +3706,11 @@ mod tests {
 					"_RimShadowMask": 0.91,
 					"_RimNormalStrength": 0.82,
 					"_RimBackfaceMask": 0.73,
+					"_RimDirStrength": 0.52,
+					"_RimDirRange": 0.42,
+					"_RimIndirRange": 0.32,
+					"_RimIndirBorder": 0.22,
+					"_RimIndirBlur": 0.12,
 					"_UseRimShade": 1.0,
 					"_RimShadeBorder": 0.44,
 					"_RimShadeBlur": 0.22,
@@ -3720,6 +3743,7 @@ mod tests {
 					"_ReflectionColor": [0.9, 0.8, 0.7, 0.6],
 					"_ReflectionCubeColor": [0.6, 0.7, 0.8, 1.0],
 					"_RimColor": [0.1, 0.2, 0.3, 1.0],
+					"_RimIndirColor": [0.4, 0.5, 0.6, 0.7],
 					"_RimShadeColor": [0.6, 0.5, 0.4, 0.7],
 					"_EmissionColor": [0.5, 0.4, 0.3, 0.8],
 					"_OutlineColor": [0.01, 0.02, 0.03, 1.0],
@@ -3826,6 +3850,12 @@ mod tests {
 		assert_eq!(liltoon_like.rim.shadow_mask_factor, 0.91);
 		assert_eq!(liltoon_like.rim.normal_strength_factor, 0.82);
 		assert_eq!(liltoon_like.rim.backface_mask_factor, 0.73);
+		assert_eq!(liltoon_like.rim.directional_strength_factor, 0.52);
+		assert_eq!(liltoon_like.rim.directional_range_factor, 0.42);
+		assert_eq!(liltoon_like.rim.indirect_color_factor, [0.4, 0.5, 0.6, 0.7]);
+		assert_eq!(liltoon_like.rim.indirect_range_factor, 0.32);
+		assert_eq!(liltoon_like.rim.indirect_border_factor, 0.22);
+		assert_eq!(liltoon_like.rim.indirect_blur_factor, 0.12);
 		assert_eq!(liltoon_like.rim.shade_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.rim.shade_color_factor, [0.6, 0.5, 0.4, 0.7]);
 		assert_eq!(liltoon_like.rim.shade_border_factor, 0.44);

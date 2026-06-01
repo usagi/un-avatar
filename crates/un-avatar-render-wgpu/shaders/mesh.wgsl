@@ -46,6 +46,9 @@ struct DrawMaterial {
 	rim_params: vec4<f32>,
 	rim_control: vec4<f32>,
 	rim_ext_params: vec4<f32>,
+	rim_indirect_color: vec4<f32>,
+	rim_indirect_params: vec4<f32>,
+	rim_indirect_ext_params: vec4<f32>,
 	rim_shade_color: vec4<f32>,
 	rim_shade_params: vec4<f32>,
 	emission_color: vec4<f32>,
@@ -655,6 +658,16 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let rim_shadow = mix(1.0, shading, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
 			let rim_backface = select(clamp(drawu.rim_ext_params.z, 0.0, 1.0), 1.0, front_facing);
 			rim = lit_rim_color * rim_factor * rim_alpha * rim_shadow * rim_backface;
+			let rim_dir = pow(clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0), mix(1.0, 8.0, clamp(drawu.rim_indirect_params.y, 0.0, 1.0)));
+			let rim_dir_factor = clamp(drawu.rim_indirect_params.x * rim_dir, 0.0, 1.0);
+			rim = mix(rim, rim * rim_dir, rim_dir_factor);
+			let indir_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
+			let indir_factor = lil_tooning_scale(
+				indir_raw,
+				clamp(drawu.rim_indirect_params.w, 0.0, 1.0),
+				clamp(drawu.rim_indirect_ext_params.x, 0.0, 1.0)
+			) * clamp(drawu.rim_indirect_params.z * drawu.rim_indirect_color.a, 0.0, 1.0);
+			rim = rim + drawu.rim_indirect_color.rgb * indir_factor * rim_alpha * rim_shadow * rim_backface;
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;

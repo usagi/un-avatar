@@ -425,6 +425,24 @@ Status legend:
 - `[~]` `_RimEnableLighting`
   - done: v2 rim parameter として保持し、rim color と main light color の mix に接続した。
   - remaining: forward add branch と blend mode 3 以上の本家条件を反映する。
+- `[~]` `_RimDirStrength`
+  - done: source raw params を保持し、rim contribution の directional factor 近似へ接続した。
+  - remaining: 本家 directional rim の view-space/light-space 入力と `_RimDirRange` の係数域を検証する。
+- `[~]` `_RimDirRange`
+  - done: source raw params を保持し、directional rim factor の power 近似へ接続した。
+  - remaining: lilToon の directional rim range と同じ見え方になるよう係数変換を調整する。
+- `[~]` `_RimIndirColor`
+  - done: source raw color params を保持し、indirect rim color contribution へ接続した。
+  - remaining: `_RimIndirRange`、lighting、RimShade との本家合成順を検証する。
+- `[~]` `_RimIndirRange`
+  - done: source raw params を保持し、indirect rim strength gate へ接続した。
+  - remaining: 本家の indirect rim range と alpha/strength semantics を照合する。
+- `[~]` `_RimIndirBorder`
+  - done: source raw params を保持し、indirect rim toon border へ接続した。
+  - remaining: `_AAStrength` と blur の係数域を本家へ合わせる。
+- `[~]` `_RimIndirBlur`
+  - done: source raw params を保持し、indirect rim toon blur へ接続した。
+  - remaining: `_AAStrength` と border の係数域を本家へ合わせる。
 - `[~]` `_RimBlendMode`
   - done: v2 rim parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体、RimShade / indirect rim との合成順を実装する。
