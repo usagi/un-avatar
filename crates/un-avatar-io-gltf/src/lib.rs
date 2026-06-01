@@ -5,7 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Cursor;
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
@@ -909,17 +909,6 @@ pub struct WardrobeApplyReport {
 	pub missing_blendshapes: Vec<String>,
 }
 
-fn collect_node_subtree_indices(scene: &UnaSceneSnapshot, idx: usize, out: &mut BTreeSet<usize>) {
-	if !out.insert(idx) {
-		return;
-	}
-	if let Some(node) = scene.nodes.get(idx) {
-		for &child in &node.children {
-			collect_node_subtree_indices(scene, child, out);
-		}
-	}
-}
-
 fn apply_unavatar_wardrobe_operations(
 	scene: &mut UnaSceneSnapshot,
 	operations: &[Value],
@@ -940,16 +929,7 @@ fn apply_unavatar_wardrobe_operations(
 				};
 				let indices = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
 				if !indices.is_empty() {
-					let apply_subtree = matches!(ty, "subtreeEnabled" | "subtreeVisibility");
-					let mut targets = BTreeSet::new();
 					for idx in indices {
-						if apply_subtree {
-							collect_node_subtree_indices(scene, idx, &mut targets);
-						} else {
-							targets.insert(idx);
-						}
-					}
-					for idx in targets {
 						if let Some(node) = scene.nodes.get_mut(idx) {
 							node.visible = visible;
 						}
@@ -1078,6 +1058,46 @@ fn current_state_operation_is_inherited_hidden_under_base(
 	})
 }
 
+fn base_operation_is_inherited_hidden_under_base(
+	op: &Value,
+	base_hidden_paths: &[String],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	paths_by_index: &[Option<String>],
+) -> bool {
+	let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
+	if !matches!(
+		ty,
+		"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
+	) || op.get("visible").and_then(|v| v.as_bool()) != Some(false)
+	{
+		return false;
+	}
+	let path = operation_target_path(op);
+	if path.is_empty() {
+		return false;
+	}
+	let resolved = lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op);
+	if resolved.is_empty() {
+		return base_hidden_paths.iter().any(|hidden| {
+			let hidden = normalize_unavatar_path(hidden);
+			let path = normalize_unavatar_path(path);
+			hidden != path && !hidden.is_empty() && path.starts_with(&format!("{hidden}/"))
+		});
+	}
+	resolved.iter().all(|idx| {
+		paths_by_index.get(*idx).and_then(|p| p.as_deref()).is_some_and(|resolved_path| {
+			base_hidden_paths.iter().any(|hidden| {
+				let hidden = normalize_unavatar_path(hidden);
+				let resolved_path = normalize_unavatar_path(resolved_path);
+				hidden != resolved_path && !hidden.is_empty() && resolved_path.starts_with(&format!("{hidden}/"))
+			})
+		})
+	})
+}
+
 fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some(variants) = unavatar.source.get("variants").and_then(|v| v.as_array()) else {
 		return;
@@ -1161,12 +1181,54 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 		return;
 	};
 
-	let applied = apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar));
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut paths_by_index = vec![None; scene.nodes.len()];
+	for (path, idx) in &paths {
+		if let Some(slot) = paths_by_index.get_mut(*idx) {
+			*slot = Some(path.clone());
+		}
+	}
+	let base_hidden_paths = operations
+		.iter()
+		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
+		.flat_map(|op| {
+			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+			if resolved.is_empty() {
+				vec![operation_target_path(op).to_string()]
+			} else {
+				resolved
+					.into_iter()
+					.filter_map(|idx| paths_by_index.get(idx).and_then(|p| p.clone()))
+					.collect::<Vec<_>>()
+			}
+		})
+		.filter(|path| !path.is_empty())
+		.collect::<Vec<_>>();
+	let filtered_operations: Vec<Value> = operations
+		.iter()
+		.filter(|op| {
+			!base_operation_is_inherited_hidden_under_base(
+				op,
+				&base_hidden_paths,
+				&node_ids,
+				&registry_paths,
+				&paths,
+				&normalized_paths,
+				&paths_by_index,
+			)
+		})
+		.cloned()
+		.collect();
+	let skipped = operations.len().saturating_sub(filtered_operations.len());
+	let applied = apply_unavatar_wardrobe_operations(scene, &filtered_operations, Some(unavatar));
 	if applied.visibility_applied > 0 || applied.visibility_missing > 0 || applied.blendshape_applied > 0 || applied.blendshape_missing > 0
 	{
 		report.push_info(format!(
-			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
-			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
+			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, inherited_hidden_skipped={}",
+			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing, skipped
 		));
 	}
 }
@@ -2642,7 +2704,7 @@ mod tests {
 		assert!(scene.nodes[0].visible);
 		assert_eq!(scene.nodes[1].source_node_id.as_deref(), Some("node_hidden"));
 		assert!(!scene.nodes[1].visible);
-		assert!(!scene.nodes[3].visible);
+		assert!(scene.nodes[3].visible);
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);

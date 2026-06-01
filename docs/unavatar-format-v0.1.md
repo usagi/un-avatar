@@ -412,7 +412,7 @@ wardrobe set の適用順。
 
 1. `.unavatar` の base state を適用する。
 2. 選択された `wardrobe.sets[].operations` を上から順に適用する。
-3. `subtreeEnabled` は対象 node と子孫全体の enabled state を変更する。`nodeEnabled` は対象 node だけを変更する。実効可視は親 node の local enabled state を継承して Runtime が計算する。
+3. `subtreeEnabled` は対象 node の local enabled state を変更し、その実効可視が子孫へ継承される。子孫の local enabled state は変更しない。`nodeEnabled` も対象 node の local enabled state を変更する。
 4. 同じ具体度なら後勝ち。
 5. Supervisor profile 側のユーザー override は `.unavatar` 内蔵 set より後に適用する。
 
@@ -421,6 +421,7 @@ wardrobe set の適用順。
 Unity Exporter の preview 実装では、wardrobe operations は bake 後 snapshot から再生成しない。`base` も non-base set も Unity 上で capture した authored state / diff を正本にする。Modular Avatar bake は export mesh を整える処理であり、wardrobe の意味論を上書きする正本ではない。
 Exporter は `activeInHierarchy` ではなく `activeSelf` を capture する。親が OFF のため実効的に見えていない子でも、子自身の Inspector チェックボックス状態は維持する必要があるためである。特定の子だけを落としたい場合は、親を `subtreeEnabled=true` した後に、その子へ `nodeEnabled=false` または `subtreeEnabled=false` を置く。
 Unity Exporter は親を ON にする set の配下にある inactive child を明示的な `nodeEnabled=false` として出力する。これにより、衣装 root をまとめて ON にしつつ帽子や pants/skirt のような相互排他部品だけを OFF にできる。
+Runtime は base state 適用時、親 OFF に由来する子孫の `false` を冗長 operation として無視する。base が子孫 local state まで `false` に潰すと、後続 set が衣装 root を ON にした際に配下の authored ON 子要素まで復元できなくなるためである。set 側で明示された子孫 `false` はそのまま尊重する。
 
 ### Asset Groups And Lazy Loading
 

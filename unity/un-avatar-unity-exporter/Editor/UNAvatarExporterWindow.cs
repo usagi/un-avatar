@@ -830,7 +830,14 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
-            ApplyWardrobeOperations(CurrentBaseOperations());
+            if (hasBaseSnapshot)
+            {
+                WardrobeSnapshotCapture.ApplyToRoot(avatarRoot, baseSnapshot);
+            }
+            else
+            {
+                ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
+            }
             selectedWardrobeSetIndex = BaseSelectionIndex;
             lastSummary = "Applied base wardrobe state to scene.";
             SceneView.RepaintAll();
@@ -848,9 +855,18 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
-            ApplyWardrobeOperations(CurrentBaseOperations());
-            ApplyWardrobeOperations(capturedWardrobeSets[selectedWardrobeSetIndex].operations);
-            lastSummary = "Applied wardrobe set `" + capturedWardrobeSets[selectedWardrobeSetIndex].displayName + "` to scene.";
+            var set = capturedWardrobeSets[selectedWardrobeSetIndex];
+            if (set.capturedSnapshot != null && set.capturedSnapshot.nodes.Count > 0)
+            {
+                WardrobeSnapshotCapture.ApplyToRoot(avatarRoot, set.capturedSnapshot);
+                lastSummary = "Applied wardrobe set snapshot `" + set.displayName + "` to scene.";
+            }
+            else
+            {
+                ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
+                ApplyWardrobeOperations(set.operations);
+                lastSummary = "Applied wardrobe set `" + set.displayName + "` to scene.";
+            }
             SceneView.RepaintAll();
         }
 
@@ -861,6 +877,11 @@ namespace UNAvatar.UnityExporter
                 : hasImportedBaseOperations
                 ? importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList()
                 : new List<WardrobeOperationDraft>();
+        }
+
+        private List<WardrobeOperationDraft> CurrentBaseOperationsForSceneApply()
+        {
+            return WardrobeSnapshotCapture.FilterInheritedHiddenOperations(CurrentBaseOperations());
         }
 
         private string BaseStatusText()
@@ -1820,6 +1841,136 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return snapshot;
+        }
+
+        public static void ApplyToRoot(GameObject root, WardrobeSnapshotDraft snapshot)
+        {
+            if (root == null || snapshot == null)
+            {
+                return;
+            }
+
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            var nodesById = transforms.ToDictionary(transform => NodeIdFor(root.transform, transform), transform => transform);
+            var nodesByPath = transforms
+                .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (var node in snapshot.nodes)
+            {
+                var transform = ResolveTransform(nodesById, nodesByPath, node.nodeId, node.path);
+                if (transform != null)
+                {
+                    transform.gameObject.SetActive(node.activeSelf);
+                }
+            }
+
+            foreach (var rendererState in snapshot.renderers)
+            {
+                var transform = ResolveTransform(nodesById, nodesByPath, rendererState.nodeId, rendererState.path);
+                if (transform == null)
+                {
+                    continue;
+                }
+                foreach (var renderer in transform.GetComponents<Renderer>())
+                {
+                    renderer.enabled = rendererState.enabled;
+                }
+            }
+
+            foreach (var shape in snapshot.blendShapes)
+            {
+                var transform = ResolveTransform(nodesById, nodesByPath, shape.nodeId, shape.path);
+                if (transform == null)
+                {
+                    continue;
+                }
+                foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
+                {
+                    var mesh = skinned.sharedMesh;
+                    var index = mesh != null ? mesh.GetBlendShapeIndex(shape.name) : -1;
+                    if (index >= 0)
+                    {
+                        skinned.SetBlendShapeWeight(index, shape.weight);
+                    }
+                }
+            }
+        }
+
+        private static Transform ResolveTransform(
+            Dictionary<string, Transform> nodesById,
+            Dictionary<string, Transform> nodesByPath,
+            string nodeId,
+            string path)
+        {
+            var transform = default(Transform);
+            if (!string.IsNullOrEmpty(nodeId))
+            {
+                nodesById.TryGetValue(nodeId, out transform);
+            }
+            if (transform == null && !string.IsNullOrEmpty(path))
+            {
+                nodesByPath.TryGetValue(path, out transform);
+            }
+            return transform;
+        }
+
+        public static List<WardrobeOperationDraft> FilterInheritedHiddenOperations(IEnumerable<WardrobeOperationDraft> operations)
+        {
+            var list = operations?
+                .Where(operation => operation != null)
+                .Select(CloneOperation)
+                .ToList() ?? new List<WardrobeOperationDraft>();
+            var hiddenPaths = list
+                .Where(IsVisibilityFalseOperation)
+                .Select(operation => operation.target != null ? operation.target.path : null)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Distinct()
+                .ToList();
+            if (hiddenPaths.Count == 0)
+            {
+                return list;
+            }
+
+            return list
+                .Where(operation => !IsInheritedHiddenOperation(operation, hiddenPaths))
+                .ToList();
+        }
+
+        private static bool IsInheritedHiddenOperation(WardrobeOperationDraft operation, IReadOnlyList<string> hiddenPaths)
+        {
+            if (!IsVisibilityFalseOperation(operation) || operation.target == null || string.IsNullOrEmpty(operation.target.path))
+            {
+                return false;
+            }
+
+            var path = NormalizePath(operation.target.path);
+            return hiddenPaths.Any(hidden =>
+            {
+                var hiddenPath = NormalizePath(hidden);
+                return !string.IsNullOrEmpty(hiddenPath)
+                    && hiddenPath != path
+                    && path.StartsWith(hiddenPath + "/", StringComparison.Ordinal);
+            });
+        }
+
+        private static bool IsVisibilityFalseOperation(WardrobeOperationDraft operation)
+        {
+            return operation != null
+                && (operation.type == "subtreeEnabled"
+                    || operation.type == "subtreeVisibility"
+                    || operation.type == "nodeEnabled"
+                    || operation.type == "nodeVisibility"
+                    || operation.type == "rendererEnabled"
+                    || operation.type == "rendererVisibility")
+                && !operation.boolValue;
+        }
+
+        private static string NormalizePath(string path)
+        {
+            return string.IsNullOrEmpty(path)
+                ? string.Empty
+                : path.Replace('\\', '/').Trim('/');
         }
 
         public static WardrobeSetDraft Diff(WardrobeSnapshotDraft baseline, WardrobeSnapshotDraft current, string displayName)
