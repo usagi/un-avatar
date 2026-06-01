@@ -124,6 +124,28 @@ fn mark_texture_role(roles: &mut [TextureRole], index: Option<usize>, role: Text
 	*slot = merge_texture_role(*slot, role);
 }
 
+fn texture_role_from_source_metadata(source: &un_avatar_core::UnaImageSourceMetadata) -> Option<TextureRole> {
+	let texture_type = source.texture_type.as_deref().unwrap_or("").to_ascii_lowercase();
+	let color_space = source.color_space.as_deref().unwrap_or("").to_ascii_lowercase();
+	let name = source.name.as_deref().unwrap_or("").to_ascii_lowercase();
+	if texture_type.contains("normal") || name.contains("normal") || name.contains("_nrm") {
+		return Some(TextureRole::Normal);
+	}
+	if texture_type.contains("mask")
+		|| texture_type.contains("singlechannel")
+		|| color_space == "data"
+		|| name.contains("mask")
+		|| name.contains("occlusion")
+		|| name == "ao"
+	{
+		return Some(TextureRole::Data);
+	}
+	if source.srgb == Some(false) && color_space == "linear" {
+		return Some(TextureRole::Data);
+	}
+	None
+}
+
 pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRole> {
 	let mut roles = vec![TextureRole::GenericColor; scene.images.len()];
 	for mat in &scene.materials {
@@ -139,6 +161,12 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.reflection_cube_texture_index, TextureRole::Emissive);
 			mark_texture_role(&mut roles, mtoon.outline_width_multiply_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
+		}
+	}
+	for (index, source) in scene.image_sources.iter().enumerate() {
+		let Some(source) = source.as_ref() else { continue };
+		if let Some(role) = texture_role_from_source_metadata(source) {
+			mark_texture_role(&mut roles, Some(index), role);
 		}
 	}
 	roles
@@ -339,5 +367,44 @@ mod tests {
 
 		let outline = effective_mtoon_outline(&mtoon, &opts).expect("authored outline should exist");
 		assert_eq!(outline.width, MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS);
+	}
+
+	#[test]
+	fn texture_roles_use_source_metadata_as_fallback() {
+		let image = || un_avatar_core::UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut scene = UnaSceneSnapshot {
+			images: vec![image(), image()],
+			image_sources: vec![
+				Some(un_avatar_core::UnaImageSourceMetadata {
+					name: Some("detail_normal".to_string()),
+					texture_type: Some("NormalMap".to_string()),
+					byte_length: 1,
+					source_hash: 1,
+					..Default::default()
+				}),
+				Some(un_avatar_core::UnaImageSourceMetadata {
+					name: Some("mask".to_string()),
+					color_space: Some("data".to_string()),
+					byte_length: 1,
+					source_hash: 2,
+					..Default::default()
+				}),
+			],
+			..Default::default()
+		};
+		assert_eq!(texture_roles_for_scene(&scene)[0], TextureRole::Normal);
+		assert_eq!(texture_roles_for_scene(&scene)[1], TextureRole::Data);
+
+		scene.materials.push(UnaMaterialPbr {
+			base_color_texture_index: Some(0),
+			name: Some("Face".to_string()),
+			..Default::default()
+		});
+		assert_eq!(texture_roles_for_scene(&scene)[0], TextureRole::Face);
 	}
 }

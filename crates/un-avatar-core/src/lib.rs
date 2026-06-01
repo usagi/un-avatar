@@ -293,7 +293,7 @@ pub struct UnaSceneSnapshot {
 	pub node_constraints: Vec<UnaNodeConstraint>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaImageSourceMetadata {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
