@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -110,13 +109,13 @@ namespace UNAvatar.UnityExporter
                 offset += length;
             }
 
-            var jsonChunk = chunks.FirstOrDefault(c => c.Type == JsonChunkType);
+            var jsonChunk = FindChunk(chunks, JsonChunkType);
             if (jsonChunk == null)
             {
                 throw new InvalidDataException("GLB JSON chunk was not found.");
             }
 
-            var binChunk = chunks.FirstOrDefault(c => c.Type == 0x004E4942);
+            var binChunk = FindChunk(chunks, 0x004E4942);
             if (binChunk == null)
             {
                 binChunk = new GlbChunk { Type = 0x004E4942, Data = Array.Empty<byte>() };
@@ -127,10 +126,7 @@ namespace UNAvatar.UnityExporter
             if (textureAssets != null && textureAssets.Count > 0)
             {
                 json = AppendTextureAssetBufferViews(json, binChunk, textureAssets);
-                payload["textureAssets"] = textureAssets
-                    .Select(asset => asset.ToJson())
-                    .Cast<object>()
-                    .ToList();
+                payload["textureAssets"] = TextureAssetsToJson(textureAssets);
             }
             if (wardrobePreviewImages != null && wardrobePreviewImages.Count > 0)
             {
@@ -141,6 +137,28 @@ namespace UNAvatar.UnityExporter
             jsonChunk.Data = Pad(Encoding.UTF8.GetBytes(json), 0x20);
 
             WriteGlb(destinationGlb, chunks);
+        }
+
+        private static GlbChunk FindChunk(List<GlbChunk> chunks, uint type)
+        {
+            foreach (var chunk in chunks)
+            {
+                if (chunk.Type == type)
+                {
+                    return chunk;
+                }
+            }
+            return null;
+        }
+
+        private static List<object> TextureAssetsToJson(List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            var json = new List<object>(textureAssets.Count);
+            foreach (var asset in textureAssets)
+            {
+                json.Add(asset.ToJson());
+            }
+            return json;
         }
 
         public static byte[] ReadBufferViewBytes(string glbPath, int bufferViewIndex)
@@ -156,8 +174,8 @@ namespace UNAvatar.UnityExporter
             }
 
             var chunks = ReadChunks(bytes);
-            var jsonChunk = chunks.FirstOrDefault(c => c.Type == JsonChunkType);
-            var binChunk = chunks.FirstOrDefault(c => c.Type == 0x004E4942);
+            var jsonChunk = FindChunk(chunks, JsonChunkType);
+            var binChunk = FindChunk(chunks, 0x004E4942);
             if (jsonChunk == null || binChunk == null)
             {
                 return null;
