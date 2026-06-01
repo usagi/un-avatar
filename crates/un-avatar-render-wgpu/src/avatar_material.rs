@@ -151,11 +151,13 @@ pub(crate) struct EffectiveOutline {
 	pub(crate) lighting_mix: f32,
 }
 
+const MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS: f32 = 0.00025;
+
 pub(crate) fn effective_mtoon_outline(mtoon: &UnaMtoonMaterial, opts: &SceneMeshLoadOpts) -> Option<EffectiveOutline> {
 	if opts.avatar_outline.policy == AvatarOutlinePolicy::Off {
 		return None;
 	}
-	let width = match opts.avatar_outline.policy {
+	let mut width = match opts.avatar_outline.policy {
 		AvatarOutlinePolicy::Authored => mtoon.outline_width_factor,
 		AvatarOutlinePolicy::Off => 0.0,
 		AvatarOutlinePolicy::Override => opts.avatar_outline.width.unwrap_or(if mtoon.outline_width_factor > 0.0 {
@@ -165,6 +167,9 @@ pub(crate) fn effective_mtoon_outline(mtoon: &UnaMtoonMaterial, opts: &SceneMesh
 		}),
 	}
 	.max(0.0);
+	if opts.avatar_outline.policy == AvatarOutlinePolicy::Authored {
+		width = width.min(MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS);
+	}
 	if width <= 0.0 {
 		return None;
 	}
@@ -314,5 +319,25 @@ mod tests {
 			..Default::default()
 		};
 		assert!(effective_mtoon_outline(&mtoon, &opts).is_none());
+	}
+
+	#[test]
+	fn authored_outline_width_is_capped_for_untoon_compatibility() {
+		let mtoon = UnaMtoonMaterial {
+			outline_width_mode: UnaMtoonOutlineWidthMode::WorldCoordinates,
+			outline_width_factor: 0.0008,
+			..Default::default()
+		};
+		let opts = SceneMeshLoadOpts {
+			avatar_outline: AvatarOutlineOptions {
+				policy: AvatarOutlinePolicy::Authored,
+				kind: AvatarOutlineKind::Mtoon,
+				..Default::default()
+			},
+			..Default::default()
+		};
+
+		let outline = effective_mtoon_outline(&mtoon, &opts).expect("authored outline should exist");
+		assert_eq!(outline.width, MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS);
 	}
 }

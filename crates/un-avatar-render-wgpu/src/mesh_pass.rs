@@ -808,7 +808,11 @@ fn create_solid_texture_1x1(
 fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 	match opts.avatar_outline.policy {
 		AvatarOutlinePolicy::Override => false,
-		AvatarOutlinePolicy::Authored => d.shading == UnaShadingModel::MToonLike && effective_mtoon_outline(&d.mtoon, opts).is_some(),
+		AvatarOutlinePolicy::Authored => {
+			d.shading == UnaShadingModel::MToonLike
+				&& matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
+				&& effective_mtoon_outline(&d.mtoon, opts).is_some()
+		}
 		AvatarOutlinePolicy::Off => false,
 	}
 }
