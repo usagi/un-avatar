@@ -202,6 +202,12 @@ fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwr
 	}
 }
 
+fn discard_transparent_zprepass(a: f32, alpha_kind: f32, transparent_zwrite: f32) {
+	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < 0.5 {
+		discard;
+	}
+}
+
 fn discard_backface_if_single_sided(front_facing: bool, flags: u32) {
 	if !front_facing && (flags & MAT_DOUBLE_SIDED) == 0u {
 		discard;
@@ -398,4 +404,12 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 	let color = drawu.outline_color.rgb * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.outline_params.z, 0.0, 1.0));
 	return vec4<f32>(color, 1.0);
+}
+
+@fragment
+fn fs_mtoon_zprepass(i: VsOut) -> @location(0) vec4<f32> {
+	let samp_tex = textureSample(tex, samp, i.uv);
+	let a = samp_tex.a * drawu.base_color.a;
+	discard_transparent_zprepass(a, drawu.params.y, drawu.outline_params.w);
+	return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }

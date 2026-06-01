@@ -1502,7 +1502,7 @@ impl SceneMeshes {
 			&vb_layout,
 			"mesh_transparent_zprepass_mtoon",
 			"vs_main",
-			"fs_mtoon",
+			"fs_mtoon_zprepass",
 			None,
 			wgpu::ColorWrites::empty(),
 			true,
