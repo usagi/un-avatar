@@ -69,29 +69,25 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
-            var transforms = root.GetComponentsInChildren<Transform>(true);
-            var nodesById = transforms.ToDictionary(transform => NodeIdFor(root.transform, transform), transform => transform);
-            var nodesByPath = transforms
-                .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
-                .ToDictionary(group => group.Key, group => group.First());
+            var nodes = BuildNodeLookup(root);
 
             foreach (var node in snapshot.nodes)
             {
-                var transform = ResolveTransform(nodesById, nodesByPath, node.nodeId, node.path);
-                if (transform != null)
+                var target = ResolveNode(nodes, node.nodeId, node.path);
+                if (target != null)
                 {
-                    transform.gameObject.SetActive(node.activeSelf);
+                    target.Transform.gameObject.SetActive(node.activeSelf);
                 }
             }
 
             foreach (var rendererState in snapshot.renderers)
             {
-                var transform = ResolveTransform(nodesById, nodesByPath, rendererState.nodeId, rendererState.path);
-                if (transform == null)
+                var target = ResolveNode(nodes, rendererState.nodeId, rendererState.path);
+                if (target == null)
                 {
                     continue;
                 }
-                foreach (var renderer in transform.GetComponents<Renderer>())
+                foreach (var renderer in target.Renderers)
                 {
                     renderer.enabled = rendererState.enabled;
                 }
@@ -99,12 +95,12 @@ namespace UNAvatar.UnityExporter
 
             foreach (var shape in snapshot.blendShapes)
             {
-                var transform = ResolveTransform(nodesById, nodesByPath, shape.nodeId, shape.path);
-                if (transform == null)
+                var target = ResolveNode(nodes, shape.nodeId, shape.path);
+                if (target == null)
                 {
                     continue;
                 }
-                foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
+                foreach (var skinned in target.SkinnedRenderers)
                 {
                     var mesh = skinned.sharedMesh;
                     var index = mesh != null ? mesh.GetBlendShapeIndex(shape.name) : -1;
@@ -116,22 +112,59 @@ namespace UNAvatar.UnityExporter
             }
         }
 
-        private static Transform ResolveTransform(
-            Dictionary<string, Transform> nodesById,
-            Dictionary<string, Transform> nodesByPath,
+        private static SnapshotNodeLookup BuildNodeLookup(GameObject root)
+        {
+            var lookup = new SnapshotNodeLookup();
+            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                var node = new SnapshotNode
+                {
+                    Transform = transform,
+                    Renderers = transform.GetComponents<Renderer>(),
+                    SkinnedRenderers = transform.GetComponents<SkinnedMeshRenderer>()
+                };
+                var id = NodeIdFor(root.transform, transform);
+                if (!lookup.ById.ContainsKey(id))
+                {
+                    lookup.ById[id] = node;
+                }
+                var path = VariantExtractor.TransformPath(root.transform, transform);
+                if (!lookup.ByPath.ContainsKey(path))
+                {
+                    lookup.ByPath[path] = node;
+                }
+            }
+            return lookup;
+        }
+
+        private static SnapshotNode ResolveNode(
+            SnapshotNodeLookup nodes,
             string nodeId,
             string path)
         {
-            var transform = default(Transform);
+            var node = default(SnapshotNode);
             if (!string.IsNullOrEmpty(nodeId))
             {
-                nodesById.TryGetValue(nodeId, out transform);
+                nodes.ById.TryGetValue(nodeId, out node);
             }
-            if (transform == null && !string.IsNullOrEmpty(path))
+            if (node == null && !string.IsNullOrEmpty(path))
             {
-                nodesByPath.TryGetValue(path, out transform);
+                nodes.ByPath.TryGetValue(path, out node);
             }
-            return transform;
+            return node;
+        }
+
+        private sealed class SnapshotNodeLookup
+        {
+            public readonly Dictionary<string, SnapshotNode> ById = new Dictionary<string, SnapshotNode>(StringComparer.Ordinal);
+            public readonly Dictionary<string, SnapshotNode> ByPath = new Dictionary<string, SnapshotNode>(StringComparer.Ordinal);
+        }
+
+        private sealed class SnapshotNode
+        {
+            public Transform Transform;
+            public Renderer[] Renderers;
+            public SkinnedMeshRenderer[] SkinnedRenderers;
         }
 
         public static List<WardrobeOperationDraft> FilterInheritedHiddenOperations(IEnumerable<WardrobeOperationDraft> operations)
@@ -255,7 +288,7 @@ namespace UNAvatar.UnityExporter
         {
             var enabledSubtreePaths = set.operations
                 .Where(operation => operation.type == "subtreeEnabled" && operation.boolValue && operation.target != null)
-                .Select(operation => operation.target.path ?? "")
+                .Select(operation => NormalizePath(operation.target.path ?? ""))
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .ToList();
             if (enabledSubtreePaths.Count == 0)
@@ -272,7 +305,17 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                if (!enabledSubtreePaths.Any(path => IsAncestorOrSelf(path, node.path) && !string.Equals(path, node.path, StringComparison.Ordinal)))
+                var nodePath = NormalizePath(node.path);
+                var isDisabledDescendant = false;
+                foreach (var path in enabledSubtreePaths)
+                {
+                    if (IsAncestorOrSelf(path, nodePath) && !string.Equals(path, nodePath, StringComparison.Ordinal))
+                    {
+                        isDisabledDescendant = true;
+                        break;
+                    }
+                }
+                if (!isDisabledDescendant)
                 {
                     continue;
                 }
@@ -328,16 +371,24 @@ namespace UNAvatar.UnityExporter
 
         public static string MakeId(string value)
         {
-            var normalized = new string((value ?? "outfit")
-                .Trim()
-                .ToLowerInvariant()
-                .Select(c => char.IsLetterOrDigit(c) ? c : '-')
-                .ToArray());
-            while (normalized.Contains("--"))
+            var source = (value ?? "outfit").Trim().ToLowerInvariant();
+            var sb = new StringBuilder(source.Length);
+            var lastWasDash = false;
+            foreach (var c in source)
             {
-                normalized = normalized.Replace("--", "-");
+                if (char.IsLetterOrDigit(c))
+                {
+                    sb.Append(c);
+                    lastWasDash = false;
+                    continue;
+                }
+                if (!lastWasDash && sb.Length > 0)
+                {
+                    sb.Append('-');
+                    lastWasDash = true;
+                }
             }
-            normalized = normalized.Trim('-');
+            var normalized = sb.ToString().Trim('-');
             return string.IsNullOrEmpty(normalized) ? "outfit" : normalized;
         }
 
