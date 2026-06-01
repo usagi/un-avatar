@@ -348,6 +348,7 @@ namespace UNAvatar.UnityExporter
     {
         private const string ExtensionName = "UN_avatar";
         private const string SpecVersion = "0.1-preview";
+        private const string ExporterBuildMarker = "2026-06-02-preview-order-diagnostics";
         private const int BaseSelectionIndex = -2;
 
         [SerializeField] private GameObject avatarRoot;
@@ -494,6 +495,7 @@ namespace UNAvatar.UnityExporter
 
             var lines = new List<string>
             {
+                $"Exporter build marker: {ExporterBuildMarker}",
                 $"Renderers: {renderers.Length}",
                 $"Materials: {materials.Count}",
                 $"Distinct material textures: {textures.Count}",
