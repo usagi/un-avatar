@@ -450,7 +450,10 @@ namespace UNAvatar.UnityExporter
                     EditorGUILayout.Toggle("Force Enable All Before Bake", true);
                 }
                 EditorGUILayout.LabelField("Debug Hints", EditorStyles.boldLabel);
-                developerDiagnosticsText = BuildDeveloperDiagnostics();
+                if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)) || string.IsNullOrWhiteSpace(developerDiagnosticsText))
+                {
+                    developerDiagnosticsText = BuildDeveloperDiagnostics();
+                }
                 EditorGUILayout.TextArea(developerDiagnosticsText, GUILayout.MinHeight(180));
             }
             EditorGUILayout.EndScrollView();
@@ -505,12 +508,91 @@ namespace UNAvatar.UnityExporter
                 "Source extensions that will use PNG fallback in v0.1:",
                 fallbackExtensions.Any() ? string.Join("\n", fallbackExtensions) : "(none)",
                 "",
+                "Wardrobe preview state probe:",
+                BuildWardrobePreviewStateDiagnostics(),
+                "",
                 "Hints:",
                 "JPG/JPEG source bytes are usually worth preserving.",
                 "Large PNG normal/mask textures may be smaller after exporter PNG fallback or later optimizer transcode.",
                 "If generated/fallback textures are high, export time will include GPU readback and PNG encode."
             };
             return string.Join("\n", lines);
+        }
+
+        private string BuildWardrobePreviewStateDiagnostics()
+        {
+            if (avatarRoot == null)
+            {
+                return "Avatar Root is missing.";
+            }
+
+            GameObject probeClone = null;
+            try
+            {
+                probeClone = Instantiate(avatarRoot);
+                probeClone.name = avatarRoot.name + " (UNAvatar Preview State Probe)";
+                probeClone.hideFlags = HideFlags.HideAndDontSave;
+                probeClone.SetActive(true);
+
+                var lines = new List<string>
+                {
+                    $"hasBaseSnapshot: {hasBaseSnapshot}, base nodes: {(baseSnapshot != null ? baseSnapshot.nodes.Count : 0)}, base blendshapes: {(baseSnapshot != null ? baseSnapshot.blendShapes.Count : 0)}",
+                    $"importedBaseOperations: {importedBaseOperations.Count}, captured sets: {capturedWardrobeSets.Count}",
+                    ProbeWardrobeStateLine(probeClone, "base", null)
+                };
+                foreach (var set in capturedWardrobeSets)
+                {
+                    lines.Add(ProbeWardrobeStateLine(probeClone, set.displayName, set));
+                }
+                return string.Join("\n", lines);
+            }
+            catch (Exception ex)
+            {
+                return "probe failed: " + ex.Message;
+            }
+            finally
+            {
+                if (probeClone != null)
+                {
+                    DestroyImmediate(probeClone);
+                }
+            }
+        }
+
+        private string ProbeWardrobeStateLine(GameObject probeRoot, string label, WardrobeSetDraft set)
+        {
+            if (set == null)
+            {
+                ApplyPreviewBaseStateToRoot(probeRoot);
+            }
+            else
+            {
+                ApplyPreviewWardrobeSetToRoot(probeRoot, set);
+            }
+
+            var renderers = probeRoot.GetComponentsInChildren<Renderer>(true);
+            var activeRenderers = renderers.Count(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy);
+            var probes = new[]
+            {
+                "Color  1",
+                "Color  13",
+                "add-belt",
+                "Maid",
+                "Outer"
+            };
+            var states = probes.Select(path => path + "=" + ProbePathState(probeRoot, path));
+            return $"{label}: snapshot={(set == null ? hasBaseSnapshot : set.capturedSnapshot != null && set.capturedSnapshot.nodes.Count > 0)}, ops={(set != null ? set.operations.Count : CurrentBaseOperations().Count)}, activeRenderers={activeRenderers}; {string.Join(", ", states)}";
+        }
+
+        private static string ProbePathState(GameObject root, string path)
+        {
+            var transform = root.GetComponentsInChildren<Transform>(true)
+                .FirstOrDefault(candidate => VariantExtractor.TransformPath(root.transform, candidate) == path);
+            if (transform == null)
+            {
+                return "missing";
+            }
+            return (transform.gameObject.activeSelf ? "self:on" : "self:off") + "/" + (transform.gameObject.activeInHierarchy ? "hier:on" : "hier:off");
         }
 
         private bool TryAutoAssignAvatarRoot(bool updateSummary)
