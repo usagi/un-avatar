@@ -60,6 +60,7 @@ struct DrawMaterial {
 	outline_ext_params: vec4<f32>,
 	alpha_mask_params: vec4<f32>,
 	alpha_ext_params: vec4<f32>,
+	lighting_ext_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
@@ -429,6 +430,15 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 	return clamp(mix(1.0, sample, strength), 0.0, 1.0);
 }
 
+fn lil_direct_light_color() -> vec3<f32> {
+	let raw = frame.light_color.rgb * frame.light_color.w;
+	let luminance = dot(raw, vec3<f32>(0.2126, 0.7152, 0.0722));
+	let monochrome = mix(raw, vec3<f32>(luminance, luminance, luminance), clamp(drawu.lighting_ext_params.z, 0.0, 1.0));
+	let min_limit = max(drawu.lighting_ext_params.x, 0.0);
+	let max_limit = max(drawu.lighting_ext_params.y, min_limit);
+	return clamp(monochrome, vec3<f32>(min_limit, min_limit, min_limit), vec3<f32>(max_limit, max_limit, max_limit));
+}
+
 @fragment
 fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
@@ -449,7 +459,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
 	let ndl = max(dot(n, l), 0.0);
 	let ambient = frame.ambient_color.rgb * (frame.ambient_color.w * 0.57);
-	let direct = frame.light_color.rgb * (frame.light_color.w * 0.8 * ndl);
+	let direct = lil_direct_light_color() * (0.8 * ndl);
 	let lit = base * (ambient + direct) * authored_occlusion(uv, dbg);
 	return vec4<f32>(lit, out_a);
 }
@@ -531,7 +541,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	var lit: vec3<f32>;
 	if (drawu.shadow_params.x > 0.5) {
-		let light_color = frame.light_color.rgb * frame.light_color.w;
+		let light_color = lil_direct_light_color();
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
 		let shadow2_value = dot(shadow2_n, l) * 0.5 + 0.5;

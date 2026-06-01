@@ -151,8 +151,9 @@ Status legend:
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
   - remaining: outline pass cull、transparent/fur/refraction variant 固有の cull 差分を分離する。
 - `[~]` lighting / toon AA controls
-  - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持し、`_AAStrength` を shadow / specular / rim の toon ramp blur へ反映する。
-  - remaining: light min/max、monochrome lighting、vertex light、GSAA の本家 lighting path への接続を実装する。
+  - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持する。
+  - done: `_AAStrength` を shadow / specular / rim の toon ramp blur へ反映し、light min/max と monochrome lighting を main toon direct light に反映する。
+  - remaining: vertex light、GSAA、MatCap/specular/rim 個別 lighting path の min/max 適用を本家に合わせる。
 - `[ ]` render queue ordering: Unity renderQueue / lilToon queue conventions
 - `[ ]` stencil / color mask / offset: record and report unsupported use
 
