@@ -452,7 +452,8 @@ namespace UNAvatar.UnityExporter
                     EditorGUILayout.Toggle("Force Enable All Before Bake", true);
                 }
                 EditorGUILayout.LabelField("Debug Hints", EditorStyles.boldLabel);
-                if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)) || string.IsNullOrWhiteSpace(developerDiagnosticsText))
+                EditorGUILayout.LabelField("Exporter build marker", ExporterBuildMarker);
+                if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)) || !developerDiagnosticsText.Contains(ExporterBuildMarker))
                 {
                     developerDiagnosticsText = BuildDeveloperDiagnostics();
                 }
@@ -1544,6 +1545,7 @@ namespace UNAvatar.UnityExporter
                 },
                 ["unityExporter"] = new Dictionary<string, object>
                 {
+                    ["buildMarker"] = ExporterBuildMarker,
                     ["bakeModularAvatar"] = exportMode != UNAvatarExportMode.WardrobeSplit,
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
                     ["modularAvatarBakeAttempted"] = bakeAttempted,
