@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -104,10 +103,58 @@ namespace UNAvatar.UnityExporter
                 ["displayName"] = displayName ?? "",
                 ["source"] = source ?? "",
                 ["default"] = isDefault,
-                ["assetGroups"] = assetGroups.Cast<object>().ToList(),
-                ["operations"] = operations.Select(op => op.ToJson()).Cast<object>().ToList(),
-                ["previewImages"] = (previewImages ?? new List<WardrobePreviewImageDraft>()).Select(image => image.ToJson()).Cast<object>().ToList()
+                ["assetGroups"] = StringsToObjectList(assetGroups),
+                ["operations"] = OperationsToJson(operations),
+                ["previewImages"] = PreviewImagesToJson(previewImages)
             };
+            return json;
+        }
+
+        private static List<object> StringsToObjectList(List<string> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
+        }
+
+        private static List<object> OperationsToJson(List<WardrobeOperationDraft> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                if (value != null)
+                {
+                    json.Add(value.ToJson());
+                }
+            }
+            return json;
+        }
+
+        private static List<object> PreviewImagesToJson(List<WardrobePreviewImageDraft> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                if (value != null)
+                {
+                    json.Add(value.ToJson());
+                }
+            }
             return json;
         }
     }
@@ -151,7 +198,7 @@ namespace UNAvatar.UnityExporter
                     ["mode"] = renderMode ?? "standard",
                     ["antiAliasingSamples"] = antiAliasingSamples,
                     ["stateDigest"] = stateDigest ?? "",
-                    ["stateDetails"] = (stateDetails ?? new List<string>()).Cast<object>().ToList()
+                    ["stateDetails"] = StringsToObjectList(stateDetails)
                 },
                 ["camera"] = new Dictionary<string, object>
                 {
@@ -174,6 +221,20 @@ namespace UNAvatar.UnityExporter
         private static List<object> FloatArray(Vector3 value)
         {
             return new List<object> { value.x, value.y, value.z };
+        }
+
+        private static List<object> StringsToObjectList(List<string> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
         }
     }
 
@@ -201,7 +262,13 @@ namespace UNAvatar.UnityExporter
             var summary = $"ops={Total}, matched={Matched}, missing={Missing}, active={VisibilityChanged}, renderer={RendererChanged}, blendshape={BlendShapeChanged}.";
             if (MissingTargets.Count > 0)
             {
-                summary += " Missing: " + string.Join(", ", MissingTargets.Take(8).ToArray());
+                var count = Math.Min(8, MissingTargets.Count);
+                var targets = new string[count];
+                for (var i = 0; i < count; i++)
+                {
+                    targets[i] = MissingTargets[i];
+                }
+                summary += " Missing: " + string.Join(", ", targets);
             }
             return summary;
         }
