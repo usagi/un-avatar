@@ -390,7 +390,7 @@ pub(crate) struct DebugManifest {
 	pub disable_shade_color: Option<bool>,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断 toggle（既定 false）。
 	pub disable_normal_map: Option<bool>,
-	/// fs_mtoon を `base` のみで早期 return する診断 toggle（既定 false）。
+	/// toon path を `base` のみで早期 return する診断 toggle（既定 false）。
 	pub base_texture_only: Option<bool>,
 }
 

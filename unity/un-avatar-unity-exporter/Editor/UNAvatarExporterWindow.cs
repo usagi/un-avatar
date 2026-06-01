@@ -3114,6 +3114,10 @@ namespace UNAvatar.UnityExporter
                     ? ReadColor(material, "_ShadeColor", ReadColor(material, "_ShadowColor", new Color(0.97f, 0.97f, 0.97f, 1.0f)))
                     : baseColor;
                 mtoon["shadeColorFactor"] = FloatArray(shadeColor.r, shadeColor.g, shadeColor.b);
+                AddTextureIndex(mtoon, "shadowColorTextureIndex", useShadow ? ReadTexture(material, "_ShadowColorTex") : null);
+                AddTextureIndex(mtoon, "shadowStrengthMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowStrengthMask") : null);
+                AddTextureIndex(mtoon, "shadowBorderMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowBorderMask") : null);
+                AddTextureIndex(mtoon, "shadowBlurMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowBlurMask") : null);
                 AddTextureIndex(
                     mtoon,
                     "shadeMultiplyTextureIndex",
@@ -3128,6 +3132,7 @@ namespace UNAvatar.UnityExporter
                 var matcapColor = useMatCap ? ReadColor(material, "_MatCapColor", Color.white) * matcapMainStrength : Color.black;
                 mtoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
                 AddTextureIndex(mtoon, "matcapTextureIndex", useMatCap ? ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex") : null);
+                AddTextureIndex(mtoon, "matcapBlendMaskTextureIndex", useMatCap ? ReadTexture(material, "_MatCapBlendMask") : null);
 
                 var useRim = IsMaterialFeatureEnabled(material, "_UseRim", material.HasProperty("_RimColor") || ReadTexture(material, "_RimColorTex") != null);
                 var rimMainStrength = ReadFloat(material, "_RimMainStrength", 1.0f);
@@ -3135,10 +3140,22 @@ namespace UNAvatar.UnityExporter
                 mtoon["parametricRimColorFactor"] = FloatArray(rimColor.r, rimColor.g, rimColor.b);
                 mtoon["parametricRimFresnelPowerFactor"] = ReadFloat(material, "_RimFresnelPower", 5.0f);
                 mtoon["rimLightingMixFactor"] = useRim ? ReadFloat(material, "_RimEnableLighting", 1.0f) : 0.0f;
+                mtoon["rimBlendMode"] = ReadFloat(material, "_RimBlendMode", 1.0f);
                 AddTextureIndex(mtoon, "rimMultiplyTextureIndex", useRim ? ReadTexture(material, "_RimColorTex") : null);
+
+                var useEmission = IsMaterialFeatureEnabled(
+                    material,
+                    "_UseEmission",
+                    ReadTexture(material, "_EmissionMap") != null || ReadTexture(material, "_EmissionTex") != null || ReadColor(material, "_EmissionColor", Color.black).maxColorComponent > 0.0f);
+                AddTextureIndex(mtoon, "emissionTextureIndex", useEmission ? ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex") : null);
+
+                AddTextureIndex(mtoon, "reflectionColorTextureIndex", ReadTexture(material, "_ReflectionColorTex"));
+                AddTextureIndex(mtoon, "smoothnessTextureIndex", ReadTexture(material, "_SmoothnessTex"));
+                AddTextureIndex(mtoon, "metallicGlossTextureIndex", ReadTexture(material, "_MetallicGlossMap"));
                 AddTextureIndex(mtoon, "reflectionCubeTextureIndex", ReadTexture(material, "_ReflectionCubeTex"));
 
-                var outlineWidth = ReadFloat(material, "_OutlineWidth", 0.0f);
+                var useOutline = IsMaterialFeatureEnabled(material, "_UseOutline", lowerShader.Contains("outline"));
+                var outlineWidth = useOutline ? ReadFloat(material, "_OutlineWidth", 0.0f) : 0.0f;
                 var outlineWidthFactor = lowerShader.Contains("liltoon") ? outlineWidth * 0.01f : outlineWidth;
                 mtoon["outlineWidthMode"] = outlineWidthFactor > 0.0f ? "world_coordinates" : "none";
                 mtoon["outlineWidthFactor"] = outlineWidthFactor;
@@ -3146,7 +3163,9 @@ namespace UNAvatar.UnityExporter
                 var outlineColor = ReadColor(material, "_OutlineColor", Color.black);
                 mtoon["outlineColorFactor"] = FloatArray(outlineColor.r, outlineColor.g, outlineColor.b);
                 mtoon["outlineLightingMixFactor"] = ReadFloat(material, "_OutlineEnableLighting", 1.0f);
-                AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", ReadTexture(material, "_OutlineWidthMask"));
+                AddTextureIndex(mtoon, "outlineTextureIndex", useOutline ? ReadTexture(material, "_OutlineTex") : null);
+                AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", useOutline ? ReadTexture(material, "_OutlineWidthMask") : null);
+                AddTextureIndex(mtoon, "alphaMaskTextureIndex", ReadTexture(material, "_AlphaMask"));
 
                 var mainTextureProperty = material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
                 var mainTextureScale = Vector2.one;

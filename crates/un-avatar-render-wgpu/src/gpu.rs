@@ -1720,7 +1720,7 @@ impl GpuState {
 						self.write_contact_shadow_uniform();
 						self.draw_contact_shadow(&mut pass);
 					}
-					sm.draw_mtoon_outlines(&mut pass);
+					sm.draw_toon_outlines(&mut pass);
 					sm.draw_blended(&mut pass);
 				}
 			} else {
@@ -2758,7 +2758,7 @@ impl GpuState {
 						self.write_contact_shadow_uniform();
 						self.draw_contact_shadow(&mut pass);
 					}
-					sm.draw_mtoon_outlines(&mut pass);
+					sm.draw_toon_outlines(&mut pass);
 					sm.draw_blended(&mut pass);
 				}
 			} else {

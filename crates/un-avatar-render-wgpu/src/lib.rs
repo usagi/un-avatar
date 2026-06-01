@@ -3387,7 +3387,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		debug_disable_normal_map: bool,
 		#[arg(
 			long,
-			help = "診断用: fs_mtoon を base (alb × base_color) のみで早期 return（shading/GI/rim/matcap/emissive 全 skip）"
+			help = "診断用: toon path を base (alb × base_color) のみで早期 return（shading/GI/rim/matcap/emissive 全 skip）"
 		)]
 		debug_base_texture_only: bool,
 	}

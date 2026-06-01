@@ -19,9 +19,10 @@ pub enum UnaShadingModel {
 	LitLambert,
 	/// `KHR_materials_unlit` 相当。
 	Unlit,
-	/// Legacy name for the avatar toon path. In v2 this evolves into UNToon:
-	/// lilToon-compatible first, with VRM/MToon converted into that model.
+	/// Legacy v1 avatar toon path for VRM/MToon inputs.
 	MToonLike,
+	/// v2 avatar toon path for `.unavatar` / lilToon-compatible inputs.
+	LilToonLike,
 }
 
 impl UnaShadingModel {
@@ -31,6 +32,7 @@ impl UnaShadingModel {
 			UnaShadingModel::LitLambert => 0.0,
 			UnaShadingModel::Unlit => 1.0,
 			UnaShadingModel::MToonLike => 2.0,
+			UnaShadingModel::LilToonLike => 3.0,
 		}
 	}
 }
@@ -477,8 +479,13 @@ pub struct UnaMaterialPbr {
 	pub uv_offset_scale: [f32; 4],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub mtoon: Option<UnaMtoonMaterial>,
+	/// lilToon-like v2 material model. This is the primary runtime material for v2.
+	/// lilToon inputs are imported here; MToon/VRM may be mapped later, but is
+	/// not the design base.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub liltoon_like: Option<UnaLilToonLikeMaterial>,
 	/// `.unavatar` material extension payload as authored/exported. Runtime
-	/// material importers may read this for UNToon/lilToon compatibility without
+	/// material importers may read this for lilToon-like compatibility without
 	/// reparsing the source glTF JSON.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub unavatar_material: Option<Value>,
@@ -490,6 +497,347 @@ pub enum UnaMtoonOutlineWidthMode {
 	None,
 	WorldCoordinates,
 	ScreenCoordinates,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaLilToonLikeSourceProfile {
+	#[default]
+	Unknown,
+	Liltoon,
+	MtoonConverted,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaLilToonLikeBlendMode {
+	Normal,
+	#[default]
+	Add,
+	Screen,
+	Multiply,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeShadow {
+	#[serde(default = "one_f32")]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub color_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub strength_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub border_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub blur_mask_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub strength_factor: f32,
+	#[serde(default = "default_liltoon_shadow_border")]
+	pub border_factor: f32,
+	#[serde(default = "default_liltoon_shadow_blur")]
+	pub blur_factor: f32,
+	#[serde(default)]
+	pub border_range_factor: f32,
+	#[serde(default = "default_liltoon_shadow_main_strength")]
+	pub main_strength_factor: f32,
+	#[serde(default = "default_liltoon_shadow_env_strength")]
+	pub env_strength_factor: f32,
+	#[serde(default = "default_liltoon_shadow_border_color")]
+	pub border_color_factor: [f32; 3],
+	#[serde(default = "one_f32")]
+	pub normal_strength_factor: f32,
+	#[serde(default)]
+	pub receive_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeMatcap {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default = "one_vec3")]
+	pub color_factor: [f32; 3],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub blend_mask_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub blend_factor: f32,
+	#[serde(default)]
+	pub main_strength_factor: f32,
+	#[serde(default)]
+	pub enable_lighting_factor: f32,
+	#[serde(default)]
+	pub blend_mode: UnaLilToonLikeBlendMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeReflection {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_smoothness")]
+	pub smoothness_factor: f32,
+	#[serde(default)]
+	pub metallic_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub metallic_texture_index: Option<usize>,
+	#[serde(default = "default_liltoon_reflectance")]
+	pub reflectance_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_specular_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_reflection_factor: f32,
+	#[serde(default = "one_f32")]
+	pub specular_toon_factor: f32,
+	#[serde(default = "default_liltoon_specular_border")]
+	pub specular_border_factor: f32,
+	#[serde(default)]
+	pub specular_blur_factor: f32,
+	#[serde(default)]
+	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub cube_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub smoothness_texture_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeRim {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default)]
+	pub main_strength_factor: f32,
+	#[serde(default = "default_liltoon_rim_border")]
+	pub border_factor: f32,
+	#[serde(default = "default_liltoon_rim_blur")]
+	pub blur_factor: f32,
+	#[serde(default = "default_liltoon_rim_fresnel_power")]
+	pub fresnel_power_factor: f32,
+	#[serde(default = "one_f32")]
+	pub enable_lighting_factor: f32,
+	#[serde(default)]
+	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default)]
+	pub shade_enabled_factor: f32,
+	#[serde(default = "default_liltoon_rim_shade_color")]
+	pub shade_color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_rim_border")]
+	pub shade_border_factor: f32,
+	#[serde(default = "default_liltoon_rim_blur")]
+	pub shade_blur_factor: f32,
+	#[serde(default = "default_liltoon_rim_fresnel_power")]
+	pub shade_fresnel_power_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeEmission {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default)]
+	pub main_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub blend_factor: f32,
+	#[serde(default)]
+	pub blend_mode: UnaLilToonLikeBlendMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeOutline {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub width_mask_texture_index: Option<usize>,
+	#[serde(default)]
+	pub width_factor: f32,
+	#[serde(default = "default_liltoon_outline_fix_width")]
+	pub fix_width_factor: f32,
+	#[serde(default = "one_f32")]
+	pub enable_lighting_factor: f32,
+	#[serde(default)]
+	pub z_bias_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeAlphaMask {
+	#[serde(default)]
+	pub mode_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub scale_factor: f32,
+	#[serde(default)]
+	pub value_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeMaterial {
+	#[serde(default)]
+	pub source_profile: UnaLilToonLikeSourceProfile,
+	#[serde(default)]
+	pub shadow: UnaLilToonLikeShadow,
+	#[serde(default)]
+	pub matcap: UnaLilToonLikeMatcap,
+	#[serde(default)]
+	pub reflection: UnaLilToonLikeReflection,
+	#[serde(default)]
+	pub rim: UnaLilToonLikeRim,
+	#[serde(default)]
+	pub emission: UnaLilToonLikeEmission,
+	#[serde(default)]
+	pub outline: UnaLilToonLikeOutline,
+	#[serde(default)]
+	pub alpha_mask: UnaLilToonLikeAlphaMask,
+}
+
+impl Default for UnaLilToonLikeShadow {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 1.0,
+			color_factor: [0.0, 0.0, 0.0],
+			color_texture_index: None,
+			strength_mask_texture_index: None,
+			border_mask_texture_index: None,
+			blur_mask_texture_index: None,
+			strength_factor: 1.0,
+			border_factor: default_liltoon_shadow_border(),
+			blur_factor: default_liltoon_shadow_blur(),
+			border_range_factor: 0.0,
+			main_strength_factor: default_liltoon_shadow_main_strength(),
+			env_strength_factor: default_liltoon_shadow_env_strength(),
+			border_color_factor: default_liltoon_shadow_border_color(),
+			normal_strength_factor: 1.0,
+			receive_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeMatcap {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [1.0, 1.0, 1.0],
+			texture_index: None,
+			blend_mask_texture_index: None,
+			blend_factor: 1.0,
+			main_strength_factor: 0.0,
+			enable_lighting_factor: 0.0,
+			blend_mode: UnaLilToonLikeBlendMode::default(),
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeReflection {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [1.0, 1.0, 1.0, 1.0],
+			smoothness_factor: default_liltoon_smoothness(),
+			metallic_factor: 0.0,
+			metallic_texture_index: None,
+			reflectance_factor: default_liltoon_reflectance(),
+			apply_specular_factor: 1.0,
+			apply_reflection_factor: 1.0,
+			specular_toon_factor: 1.0,
+			specular_border_factor: default_liltoon_specular_border(),
+			specular_blur_factor: 0.0,
+			blend_mode: UnaLilToonLikeBlendMode::default(),
+			cube_texture_index: None,
+			color_texture_index: None,
+			smoothness_texture_index: None,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeRim {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [1.0, 1.0, 1.0, 1.0],
+			texture_index: None,
+			main_strength_factor: 0.0,
+			border_factor: default_liltoon_rim_border(),
+			blur_factor: default_liltoon_rim_blur(),
+			fresnel_power_factor: default_liltoon_rim_fresnel_power(),
+			enable_lighting_factor: 1.0,
+			blend_mode: UnaLilToonLikeBlendMode::default(),
+			shade_enabled_factor: 0.0,
+			shade_color_factor: default_liltoon_rim_shade_color(),
+			shade_border_factor: default_liltoon_rim_border(),
+			shade_blur_factor: default_liltoon_rim_blur(),
+			shade_fresnel_power_factor: default_liltoon_rim_fresnel_power(),
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeEmission {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [0.0, 0.0, 0.0, 1.0],
+			texture_index: None,
+			main_strength_factor: 0.0,
+			blend_factor: 1.0,
+			blend_mode: UnaLilToonLikeBlendMode::default(),
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeOutline {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [0.6, 0.56, 0.73, 1.0],
+			texture_index: None,
+			width_mask_texture_index: None,
+			width_factor: 0.0,
+			fix_width_factor: default_liltoon_outline_fix_width(),
+			enable_lighting_factor: 1.0,
+			z_bias_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeAlphaMask {
+	fn default() -> Self {
+		Self {
+			mode_factor: 0.0,
+			texture_index: None,
+			scale_factor: 1.0,
+			value_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeMaterial {
+	fn default() -> Self {
+		Self {
+			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			shadow: UnaLilToonLikeShadow::default(),
+			matcap: UnaLilToonLikeMatcap::default(),
+			reflection: UnaLilToonLikeReflection::default(),
+			rim: UnaLilToonLikeRim::default(),
+			emission: UnaLilToonLikeEmission::default(),
+			outline: UnaLilToonLikeOutline::default(),
+			alpha_mask: UnaLilToonLikeAlphaMask::default(),
+		}
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -540,7 +888,7 @@ pub struct UnaMtoonMaterial {
 	pub outline_lighting_mix_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub uv_animation_mask_texture_index: Option<usize>,
-	/// Base UV transform shared by the current UNToon compatibility path:
+	/// Base UV transform shared by the current toon compatibility paths:
 	/// `[offset_x, offset_y, scale_x, scale_y]`.
 	#[serde(default = "default_uv_offset_scale")]
 	pub uv_offset_scale: [f32; 4],
@@ -594,6 +942,10 @@ fn one_vec3() -> [f32; 3] {
 	[1.0, 1.0, 1.0]
 }
 
+fn one_vec4() -> [f32; 4] {
+	[1.0, 1.0, 1.0, 1.0]
+}
+
 fn default_uv_offset_scale() -> [f32; 4] {
 	[0.0, 0.0, 1.0, 1.0]
 }
@@ -604,6 +956,58 @@ fn default_mtoon_shading_toony() -> f32 {
 
 fn default_mtoon_gi_equalization() -> f32 {
 	0.9
+}
+
+fn default_liltoon_shadow_border() -> f32 {
+	0.5
+}
+
+fn default_liltoon_shadow_blur() -> f32 {
+	0.1
+}
+
+fn default_liltoon_shadow_main_strength() -> f32 {
+	0.0
+}
+
+fn default_liltoon_shadow_env_strength() -> f32 {
+	0.0
+}
+
+fn default_liltoon_shadow_border_color() -> [f32; 3] {
+	[1.0, 0.1, 0.0]
+}
+
+fn default_liltoon_smoothness() -> f32 {
+	0.5
+}
+
+fn default_liltoon_reflectance() -> f32 {
+	0.5
+}
+
+fn default_liltoon_specular_border() -> f32 {
+	0.5
+}
+
+fn default_liltoon_rim_border() -> f32 {
+	0.5
+}
+
+fn default_liltoon_rim_blur() -> f32 {
+	0.65
+}
+
+fn default_liltoon_rim_fresnel_power() -> f32 {
+	3.5
+}
+
+fn default_liltoon_rim_shade_color() -> [f32; 4] {
+	[0.5, 0.5, 0.5, 1.0]
+}
+
+fn default_liltoon_outline_fix_width() -> f32 {
+	0.5
 }
 
 fn default_mtoon_rim_fresnel_power() -> f32 {
@@ -635,6 +1039,7 @@ impl Default for UnaMaterialPbr {
 			alpha_cutoff: default_alpha_cutoff(),
 			uv_offset_scale: default_uv_offset_scale(),
 			mtoon: None,
+			liltoon_like: None,
 			unavatar_material: None,
 		}
 	}

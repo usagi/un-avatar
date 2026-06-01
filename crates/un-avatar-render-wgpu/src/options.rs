@@ -599,7 +599,7 @@ pub struct AvatarWindowOptions {
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断フラグ。
 	/// manifest `[debug] disable_normal_map = true`。
 	pub debug_disable_normal_map: bool,
-	/// fs_mtoon を `base` のみで早期 return する診断フラグ（shading / rim / matcap / GI / emissive 全 skip）。
+	/// toon path を `base` のみで早期 return する診断フラグ（shading / rim / matcap / GI / emissive 全 skip）。
 	/// manifest `[debug] base_texture_only = true`。
 	pub debug_base_texture_only: bool,
 	/// カメラ操作ロック。true の間はマウスドラッグ / ホイールでカメラ操作不可。

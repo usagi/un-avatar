@@ -167,7 +167,7 @@ pub struct SceneMeshLoadOpts {
 	pub debug_disable_shade_color: bool,
 	/// normalTexture の寄与を 0 にし、頂点法線のみで shading / rim を計算する診断 toggle。
 	pub debug_disable_normal_map: bool,
-	/// fs_mtoon の出力を `base = alb × base_color.rgb` のみで早期 return する診断 toggle。
+	/// toon fragment path の出力を `base = alb × base_color.rgb` のみで早期 return する診断 toggle。
 	/// shading / GI / rim / matcap / emissive / shade_term を全てスキップ。
 	/// これでリングが残るならテクスチャ自身またはメッシュ重なり由来。
 	pub debug_base_texture_only: bool,
@@ -220,7 +220,7 @@ struct MeshDrawTransformGpu {
 /// `params.w` はビットパック `u32` を `f32` で渡す（`bitcast`）。
 /// bit0=bind pose rigid, bit1=単色プリミティブ, bit2=Rim Lighting OFF (debug),
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
-/// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=fs_mtoon を base のみで早期 return (debug),
+/// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
 /// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -229,11 +229,25 @@ struct MeshDrawMaterialGpu {
 	params: [f32; 4],
 	shade_color: [f32; 4],
 	shading_params: [f32; 4],
+	shadow_params: [f32; 4],
+	shadow_ext_params: [f32; 4],
+	shadow_border_color: [f32; 4],
 	matcap_factor: [f32; 4],
+	matcap_params: [f32; 4],
+	reflection_color: [f32; 4],
+	reflection_control: [f32; 4],
+	reflection_params: [f32; 4],
+	specular_toon_params: [f32; 4],
 	rim_color: [f32; 4],
 	rim_params: [f32; 4],
+	rim_control: [f32; 4],
+	rim_shade_color: [f32; 4],
+	rim_shade_params: [f32; 4],
+	emission_color: [f32; 4],
+	emission_params: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
+	alpha_mask_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -249,7 +263,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 192);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 416);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -353,10 +367,10 @@ struct ExpressionBinding {
 enum DrawPipelineKind {
 	OpaqueLit,
 	OpaqueUnlit,
-	OpaqueMtoon,
+	OpaqueToon,
 	BlendLit,
 	BlendUnlit,
-	BlendMtoon,
+	BlendToon,
 }
 
 #[derive(Clone, Debug)]
@@ -452,7 +466,7 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	match shading {
 		UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
 		UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
-		UnaShadingModel::MToonLike => DrawPipelineKind::BlendMtoon,
+		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::BlendToon,
 	}
 }
 
@@ -463,10 +477,12 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueMtoon, batch_capacity),
+		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
+		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueMtoon, batch_capacity),
+		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
+		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 	];
 	let mut blended_batches = Vec::new();
 
@@ -483,13 +499,16 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaShadingModel::LitLambert => 0,
 			UnaShadingModel::Unlit => 1,
 			UnaShadingModel::MToonLike => 2,
+			UnaShadingModel::LilToonLike => 3,
 		};
 		match draw.alpha_mode {
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Mask => opaque_batches[3 + shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Blend if draw.mtoon.transparent_with_z_write && shading == UnaShadingModel::MToonLike => {
+			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
+			UnaAlphaMode::Blend
+				if draw.mtoon.transparent_with_z_write && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) =>
+			{
 				transparent_zwrite_draw_indices.push(draw_index);
-				append_ordered_draw_batch(&mut blended_batches, DrawPipelineKind::BlendMtoon, draw_index, batch_capacity);
+				append_ordered_draw_batch(&mut blended_batches, DrawPipelineKind::BlendToon, draw_index, batch_capacity);
 			}
 			UnaAlphaMode::Blend => {
 				append_ordered_draw_batch(
@@ -518,14 +537,14 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 }
 
 pub(crate) struct SceneMeshes {
-	pipeline_outline_mtoon: wgpu::RenderPipeline,
+	pipeline_outline_toon: wgpu::RenderPipeline,
 	pipeline_opaque_lit: wgpu::RenderPipeline,
 	pipeline_opaque_unlit: wgpu::RenderPipeline,
-	pipeline_opaque_mtoon: wgpu::RenderPipeline,
+	pipeline_opaque_toon: wgpu::RenderPipeline,
 	pipeline_blend_lit: wgpu::RenderPipeline,
 	pipeline_blend_unlit: wgpu::RenderPipeline,
-	pipeline_blend_mtoon: wgpu::RenderPipeline,
-	pipeline_transparent_zprepass_mtoon: wgpu::RenderPipeline,
+	pipeline_blend_toon: wgpu::RenderPipeline,
+	pipeline_transparent_zprepass_toon: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_bind_group: wgpu::BindGroup,
@@ -933,9 +952,17 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 	match opts.avatar_outline.policy {
 		AvatarOutlinePolicy::Override => false,
 		AvatarOutlinePolicy::Authored => {
-			d.shading == UnaShadingModel::MToonLike
-				&& matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
-				&& effective_mtoon_outline(&d.mtoon, opts).is_some()
+			if !matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask) {
+				return false;
+			}
+			if d.shading == UnaShadingModel::LilToonLike {
+				return d
+					.material
+					.liltoon_like
+					.as_ref()
+					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
+			}
+			d.shading == UnaShadingModel::MToonLike && effective_mtoon_outline(&d.mtoon, opts).is_some()
 		}
 		AvatarOutlinePolicy::Off => false,
 	}
@@ -1013,17 +1040,187 @@ fn mesh_draw_material_gpu(
 	} else {
 		1.0
 	};
+	let liltoon_like = mat.liltoon_like.as_ref();
 	let outline = effective_mtoon_outline(mtoon, opts);
-	let (outline_mode, outline_width, outline_color, outline_lighting_mix) = outline
-		.map(|o| (o.mode, o.width, o.color, o.lighting_mix))
-		.unwrap_or((UnaMtoonOutlineWidthMode::None, 0.0, [0.0, 0.0, 0.0], 0.0));
+	let (outline_mode, outline_width, outline_color, outline_lighting_mix) = if let Some(liltoon_like) = liltoon_like {
+		if liltoon_like.outline.enabled_factor > 0.5 && liltoon_like.outline.width_factor > 0.0 {
+			(
+				UnaMtoonOutlineWidthMode::WorldCoordinates,
+				liltoon_like.outline.width_factor,
+				[
+					liltoon_like.outline.color_factor[0],
+					liltoon_like.outline.color_factor[1],
+					liltoon_like.outline.color_factor[2],
+				],
+				liltoon_like.outline.enable_lighting_factor,
+			)
+		} else {
+			(UnaMtoonOutlineWidthMode::None, 0.0, [0.0, 0.0, 0.0], 0.0)
+		}
+	} else {
+		outline
+			.map(|o| (o.mode, o.width, o.color, o.lighting_mix))
+			.unwrap_or((UnaMtoonOutlineWidthMode::None, 0.0, [0.0, 0.0, 0.0], 0.0))
+	};
+	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or(mtoon.shade_color_factor);
+	let shadow_params = liltoon_like
+		.map(|u| {
+			[
+				1.0,
+				(u.shadow.enabled_factor * u.shadow.strength_factor).clamp(0.0, 1.0),
+				u.shadow.border_factor.clamp(0.0, 1.0),
+				u.shadow.blur_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.5, 0.1]);
+	let shadow_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.shadow.border_range_factor.clamp(0.0, 1.0),
+				u.shadow.main_strength_factor.clamp(0.0, 1.0),
+				u.shadow.env_strength_factor.clamp(0.0, 1.0),
+				u.shadow.normal_strength_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let shadow_border_color = liltoon_like
+		.map(|u| {
+			[
+				u.shadow.border_color_factor[0],
+				u.shadow.border_color_factor[1],
+				u.shadow.border_color_factor[2],
+				1.0,
+			]
+		})
+		.unwrap_or([1.0, 0.1, 0.0, 1.0]);
+	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or(mtoon.matcap_factor);
+	let matcap_params = liltoon_like
+		.map(|u| {
+			[
+				(u.matcap.enabled_factor * u.matcap.blend_factor).clamp(0.0, 1.0),
+				u.matcap.main_strength_factor.clamp(0.0, 1.0),
+				u.matcap.enable_lighting_factor.clamp(0.0, 1.0),
+				match u.matcap.blend_mode {
+					un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
+				},
+			]
+		})
+		.unwrap_or([1.0, 0.0, 0.0, 1.0]);
+	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let reflection_control = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.enabled_factor.clamp(0.0, 1.0),
+				(u.reflection.enabled_factor * u.reflection.apply_specular_factor).clamp(0.0, 1.0),
+				(u.reflection.enabled_factor * u.reflection.apply_reflection_factor).clamp(0.0, 1.0),
+				match u.reflection.blend_mode {
+					un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
+				},
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let reflection_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.smoothness_factor.clamp(0.0, 1.0),
+				u.reflection.metallic_factor.clamp(0.0, 1.0),
+				u.reflection.reflectance_factor.clamp(0.0, 1.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let specular_toon_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.specular_toon_factor.clamp(0.0, 1.0),
+				u.reflection.specular_border_factor.clamp(0.0, 1.0),
+				u.reflection.specular_blur_factor.clamp(0.0, 1.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.5, 0.0, 0.0]);
+	let alpha_mask_params = liltoon_like
+		.map(|u| {
+			[
+				u.alpha_mask.mode_factor.clamp(0.0, 4.0),
+				u.alpha_mask.scale_factor,
+				u.alpha_mask.value_factor,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let rim_color_factor = liltoon_like.map(|u| u.rim.color_factor);
+	let rim_color_gpu = rim_color_factor.unwrap_or([rim_color[0], rim_color[1], rim_color[2], 1.0]);
+	let rim_params = liltoon_like
+		.map(|u| {
+			[
+				u.rim.border_factor.clamp(0.0, 1.0),
+				u.rim.blur_factor.clamp(0.0, 1.0),
+				u.rim.fresnel_power_factor.clamp(0.01, 50.0),
+				0.0,
+			]
+		})
+		.unwrap_or([rim_lighting_mix, rim_power, rim_lift, rim_texture_mix]);
+	let rim_control = liltoon_like
+		.map(|u| {
+			[
+				(u.rim.enabled_factor * u.rim.color_factor[3]).clamp(0.0, 1.0),
+				u.rim.main_strength_factor.clamp(0.0, 1.0),
+				u.rim.enable_lighting_factor.clamp(0.0, 1.0),
+				match u.rim.blend_mode {
+					un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
+				},
+			]
+		})
+		.unwrap_or([1.0, 0.0, 0.0, 1.0]);
+	let rim_shade_color = liltoon_like.map(|u| u.rim.shade_color_factor).unwrap_or([0.5, 0.5, 0.5, 1.0]);
+	let rim_shade_params = liltoon_like
+		.map(|u| {
+			[
+				u.rim.shade_enabled_factor.clamp(0.0, 1.0),
+				u.rim.shade_border_factor.clamp(0.0, 1.0),
+				u.rim.shade_blur_factor.clamp(0.0, 1.0),
+				u.rim.shade_fresnel_power_factor.clamp(0.01, 50.0),
+			]
+		})
+		.unwrap_or([0.0, 0.5, 0.65, 3.5]);
+	let emission_color = liltoon_like.map(|u| u.emission.color_factor).unwrap_or([
+		mat.emissive_factor[0],
+		mat.emissive_factor[1],
+		mat.emissive_factor[2],
+		1.0,
+	]);
+	let emission_params = liltoon_like
+		.map(|u| {
+			[
+				u.emission.enabled_factor.clamp(0.0, 1.0),
+				u.emission.main_strength_factor.clamp(0.0, 1.0),
+				u.emission.blend_factor.clamp(0.0, 1.0),
+				match u.emission.blend_mode {
+					un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+					un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
+				},
+			]
+		})
+		.unwrap_or([1.0, 0.0, 1.0, 1.0]);
 	MeshDrawMaterialGpu {
 		base_color,
 		params: [0.0, eff_alpha.as_shader_alpha_kind(), mat.alpha_cutoff, f32::from_bits(flags)],
 		shade_color: [
-			mtoon.shade_color_factor[0],
-			mtoon.shade_color_factor[1],
-			mtoon.shade_color_factor[2],
+			shade_color[0],
+			shade_color[1],
+			shade_color[2],
 			if mat.normal_texture_index.is_some() {
 				mat.normal_texture_scale
 			} else {
@@ -1036,19 +1233,32 @@ fn mesh_draw_material_gpu(
 			mtoon.shading_shift_texture_scale,
 			mtoon.gi_equalization_factor,
 		],
+		shadow_params,
+		shadow_ext_params,
+		shadow_border_color,
 		matcap_factor: [
-			mtoon.matcap_factor[0],
-			mtoon.matcap_factor[1],
-			mtoon.matcap_factor[2],
+			matcap_color[0],
+			matcap_color[1],
+			matcap_color[2],
 			opts.avatar_matcap.scale.clamp(0.0, 2.0),
 		],
+		matcap_params,
+		reflection_color,
+		reflection_control,
+		reflection_params,
+		specular_toon_params,
 		rim_color: [
-			rim_color[0],
-			rim_color[1],
-			rim_color[2],
+			rim_color_gpu[0],
+			rim_color_gpu[1],
+			rim_color_gpu[2],
 			(mat.occlusion_texture_strength * opts.avatar_ambient_occlusion.strength).clamp(0.0, 2.0),
 		],
-		rim_params: [rim_lighting_mix, rim_power, rim_lift, rim_texture_mix],
+		rim_params,
+		rim_control,
+		rim_shade_color,
+		rim_shade_params,
+		emission_color,
+		emission_params,
 		outline_color: [outline_color[0], outline_color[1], outline_color[2], 0.0],
 		outline_params: [
 			outline_mode_gpu(outline_mode),
@@ -1056,6 +1266,7 @@ fn mesh_draw_material_gpu(
 			outline_lighting_mix,
 			if mtoon.transparent_with_z_write { 1.0 } else { 0.0 },
 		],
+		alpha_mask_params,
 		emissive_factor: [
 			mat.emissive_factor[0],
 			mat.emissive_factor[1],
@@ -1357,6 +1568,83 @@ impl SceneMeshes {
 				sampler_bind_group_layout_entry(21, wgpu::ShaderStages::FRAGMENT),
 				sampler_bind_group_layout_entry(22, wgpu::ShaderStages::FRAGMENT),
 				sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 24,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 25,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(26, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(27, wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 28,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 29,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 30,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(31, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(32, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(33, wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 34,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(35, wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 36,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 
@@ -1459,13 +1747,13 @@ impl SceneMeshes {
 			attributes: &MESH_VTX_ATTRS,
 		};
 
-		let pipeline_outline_mtoon = Self::create_mesh_pipeline(
+		let pipeline_outline_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_outline_mtoon",
+			"mesh_outline_toon",
 			"vs_outline",
 			"fs_outline",
 			None,
@@ -1507,15 +1795,15 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_opaque_mtoon = Self::create_mesh_pipeline(
+		let pipeline_opaque_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_opaque_mtoon",
+			"mesh_opaque_toon",
 			"vs_main",
-			"fs_mtoon",
+			"fs_toon",
 			None,
 			wgpu::ColorWrites::ALL,
 			true,
@@ -1525,7 +1813,8 @@ impl SceneMeshes {
 		);
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
 		// lilToon Transparent uses SrcBlend=One, DstBlend=OneMinusSrcAlpha
-		// with shader-side premultiply. UNToon v2 follows that path for MToonLike.
+		// with shader-side premultiply. The lilToon-like v2 path follows the same
+		// premultiplied-alpha convention while it still shares this pipeline.
 		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
 		let pipeline_blend_lit = Self::create_mesh_pipeline(
 			device,
@@ -1559,15 +1848,15 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_blend_mtoon = Self::create_mesh_pipeline(
+		let pipeline_blend_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_blend_mtoon",
+			"mesh_blend_toon",
 			"vs_main",
-			"fs_mtoon",
+			"fs_toon",
 			premultiplied_blend,
 			wgpu::ColorWrites::ALL,
 			false,
@@ -1575,15 +1864,15 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_transparent_zprepass_mtoon = Self::create_mesh_pipeline(
+		let pipeline_transparent_zprepass_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_transparent_zprepass_mtoon",
+			"mesh_transparent_zprepass_toon",
 			"vs_main",
-			"fs_mtoon_zprepass",
+			"fs_toon_zprepass",
 			None,
 			wgpu::ColorWrites::empty(),
 			true,
@@ -2017,22 +2306,101 @@ impl SceneMeshes {
 				let mtoon = mat.mtoon.clone().unwrap_or_default();
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
-				let shade_view = texture_view_or(&image_views, mtoon.shade_multiply_texture_index, &white_view);
-				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.shade_multiply_texture_index, 0);
-				let shift_view = texture_view_or(&image_views, mtoon.shading_shift_texture_index, &black_view);
-				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.shading_shift_texture_index, 0);
-				let matcap_view = texture_view_or(&image_views, mtoon.matcap_texture_index, &black_view);
-				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.matcap_texture_index, 0);
-				let rim_view = texture_view_or(&image_views, mtoon.rim_multiply_texture_index, &white_view);
-				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.rim_multiply_texture_index, 0);
-				let reflection_view = texture_view_or(&image_views, mtoon.reflection_cube_texture_index, &black_view);
-				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.reflection_cube_texture_index, 0);
-				let emissive_view = texture_view_or(&image_views, mat.emissive_texture_index, &black_view);
-				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.emissive_texture_index, 0);
+				let shade_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
+					.or(mtoon.shade_multiply_texture_index);
+				let shade_view = texture_view_or(&image_views, shade_texture_index, &white_view);
+				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shade_texture_index, 0);
+				let liltoon_strength_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
+				let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
+				let shift_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let shift_view = texture_view_or(&image_views, shading_shift_texture_index, shift_fallback_view);
+				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shading_shift_texture_index, 0);
+				let shadow_border_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.border_mask_texture_index);
+				let shadow_border_mask_view = texture_view_or(&image_views, shadow_border_mask_texture_index, &white_view);
+				let shadow_border_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_border_mask_texture_index, 0);
+				let shadow_blur_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
+				let shadow_blur_mask_view = texture_view_or(&image_views, shadow_blur_mask_texture_index, &white_view);
+				let shadow_blur_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_blur_mask_texture_index, 0);
+				let matcap_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
+					.or(mtoon.matcap_texture_index);
+				let matcap_view = texture_view_or(&image_views, matcap_texture_index, &black_view);
+				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_texture_index, 0);
+				let matcap_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
+				let matcap_blend_mask_view = texture_view_or(&image_views, matcap_blend_mask_texture_index, &white_view);
+				let matcap_blend_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_blend_mask_texture_index, 0);
+				let alpha_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
+				let alpha_mask_view = texture_view_or(&image_views, alpha_mask_texture_index, &white_view);
+				let alpha_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, alpha_mask_texture_index, 0);
+				let rim_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.rim.texture_index)
+					.or(mtoon.rim_multiply_texture_index);
+				let rim_view = texture_view_or(&image_views, rim_texture_index, &white_view);
+				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, rim_texture_index, 0);
+				let reflection_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.cube_texture_index)
+					.or(mtoon.reflection_cube_texture_index);
+				let reflection_view = texture_view_or(&image_views, reflection_texture_index, &black_view);
+				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_texture_index, 0);
+				let reflection_color_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.color_texture_index);
+				let reflection_color_view = texture_view_or(&image_views, reflection_color_texture_index, &white_view);
+				let reflection_color_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_color_texture_index, 0);
+				let smoothness_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.smoothness_texture_index);
+				let smoothness_view = texture_view_or(&image_views, smoothness_texture_index, &white_view);
+				let smoothness_sampler = texture_sampler_or(&samplers, &image_sampler_indices, smoothness_texture_index, 0);
+				let metallic_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.metallic_texture_index);
+				let metallic_view = texture_view_or(&image_views, metallic_texture_index, &white_view);
+				let metallic_sampler = texture_sampler_or(&samplers, &image_sampler_indices, metallic_texture_index, 0);
+				let emissive_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.texture_index)
+					.or(mat.emissive_texture_index);
+				let emissive_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let emissive_view = texture_view_or(&image_views, emissive_texture_index, emissive_fallback_view);
+				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, emissive_texture_index, 0);
 				let occlusion_view = texture_view_or(&image_views, mat.occlusion_texture_index, &white_view);
 				let occlusion_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.occlusion_texture_index, 0);
-				let outline_view = texture_view_or(&image_views, mtoon.outline_width_multiply_texture_index, &white_view);
-				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.outline_width_multiply_texture_index, 0);
+				let outline_width_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index)
+					.or(mtoon.outline_width_multiply_texture_index);
+				let outline_view = texture_view_or(&image_views, outline_width_mask_texture_index, &white_view);
+				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, outline_width_mask_texture_index, 0);
 				let uv_mask_view = texture_view_or(&image_views, mtoon.uv_animation_mask_texture_index, &white_view);
 				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
@@ -2151,6 +2519,62 @@ impl SceneMeshes {
 							binding: 23,
 							resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
 						},
+						wgpu::BindGroupEntry {
+							binding: 24,
+							resource: wgpu::BindingResource::TextureView(shadow_border_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 25,
+							resource: wgpu::BindingResource::TextureView(shadow_blur_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 26,
+							resource: wgpu::BindingResource::Sampler(shadow_border_mask_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 27,
+							resource: wgpu::BindingResource::Sampler(shadow_blur_mask_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 28,
+							resource: wgpu::BindingResource::TextureView(reflection_color_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 29,
+							resource: wgpu::BindingResource::TextureView(smoothness_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 30,
+							resource: wgpu::BindingResource::TextureView(metallic_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 31,
+							resource: wgpu::BindingResource::Sampler(reflection_color_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 32,
+							resource: wgpu::BindingResource::Sampler(smoothness_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 33,
+							resource: wgpu::BindingResource::Sampler(metallic_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 34,
+							resource: wgpu::BindingResource::TextureView(matcap_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 35,
+							resource: wgpu::BindingResource::Sampler(matcap_blend_mask_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 36,
+							resource: wgpu::BindingResource::TextureView(alpha_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 37,
+							resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
+						},
 					],
 				});
 
@@ -2233,14 +2657,14 @@ impl SceneMeshes {
 		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) = build_draw_order(&draws, &opts);
 
 		Ok(Self {
-			pipeline_outline_mtoon,
+			pipeline_outline_toon,
 			pipeline_opaque_lit,
 			pipeline_opaque_unlit,
-			pipeline_opaque_mtoon,
+			pipeline_opaque_toon,
 			pipeline_blend_lit,
 			pipeline_blend_unlit,
-			pipeline_blend_mtoon,
-			pipeline_transparent_zprepass_mtoon,
+			pipeline_blend_toon,
+			pipeline_transparent_zprepass_toon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_bind_group,
@@ -2337,7 +2761,7 @@ impl SceneMeshes {
 		pass.draw_indexed(0..d.index_count, 0, 0..1);
 	}
 
-	pub fn draw_mtoon_outlines(&self, pass: &mut wgpu::RenderPass<'_>) {
+	pub fn draw_toon_outlines(&self, pass: &mut wgpu::RenderPass<'_>) {
 		if self.outline_draw_indices.is_empty()
 			|| self.opts.force_simple_basecolor
 			|| self.opts.debug_bind_pose
@@ -2345,7 +2769,7 @@ impl SceneMeshes {
 		{
 			return;
 		}
-		pass.set_pipeline(&self.pipeline_outline_mtoon);
+		pass.set_pipeline(&self.pipeline_outline_toon);
 		let mut state = DrawBindState::default();
 		for &draw_index in &self.outline_draw_indices {
 			self.draw_inner(pass, &mut state, draw_index);
@@ -2410,10 +2834,10 @@ impl SceneMeshes {
 		match kind {
 			DrawPipelineKind::OpaqueLit => &self.pipeline_opaque_lit,
 			DrawPipelineKind::OpaqueUnlit => &self.pipeline_opaque_unlit,
-			DrawPipelineKind::OpaqueMtoon => &self.pipeline_opaque_mtoon,
+			DrawPipelineKind::OpaqueToon => &self.pipeline_opaque_toon,
 			DrawPipelineKind::BlendLit => &self.pipeline_blend_lit,
 			DrawPipelineKind::BlendUnlit => &self.pipeline_blend_unlit,
-			DrawPipelineKind::BlendMtoon => &self.pipeline_blend_mtoon,
+			DrawPipelineKind::BlendToon => &self.pipeline_blend_toon,
 		}
 	}
 
@@ -2438,7 +2862,7 @@ impl SceneMeshes {
 		}
 		let mut state = DrawBindState::default();
 		if !self.transparent_zwrite_draw_indices.is_empty() {
-			pass.set_pipeline(&self.pipeline_transparent_zprepass_mtoon);
+			pass.set_pipeline(&self.pipeline_transparent_zprepass_toon);
 			for &draw_index in &self.transparent_zwrite_draw_indices {
 				self.draw_inner(pass, &mut state, draw_index);
 			}
@@ -2680,17 +3104,17 @@ mod tests {
 	#[test]
 	fn ordered_draw_batches_preserve_transparent_sequence() {
 		let mut batches = Vec::new();
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 0, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 1);
 		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 1, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 2, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendMtoon, 3, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 2, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 3, 1);
 
 		assert_eq!(batches.len(), 3);
-		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendMtoon);
+		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[0].draw_indices, vec![0]);
 		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendLit);
 		assert_eq!(batches[1].draw_indices, vec![1]);
-		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendMtoon);
+		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[2].draw_indices, vec![2, 3]);
 	}
 

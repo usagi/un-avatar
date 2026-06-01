@@ -560,6 +560,7 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		uv_animation_scroll_x_speed_factor: obj_f32(obj, &["uvAnimationScrollXSpeedFactor"], 0.0),
 		uv_animation_scroll_y_speed_factor: obj_f32(obj, &["uvAnimationScrollYSpeedFactor"], 0.0),
 		uv_animation_rotation_speed_factor: obj_f32(obj, &["uvAnimationRotationSpeedFactor"], 0.0),
+		..Default::default()
 	})
 }
 
