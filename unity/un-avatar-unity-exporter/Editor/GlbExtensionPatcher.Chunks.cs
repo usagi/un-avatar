@@ -15,7 +15,11 @@ namespace UNAvatar.UnityExporter
     {
         private static void WriteGlb(string path, List<GlbChunk> chunks)
         {
-            var totalLength = 12 + chunks.Sum(c => 8 + c.Data.Length);
+            var totalLength = 12;
+            foreach (var chunk in chunks)
+            {
+                totalLength += 8 + chunk.Data.Length;
+            }
             using (var stream = File.Create(path))
             using (var writer = new BinaryWriter(stream))
             {
