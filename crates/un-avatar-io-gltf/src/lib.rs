@@ -1250,7 +1250,9 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			} else {
 				UnaShadingModel::LitLambert
 			};
-			let alpha_cutoff_opt = m.alpha_cutoff();
+			let alpha_cutoff_opt = m
+				.alpha_cutoff()
+				.or_else(|| extras.as_ref().and_then(unavatar_material_alpha_cutoff_from_source_params));
 			let alpha_cutoff = alpha_cutoff_opt.unwrap_or(0.5);
 			let gltf_alpha_mode = match m.alpha_mode() {
 				gltf::material::AlphaMode::Opaque => UnaAlphaMode::Opaque,
@@ -1312,6 +1314,10 @@ fn unavatar_material_inferred_alpha_mode(
 		return None;
 	}
 
+	if let Some(mode) = unavatar_material_alpha_mode_from_source_params(extras) {
+		return Some(mode);
+	}
+
 	let shader = source_shader.to_ascii_lowercase();
 	if let Some(render_queue) = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue"))) {
 		if render_queue >= 3000 {
@@ -1328,6 +1334,25 @@ fn unavatar_material_inferred_alpha_mode(
 	} else {
 		None
 	}
+}
+
+fn unavatar_material_alpha_mode_from_source_params(extras: &Value) -> Option<UnaAlphaMode> {
+	let mode = unavatar_material_float_param(extras, "_TransparentMode")
+		.or_else(|| unavatar_material_float_param(extras, "_AlphaMode"))
+		.or_else(|| unavatar_material_float_param(extras, "_BlendMode"))?;
+	if mode >= 1.5 {
+		Some(UnaAlphaMode::Blend)
+	} else if mode >= 0.5 {
+		Some(UnaAlphaMode::Mask)
+	} else {
+		Some(UnaAlphaMode::Opaque)
+	}
+}
+
+fn unavatar_material_alpha_cutoff_from_source_params(extras: &Value) -> Option<f32> {
+	unavatar_material_float_param(extras, "_Cutoff")
+		.or_else(|| unavatar_material_float_param(extras, "_AlphaCutoff"))
+		.map(|value| value.clamp(0.0, 1.0))
 }
 
 fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
@@ -1403,6 +1428,10 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	let mut out = UnaMtoonMaterial::default();
 	if let Some(value) = json_bool(mtoon.get("transparentWithZWrite").or_else(|| mtoon.get("transparent_with_z_write"))) {
 		out.transparent_with_z_write = value;
+	} else if let Some(value) =
+		unavatar_material_float_param(extras, "_ZWrite").or_else(|| unavatar_material_float_param(extras, "_ZWriteMode"))
+	{
+		out.transparent_with_z_write = value > 0.5;
 	} else if source_shader.to_ascii_lowercase().contains("twopass") {
 		out.transparent_with_z_write = true;
 	}
@@ -1506,6 +1535,18 @@ fn json_bool(value: Option<&Value>) -> Option<bool> {
 
 fn json_string(value: Option<&Value>) -> Option<String> {
 	value.and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string)
+}
+
+fn unavatar_material_float_param(extras: &Value, name: &str) -> Option<f32> {
+	extras
+		.get("floatParams")
+		.or_else(|| extras.get("float_params"))
+		.and_then(|params| params.get(name))
+		.and_then(json_number_f32)
+}
+
+fn json_number_f32(value: &Value) -> Option<f32> {
+	value.as_f64().or_else(|| value.as_i64().map(|v| v as f64)).map(|v| v as f32)
 }
 
 fn json_f32(value: Option<&Value>) -> Option<f32> {
@@ -2508,6 +2549,16 @@ mod tests {
 			"sourceShader": "lilToon",
 			"renderQueue": 3000
 		});
+		let source_param_blend = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"floatParams": { "_TransparentMode": 2.0 }
+		});
+		let source_param_cutout = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"floatParams": { "_AlphaMode": 1.0 }
+		});
 
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
@@ -2544,6 +2595,20 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&queue_transparent), UnaAlphaMode::Opaque, None, true),
 			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&source_param_blend), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&source_param_cutout), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Mask)
+		);
+		assert_eq!(
+			unavatar_material_alpha_cutoff_from_source_params(&serde_json::json!({
+				"floatParams": { "_Cutoff": 0.25 }
+			})),
+			Some(0.25)
 		);
 	}
 
@@ -2616,5 +2681,19 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
 		assert!(mtoon.transparent_with_z_write);
+	}
+
+	#[test]
+	fn source_zwrite_param_overrides_twopass_shader_name() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTwoPassTransparentOutline",
+			"floatParams": { "_ZWrite": 0.0 },
+			"mtoon": {}
+		});
+
+		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+
+		assert!(!mtoon.transparent_with_z_write);
 	}
 }
