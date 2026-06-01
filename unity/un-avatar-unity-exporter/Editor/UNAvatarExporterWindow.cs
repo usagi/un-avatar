@@ -124,6 +124,7 @@ namespace UNAvatar.UnityExporter
         public string colorSpace = "sRGB";
         public string renderMode = "standard";
         public int antiAliasingSamples = 1;
+        public string stateDigest = "";
         public float fovYDegrees;
         public float nearClip;
         public float farClip;
@@ -147,7 +148,8 @@ namespace UNAvatar.UnityExporter
                 ["render"] = new Dictionary<string, object>
                 {
                     ["mode"] = renderMode ?? "standard",
-                    ["antiAliasingSamples"] = antiAliasingSamples
+                    ["antiAliasingSamples"] = antiAliasingSamples,
+                    ["stateDigest"] = stateDigest ?? ""
                 },
                 ["camera"] = new Dictionary<string, object>
                 {
@@ -1671,6 +1673,7 @@ namespace UNAvatar.UnityExporter
                         {
                             ["view"] = image.view ?? "",
                             ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
+                            ["stateDigest"] = image.stateDigest ?? "",
                             ["sha256"] = Sha256Hex(image.pngBytes)
                         })
                         .Cast<object>()
@@ -1880,10 +1883,12 @@ namespace UNAvatar.UnityExporter
 
                 ApplyPreviewBaseStateToRoot(previewClone);
                 basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
+                AssignPreviewStateDigest(basePreviewImages, "base", previewClone);
                 for (var i = 0; i < capturedWardrobeSets.Count; i++)
                 {
                     ApplyPreviewWardrobeSetToRoot(previewClone, capturedWardrobeSets[i]);
                     capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
+                    AssignPreviewStateDigest(capturedWardrobeSets[i].previewImages, capturedWardrobeSets[i].id, previewClone);
                 }
             }
             finally
@@ -1892,6 +1897,53 @@ namespace UNAvatar.UnityExporter
                 {
                     DestroyImmediate(previewClone);
                 }
+            }
+        }
+
+        private static void AssignPreviewStateDigest(List<WardrobePreviewImageDraft> previews, string label, GameObject root)
+        {
+            var digest = WardrobePreviewStateDigest(label, root);
+            foreach (var preview in previews ?? new List<WardrobePreviewImageDraft>())
+            {
+                if (preview != null)
+                {
+                    preview.stateDigest = digest;
+                }
+            }
+        }
+
+        private static string WardrobePreviewStateDigest(string label, GameObject root)
+        {
+            if (root == null)
+            {
+                return label + "|missing-root";
+            }
+
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+            var active = renderers
+                .Where(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
+                .Select(renderer => VariantExtractor.TransformPath(root.transform, renderer.transform))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+            var probes = new[]
+            {
+                "Color  1",
+                "Color  13",
+                "add-belt",
+                "Maid",
+                "Outer"
+            };
+            var states = probes.Select(path => path + "=" + ProbePathState(root, path));
+            using (var sha = SHA256.Create())
+            {
+                var joined = string.Join("\n", active);
+                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(joined));
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (var b in hash)
+                {
+                    sb.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+                }
+                return $"{label}|activeRenderers={active.Count}|activeHash={sb}|{string.Join(",", states)}";
             }
         }
 
@@ -2557,6 +2609,7 @@ namespace UNAvatar.UnityExporter
                 colorSpace = source.colorSpace,
                 renderMode = source.renderMode,
                 antiAliasingSamples = source.antiAliasingSamples,
+                stateDigest = source.stateDigest,
                 fovYDegrees = source.fovYDegrees,
                 nearClip = source.nearClip,
                 farClip = source.farClip,
