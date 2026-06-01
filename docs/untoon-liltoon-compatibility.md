@@ -436,6 +436,9 @@ Status legend:
 - `[~]` `_RimShadeColor`
   - done: source raw color params を保持し、rim shade darkening color と alpha strength に接続する。
   - remaining: HDR/color space と `_RimShadeMask` の合成を実装する。
+- `[~]` `_RimShadeNormalStrength`
+  - done: source raw params を保持し、RimShade factor 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: `_RimShadeMask`、2nd normal map、backface behavior との順序を本家へ合わせる。
 - `[defer]` backlight: after rim basics
 
 ### Emission

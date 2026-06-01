@@ -1292,7 +1292,7 @@ fn mesh_draw_material_gpu(
 				u.rim.shadow_mask_factor.clamp(0.0, 1.0),
 				u.rim.normal_strength_factor.clamp(0.0, 1.0),
 				u.rim.backface_mask_factor.clamp(0.0, 1.0),
-				0.0,
+				u.rim.shade_normal_strength_factor.clamp(0.0, 1.0),
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);

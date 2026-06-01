@@ -692,6 +692,8 @@ pub struct UnaLilToonLikeRim {
 	pub shade_blur_factor: f32,
 	#[serde(default = "default_liltoon_rim_fresnel_power")]
 	pub shade_fresnel_power_factor: f32,
+	#[serde(default = "one_f32")]
+	pub shade_normal_strength_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -876,6 +878,7 @@ impl Default for UnaLilToonLikeRim {
 			shade_border_factor: default_liltoon_rim_border(),
 			shade_blur_factor: default_liltoon_rim_blur(),
 			shade_fresnel_power_factor: default_liltoon_rim_fresnel_power(),
+			shade_normal_strength_factor: 1.0,
 		}
 	}
 }

@@ -669,7 +669,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
 		if (drawu.rim_shade_params.x > 0.5) {
-			let rim_shade_raw = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
+			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
+			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
 			let rim_shade = lil_tooning_scale(
 				rim_shade_raw,
 				clamp(drawu.rim_shade_params.y, 0.0, 1.0),

@@ -2011,6 +2011,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_RimShadeFresnelPower") {
 		out.rim.shade_fresnel_power_factor = value.clamp(0.01, 50.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimShadeNormalStrength") {
+		out.rim.shade_normal_strength_factor = value.clamp(0.0, 1.0);
+	}
 
 	out.emission.enabled_factor = unavatar_material_float_param(extras, "_UseEmission").unwrap_or(0.0).clamp(0.0, 1.0);
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_EmissionColor") {
@@ -3660,6 +3663,7 @@ mod tests {
 					"_RimShadeBorder": 0.44,
 					"_RimShadeBlur": 0.22,
 					"_RimShadeFresnelPower": 2.5,
+					"_RimShadeNormalStrength": 0.62,
 					"_UseEmission": 1.0,
 					"_EmissionMainStrength": 0.45,
 					"_EmissionBlend": 0.55,
@@ -3793,6 +3797,7 @@ mod tests {
 		assert_eq!(liltoon_like.rim.shade_border_factor, 0.44);
 		assert_eq!(liltoon_like.rim.shade_blur_factor, 0.22);
 		assert_eq!(liltoon_like.rim.shade_fresnel_power_factor, 2.5);
+		assert_eq!(liltoon_like.rim.shade_normal_strength_factor, 0.62);
 		assert_eq!(liltoon_like.emission.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.emission.color_factor, [0.5, 0.4, 0.3, 0.8]);
 		assert_eq!(liltoon_like.emission.texture_index, Some(13));
