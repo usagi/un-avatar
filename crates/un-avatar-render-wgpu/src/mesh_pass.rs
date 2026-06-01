@@ -1819,6 +1819,16 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 40,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
 			],
 		});
 
@@ -2585,6 +2595,11 @@ impl SceneMeshes {
 					.or(mtoon.outline_width_multiply_texture_index);
 				let outline_view = texture_view_or(&image_views, outline_width_mask_texture_index, &white_view);
 				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, outline_width_mask_texture_index, 0);
+				let outline_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.outline.texture_index);
+				let outline_color_view = texture_view_or(&image_views, outline_texture_index, &white_view);
 				let uv_mask_view = texture_view_or(&image_views, mtoon.uv_animation_mask_texture_index, &white_view);
 				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
@@ -2766,6 +2781,10 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 39,
 							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 40,
+							resource: wgpu::BindingResource::TextureView(outline_color_view),
 						},
 					],
 				});

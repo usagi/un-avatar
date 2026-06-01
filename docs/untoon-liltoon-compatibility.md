@@ -496,13 +496,14 @@ Status legend:
   - remaining: screen/world mode、camera distance scaling を本家の単位系に合わせる。
 - `[~]` `_OutlineColor`
   - done: outline color factor として保持し、v2 authored outline color に接続する。
-  - remaining: `_OutlineTex`、alpha、lighting mix との合成を本家に合わせる。
+  - done: `_OutlineTex` の color / alpha を outline color に乗算する。
+  - remaining: alpha discard、lighting mix との合成を本家に合わせる。
 - `[~]` `_OutlineLitColor`
   - done: source raw color params を保持し、alpha がある場合は outline NdotL / `_OutlineLitScale` / `_OutlineLitOffset` による lit outline color への補間へ接続した。
   - remaining: view-space outline NdotL、`_OutlineLitShadowReceive` の shadow attenuation、`_OutlineLitApplyTex` の texture source を本家へ合わせる。
 - `[~]` `_OutlineTex`
-  - done: Exporter / importer / v2 material で texture reference を保持する。
-  - remaining: outline fragment shader で color texture として sample する。
+  - done: Exporter / importer / v2 material で texture reference を保持し、outline fragment shader で color / alpha texture として sample する。
+  - remaining: sampler / UV transform / color space / alpha discard の本家互換性を照合する。
 - `[~]` `_OutlineWidthMask`
   - done: Exporter / importer / v2 material で texture reference を保持し、outline width mask binding に接続する。
   - remaining: mask channel、UV mode、width scaling の本家互換性を照合する。

@@ -110,6 +110,7 @@ struct MorphU {
 @group(1) @binding(37) var alpha_mask_samp: sampler;
 @group(1) @binding(38) var matcap2_tex: texture_2d<f32>;
 @group(1) @binding(39) var matcap2_blend_mask_tex: texture_2d<f32>;
+@group(1) @binding(40) var outline_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -723,15 +724,17 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 	if (mask <= 0.001) {
 		discard;
 	}
+	let outline_sample = textureSample(outline_tex, base_samp, uv);
 	let n = normalize(i.wn);
 	let l = normalize(frame.light_dir.xyz);
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
-	let lit_base = drawu.outline_color.rgb * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.outline_params.z, 0.0, 1.0));
+	let outline_base = drawu.outline_color.rgb * outline_sample.rgb;
+	let lit_base = outline_base * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.outline_params.z, 0.0, 1.0));
 	let outline_ndotl = dot(n, l) * 0.5 + 0.5;
 	let lit_factor = clamp(outline_ndotl * drawu.outline_lit_params.x + drawu.outline_lit_params.y, 0.0, 1.0) * clamp(drawu.outline_lit_color.a, 0.0, 1.0);
 	let lit_color = mix(drawu.outline_lit_color.rgb, samp_tex.rgb * drawu.outline_lit_color.rgb, clamp(drawu.outline_lit_params.z, 0.0, 1.0));
 	let color = mix(lit_base, lit_color, lit_factor);
-	return vec4<f32>(color, clamp(drawu.outline_color.a, 0.0, 1.0));
+	return vec4<f32>(color, clamp(drawu.outline_color.a * outline_sample.a, 0.0, 1.0));
 }
 
 @fragment
