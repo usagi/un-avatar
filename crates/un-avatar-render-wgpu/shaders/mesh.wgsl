@@ -40,6 +40,7 @@ struct DrawMaterial {
 	reflection_control: vec4<f32>,
 	reflection_params: vec4<f32>,
 	reflection_ext_params: vec4<f32>,
+	reflection_cube_color: vec4<f32>,
 	specular_toon_params: vec4<f32>,
 	rim_color: vec4<f32>,
 	rim_params: vec4<f32>,
@@ -631,7 +632,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 				frame.light_color.rgb * frame.light_color.w,
 				clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 			);
-			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * reflection_lighting;
+			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * drawu.reflection_cube_color.rgb * reflection_lighting;
 			authored_reflection = env * (0.18 + 0.32 * reflection_fresnel) * reflectance * clamp(drawu.reflection_control.z, 0.0, 1.0);
 		}
 	} else {

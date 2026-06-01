@@ -641,6 +641,10 @@ pub struct UnaLilToonLikeReflection {
 	#[serde(default = "one_f32")]
 	pub cube_enable_lighting_factor: f32,
 	#[serde(default)]
+	pub cube_color_factor: [f32; 4],
+	#[serde(default)]
+	pub cube_override_factor: f32,
+	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cube_texture_index: Option<usize>,
@@ -835,6 +839,8 @@ impl Default for UnaLilToonLikeReflection {
 			specular_normal_strength_factor: 1.0,
 			reflection_normal_strength_factor: 1.0,
 			cube_enable_lighting_factor: 1.0,
+			cube_color_factor: [0.0, 0.0, 0.0, 1.0],
+			cube_override_factor: 0.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			cube_texture_index: None,
 			color_texture_index: None,

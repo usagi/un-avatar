@@ -1946,6 +1946,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionCubeEnableLighting") {
 		out.reflection.cube_enable_lighting_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_ReflectionCubeColor") {
+		out.reflection.cube_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionCubeOverride") {
+		out.reflection.cube_override_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionBlendMode").map(float_to_u32_saturating) {
 		out.reflection.blend_mode = liltoon_like_blend_mode(value);
 	}
@@ -3629,6 +3635,7 @@ mod tests {
 					"_SpecularNormalStrength": 0.88,
 					"_ReflectionNormalStrength": 0.77,
 					"_ReflectionCubeEnableLighting": 0.69,
+					"_ReflectionCubeOverride": 1.0,
 					"_ReflectionBlendMode": 3.0,
 					"_RimMainStrength": 0.4,
 					"_RimBorder": 0.3,
@@ -3666,6 +3673,7 @@ mod tests {
 					"_MatCapColor": [0.2, 0.4, 0.6, 1.0],
 					"_MatCap2ndColor": [0.3, 0.5, 0.7, 0.9],
 					"_ReflectionColor": [0.9, 0.8, 0.7, 0.6],
+					"_ReflectionCubeColor": [0.6, 0.7, 0.8, 1.0],
 					"_RimColor": [0.1, 0.2, 0.3, 1.0],
 					"_RimShadeColor": [0.6, 0.5, 0.4, 0.7],
 					"_EmissionColor": [0.5, 0.4, 0.3, 0.8],
@@ -3749,6 +3757,8 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.specular_normal_strength_factor, 0.88);
 		assert_eq!(liltoon_like.reflection.reflection_normal_strength_factor, 0.77);
 		assert_eq!(liltoon_like.reflection.cube_enable_lighting_factor, 0.69);
+		assert_eq!(liltoon_like.reflection.cube_color_factor, [0.6, 0.7, 0.8, 1.0]);
+		assert_eq!(liltoon_like.reflection.cube_override_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.blend_mode, UnaLilToonLikeBlendMode::Multiply);
 		assert_eq!(liltoon_like.reflection.color_texture_index, Some(16));
 		assert_eq!(liltoon_like.reflection.smoothness_texture_index, Some(17));

@@ -246,6 +246,7 @@ struct MeshDrawMaterialGpu {
 	reflection_control: [f32; 4],
 	reflection_params: [f32; 4],
 	reflection_ext_params: [f32; 4],
+	reflection_cube_color: [f32; 4],
 	specular_toon_params: [f32; 4],
 	rim_color: [f32; 4],
 	rim_params: [f32; 4],
@@ -275,7 +276,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 608);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 624);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1228,6 +1229,16 @@ fn mesh_draw_material_gpu(
 	let reflection_ext_params = liltoon_like
 		.map(|u| [u.reflection.cube_enable_lighting_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let reflection_cube_color = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.cube_color_factor[0],
+				u.reflection.cube_color_factor[1],
+				u.reflection.cube_color_factor[2],
+				u.reflection.cube_override_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([1.0, 1.0, 1.0, 0.0]);
 	let specular_toon_params = liltoon_like
 		.map(|u| {
 			[
@@ -1351,6 +1362,7 @@ fn mesh_draw_material_gpu(
 		reflection_control,
 		reflection_params,
 		reflection_ext_params,
+		reflection_cube_color,
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
