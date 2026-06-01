@@ -1435,7 +1435,10 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	} else if source_shader.to_ascii_lowercase().contains("twopass") {
 		out.transparent_with_z_write = true;
 	}
-	if let Some(value) = json_vec3(mtoon.get("shadeColorFactor").or_else(|| mtoon.get("shade_color_factor"))) {
+	if let Some(value) = json_vec3(mtoon.get("shadeColorFactor").or_else(|| mtoon.get("shade_color_factor")))
+		.or_else(|| unavatar_material_color_param_rgb(extras, "_ShadeColor"))
+		.or_else(|| unavatar_material_color_param_rgb(extras, "_ShadowColor"))
+	{
 		out.shade_color_factor = value;
 	}
 	if let Some(value) = json_usize(
@@ -1451,7 +1454,15 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	if let Some(value) = json_f32(mtoon.get("shadingToonyFactor").or_else(|| mtoon.get("shading_toony_factor"))) {
 		out.shading_toony_factor = value;
 	}
-	if let Some(value) = json_vec3(mtoon.get("matcapFactor").or_else(|| mtoon.get("matcap_factor"))) {
+	if let Some(value) = json_vec3(mtoon.get("matcapFactor").or_else(|| mtoon.get("matcap_factor"))).or_else(|| {
+		unavatar_material_color_param_rgb(extras, "_MatCapColor").map(|color| {
+			let strength = unavatar_material_float_param(extras, "_MatCapMainStrength")
+				.or_else(|| unavatar_material_float_param(extras, "_MatCapBlend"))
+				.unwrap_or(1.0)
+				.max(0.0);
+			[color[0] * strength, color[1] * strength, color[2] * strength]
+		})
+	}) {
 		out.matcap_factor = value;
 	}
 	if let Some(value) = json_usize(mtoon.get("matcapTextureIndex").or_else(|| mtoon.get("matcap_texture_index"))) {
@@ -1461,7 +1472,13 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 		mtoon
 			.get("parametricRimColorFactor")
 			.or_else(|| mtoon.get("parametric_rim_color_factor")),
-	) {
+	)
+	.or_else(|| {
+		unavatar_material_color_param_rgb(extras, "_RimColor").map(|color| {
+			let strength = unavatar_material_float_param(extras, "_RimMainStrength").unwrap_or(1.0).max(0.0);
+			[color[0] * strength, color[1] * strength, color[2] * strength]
+		})
+	}) {
 		out.parametric_rim_color_factor = value;
 	}
 	if let Some(value) = json_usize(
@@ -1516,7 +1533,9 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	) {
 		out.outline_width_multiply_texture_index = Some(value);
 	}
-	if let Some(value) = json_vec3(mtoon.get("outlineColorFactor").or_else(|| mtoon.get("outline_color_factor"))) {
+	if let Some(value) = json_vec3(mtoon.get("outlineColorFactor").or_else(|| mtoon.get("outline_color_factor")))
+		.or_else(|| unavatar_material_color_param_rgb(extras, "_OutlineColor"))
+	{
 		out.outline_color_factor = value;
 	}
 	if let Some(value) = json_f32(
@@ -1543,6 +1562,14 @@ fn unavatar_material_float_param(extras: &Value, name: &str) -> Option<f32> {
 		.or_else(|| extras.get("float_params"))
 		.and_then(|params| params.get(name))
 		.and_then(json_number_f32)
+}
+
+fn unavatar_material_color_param_rgb(extras: &Value, name: &str) -> Option<[f32; 3]> {
+	extras
+		.get("colorParams")
+		.or_else(|| extras.get("color_params"))
+		.and_then(|params| params.get(name))
+		.and_then(|value| json_vec3(Some(value)))
 }
 
 fn json_number_f32(value: &Value) -> Option<f32> {
@@ -2695,5 +2722,31 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
 		assert!(!mtoon.transparent_with_z_write);
+	}
+
+	#[test]
+	fn source_color_params_fill_mtoon_compat_fields() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"floatParams": {
+				"_MatCapMainStrength": 0.5,
+				"_RimMainStrength": 2.0
+			},
+			"colorParams": {
+				"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
+				"_MatCapColor": [0.2, 0.4, 0.6, 1.0],
+				"_RimColor": [0.1, 0.2, 0.3, 1.0],
+				"_OutlineColor": [0.01, 0.02, 0.03, 1.0]
+			},
+			"mtoon": {}
+		});
+
+		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+
+		assert_eq!(mtoon.shade_color_factor, [0.7, 0.8, 0.9]);
+		assert_eq!(mtoon.matcap_factor, [0.1, 0.2, 0.3]);
+		assert_eq!(mtoon.parametric_rim_color_factor, [0.2, 0.4, 0.6]);
+		assert_eq!(mtoon.outline_color_factor, [0.01, 0.02, 0.03]);
 	}
 }
