@@ -99,6 +99,9 @@ struct DiagnoseSceneSummary {
 	node_constraint_count: usize,
 	shading_counts: BTreeMap<String, usize>,
 	alpha_counts: BTreeMap<String, usize>,
+	visible_shading_counts: BTreeMap<String, usize>,
+	visible_alpha_counts: BTreeMap<String, usize>,
+	visible_material_indices: Vec<usize>,
 	eye_like_material_indices: Vec<usize>,
 	materials: Vec<DiagnoseMaterialSummary>,
 	visible_mesh_nodes: Vec<DiagnoseVisibleMeshNodeSummary>,
@@ -1494,12 +1497,28 @@ fn build_diagnose_report(
 		}
 		let effective_visibility = scene_effective_visibility(sc);
 		let node_paths_by_index = scene_node_paths_by_index(sc);
+		let mut visible_material_indices = Vec::new();
+		let mut visible_shading_counts = BTreeMap::new();
+		let mut visible_alpha_counts = BTreeMap::new();
 		let visible_mesh_nodes = sc
 			.nodes
 			.iter()
 			.enumerate()
 			.filter(|(idx, _)| effective_visibility.get(*idx).copied().unwrap_or(false))
 			.filter_map(|(idx, node)| {
+				if let Some(mesh) = node.mesh {
+					if let Some(primitives) = sc.meshes.get(mesh) {
+						for primitive in primitives {
+							let Some(material_index) = primitive.material_index else { continue };
+							let Some(material) = sc.materials.get(material_index) else {
+								continue;
+							};
+							visible_material_indices.push(material_index);
+							bump_count(&mut visible_shading_counts, format!("{:?}", material.shading));
+							bump_count(&mut visible_alpha_counts, format!("{:?}", material.alpha_mode));
+						}
+					}
+				}
 				node.mesh.map(|mesh| DiagnoseVisibleMeshNodeSummary {
 					node: idx,
 					name: node.name.clone(),
@@ -1511,6 +1530,8 @@ fn build_diagnose_report(
 				})
 			})
 			.collect();
+		visible_material_indices.sort_unstable();
+		visible_material_indices.dedup();
 		DiagnoseSceneSummary {
 			has_scene: true,
 			mesh_count: sc.meshes.len(),
@@ -1534,6 +1555,9 @@ fn build_diagnose_report(
 			node_constraint_count: sc.node_constraints.len(),
 			shading_counts,
 			alpha_counts,
+			visible_shading_counts,
+			visible_alpha_counts,
+			visible_material_indices,
 			eye_like_material_indices,
 			materials,
 			visible_mesh_nodes,
@@ -1559,6 +1583,9 @@ fn build_diagnose_report(
 			node_constraint_count: 0,
 			shading_counts: BTreeMap::new(),
 			alpha_counts: BTreeMap::new(),
+			visible_shading_counts: BTreeMap::new(),
+			visible_alpha_counts: BTreeMap::new(),
+			visible_material_indices: Vec::new(),
 			eye_like_material_indices: Vec::new(),
 			materials: Vec::new(),
 			visible_mesh_nodes: Vec::new(),
@@ -1853,6 +1880,9 @@ fn run_diagnose(
 	}
 	println!("shading: {:?}", report.scene.shading_counts);
 	println!("alpha: {:?}", report.scene.alpha_counts);
+	println!("visible_shading: {:?}", report.scene.visible_shading_counts);
+	println!("visible_alpha: {:?}", report.scene.visible_alpha_counts);
+	println!("visible_materials: {:?}", report.scene.visible_material_indices);
 	if let Some(h) = &report.humanoid {
 		println!(
 			"humanoid: bones={} left_eye={:?} right_eye={:?}",
@@ -2146,6 +2176,9 @@ mod tests {
 		assert_eq!(report.scene.material_count, 2);
 		assert_eq!(report.scene.node_constraint_count, 0);
 		assert_eq!(report.scene.shading_counts.get("MToonLike"), Some(&2));
+		assert!(report.scene.visible_shading_counts.is_empty());
+		assert!(report.scene.visible_alpha_counts.is_empty());
+		assert!(report.scene.visible_material_indices.is_empty());
 		assert_eq!(report.scene.eye_like_material_indices, vec![0]);
 		assert_eq!(report.vrm.as_ref().unwrap().mtoon_material_indices_v1, vec![0, 1]);
 		assert!(!report.warnings.iter().any(|w| w.contains("eye-like material[0]")));
