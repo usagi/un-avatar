@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,7 +15,7 @@ namespace UNAvatar.UnityExporter
     {
         private const string ExtensionName = "UN_avatar";
         private const string SpecVersion = "0.1-preview";
-        private const string ExporterBuildMarker = "2026-06-02-glb-patcher-linq-reduced";
+        private const string ExporterBuildMarker = "2026-06-02-linq-free-exporter";
         private const int BaseSelectionIndex = -2;
 
         [SerializeField] private GameObject avatarRoot;
