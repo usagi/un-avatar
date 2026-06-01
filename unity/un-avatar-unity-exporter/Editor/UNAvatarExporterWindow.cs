@@ -1737,12 +1737,11 @@ namespace UNAvatar.UnityExporter
 
                 var previewBounds = CalculateWardrobePreviewBounds(previewClone);
 
-                ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
+                ApplyPreviewBaseStateToRoot(previewClone);
                 basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
                 for (var i = 0; i < capturedWardrobeSets.Count; i++)
                 {
-                    ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
-                    ApplyWardrobeOperationsToRoot(previewClone, capturedWardrobeSets[i].operations);
+                    ApplyPreviewWardrobeSetToRoot(previewClone, capturedWardrobeSets[i]);
                     capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
                 }
             }
@@ -1757,12 +1756,11 @@ namespace UNAvatar.UnityExporter
 
         private Bounds CalculateWardrobePreviewBounds(GameObject previewRoot)
         {
-            ApplyWardrobeOperationsToRoot(previewRoot, CurrentBaseOperationsForSceneApply());
+            ApplyPreviewBaseStateToRoot(previewRoot);
             var bounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
             foreach (var set in capturedWardrobeSets)
             {
-                ApplyWardrobeOperationsToRoot(previewRoot, CurrentBaseOperationsForSceneApply());
-                ApplyWardrobeOperationsToRoot(previewRoot, set.operations);
+                ApplyPreviewWardrobeSetToRoot(previewRoot, set);
                 var setBounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
                 if (bounds.size == Vector3.zero)
                 {
@@ -1774,6 +1772,42 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return bounds;
+        }
+
+        private void ApplyPreviewBaseStateToRoot(GameObject root)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            if (hasBaseSnapshot && baseSnapshot != null && baseSnapshot.nodes.Count > 0)
+            {
+                WardrobeSnapshotCapture.ApplyToRoot(root, baseSnapshot);
+                return;
+            }
+
+            ApplyWardrobeOperationsToRoot(root, CurrentBaseOperations());
+        }
+
+        private void ApplyPreviewWardrobeSetToRoot(GameObject root, WardrobeSetDraft set)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            if (set != null && set.capturedSnapshot != null && set.capturedSnapshot.nodes.Count > 0)
+            {
+                WardrobeSnapshotCapture.ApplyToRoot(root, set.capturedSnapshot);
+                return;
+            }
+
+            ApplyPreviewBaseStateToRoot(root);
+            if (set != null)
+            {
+                ApplyWardrobeOperationsToRoot(root, set.operations);
+            }
         }
 
         private List<WardrobeSetDraft> WardrobeSetsForExport()
@@ -3435,12 +3469,13 @@ namespace UNAvatar.UnityExporter
                 var index = nodes.Count;
                 nodeIndices[transform] = index;
                 var isExportRoot = transform == root.transform;
-                var translation = isExportRoot ? Vector3.zero : transform.localPosition;
+                var translation = isExportRoot ? Vector3.zero : UnityVectorToGltf(transform.localPosition);
+                var rotation = UnityRotationToGltf(transform.localRotation);
                 var node = new Dictionary<string, object>
                 {
                     ["name"] = transform.name,
                     ["translation"] = FloatArray(translation.x, translation.y, translation.z),
-                    ["rotation"] = FloatArray(transform.localRotation.x, transform.localRotation.y, transform.localRotation.z, transform.localRotation.w),
+                    ["rotation"] = FloatArray(rotation.x, rotation.y, rotation.z, rotation.w),
                     ["scale"] = FloatArray(transform.localScale.x, transform.localScale.y, transform.localScale.z),
                     ["extras"] = new Dictionary<string, object>
                     {
@@ -3515,9 +3550,9 @@ namespace UNAvatar.UnityExporter
                 var colors = mesh.colors;
                 var boneWeights = skinned != null ? mesh.boneWeights : null;
 
-                var positionAccessor = AddVec3Accessor(vertices, true);
-                var normalAccessor = normals != null && normals.Length == vertices.Length ? AddVec3Accessor(normals, false) : -1;
-                var tangentAccessor = tangents != null && tangents.Length == vertices.Length ? AddVec4Accessor(tangents) : -1;
+                var positionAccessor = AddVec3Accessor(vertices, true, true);
+                var normalAccessor = normals != null && normals.Length == vertices.Length ? AddVec3Accessor(normals, false, true) : -1;
+                var tangentAccessor = tangents != null && tangents.Length == vertices.Length ? AddVec4Accessor(tangents, true) : -1;
                 var uvAccessor = uv != null && uv.Length == vertices.Length ? AddVec2Accessor(uv) : -1;
                 var colorAccessor = colors != null && colors.Length == vertices.Length ? AddColorAccessor(colors) : -1;
                 var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddJointsAccessor(boneWeights) : -1;
@@ -3554,7 +3589,7 @@ namespace UNAvatar.UnityExporter
                     var primitive = new Dictionary<string, object>
                     {
                         ["attributes"] = attributes,
-                        ["indices"] = AddIndicesAccessor(indices),
+                        ["indices"] = AddIndicesAccessor(indices, true),
                         ["material"] = ExportMaterial(material),
                         ["mode"] = 4
                     };
@@ -3616,8 +3651,8 @@ namespace UNAvatar.UnityExporter
                     var record = new MorphTargetRecord
                     {
                         Name = name,
-                        PositionAccessor = AddVec3Accessor(deltaVertices, false),
-                        NormalAccessor = HasAnyNonZero(deltaNormals) ? AddVec3Accessor(deltaNormals, false) : -1
+                        PositionAccessor = AddVec3Accessor(deltaVertices, false, true),
+                        NormalAccessor = HasAnyNonZero(deltaNormals) ? AddVec3Accessor(deltaNormals, false, true) : -1
                     };
                     targets.Add(record);
                 }
@@ -3673,7 +3708,7 @@ namespace UNAvatar.UnityExporter
                 var matrices = new List<Matrix4x4>();
                 for (var i = 0; i < bones.Length; i++)
                 {
-                    matrices.Add(bindposes != null && i < bindposes.Length ? bindposes[i] : Matrix4x4.identity);
+                    matrices.Add(UnityMatrixToGltf(bindposes != null && i < bindposes.Length ? bindposes[i] : Matrix4x4.identity));
                 }
 
                 var skin = new Dictionary<string, object>
@@ -4774,18 +4809,47 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            private int AddVec3Accessor(Vector3[] values, bool minMax)
+            private static Vector3 UnityVectorToGltf(Vector3 value)
+            {
+                return new Vector3(-value.x, value.y, value.z);
+            }
+
+            private static Quaternion UnityRotationToGltf(Quaternion value)
+            {
+                return new Quaternion(value.x, -value.y, -value.z, value.w);
+            }
+
+            private static Vector4 UnityTangentToGltf(Vector4 value)
+            {
+                return new Vector4(-value.x, value.y, value.z, -value.w);
+            }
+
+            private static Matrix4x4 UnityMatrixToGltf(Matrix4x4 value)
+            {
+                for (var row = 0; row < 4; row++)
+                {
+                    value[row, 0] = -value[row, 0];
+                }
+                for (var col = 0; col < 4; col++)
+                {
+                    value[0, col] = -value[0, col];
+                }
+                return value;
+            }
+
+            private int AddVec3Accessor(Vector3[] values, bool minMax, bool convertUnityToGltf)
             {
                 var bytes = new byte[values.Length * 12];
                 var min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
                 var max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
                 for (var i = 0; i < values.Length; i++)
                 {
-                    WriteFloat(bytes, i * 12, values[i].x);
-                    WriteFloat(bytes, i * 12 + 4, values[i].y);
-                    WriteFloat(bytes, i * 12 + 8, values[i].z);
-                    min = Vector3.Min(min, values[i]);
-                    max = Vector3.Max(max, values[i]);
+                    var value = convertUnityToGltf ? UnityVectorToGltf(values[i]) : values[i];
+                    WriteFloat(bytes, i * 12, value.x);
+                    WriteFloat(bytes, i * 12 + 4, value.y);
+                    WriteFloat(bytes, i * 12 + 8, value.z);
+                    min = Vector3.Min(min, value);
+                    max = Vector3.Max(max, value);
                 }
                 var view = AddBufferView(bytes);
                 var accessor = Accessor(view, values.Length, 5126, "VEC3");
@@ -4798,15 +4862,16 @@ namespace UNAvatar.UnityExporter
                 return accessors.Count - 1;
             }
 
-            private int AddVec4Accessor(Vector4[] values)
+            private int AddVec4Accessor(Vector4[] values, bool convertUnityTangentToGltf)
             {
                 var bytes = new byte[values.Length * 16];
                 for (var i = 0; i < values.Length; i++)
                 {
-                    WriteFloat(bytes, i * 16, values[i].x);
-                    WriteFloat(bytes, i * 16 + 4, values[i].y);
-                    WriteFloat(bytes, i * 16 + 8, values[i].z);
-                    WriteFloat(bytes, i * 16 + 12, values[i].w);
+                    var value = convertUnityTangentToGltf ? UnityTangentToGltf(values[i]) : values[i];
+                    WriteFloat(bytes, i * 16, value.x);
+                    WriteFloat(bytes, i * 16 + 4, value.y);
+                    WriteFloat(bytes, i * 16 + 8, value.z);
+                    WriteFloat(bytes, i * 16 + 12, value.w);
                 }
                 var view = AddBufferView(bytes);
                 accessors.Add(Accessor(view, values.Length, 5126, "VEC4"));
@@ -4905,19 +4970,36 @@ namespace UNAvatar.UnityExporter
                 return accessors.Count - 1;
             }
 
-            private int AddIndicesAccessor(int[] indices)
+            private int AddIndicesAccessor(int[] indices, bool reverseWinding)
             {
                 var useUshort = indices.All(i => i >= 0 && i <= ushort.MaxValue);
                 var bytes = new byte[indices.Length * (useUshort ? 2 : 4)];
                 for (var i = 0; i < indices.Length; i++)
                 {
+                    var value = indices[i];
+                    if (reverseWinding)
+                    {
+                        var triangleOffset = i % 3;
+                        var triangleStart = i - triangleOffset;
+                        if (triangleStart + 2 < indices.Length)
+                        {
+                            if (triangleOffset == 1)
+                            {
+                                value = indices[i + 1];
+                            }
+                            else if (triangleOffset == 2)
+                            {
+                                value = indices[i - 1];
+                            }
+                        }
+                    }
                     if (useUshort)
                     {
-                        WriteUShort(bytes, i * 2, indices[i]);
+                        WriteUShort(bytes, i * 2, value);
                     }
                     else
                     {
-                        WriteUInt(bytes, i * 4, (uint)indices[i]);
+                        WriteUInt(bytes, i * 4, (uint)value);
                     }
                 }
                 var view = AddBufferView(bytes);
