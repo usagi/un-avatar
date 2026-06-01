@@ -1176,7 +1176,7 @@ fn mesh_draw_material_gpu(
 			[
 				u.matcap.normal_strength_factor.clamp(0.0, 1.0),
 				u.matcap.shadow_mask_factor.clamp(0.0, 1.0),
-				0.0,
+				u.matcap.lod_factor.max(0.0),
 				0.0,
 			]
 		})

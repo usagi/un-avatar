@@ -571,7 +571,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
 	let matcap_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
 	let matcap_uv = toon_matcap_uv(matcap_n, v);
-	let matcap_tex_color = textureSample(matcap_tex, matcap_samp, matcap_uv);
+	let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 	let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 	if (!disable_matcap) {
 		if (drawu.shadow_params.x > 0.5) {

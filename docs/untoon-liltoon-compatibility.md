@@ -319,6 +319,9 @@ Status legend:
 - `[~]` `_MatCapShadowMask`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap blend weight を current shadowmix approximation (`shading`) で抑制する係数へ接続した。
   - remaining: lilToon の `fd.shadowmix`、MatCap mask texture、2nd MatCap との合成順を本家へ合わせる。
+- `[~]` `_MatCapLod`
+  - done: source raw params を保持し、1st MatCap texture sample の explicit LOD に接続した。
+  - remaining: mip availability、texture compression 後の LOD、2nd MatCap LOD との扱いを本家へ合わせる。
 - `[~]` `_MatCapBlendMask`
   - done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
   - remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。

@@ -595,6 +595,8 @@ pub struct UnaLilToonLikeMatcap {
 	#[serde(default)]
 	pub shadow_mask_factor: f32,
 	#[serde(default)]
+	pub lod_factor: f32,
+	#[serde(default)]
 	pub second_enabled_factor: f32,
 	#[serde(default = "one_vec4")]
 	pub second_color_factor: [f32; 4],
@@ -811,6 +813,7 @@ impl Default for UnaLilToonLikeMatcap {
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			normal_strength_factor: 1.0,
 			shadow_mask_factor: 0.0,
+			lod_factor: 0.0,
 			second_enabled_factor: 0.0,
 			second_color_factor: [1.0, 1.0, 1.0, 1.0],
 			second_main_strength_factor: 0.0,
