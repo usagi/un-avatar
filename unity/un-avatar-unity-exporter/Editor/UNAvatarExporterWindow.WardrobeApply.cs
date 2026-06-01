@@ -115,11 +115,24 @@ namespace UNAvatar.UnityExporter
 
         private List<WardrobeOperationDraft> CurrentBaseOperations()
         {
-            return hasBaseSnapshot
-                ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot)
-                : hasImportedBaseOperations
-                ? importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList()
-                : new List<WardrobeOperationDraft>();
+            if (hasBaseSnapshot)
+            {
+                return WardrobeSnapshotCapture.BaseOperations(baseSnapshot);
+            }
+            if (!hasImportedBaseOperations)
+            {
+                return new List<WardrobeOperationDraft>();
+            }
+
+            var operations = new List<WardrobeOperationDraft>(importedBaseOperations.Count);
+            foreach (var operation in importedBaseOperations)
+            {
+                if (operation != null)
+                {
+                    operations.Add(WardrobeSnapshotCapture.CloneOperation(operation));
+                }
+            }
+            return operations;
         }
 
         private List<WardrobeOperationDraft> CurrentBaseOperationsForSceneApply()
@@ -189,15 +202,7 @@ namespace UNAvatar.UnityExporter
                 return report;
             }
 
-            var transforms = root.GetComponentsInChildren<Transform>(true);
-            var nodes = transforms
-                .ToDictionary(transform => WardrobeSnapshotCapture.NodeIdFor(root.transform, transform), transform => transform);
-            var nodesByPath = transforms
-                .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
-                .ToDictionary(group => group.Key, group => group.First());
-            var nodesByNormalizedPath = transforms
-                .GroupBy(transform => WardrobeSnapshotCapture.NormalizePath(VariantExtractor.TransformPath(root.transform, transform)))
-                .ToDictionary(group => group.Key, group => group.First());
+            var nodes = BuildWardrobeApplyLookup(root);
 
             foreach (var operation in operations)
             {
@@ -207,18 +212,20 @@ namespace UNAvatar.UnityExporter
                 }
                 report.Total++;
                 var transform = default(Transform);
+                var node = default(WardrobeApplyNode);
                 if (!string.IsNullOrEmpty(operation.target.nodeId))
                 {
-                    nodes.TryGetValue(operation.target.nodeId, out transform);
+                    nodes.ById.TryGetValue(operation.target.nodeId, out node);
                 }
-                if (transform == null && !string.IsNullOrEmpty(operation.target.path))
+                if (node == null && !string.IsNullOrEmpty(operation.target.path))
                 {
-                    nodesByPath.TryGetValue(operation.target.path, out transform);
+                    nodes.ByPath.TryGetValue(operation.target.path, out node);
                 }
-                if (transform == null && !string.IsNullOrEmpty(operation.target.path))
+                if (node == null && !string.IsNullOrEmpty(operation.target.path))
                 {
-                    transform = ResolveTransformByPathSuffix(nodesByNormalizedPath, operation.target.path);
+                    node = ResolveNodeByPathSuffix(nodes.ByNormalizedPath, operation.target.path);
                 }
+                transform = node != null ? node.Transform : null;
                 if (transform == null)
                 {
                     report.Missing++;
@@ -247,7 +254,7 @@ namespace UNAvatar.UnityExporter
                 }
                 else if (operation.type == "rendererEnabled" || operation.type == "rendererVisibility")
                 {
-                    foreach (var renderer in transform.GetComponents<Renderer>())
+                    foreach (var renderer in node.Renderers)
                     {
                         if (renderer.enabled != operation.boolValue)
                         {
@@ -258,7 +265,7 @@ namespace UNAvatar.UnityExporter
                 }
                 else if (operation.type == "blendShapeWeight" && !string.IsNullOrEmpty(operation.name))
                 {
-                    foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
+                    foreach (var skinned in node.SkinnedRenderers)
                     {
                         var mesh = skinned.sharedMesh;
                         var index = mesh != null ? mesh.GetBlendShapeIndex(operation.name) : -1;
@@ -276,7 +283,51 @@ namespace UNAvatar.UnityExporter
             return report;
         }
 
-        private static Transform ResolveTransformByPathSuffix(Dictionary<string, Transform> nodesByNormalizedPath, string importedPath)
+        private static WardrobeApplyLookup BuildWardrobeApplyLookup(GameObject root)
+        {
+            var lookup = new WardrobeApplyLookup();
+            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                var node = new WardrobeApplyNode
+                {
+                    Transform = transform,
+                    Renderers = transform.GetComponents<Renderer>(),
+                    SkinnedRenderers = transform.GetComponents<SkinnedMeshRenderer>()
+                };
+                var nodeId = WardrobeSnapshotCapture.NodeIdFor(root.transform, transform);
+                if (!lookup.ById.ContainsKey(nodeId))
+                {
+                    lookup.ById[nodeId] = node;
+                }
+                var path = VariantExtractor.TransformPath(root.transform, transform);
+                if (!lookup.ByPath.ContainsKey(path))
+                {
+                    lookup.ByPath[path] = node;
+                }
+                var normalizedPath = WardrobeSnapshotCapture.NormalizePath(path);
+                if (!lookup.ByNormalizedPath.ContainsKey(normalizedPath))
+                {
+                    lookup.ByNormalizedPath[normalizedPath] = node;
+                }
+            }
+            return lookup;
+        }
+
+        private sealed class WardrobeApplyLookup
+        {
+            public readonly Dictionary<string, WardrobeApplyNode> ById = new Dictionary<string, WardrobeApplyNode>(StringComparer.Ordinal);
+            public readonly Dictionary<string, WardrobeApplyNode> ByPath = new Dictionary<string, WardrobeApplyNode>(StringComparer.Ordinal);
+            public readonly Dictionary<string, WardrobeApplyNode> ByNormalizedPath = new Dictionary<string, WardrobeApplyNode>(StringComparer.Ordinal);
+        }
+
+        private sealed class WardrobeApplyNode
+        {
+            public Transform Transform;
+            public Renderer[] Renderers;
+            public SkinnedMeshRenderer[] SkinnedRenderers;
+        }
+
+        private static WardrobeApplyNode ResolveNodeByPathSuffix(Dictionary<string, WardrobeApplyNode> nodesByNormalizedPath, string importedPath)
         {
             var path = WardrobeSnapshotCapture.NormalizePath(importedPath);
             if (string.IsNullOrEmpty(path))
@@ -289,7 +340,7 @@ namespace UNAvatar.UnityExporter
             }
 
             var suffix = "/" + path;
-            var match = default(Transform);
+            var match = default(WardrobeApplyNode);
             foreach (var entry in nodesByNormalizedPath)
             {
                 if (!entry.Key.EndsWith(suffix, StringComparison.Ordinal))
