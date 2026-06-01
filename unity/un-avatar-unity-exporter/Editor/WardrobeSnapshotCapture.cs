@@ -221,7 +221,7 @@ namespace UNAvatar.UnityExporter
             {
                 if (!string.IsNullOrEmpty(hiddenPath)
                     && hiddenPath != path
-                    && path.StartsWith(hiddenPath + "/", StringComparison.Ordinal))
+                    && IsStrictDescendantPath(hiddenPath, path))
                 {
                     return true;
                 }
@@ -506,7 +506,15 @@ namespace UNAvatar.UnityExporter
                 return true;
             }
             return string.Equals(ancestorPath, path, StringComparison.Ordinal) ||
-                path.StartsWith(ancestorPath + "/", StringComparison.Ordinal);
+                IsStrictDescendantPath(ancestorPath, path);
+        }
+
+        private static bool IsStrictDescendantPath(string ancestorPath, string path)
+        {
+            return !string.IsNullOrEmpty(path) &&
+                path.Length > ancestorPath.Length &&
+                path[ancestorPath.Length] == '/' &&
+                path.StartsWith(ancestorPath, StringComparison.Ordinal);
         }
 
         private static Dictionary<string, T> ToFirstDictionary<T>(IEnumerable<T> values, Func<T, string> keySelector)
