@@ -203,7 +203,8 @@ struct MeshFrameGpu {
 	camera_pos: [f32; 4],
 	light_color: [f32; 4],
 	ambient_color: [f32; 4],
-	_pad: [[f32; 4]; 8],
+	time_params: [f32; 4],
+	_pad: [[f32; 4]; 7],
 }
 
 #[repr(C)]
@@ -1367,6 +1368,7 @@ impl SceneMeshes {
 				sampler_bind_group_layout_entry(20, wgpu::ShaderStages::FRAGMENT),
 				sampler_bind_group_layout_entry(21, wgpu::ShaderStages::FRAGMENT),
 				sampler_bind_group_layout_entry(22, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 
@@ -2041,6 +2043,7 @@ impl SceneMeshes {
 				let outline_view = texture_view_or(&image_views, mtoon.outline_width_multiply_texture_index, &white_view);
 				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.outline_width_multiply_texture_index, 0);
 				let uv_mask_view = texture_view_or(&image_views, mtoon.uv_animation_mask_texture_index, &white_view);
+				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
 				let normal_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.normal_texture_index, 0);
 
@@ -2152,6 +2155,10 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 22,
 							resource: wgpu::BindingResource::Sampler(reflection_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 23,
+							resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
 						},
 					],
 				});
@@ -2304,6 +2311,7 @@ impl SceneMeshes {
 		camera_pos: Vec4,
 		light_color: Vec4,
 		ambient_color: Vec4,
+		time_secs: f32,
 	) {
 		if !self.blended_batches.is_empty() {
 			self.blended_batches = sorted_blended_batches(&self.draws, &self.opts, camera_pos.truncate());
@@ -2314,7 +2322,8 @@ impl SceneMeshes {
 			camera_pos: camera_pos.to_array(),
 			light_color: light_color.to_array(),
 			ambient_color: ambient_color.to_array(),
-			_pad: [[0.0; 4]; 8],
+			time_params: [time_secs, 0.0, 0.0, 0.0],
+			_pad: [[0.0; 4]; 7],
 		};
 		if self.frame_uploaded != Some(f) {
 			queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&f));

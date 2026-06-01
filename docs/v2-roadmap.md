@@ -212,6 +212,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - main texture、shade texture、normal、matcap、rim、emission、outline、alpha、cull / render queue 相当を抽出する。
 - Runtime の toon shader / material path を UNToon v2 として拡張し、lilToon の概ねの表現を可能にする。
 - VRM0/VRM1 MToon は UNToon v2 へ変換して描画する。MToon 由来の shade、rim、matcap、outline は維持するが、内部表現の基準は lilToon-compatible 側へ寄せる。
+- UV animation は UNToon v2 の基本機能として扱う。Exporter は MToon `_UvAnim*` と lilToon `_MainTex_ScrollRotate` を正規化し、Renderer は同じ animated UV を base / shade / normal / occlusion / rim / emissive / outline mask へ適用する。
 - WGSL 実装では MIT License の [lilToon](https://github.com/lilxyzw/lilToon) を主要な shader behavior reference として読む。MToon 互換側は MIT License の [MToon](https://github.com/Santarh/MToon) を参照する。U.N. Avatar は独立実装だが、実質的な移植を行った箇所は third-party notice を維持する。
 
 ### Milestone 6: PhysBone to U.N. dynamics

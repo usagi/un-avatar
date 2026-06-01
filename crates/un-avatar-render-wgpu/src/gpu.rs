@@ -793,6 +793,7 @@ pub(crate) struct GpuState {
 	debug_scene: bool,
 	debug_morph: bool,
 	debug_frame_seq: u64,
+	animation_time_secs: f32,
 	disable_expression_morphs: bool,
 	camera: OrbitCamera,
 	world_scratch: Vec<Mat4>,
@@ -1127,6 +1128,7 @@ impl GpuState {
 			debug_scene,
 			debug_morph,
 			debug_frame_seq: 0,
+			animation_time_secs: 0.0,
 			disable_expression_morphs,
 			camera: OrbitCamera::default(),
 			world_scratch: Vec::new(),
@@ -2408,6 +2410,7 @@ impl GpuState {
 				Vec4::from((cam_pos, 1.0)),
 				directional_light_color,
 				environment_light_color,
+				self.animation_time_secs,
 			);
 		}
 	}
@@ -2484,6 +2487,9 @@ impl GpuState {
 				ts.drain_ready();
 			}
 		}
+		self.animation_time_secs += wall_since_last.as_secs_f32();
+		let (gw, gh) = self.render_pixel_dims();
+		self.write_globals(gw, gh);
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
 		if let (Some(doc_arc), true) = (
 			&self.document,

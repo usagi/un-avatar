@@ -10,6 +10,7 @@ struct Frame {
 	camera_pos: vec4<f32>,
 	light_color: vec4<f32>,
 	ambient_color: vec4<f32>,
+	time_params: vec4<f32>,
 }
 
 struct DrawTransform {
@@ -60,6 +61,7 @@ struct MorphU {
 @group(1) @binding(20) var normal_samp: sampler;
 @group(1) @binding(21) var occlusion_samp: sampler;
 @group(1) @binding(22) var reflection_samp: sampler;
+@group(1) @binding(23) var uv_anim_mask_samp: sampler;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -158,7 +160,8 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 		return o;
 	}
 	let n = normalize(o.wn);
-	let mask = textureSampleLevel(outline_width_tex, outline_width_samp, o.uv, 0.0).r;
+	let uv = animated_uv(o.uv);
+	let mask = textureSampleLevel(outline_width_tex, outline_width_samp, uv, 0.0).r;
 	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask;
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;
@@ -250,6 +253,22 @@ fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 	return clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
 }
 
+fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
+	let speed = drawu.uv_anim_params.xyz;
+	if (abs(speed.x) + abs(speed.y) + abs(speed.z) < 0.000001) {
+		return uv;
+	}
+	let mask = textureSampleLevel(uv_anim_mask_tex, uv_anim_mask_samp, uv, 0.0).r;
+	let t = frame.time_params.x;
+	var out_uv = uv + speed.xy * t;
+	let angle = speed.z * t;
+	let s = sin(angle);
+	let c = cos(angle);
+	let centered = out_uv - vec2<f32>(0.5, 0.5);
+	out_uv = vec2<f32>(centered.x * c - centered.y * s, centered.x * s + centered.y * c) + vec2<f32>(0.5, 0.5);
+	return mix(uv, out_uv, clamp(mask, 0.0, 1.0));
+}
+
 fn normal_mapped(n_in: vec3<f32>, wp: vec3<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
 	let n = normalize(n_in);
 	if (abs(scale) < 0.000001) {
@@ -290,7 +309,8 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, base_samp, i.uv);
+	let uv = animated_uv(i.uv);
+	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -302,11 +322,11 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
-	let n = face_normal(normal_mapped(i.wn, i.wp, i.uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
 	let ndl = max(dot(n, l), 0.0);
 	let ambient = frame.ambient_color.rgb * (frame.ambient_color.w * 0.57);
 	let direct = frame.light_color.rgb * (frame.light_color.w * 0.8 * ndl);
-	let lit = base * (ambient + direct) * authored_occlusion(i.uv, dbg);
+	let lit = base * (ambient + direct) * authored_occlusion(uv, dbg);
 	return vec4<f32>(lit, out_a);
 }
 
@@ -314,7 +334,8 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, base_samp, i.uv);
+	let uv = animated_uv(i.uv);
+	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -331,7 +352,8 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, base_samp, i.uv);
+	let uv = animated_uv(i.uv);
+	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -347,12 +369,12 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 		return vec4<f32>(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
-	let n = face_normal(normal_mapped(i.wn, i.wp, i.uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
-	let raw_shift_tex_value = textureSample(shading_shift_tex, shading_shift_samp, i.uv).r * drawu.shading_params.z;
+	let raw_shift_tex_value = textureSample(shading_shift_tex, shading_shift_samp, uv).r * drawu.shading_params.z;
 	let shift_tex_value = select(raw_shift_tex_value, 0.0, force_shift_zero);
 	let shading_shift_factor = select(drawu.shading_params.x, 0.0, force_shift_zero);
 	var shading = dot(n, l) + shading_shift_factor + shift_tex_value;
@@ -362,7 +384,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let toony_boundary = 1.0 - toony_st;
 	shading = linearstep(-toony_boundary, toony_boundary, shading);
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
-	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, i.uv).rgb;
+	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, uv).rgb;
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	let direct_color = mix(shade_term, base, shading) * frame.light_color.rgb * frame.light_color.w;
 
@@ -371,7 +393,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	// gray patches while still preserving authored shade colors.
 	let gi_equalization = clamp(drawu.shading_params.w, 0.0, 1.0);
 	let indirect_light = mix(shade_term, base, gi_equalization) * frame.ambient_color.rgb * frame.ambient_color.w;
-	var lit = min(direct_color + indirect_light, base) * authored_occlusion(i.uv, dbg);
+	var lit = min(direct_color + indirect_light, base) * authored_occlusion(uv, dbg);
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
@@ -387,13 +409,13 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let authored_reflection = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
 	let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 	var rim = select(rim_base * drawu.rim_color.rgb, vec3<f32>(0.0, 0.0, 0.0), disable_rim);
-	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, i.uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
+	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 	lit = lit + matcap + specular + authored_reflection + rim;
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
-	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, emissive_samp, i.uv).rgb;
+	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, emissive_samp, uv).rgb;
 	let emission = select(emission_raw, vec3<f32>(0.0, 0.0, 0.0), disable_emissive);
 	lit = lit + emission;
 	return vec4<f32>(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a);
@@ -401,10 +423,11 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 
 @fragment
 fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
-	let samp_tex = textureSample(tex, base_samp, i.uv);
+	let uv = animated_uv(i.uv);
+	let samp_tex = textureSample(tex, base_samp, uv);
 	let a = samp_tex.a * drawu.base_color.a;
 	mask_discard_mtoon(samp_tex.rgb, a, drawu.params.y, drawu.params.z);
-	let mask = textureSample(outline_width_tex, outline_width_samp, i.uv).r;
+	let mask = textureSample(outline_width_tex, outline_width_samp, uv).r;
 	if (mask <= 0.001) {
 		discard;
 	}
@@ -417,7 +440,8 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_mtoon_zprepass(i: VsOut) -> @location(0) vec4<f32> {
-	let samp_tex = textureSample(tex, base_samp, i.uv);
+	let uv = animated_uv(i.uv);
+	let samp_tex = textureSample(tex, base_samp, uv);
 	let a = samp_tex.a * drawu.base_color.a;
 	discard_transparent_zprepass(a, drawu.params.y, drawu.params.z, drawu.outline_params.w);
 	return vec4<f32>(0.0, 0.0, 0.0, 0.0);

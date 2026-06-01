@@ -1560,6 +1560,34 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	) {
 		out.outline_lighting_mix_factor = value;
 	}
+	if let Some(value) = json_usize(
+		mtoon
+			.get("uvAnimationMaskTextureIndex")
+			.or_else(|| mtoon.get("uv_animation_mask_texture_index")),
+	) {
+		out.uv_animation_mask_texture_index = Some(value);
+	}
+	if let Some(value) = json_f32(
+		mtoon
+			.get("uvAnimationScrollXSpeedFactor")
+			.or_else(|| mtoon.get("uv_animation_scroll_x_speed_factor")),
+	) {
+		out.uv_animation_scroll_x_speed_factor = value;
+	}
+	if let Some(value) = json_f32(
+		mtoon
+			.get("uvAnimationScrollYSpeedFactor")
+			.or_else(|| mtoon.get("uv_animation_scroll_y_speed_factor")),
+	) {
+		out.uv_animation_scroll_y_speed_factor = value;
+	}
+	if let Some(value) = json_f32(
+		mtoon
+			.get("uvAnimationRotationSpeedFactor")
+			.or_else(|| mtoon.get("uv_animation_rotation_speed_factor")),
+	) {
+		out.uv_animation_rotation_speed_factor = value;
+	}
 	Some(out)
 }
 
@@ -2798,5 +2826,26 @@ mod tests {
 			mtoon.parametric_rim_color_factor,
 			UnaMtoonMaterial::default().parametric_rim_color_factor
 		);
+	}
+
+	#[test]
+	fn imports_mtoon_uv_animation_fields() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"mtoon": {
+				"uvAnimationMaskTextureIndex": 7,
+				"uvAnimationScrollXSpeedFactor": 0.25,
+				"uvAnimationScrollYSpeedFactor": -0.5,
+				"uvAnimationRotationSpeedFactor": 0.75
+			}
+		});
+
+		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+
+		assert_eq!(mtoon.uv_animation_mask_texture_index, Some(7));
+		assert_eq!(mtoon.uv_animation_scroll_x_speed_factor, 0.25);
+		assert_eq!(mtoon.uv_animation_scroll_y_speed_factor, -0.5);
+		assert_eq!(mtoon.uv_animation_rotation_speed_factor, 0.75);
 	}
 }

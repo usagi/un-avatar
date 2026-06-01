@@ -222,6 +222,8 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 
 lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は cutout hint として扱う。
 
+UV animation は UNToon 正規化値として `mtoon.uvAnimationScrollXSpeedFactor`、`mtoon.uvAnimationScrollYSpeedFactor`、`mtoon.uvAnimationRotationSpeedFactor`、`mtoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
+
 ### Texture Storage
 
 v0.1 exporter は texture asset の source bytes を優先して `.unavatar` に埋め込む。Exporter は重い texture transcode / recompress / resize を行わない。Unity Editor 上で形式変換するほど品質劣化、世代劣化、encoder 差、export 時間増加、検証困難化のリスクが増えるためである。

@@ -2893,6 +2893,12 @@ namespace UNAvatar.UnityExporter
                 mtoon["outlineLightingMixFactor"] = ReadFloat(material, "_OutlineEnableLighting", 1.0f);
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", ReadTexture(material, "_OutlineWidthMask"));
 
+                var lilMainScrollRotate = ReadVector(material, "_MainTex_ScrollRotate", Vector4.zero);
+                mtoon["uvAnimationScrollXSpeedFactor"] = ReadFloat(material, "_UvAnimScrollX", lilMainScrollRotate.x);
+                mtoon["uvAnimationScrollYSpeedFactor"] = ReadFloat(material, "_UvAnimScrollY", lilMainScrollRotate.y);
+                mtoon["uvAnimationRotationSpeedFactor"] = ReadFloat(material, "_UvAnimRotation", lilMainScrollRotate.z);
+                AddTextureIndex(mtoon, "uvAnimationMaskTextureIndex", ReadTexture(material, "_UvAnimMaskTexture"));
+
                 mtoon["transparentWithZWrite"] = ReadFloat(material, "_ZWrite", 0.0f) > 0.5f || ReadFloat(material, "_ZWriteMode", 0.0f) > 0.5f;
 
                 return new Dictionary<string, object>
@@ -3832,6 +3838,11 @@ namespace UNAvatar.UnityExporter
             private static float ReadFloat(Material material, string property, float fallback)
             {
                 return material.HasProperty(property) ? material.GetFloat(property) : fallback;
+            }
+
+            private static Vector4 ReadVector(Material material, string property, Vector4 fallback)
+            {
+                return material.HasProperty(property) ? material.GetVector(property) : fallback;
             }
 
             private static Texture ReadTexture(Material material, string property)
