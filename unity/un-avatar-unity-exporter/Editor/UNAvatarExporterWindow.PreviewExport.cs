@@ -40,32 +40,18 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
-            var previewBounds = CalculateWardrobePreviewBoundsForExport();
-            basePreviewImages = CapturePreviewImagesForState("base", null, previewBounds);
-            for (var i = 0; i < capturedWardrobeSets.Count; i++)
-            {
-                capturedWardrobeSets[i].previewImages = CapturePreviewImagesForState(capturedWardrobeSets[i].id, capturedWardrobeSets[i], previewBounds);
-            }
-        }
-
-        private List<WardrobePreviewImageDraft> CapturePreviewImagesForState(string label, WardrobeSetDraft set, Bounds previewBounds)
-        {
             GameObject previewClone = null;
             try
             {
-                previewClone = CreateWardrobePreviewClone(label);
-                if (set == null)
-                {
-                    ApplyBaseStateToRoot(previewClone);
-                }
-                else
-                {
-                    ApplyWardrobeSetStateToRoot(previewClone, set);
-                }
+                previewClone = CreateWardrobePreviewClone("shared");
                 PrepareWardrobePreviewRenderers(previewClone);
-                var previews = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
-                AssignPreviewStateDigest(previews, label, previewClone);
-                return previews;
+
+                var previewBounds = CalculateWardrobePreviewBoundsForExport(previewClone);
+                basePreviewImages = CapturePreviewImagesForState(previewClone, "base", null, previewBounds);
+                for (var i = 0; i < capturedWardrobeSets.Count; i++)
+                {
+                    capturedWardrobeSets[i].previewImages = CapturePreviewImagesForState(previewClone, capturedWardrobeSets[i].id, capturedWardrobeSets[i], previewBounds);
+                }
             }
             finally
             {
@@ -74,6 +60,14 @@ namespace UNAvatar.UnityExporter
                     DestroyImmediate(previewClone);
                 }
             }
+        }
+
+        private List<WardrobePreviewImageDraft> CapturePreviewImagesForState(GameObject previewClone, string label, WardrobeSetDraft set, Bounds previewBounds)
+        {
+            ApplyPreviewStateToRoot(previewClone, set);
+            var previews = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
+            AssignPreviewStateDigest(previews, label, previewClone);
+            return previews;
         }
 
         private GameObject CreateWardrobePreviewClone(string label)
@@ -180,12 +174,12 @@ namespace UNAvatar.UnityExporter
                 + "," + value.z.ToString("R", CultureInfo.InvariantCulture);
         }
 
-        private Bounds CalculateWardrobePreviewBoundsForExport()
+        private Bounds CalculateWardrobePreviewBoundsForExport(GameObject previewClone)
         {
-            var bounds = CalculateWardrobePreviewBoundsForState(null);
+            var bounds = CalculateWardrobePreviewBoundsForState(previewClone, null);
             foreach (var set in capturedWardrobeSets)
             {
-                var setBounds = CalculateWardrobePreviewBoundsForState(set);
+                var setBounds = CalculateWardrobePreviewBoundsForState(previewClone, set);
                 if (bounds.size == Vector3.zero)
                 {
                     bounds = setBounds;
@@ -198,29 +192,21 @@ namespace UNAvatar.UnityExporter
             return bounds;
         }
 
-        private Bounds CalculateWardrobePreviewBoundsForState(WardrobeSetDraft set)
+        private Bounds CalculateWardrobePreviewBoundsForState(GameObject previewClone, WardrobeSetDraft set)
         {
-            GameObject previewClone = null;
-            try
+            ApplyPreviewStateToRoot(previewClone, set);
+            return WardrobePreviewCapture.CalculateVisibleBounds(previewClone);
+        }
+
+        private void ApplyPreviewStateToRoot(GameObject previewClone, WardrobeSetDraft set)
+        {
+            if (set == null)
             {
-                previewClone = CreateWardrobePreviewClone(set == null ? "base-bounds" : set.id + "-bounds");
-                if (set == null)
-                {
-                    ApplyBaseStateToRoot(previewClone);
-                }
-                else
-                {
-                    ApplyWardrobeSetStateToRoot(previewClone, set);
-                }
-                PrepareWardrobePreviewRenderers(previewClone);
-                return WardrobePreviewCapture.CalculateVisibleBounds(previewClone);
+                ApplyBaseStateToRoot(previewClone);
             }
-            finally
+            else
             {
-                if (previewClone != null)
-                {
-                    DestroyImmediate(previewClone);
-                }
+                ApplyWardrobeSetStateToRoot(previewClone, set);
             }
         }
 
