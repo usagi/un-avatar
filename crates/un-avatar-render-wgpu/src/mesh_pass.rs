@@ -1265,10 +1265,10 @@ fn mesh_draw_material_gpu(
 				u.alpha_mask.mode_factor.clamp(0.0, 4.0),
 				u.alpha_mask.scale_factor,
 				u.alpha_mask.value_factor,
-				0.0,
+				u.blend_state.alpha_boost_factor.max(0.0),
 			]
 		})
-		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
 	let rim_color_factor = liltoon_like.map(|u| u.rim.color_factor);
 	let rim_color_gpu = rim_color_factor.unwrap_or([rim_color[0], rim_color[1], rim_color[2], 1.0]);
 	let rim_params = liltoon_like

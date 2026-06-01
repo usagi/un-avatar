@@ -145,7 +145,8 @@ Status legend:
   - remaining: `_TransparentMode`、two-pass variants、refraction/fur variants、subpass cutoff を本家仕様に沿って分類する。
 - `[~]` blend state: lilToon premultiply path for transparent materials
   - done: Transparent 系は shader-side premultiply + premultiplied blend path へ寄せ始めている。
-  - remaining: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_AlphaBoostFA` の組み合わせを source property から反映する。
+  - done: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_AlphaBoostFA` を lilToon-like material に保持し、transparent 出力 alpha へ `_AlphaBoostFA` を反映する。
+  - remaining: `_SrcBlend` / `_DstBlend` / `_BlendOp` の組み合わせを wgpu pipeline blend state へより厳密に反映する。
 - `[~]` cull mode: `_Cull`, double-sided handling
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
   - remaining: outline pass cull、transparent/fur/refraction variant 固有の cull 差分を分離する。

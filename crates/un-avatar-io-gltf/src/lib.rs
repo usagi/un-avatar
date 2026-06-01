@@ -2174,6 +2174,18 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskValue") {
 		out.alpha_mask.value_factor = value;
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlend") {
+		out.blend_state.source_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_DstBlend") {
+		out.blend_state.destination_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BlendOp") {
+		out.blend_state.operation_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AlphaBoostFA") {
+		out.blend_state.alpha_boost_factor = value.max(0.0);
+	}
 	Some(out)
 }
 
@@ -3771,7 +3783,11 @@ mod tests {
 					"_OutlineZBias": -0.01,
 					"_AlphaMaskMode": 2.0,
 					"_AlphaMaskScale": 0.8,
-					"_AlphaMaskValue": 0.1
+					"_AlphaMaskValue": 0.1,
+					"_SrcBlend": 1.0,
+					"_DstBlend": 10.0,
+					"_BlendOp": 0.0,
+					"_AlphaBoostFA": 10.0
 				},
 				"colorParams": {
 					"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
@@ -3936,6 +3952,10 @@ mod tests {
 		assert_eq!(liltoon_like.alpha_mask.texture_index, Some(21));
 		assert_eq!(liltoon_like.alpha_mask.scale_factor, 0.8);
 		assert_eq!(liltoon_like.alpha_mask.value_factor, 0.1);
+		assert_eq!(liltoon_like.blend_state.source_factor, 1.0);
+		assert_eq!(liltoon_like.blend_state.destination_factor, 10.0);
+		assert_eq!(liltoon_like.blend_state.operation_factor, 0.0);
+		assert_eq!(liltoon_like.blend_state.alpha_boost_factor, 10.0);
 		assert_eq!(mtoon.parametric_rim_color_factor, [0.040000003, 0.080000006, 0.120000005]);
 		assert_eq!(mtoon.outline_color_factor, [0.01, 0.02, 0.03]);
 	}

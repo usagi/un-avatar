@@ -249,7 +249,7 @@ fn mask_discard_toon(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
 
 fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {
 	if alpha_kind > 1.5 {
-		return a;
+		return clamp(a * max(drawu.alpha_mask_params.w, 0.0), 0.0, 1.0);
 	}
 	if alpha_kind > 0.5 && alpha_kind < 1.5 {
 		return 1.0;

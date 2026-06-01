@@ -797,6 +797,18 @@ pub struct UnaLilToonLikeAlphaMask {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeBlendState {
+	#[serde(default = "one_f32")]
+	pub source_factor: f32,
+	#[serde(default)]
+	pub destination_factor: f32,
+	#[serde(default)]
+	pub operation_factor: f32,
+	#[serde(default = "one_f32")]
+	pub alpha_boost_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
@@ -816,6 +828,8 @@ pub struct UnaLilToonLikeMaterial {
 	pub backlight: UnaLilToonLikeBacklight,
 	#[serde(default)]
 	pub alpha_mask: UnaLilToonLikeAlphaMask,
+	#[serde(default)]
+	pub blend_state: UnaLilToonLikeBlendState,
 }
 
 impl Default for UnaLilToonLikeShadow {
@@ -997,6 +1011,17 @@ impl Default for UnaLilToonLikeAlphaMask {
 	}
 }
 
+impl Default for UnaLilToonLikeBlendState {
+	fn default() -> Self {
+		Self {
+			source_factor: 1.0,
+			destination_factor: 0.0,
+			operation_factor: 0.0,
+			alpha_boost_factor: 1.0,
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
@@ -1009,6 +1034,7 @@ impl Default for UnaLilToonLikeMaterial {
 			outline: UnaLilToonLikeOutline::default(),
 			backlight: UnaLilToonLikeBacklight::default(),
 			alpha_mask: UnaLilToonLikeAlphaMask::default(),
+			blend_state: UnaLilToonLikeBlendState::default(),
 		}
 	}
 }
