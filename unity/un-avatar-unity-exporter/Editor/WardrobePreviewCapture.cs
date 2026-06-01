@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -165,7 +164,7 @@ namespace UNAvatar.UnityExporter
                         cameraPosition = camera.transform.position,
                         cameraRotationEuler = camera.transform.rotation.eulerAngles,
                         target = target,
-                        pngBytes = texture.EncodeToPNG().ToList()
+                        pngBytes = new List<byte>(texture.EncodeToPNG())
                     };
                 }
                 finally
@@ -189,10 +188,16 @@ namespace UNAvatar.UnityExporter
 
             public WardrobePreviewLayerScope(GameObject root, int layer)
             {
-                transforms = root != null
-                    ? root.GetComponentsInChildren<Transform>(true).ToList()
-                    : new List<Transform>();
-                layers = transforms.Select(transform => transform.gameObject.layer).ToList();
+                var rootTransforms = root != null
+                    ? root.GetComponentsInChildren<Transform>(true)
+                    : Array.Empty<Transform>();
+                transforms = new List<Transform>(rootTransforms.Length);
+                layers = new List<int>(rootTransforms.Length);
+                foreach (var transform in rootTransforms)
+                {
+                    transforms.Add(transform);
+                    layers.Add(transform.gameObject.layer);
+                }
                 foreach (var transform in transforms)
                 {
                     transform.gameObject.layer = layer;
@@ -269,18 +274,21 @@ namespace UNAvatar.UnityExporter
 
         public static Bounds CalculateVisibleBounds(GameObject root)
         {
-            var renderers = root.GetComponentsInChildren<Renderer>(true)
-                .Where(renderer => renderer.enabled && renderer.gameObject.activeInHierarchy)
-                .ToList();
-            if (renderers.Count == 0)
+            var hasBounds = false;
+            var bounds = new Bounds(root.transform.position, Vector3.zero);
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
             {
-                return new Bounds(root.transform.position, Vector3.zero);
-            }
-
-            var bounds = renderers[0].bounds;
-            for (var i = 1; i < renderers.Count; i++)
-            {
-                bounds.Encapsulate(renderers[i].bounds);
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                    continue;
+                }
+                bounds.Encapsulate(renderer.bounds);
             }
             return bounds;
         }
