@@ -1198,7 +1198,14 @@ fn mesh_draw_material_gpu(
 		})
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let matcap2_ext_params = liltoon_like
-		.map(|u| [u.matcap.second_normal_strength_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.map(|u| {
+			[
+				u.matcap.second_normal_strength_factor.clamp(0.0, 1.0),
+				0.0,
+				u.matcap.second_lod_factor.max(0.0),
+				0.0,
+			]
+		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_control = liltoon_like
@@ -1772,6 +1779,26 @@ impl SceneMeshes {
 					count: None,
 				},
 				sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 38,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 39,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
 			],
 		});
 
@@ -2473,6 +2500,16 @@ impl SceneMeshes {
 					.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
 				let matcap_blend_mask_view = texture_view_or(&image_views, matcap_blend_mask_texture_index, &white_view);
 				let matcap_blend_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_blend_mask_texture_index, 0);
+				let matcap2_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.second_texture_index);
+				let matcap2_view = texture_view_or(&image_views, matcap2_texture_index, &white_view);
+				let matcap2_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
+				let matcap2_blend_mask_view = texture_view_or(&image_views, matcap2_blend_mask_texture_index, &white_view);
 				let alpha_mask_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -2701,6 +2738,14 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 37,
 							resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 38,
+							resource: wgpu::BindingResource::TextureView(matcap2_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 39,
+							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
 						},
 					],
 				});

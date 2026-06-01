@@ -326,8 +326,9 @@ Status legend:
   - done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
   - remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
 - `[~]` 2nd MatCap
-  - done: `_UseMatCap2nd`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength` を保持し、texture なし近似の 2nd MatCap contribution へ接続した。
-  - remaining: `_MatCap2ndTex` / `_MatCap2ndBlendMask` の texture binding、VR parallax、Z rotation cancel、1st MatCap との本家合成順を実装する。
+  - done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod` を保持し、2nd MatCap contribution へ接続した。
+  - done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。
+  - remaining: VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
 
 ### Reflection / Specular
 

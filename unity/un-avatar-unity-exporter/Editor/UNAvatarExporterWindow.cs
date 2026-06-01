@@ -3721,6 +3721,9 @@ namespace UNAvatar.UnityExporter
                 mtoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
                 AddTextureIndex(mtoon, "matcapTextureIndex", useMatCap ? ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex") : null);
                 AddTextureIndex(mtoon, "matcapBlendMaskTextureIndex", useMatCap ? ReadTexture(material, "_MatCapBlendMask") : null);
+                var useMatCap2nd = IsMaterialFeatureEnabled(material, "_UseMatCap2nd", ReadTexture(material, "_MatCap2ndTex") != null);
+                AddTextureIndex(mtoon, "matcap2ndTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndTex") : null);
+                AddTextureIndex(mtoon, "matcap2ndBlendMaskTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndBlendMask") : null);
 
                 var useRim = IsMaterialFeatureEnabled(material, "_UseRim", material.HasProperty("_RimColor") || ReadTexture(material, "_RimColorTex") != null);
                 var rimMainStrength = ReadFloat(material, "_RimMainStrength", 1.0f);

@@ -105,6 +105,8 @@ struct MorphU {
 @group(1) @binding(35) var matcap_blend_mask_samp: sampler;
 @group(1) @binding(36) var alpha_mask_tex: texture_2d<f32>;
 @group(1) @binding(37) var alpha_mask_samp: sampler;
+@group(1) @binding(38) var matcap2_tex: texture_2d<f32>;
+@group(1) @binding(39) var matcap2_blend_mask_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -586,15 +588,13 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		}
 		if (drawu.matcap2_params.x > 0.0) {
 			let matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
-			let matcap2_lighting = mix(
-				vec3<f32>(1.0, 1.0, 1.0),
-				frame.light_color.rgb * frame.light_color.w,
-				clamp(drawu.matcap2_params.z, 0.0, 1.0),
-			);
-			let matcap2_view = clamp(dot(matcap2_n, v) * 0.5 + 0.5, 0.0, 1.0);
-			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_lighting * matcap2_view;
+			let matcap2_uv = toon_matcap_uv(matcap2_n, v);
+			let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
+			let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
+			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 			let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
-			let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a, 0.0, 1.0);
+			let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, uv).r;
+			let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask, 0.0, 1.0);
 			lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 		}
 	}

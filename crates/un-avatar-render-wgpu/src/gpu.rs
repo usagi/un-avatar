@@ -883,7 +883,7 @@ impl GpuState {
 		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
 		limits.max_sampled_textures_per_shader_stage = limits
 			.max_sampled_textures_per_shader_stage
-			.max(18)
+			.max(20)
 			.min(adapter.limits().max_sampled_textures_per_shader_stage);
 		limits.max_samplers_per_shader_stage = limits
 			.max_samplers_per_shader_stage

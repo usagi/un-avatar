@@ -557,6 +557,20 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.matcap
 				.blend_mask_texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "matcap2ndTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.matcap
+				.second_texture_index = Some(image_index);
+		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "matcap2ndBlendMaskTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.matcap
+				.second_blend_mask_texture_index = Some(image_index);
+		}
 		if let Some(image_index) = texture_asset_ref(mtoon, "rimMultiplyTextureIndexAsset", asset_map) {
 			scene_material.mtoon.get_or_insert_with(Default::default).rim_multiply_texture_index = Some(image_index);
 			scene_material.liltoon_like.get_or_insert_with(Default::default).rim.texture_index = Some(image_index);
@@ -1867,6 +1881,17 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.matcap.second_enabled_factor = unavatar_material_float_param(extras, "_UseMatCap2nd")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("matcap2ndTextureIndex").or_else(|| m.get("matcap_2nd_texture_index")))) {
+		out.matcap.second_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("matcap2ndBlendMaskTextureIndex")
+				.or_else(|| m.get("matcap_2nd_blend_mask_texture_index")),
+		)
+	}) {
+		out.matcap.second_blend_mask_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_MatCap2ndColor") {
 		out.matcap.second_color_factor = value;
 	}
@@ -1884,6 +1909,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndNormalStrength") {
 		out.matcap.second_normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndLod") {
+		out.matcap.second_lod_factor = value.max(0.0);
 	}
 
 	out.reflection.enabled_factor = unavatar_material_float_param(extras, "_UseReflection")
@@ -3637,6 +3665,7 @@ mod tests {
 					"_MatCap2ndEnableLighting": 0.78,
 					"_MatCap2ndBlendMode": 1.0,
 					"_MatCap2ndNormalStrength": 0.88,
+					"_MatCap2ndLod": 1.5,
 					"_Smoothness": 0.6,
 					"_Metallic": 0.2,
 					"_Reflectance": 0.4,
@@ -3710,6 +3739,8 @@ mod tests {
 					"metallicGlossTextureIndex": 18,
 					"matcapTextureIndex": 19,
 					"matcapBlendMaskTextureIndex": 20,
+					"matcap2ndTextureIndex": 22,
+					"matcap2ndBlendMaskTextureIndex": 23,
 					"alphaMaskTextureIndex": 21
 				}
 			}"#,
@@ -3755,12 +3786,15 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.shadow_mask_factor, 0.57);
 		assert_eq!(liltoon_like.matcap.lod_factor, 2.5);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.matcap.second_texture_index, Some(22));
+		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(23));
 		assert_eq!(liltoon_like.matcap.second_color_factor, [0.3, 0.5, 0.7, 0.9]);
 		assert_eq!(liltoon_like.matcap.second_main_strength_factor, 0.58);
 		assert_eq!(liltoon_like.matcap.second_blend_factor, 0.68);
 		assert_eq!(liltoon_like.matcap.second_enable_lighting_factor, 0.78);
 		assert_eq!(liltoon_like.matcap.second_blend_mode, UnaLilToonLikeBlendMode::Add);
 		assert_eq!(liltoon_like.matcap.second_normal_strength_factor, 0.88);
+		assert_eq!(liltoon_like.matcap.second_lod_factor, 1.5);
 		assert_eq!(liltoon_like.reflection.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.reflection.smoothness_factor, 0.6);
