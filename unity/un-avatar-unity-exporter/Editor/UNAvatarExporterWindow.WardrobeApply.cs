@@ -189,12 +189,13 @@ namespace UNAvatar.UnityExporter
                 return report;
             }
 
-            var nodes = root.GetComponentsInChildren<Transform>(true)
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            var nodes = transforms
                 .ToDictionary(transform => WardrobeSnapshotCapture.NodeIdFor(root.transform, transform), transform => transform);
-            var nodesByPath = root.GetComponentsInChildren<Transform>(true)
+            var nodesByPath = transforms
                 .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
                 .ToDictionary(group => group.Key, group => group.First());
-            var nodesByNormalizedPath = root.GetComponentsInChildren<Transform>(true)
+            var nodesByNormalizedPath = transforms
                 .GroupBy(transform => WardrobeSnapshotCapture.NormalizePath(VariantExtractor.TransformPath(root.transform, transform)))
                 .ToDictionary(group => group.Key, group => group.First());
 
