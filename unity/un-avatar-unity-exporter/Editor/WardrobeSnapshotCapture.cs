@@ -22,25 +22,28 @@ namespace UNAvatar.UnityExporter
             foreach (var transform in root.GetComponentsInChildren<Transform>(true))
             {
                 var path = VariantExtractor.TransformPath(root.transform, transform);
+                var nodeId = NodeIdFor(root.transform, transform);
                 snapshot.nodes.Add(new NodeStateDraft
                 {
-                    nodeId = NodeIdFor(root.transform, transform),
+                    nodeId = nodeId,
                     path = path,
                     activeSelf = transform.gameObject.activeSelf,
                     visible = transform.gameObject.activeSelf
                 });
 
-                foreach (var renderer in transform.GetComponents<Renderer>())
+                var renderers = transform.GetComponents<Renderer>();
+                foreach (var renderer in renderers)
                 {
                     snapshot.renderers.Add(new RendererStateDraft
                     {
-                        nodeId = NodeIdFor(root.transform, transform),
+                        nodeId = nodeId,
                         path = path,
                         enabled = renderer.enabled
                     });
                 }
 
-                foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
+                var skinnedRenderers = transform.GetComponents<SkinnedMeshRenderer>();
+                foreach (var skinned in skinnedRenderers)
                 {
                     var mesh = skinned.sharedMesh;
                     if (mesh == null)
@@ -51,7 +54,7 @@ namespace UNAvatar.UnityExporter
                     {
                         snapshot.blendShapes.Add(new BlendShapeStateDraft
                         {
-                            nodeId = NodeIdFor(root.transform, transform),
+                            nodeId = nodeId,
                             path = path,
                             name = mesh.GetBlendShapeName(i),
                             weight = skinned.GetBlendShapeWeight(i)
