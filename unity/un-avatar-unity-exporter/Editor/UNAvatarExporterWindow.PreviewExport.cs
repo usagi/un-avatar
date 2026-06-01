@@ -19,7 +19,13 @@ namespace UNAvatar.UnityExporter
             var previews = new List<WardrobePreviewImageDraft>();
             if (basePreviewImages != null)
             {
-                previews.AddRange(basePreviewImages.Where(image => image != null));
+                foreach (var image in basePreviewImages)
+                {
+                    if (image != null)
+                    {
+                        previews.Add(image);
+                    }
+                }
             }
             var sets = exportWardrobeSets ?? WardrobeSetsForExport();
             foreach (var set in sets)
@@ -28,7 +34,13 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                previews.AddRange(set.previewImages.Where(image => image != null));
+                foreach (var image in set.previewImages)
+                {
+                    if (image != null)
+                    {
+                        previews.Add(image);
+                    }
+                }
             }
             return previews;
         }
@@ -92,7 +104,11 @@ namespace UNAvatar.UnityExporter
         {
             var digest = WardrobePreviewStateDigest(label, root);
             var details = WardrobePreviewStateDetails(root);
-            foreach (var preview in previews ?? new List<WardrobePreviewImageDraft>())
+            if (previews == null)
+            {
+                return;
+            }
+            foreach (var preview in previews)
             {
                 if (preview != null)
                 {
@@ -109,12 +125,7 @@ namespace UNAvatar.UnityExporter
                 return label + "|missing-root";
             }
 
-            var renderers = root.GetComponentsInChildren<Renderer>(true);
-            var active = renderers
-                .Where(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
-                .Select(renderer => VariantExtractor.TransformPath(root.transform, renderer.transform))
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToList();
+            var active = ActiveRendererPaths(root);
             var probes = new[]
             {
                 "Color  1",
@@ -123,7 +134,11 @@ namespace UNAvatar.UnityExporter
                 "Maid",
                 "Outer"
             };
-            var states = probes.Select(path => path + "=" + ProbePathState(root, path));
+            var states = new List<string>(probes.Length);
+            foreach (var path in probes)
+            {
+                states.Add(path + "=" + ProbePathState(root, path));
+            }
             using (var sha = SHA256.Create())
             {
                 var joined = string.Join("\n", active);
@@ -144,27 +159,59 @@ namespace UNAvatar.UnityExporter
                 return new List<string>();
             }
 
-            return root.GetComponentsInChildren<Renderer>(true)
-                .Where(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
-                .OrderBy(renderer => VariantExtractor.TransformPath(root.transform, renderer.transform), StringComparer.Ordinal)
-                .Select(renderer =>
+            var details = new List<string>();
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
                 {
-                    var path = VariantExtractor.TransformPath(root.transform, renderer.transform);
-                    var layerName = LayerMask.LayerToName(renderer.gameObject.layer);
-                    var bounds = renderer.bounds;
-                    var materials = string.Join(",",
-                        (renderer.sharedMaterials ?? Array.Empty<Material>())
-                            .Where(material => material != null)
-                            .Select(material => material.name
-                                + "/" + (material.shader != null ? material.shader.name : "<no-shader>")
-                                + "/rq" + material.renderQueue.ToString(CultureInfo.InvariantCulture)));
-                    return path
-                        + "|layer=" + renderer.gameObject.layer.ToString(CultureInfo.InvariantCulture) + ":" + layerName
-                        + "|boundsCenter=" + Vec3String(bounds.center)
-                        + "|boundsSize=" + Vec3String(bounds.size)
-                        + "|materials=" + materials;
-                })
-                .ToList();
+                    continue;
+                }
+                var path = VariantExtractor.TransformPath(root.transform, renderer.transform);
+                var layerName = LayerMask.LayerToName(renderer.gameObject.layer);
+                var bounds = renderer.bounds;
+                var materials = MaterialSummary(renderer.sharedMaterials);
+                details.Add(path
+                    + "|layer=" + renderer.gameObject.layer.ToString(CultureInfo.InvariantCulture) + ":" + layerName
+                    + "|boundsCenter=" + Vec3String(bounds.center)
+                    + "|boundsSize=" + Vec3String(bounds.size)
+                    + "|materials=" + materials);
+            }
+            details.Sort(StringComparer.Ordinal);
+            return details;
+        }
+
+        private static List<string> ActiveRendererPaths(GameObject root)
+        {
+            var active = new List<string>();
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
+                {
+                    active.Add(VariantExtractor.TransformPath(root.transform, renderer.transform));
+                }
+            }
+            active.Sort(StringComparer.Ordinal);
+            return active;
+        }
+
+        private static string MaterialSummary(Material[] materials)
+        {
+            if (materials == null || materials.Length == 0)
+            {
+                return "";
+            }
+            var parts = new List<string>(materials.Length);
+            foreach (var material in materials)
+            {
+                if (material == null)
+                {
+                    continue;
+                }
+                parts.Add(material.name
+                    + "/" + (material.shader != null ? material.shader.name : "<no-shader>")
+                    + "/rq" + material.renderQueue.ToString(CultureInfo.InvariantCulture));
+            }
+            return string.Join(",", parts);
         }
 
         private static string Vec3String(Vector3 value)
