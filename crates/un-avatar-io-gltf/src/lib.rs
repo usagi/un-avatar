@@ -1418,6 +1418,10 @@ fn unavatar_material_inferred_alpha_mode(
 		return None;
 	}
 
+	if let Some(mode) = unavatar_material_blend_mode_from_source_params(extras) {
+		return Some(mode);
+	}
+
 	if let Some(mode @ (UnaAlphaMode::Mask | UnaAlphaMode::Blend)) = unavatar_material_alpha_mode_from_source_params(extras) {
 		return Some(mode);
 	}
@@ -1453,6 +1457,22 @@ fn unavatar_material_alpha_mode_from_source_params(extras: &Value) -> Option<Una
 	} else {
 		Some(UnaAlphaMode::Opaque)
 	}
+}
+
+fn unavatar_material_blend_mode_from_source_params(extras: &Value) -> Option<UnaAlphaMode> {
+	let src = unavatar_material_float_param(extras, "_SrcBlend")?;
+	let dst = unavatar_material_float_param(extras, "_DstBlend")?;
+	let alpha_to_mask = unavatar_material_float_param(extras, "_AlphaToMask").unwrap_or(0.0);
+	if alpha_to_mask >= 0.5 {
+		return Some(UnaAlphaMode::Mask);
+	}
+	if dst != 0.0 {
+		return Some(UnaAlphaMode::Blend);
+	}
+	if src == 1.0 && dst == 0.0 {
+		return Some(UnaAlphaMode::Opaque);
+	}
+	None
 }
 
 fn unavatar_material_alpha_cutoff_from_source_params(extras: &Value) -> Option<f32> {
@@ -2808,6 +2828,21 @@ mod tests {
 			"sourceShader": "Hidden/lilToonTransparent",
 			"floatParams": { "_TransparentMode": 0.0 }
 		});
+		let alpha_blend_state = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTwoPassTransparentOutline",
+			"floatParams": { "_SrcBlend": 1.0, "_DstBlend": 10.0, "_TransparentMode": 0.0 }
+		});
+		let opaque_blend_state = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonOutline",
+			"floatParams": { "_SrcBlend": 1.0, "_DstBlend": 0.0, "_Cutoff": 0.5 }
+		});
+		let alpha_to_mask_state = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonOutline",
+			"floatParams": { "_SrcBlend": 1.0, "_DstBlend": 0.0, "_AlphaToMask": 1.0 }
+		});
 
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
@@ -2860,6 +2895,18 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent_shader_with_opaque_source_param), UnaAlphaMode::Opaque, None, true),
 			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&alpha_blend_state), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&opaque_blend_state), UnaAlphaMode::Mask, Some(0.5), true),
+			Some(UnaAlphaMode::Opaque)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&alpha_to_mask_state), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Mask)
 		);
 		assert_eq!(
 			unavatar_material_alpha_cutoff_from_source_params(&serde_json::json!({
