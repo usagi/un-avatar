@@ -639,6 +639,8 @@ pub struct UnaLilToonLikeReflection {
 	#[serde(default = "one_f32")]
 	pub apply_specular_factor: f32,
 	#[serde(default = "one_f32")]
+	pub apply_specular_forward_add_factor: f32,
+	#[serde(default = "one_f32")]
 	pub apply_reflection_factor: f32,
 	#[serde(default = "one_f32")]
 	pub specular_toon_factor: f32,
@@ -940,6 +942,7 @@ impl Default for UnaLilToonLikeReflection {
 			metallic_texture_index: None,
 			reflectance_factor: default_liltoon_reflectance(),
 			apply_specular_factor: 1.0,
+			apply_specular_forward_add_factor: 1.0,
 			apply_reflection_factor: 1.0,
 			specular_toon_factor: 1.0,
 			specular_border_factor: default_liltoon_specular_border(),

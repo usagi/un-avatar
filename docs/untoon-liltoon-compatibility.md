@@ -368,8 +368,11 @@ Status legend:
   - done: source raw params を保持し、specular color と reflection strength の近似値へ接続した。
   - remaining: color space と dielectric specular の本家係数へ合わせる。
 - `[~]` `_ApplySpecular`
-  - done: source raw params を保持し、lilToon-like specular contribution の gate として接続した。
-  - remaining: `_ApplySpecularFA`、shadowmix / attenuation との合成順を本家に合わせる。
+	- done: source raw params を保持し、lilToon-like specular contribution の gate として接続した。
+	- remaining: shadowmix / attenuation との合成順を本家に合わせる。
+- `[~]` `_ApplySpecularFA`
+	- done: source raw params を forward-add specular gate として保持する。
+	- remaining: forward-add lighting path、shadowmix / attenuation との合成順を本家に合わせる。
 - `[~]` `_SpecularToon`
   - done: v2 reflection parameter として保持し、enabled 時は specular highlight を toon scale path へ分岐する。
   - remaining: anisotropy path、normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。

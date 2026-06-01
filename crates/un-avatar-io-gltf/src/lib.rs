@@ -1980,6 +1980,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_ApplySpecular") {
 		out.reflection.apply_specular_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ApplySpecularFA") {
+		out.reflection.apply_specular_forward_add_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ApplyReflection") {
 		out.reflection.apply_reflection_factor = value.clamp(0.0, 1.0);
 	}
@@ -3778,6 +3781,7 @@ mod tests {
 					"_Metallic": 0.2,
 					"_Reflectance": 0.4,
 					"_ApplySpecular": 0.8,
+					"_ApplySpecularFA": 0.9,
 					"_ApplyReflection": 0.7,
 					"_SpecularToon": 1.0,
 					"_SpecularBorder": 0.37,
@@ -3950,6 +3954,7 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.metallic_factor, 0.2);
 		assert_eq!(liltoon_like.reflection.reflectance_factor, 0.4);
 		assert_eq!(liltoon_like.reflection.apply_specular_factor, 0.8);
+		assert_eq!(liltoon_like.reflection.apply_specular_forward_add_factor, 0.9);
 		assert_eq!(liltoon_like.reflection.apply_reflection_factor, 0.7);
 		assert_eq!(liltoon_like.reflection.specular_toon_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.specular_border_factor, 0.37);
