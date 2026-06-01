@@ -128,8 +128,12 @@ struct DiagnoseVisibleMaterialSummary {
 	index: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_shader: Option<String>,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
+	alpha_cutoff: f32,
+	transparent_with_z_write: bool,
 	morph_target_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	nonzero_morph_weights: Vec<DiagnoseMorphWeightSummary>,
@@ -578,6 +582,9 @@ enum Commands {
 		/// 人間向け出力で、現在の wardrobe 状態から参照される material だけを表示する
 		#[arg(long)]
 		visible_materials_only: bool,
+		/// 人間向け出力で、現在の wardrobe 状態の可視 mesh node / primitive / material 対応を表示する
+		#[arg(long)]
+		visible_meshes: bool,
 		/// 結果を JSON で stdout に出す
 		#[arg(long)]
 		json: bool,
@@ -708,6 +715,7 @@ fn run(cli: Cli) -> Result<(), String> {
 			wardrobe_set,
 			wardrobe_probe_all,
 			visible_materials_only,
+			visible_meshes,
 			json,
 		} => run_diagnose(
 			&plugin_dirs,
@@ -716,6 +724,7 @@ fn run(cli: Cli) -> Result<(), String> {
 			wardrobe_set,
 			wardrobe_probe_all,
 			visible_materials_only,
+			visible_meshes,
 			json,
 		),
 		Commands::Vmc { command } => run_vmc(command),
@@ -1179,8 +1188,16 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 				primitive: primitive_index,
 				index: material_index,
 				name: material.name.clone(),
+				source_shader: material
+					.unavatar_material
+					.as_ref()
+					.and_then(|m| m.get("sourceShader"))
+					.and_then(|v| v.as_str())
+					.map(str::to_owned),
 				shading: material.shading,
 				alpha_mode: material.alpha_mode,
+				alpha_cutoff: material.alpha_cutoff,
+				transparent_with_z_write: material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
 				morph_target_count: primitive.morph_targets.len(),
 				nonzero_morph_weights,
 			})
@@ -1741,6 +1758,7 @@ fn run_diagnose(
 	wardrobe_set: Option<String>,
 	wardrobe_probe_all: bool,
 	visible_materials_only: bool,
+	visible_meshes: bool,
 	json: bool,
 ) -> Result<(), String> {
 	let reg = io_registry_for_cli(plugin_dirs)?;
@@ -1914,6 +1932,39 @@ fn run_diagnose(
 		println!("expressions: presets={}", e.preset_count);
 	} else {
 		println!("expressions: none");
+	}
+	if visible_meshes {
+		println!("visible_mesh_nodes:");
+		for node in &report.scene.visible_mesh_nodes {
+			println!(
+				"  node[{}]: mesh={} skin={:?} path={:?} name={:?}",
+				node.node, node.mesh, node.skin, node.path, node.name
+			);
+			for material in &node.materials {
+				println!(
+					"    prim[{}]: material[{}] name={:?} source={:?} shading={:?} alpha={:?} cutoff={} zwrite={} morph_targets={} nonzero_morphs={}",
+					material.primitive,
+					material.index,
+					material.name,
+					material.source_shader,
+					material.shading,
+					material.alpha_mode,
+					material.alpha_cutoff,
+					material.transparent_with_z_write,
+					material.morph_target_count,
+					material.nonzero_morph_weights.len()
+				);
+				for morph in material.nonzero_morph_weights.iter().take(8) {
+					println!(
+						"      morph[{}]: name={:?} weight={} pos_delta_sum={} nrm_delta_sum={}",
+						morph.index, morph.name, morph.weight, morph.position_delta_abs_sum, morph.normal_delta_abs_sum
+					);
+				}
+				if material.nonzero_morph_weights.len() > 8 {
+					println!("      morph: ... {} more", material.nonzero_morph_weights.len() - 8);
+				}
+			}
+		}
 	}
 	for material in report
 		.scene
