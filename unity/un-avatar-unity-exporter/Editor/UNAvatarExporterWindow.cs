@@ -1571,7 +1571,7 @@ namespace UNAvatar.UnityExporter
                 {
                     ["op"] = "nodeEnabled",
                     ["path"] = TransformPath(root.transform, renderer.transform),
-                    ["visible"] = renderer.gameObject.activeInHierarchy && renderer.enabled
+                    ["visible"] = renderer.gameObject.activeSelf && renderer.enabled
                 });
             }
             return variant;
