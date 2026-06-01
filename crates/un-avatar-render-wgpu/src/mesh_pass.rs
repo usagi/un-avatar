@@ -838,6 +838,15 @@ fn texture_sampler_or<'a>(
 	&samplers[sampler_index]
 }
 
+fn sampler_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+	wgpu::BindGroupLayoutEntry {
+		binding,
+		visibility,
+		ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+		count: None,
+	}
+}
+
 fn create_mesh_sampler(device: &wgpu::Device, label: &'static str, sampler: &UnaTextureSampler) -> wgpu::Sampler {
 	let mag_filter = wgpu_filter_mode(sampler.mag_filter);
 	let min_filter = wgpu_filter_mode(sampler.min_filter);
@@ -1330,6 +1339,15 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+				sampler_bind_group_layout_entry(14, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(15, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(16, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(17, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(18, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(19, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(20, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(21, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(22, wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 
@@ -1987,15 +2005,24 @@ impl SceneMeshes {
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let shade_view = texture_view_or(&image_views, mtoon.shade_multiply_texture_index, &white_view);
+				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.shade_multiply_texture_index, 0);
 				let shift_view = texture_view_or(&image_views, mtoon.shading_shift_texture_index, &black_view);
+				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.shading_shift_texture_index, 0);
 				let matcap_view = texture_view_or(&image_views, mtoon.matcap_texture_index, &black_view);
+				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.matcap_texture_index, 0);
 				let rim_view = texture_view_or(&image_views, mtoon.rim_multiply_texture_index, &white_view);
+				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.rim_multiply_texture_index, 0);
 				let reflection_view = texture_view_or(&image_views, mtoon.reflection_cube_texture_index, &black_view);
+				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.reflection_cube_texture_index, 0);
 				let emissive_view = texture_view_or(&image_views, mat.emissive_texture_index, &black_view);
+				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.emissive_texture_index, 0);
 				let occlusion_view = texture_view_or(&image_views, mat.occlusion_texture_index, &white_view);
+				let occlusion_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.occlusion_texture_index, 0);
 				let outline_view = texture_view_or(&image_views, mtoon.outline_width_multiply_texture_index, &white_view);
+				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.outline_width_multiply_texture_index, 0);
 				let uv_mask_view = texture_view_or(&image_views, mtoon.uv_animation_mask_texture_index, &white_view);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
+				let normal_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.normal_texture_index, 0);
 
 				let draw_transform = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("mesh_draw_transform"),
@@ -2069,6 +2096,42 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 13,
 							resource: wgpu::BindingResource::TextureView(reflection_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 14,
+							resource: wgpu::BindingResource::Sampler(shade_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 15,
+							resource: wgpu::BindingResource::Sampler(shift_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 16,
+							resource: wgpu::BindingResource::Sampler(matcap_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 17,
+							resource: wgpu::BindingResource::Sampler(rim_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 18,
+							resource: wgpu::BindingResource::Sampler(emissive_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 19,
+							resource: wgpu::BindingResource::Sampler(outline_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 20,
+							resource: wgpu::BindingResource::Sampler(normal_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 21,
+							resource: wgpu::BindingResource::Sampler(occlusion_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 22,
+							resource: wgpu::BindingResource::Sampler(reflection_sampler),
 						},
 					],
 				});

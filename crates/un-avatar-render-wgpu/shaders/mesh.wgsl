@@ -39,7 +39,7 @@ struct MorphU {
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<uniform> drawt: DrawTransform;
 @group(1) @binding(1) var tex: texture_2d<f32>;
-@group(1) @binding(2) var samp: sampler;
+@group(1) @binding(2) var base_samp: sampler;
 @group(1) @binding(3) var shade_tex: texture_2d<f32>;
 @group(1) @binding(4) var shading_shift_tex: texture_2d<f32>;
 @group(1) @binding(5) var matcap_tex: texture_2d<f32>;
@@ -51,6 +51,15 @@ struct MorphU {
 @group(1) @binding(11) var normal_tex: texture_2d<f32>;
 @group(1) @binding(12) var occlusion_tex: texture_2d<f32>;
 @group(1) @binding(13) var reflection_tex: texture_2d<f32>;
+@group(1) @binding(14) var shade_samp: sampler;
+@group(1) @binding(15) var shading_shift_samp: sampler;
+@group(1) @binding(16) var matcap_samp: sampler;
+@group(1) @binding(17) var rim_samp: sampler;
+@group(1) @binding(18) var emissive_samp: sampler;
+@group(1) @binding(19) var outline_width_samp: sampler;
+@group(1) @binding(20) var normal_samp: sampler;
+@group(1) @binding(21) var occlusion_samp: sampler;
+@group(1) @binding(22) var reflection_samp: sampler;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -149,7 +158,7 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 		return o;
 	}
 	let n = normalize(o.wn);
-	let mask = textureSampleLevel(outline_width_tex, samp, o.uv, 0.0).r;
+	let mask = textureSampleLevel(outline_width_tex, outline_width_samp, o.uv, 0.0).r;
 	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask;
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;
@@ -246,7 +255,7 @@ fn normal_mapped(n_in: vec3<f32>, wp: vec3<f32>, uv: vec2<f32>, scale: f32) -> v
 	if (abs(scale) < 0.000001) {
 		return n;
 	}
-	let packed = textureSample(normal_tex, samp, uv).xyz;
+	let packed = textureSample(normal_tex, normal_samp, uv).xyz;
 	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
 	tn.x = tn.x * scale;
 	tn.y = tn.y * scale;
@@ -273,7 +282,7 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 		return 1.0;
 	}
 	let strength = clamp(drawu.rim_color.w, 0.0, 2.0);
-	let sample = textureSample(occlusion_tex, samp, uv).r;
+	let sample = textureSample(occlusion_tex, occlusion_samp, uv).r;
 	return clamp(mix(1.0, sample, strength), 0.0, 1.0);
 }
 
@@ -281,7 +290,7 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, samp, i.uv);
+	let samp_tex = textureSample(tex, base_samp, i.uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -305,7 +314,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, samp, i.uv);
+	let samp_tex = textureSample(tex, base_samp, i.uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -322,7 +331,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	discard_backface_if_single_sided(front_facing, dbg);
-	let samp_tex = textureSample(tex, samp, i.uv);
+	let samp_tex = textureSample(tex, base_samp, i.uv);
 	let alb = samp_tex.rgb;
 	let tex_a = samp_tex.a;
 	let a = tex_a * drawu.base_color.a;
@@ -343,7 +352,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
-	let raw_shift_tex_value = textureSample(shading_shift_tex, samp, i.uv).r * drawu.shading_params.z;
+	let raw_shift_tex_value = textureSample(shading_shift_tex, shading_shift_samp, i.uv).r * drawu.shading_params.z;
 	let shift_tex_value = select(raw_shift_tex_value, 0.0, force_shift_zero);
 	let shading_shift_factor = select(drawu.shading_params.x, 0.0, force_shift_zero);
 	var shading = dot(n, l) + shading_shift_factor + shift_tex_value;
@@ -353,7 +362,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let toony_boundary = 1.0 - toony_st;
 	shading = linearstep(-toony_boundary, toony_boundary, shading);
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
-	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, samp, i.uv).rgb;
+	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, i.uv).rgb;
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	let direct_color = mix(shade_term, base, shading) * frame.light_color.rgb * frame.light_color.w;
 
@@ -367,7 +376,7 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
 	let matcap_uv = mtoon_matcap_uv(n, v);
-	let matcap_raw = drawu.matcap_factor.rgb * textureSample(matcap_tex, samp, matcap_uv).rgb * drawu.matcap_factor.w;
+	let matcap_raw = drawu.matcap_factor.rgb * textureSample(matcap_tex, matcap_samp, matcap_uv).rgb * drawu.matcap_factor.w;
 	let matcap = select(matcap_raw, vec3<f32>(0.0, 0.0, 0.0), disable_matcap);
 	let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
 	let half_vec = normalize(l + v);
@@ -375,16 +384,16 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let specular = vec3<f32>(specular_shape * specular_intensity);
 	let reflection_uv = mtoon_reflection_uv(n, v);
 	let reflection_fresnel = pow(clamp(1.0 - dot(n, v), 0.0, 1.0), 2.0);
-	let authored_reflection = textureSample(reflection_tex, samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
+	let authored_reflection = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
 	let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 	var rim = select(rim_base * drawu.rim_color.rgb, vec3<f32>(0.0, 0.0, 0.0), disable_rim);
-	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, samp, i.uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
+	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, i.uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
 	let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 	rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 	lit = lit + matcap + specular + authored_reflection + rim;
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
-	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, samp, i.uv).rgb;
+	let emission_raw = drawu.emissive_factor.rgb * textureSample(emissive_tex, emissive_samp, i.uv).rgb;
 	let emission = select(emission_raw, vec3<f32>(0.0, 0.0, 0.0), disable_emissive);
 	lit = lit + emission;
 	return vec4<f32>(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a);
@@ -392,10 +401,10 @@ fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 
 @fragment
 fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
-	let samp_tex = textureSample(tex, samp, i.uv);
+	let samp_tex = textureSample(tex, base_samp, i.uv);
 	let a = samp_tex.a * drawu.base_color.a;
 	mask_discard_mtoon(samp_tex.rgb, a, drawu.params.y, drawu.params.z);
-	let mask = textureSample(outline_width_tex, samp, i.uv).r;
+	let mask = textureSample(outline_width_tex, outline_width_samp, i.uv).r;
 	if (mask <= 0.001) {
 		discard;
 	}
@@ -408,7 +417,7 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_mtoon_zprepass(i: VsOut) -> @location(0) vec4<f32> {
-	let samp_tex = textureSample(tex, samp, i.uv);
+	let samp_tex = textureSample(tex, base_samp, i.uv);
 	let a = samp_tex.a * drawu.base_color.a;
 	discard_transparent_zprepass(a, drawu.params.y, drawu.outline_params.w);
 	return vec4<f32>(0.0, 0.0, 0.0, 0.0);
