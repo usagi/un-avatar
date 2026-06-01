@@ -647,12 +647,14 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let rim_tex_color = textureSample(rim_tex, rim_samp, uv);
 			var rim_color = drawu.rim_color.rgb * rim_tex_color.rgb;
 			rim_color = mix(rim_color, rim_color * base, clamp(drawu.rim_control.y, 0.0, 1.0));
-			let rim_raw = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
+			let rim_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.y, 0.0, 1.0)));
+			let rim_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
 			let rim_factor = lil_tooning_scale(rim_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
 			let lit_rim_color = mix(rim_color, rim_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
 			let rim_shadow = mix(1.0, shading, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
-			rim = lit_rim_color * rim_factor * rim_alpha * rim_shadow;
+			let rim_backface = select(clamp(drawu.rim_ext_params.z, 0.0, 1.0), 1.0, front_facing);
+			rim = lit_rim_color * rim_factor * rim_alpha * rim_shadow * rim_backface;
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;

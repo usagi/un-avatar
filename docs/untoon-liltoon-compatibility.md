@@ -414,7 +414,13 @@ Status legend:
   - remaining: anti-alias strength と本家 blur curve を一致させる。
 - `[~]` `_RimFresnelPower`
   - done: v2 rim parameter として保持し、`pow(1 - abs(N dot V), power)` へ接続した。
-  - remaining: normal strength、backface mask、VR parallax 時の view vector を実装する。
+  - remaining: VR parallax 時の view vector を実装する。
+- `[~]` `_RimNormalStrength`
+  - done: source raw params を保持し、rim Fresnel 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: lilToon の `fd.rimN`、2nd normal map、backface behavior と合わせて検証する。
+- `[~]` `_RimBackfaceMask`
+  - done: source raw params を保持し、backface fragment の rim contribution gate へ接続した。
+  - remaining: cull mode / outline pass / transparent backface の本家条件と照合する。
 - `[~]` `_RimEnableLighting`
   - done: v2 rim parameter として保持し、rim color と main light color の mix に接続した。
   - remaining: forward add branch と blend mode 3 以上の本家条件を反映する。
