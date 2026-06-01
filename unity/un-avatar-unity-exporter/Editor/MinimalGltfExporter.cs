@@ -492,7 +492,15 @@ namespace UNAvatar.UnityExporter
 
             private int AddIndicesAccessor(int[] indices, bool reverseWinding)
             {
-                var useUshort = indices.All(i => i >= 0 && i <= ushort.MaxValue);
+                var useUshort = true;
+                for (var i = 0; i < indices.Length; i++)
+                {
+                    if (indices[i] < 0 || indices[i] > ushort.MaxValue)
+                    {
+                        useUshort = false;
+                        break;
+                    }
+                }
                 var bytes = new byte[indices.Length * (useUshort ? 2 : 4)];
                 for (var i = 0; i < indices.Length; i++)
                 {

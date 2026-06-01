@@ -62,11 +62,14 @@ namespace UNAvatar.UnityExporter
         private HashSet<string> ReferencedMorphTargetNamesForExport()
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var operation in capturedWardrobeSets.SelectMany(set => set.operations))
+            foreach (var set in capturedWardrobeSets)
             {
-                if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name))
+                foreach (var operation in set.operations)
                 {
-                    names.Add(operation.name);
+                    if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name))
+                    {
+                        names.Add(operation.name);
+                    }
                 }
             }
             foreach (var operation in CurrentBaseOperations())
@@ -466,7 +469,7 @@ namespace UNAvatar.UnityExporter
                         ["source"] = variant.Source,
                         ["default"] = false,
                         ["assetGroups"] = new List<object>(),
-                        ["operations"] = WardrobeOperationsAsObjects(variant.Operations)
+                        ["operations"] = VariantOperationsAsObjects(variant.Operations)
                     });
                 }
             }
@@ -497,6 +500,20 @@ namespace UNAvatar.UnityExporter
         }
 
         private static List<object> WardrobeOperationsAsObjects(List<WardrobeOperationDraft> operations)
+        {
+            var json = new List<object>(operations != null ? operations.Count : 0);
+            if (operations == null)
+            {
+                return json;
+            }
+            foreach (var operation in operations)
+            {
+                json.Add(operation);
+            }
+            return json;
+        }
+
+        private static List<object> VariantOperationsAsObjects(List<Dictionary<string, object>> operations)
         {
             var json = new List<object>(operations != null ? operations.Count : 0);
             if (operations == null)
