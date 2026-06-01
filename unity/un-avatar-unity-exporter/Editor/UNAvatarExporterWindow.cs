@@ -121,6 +121,8 @@ namespace UNAvatar.UnityExporter
         public string mimeType = "image/png";
         public string pixelFormat = "RGBA8";
         public string colorSpace = "sRGB";
+        public string renderMode = "standard";
+        public int antiAliasingSamples = 1;
         public float fovYDegrees;
         public float nearClip;
         public float farClip;
@@ -141,6 +143,11 @@ namespace UNAvatar.UnityExporter
                 ["mimeType"] = mimeType ?? "image/png",
                 ["pixelFormat"] = pixelFormat ?? "RGBA8",
                 ["colorSpace"] = colorSpace ?? "sRGB",
+                ["render"] = new Dictionary<string, object>
+                {
+                    ["mode"] = renderMode ?? "standard",
+                    ["antiAliasingSamples"] = antiAliasingSamples
+                },
                 ["camera"] = new Dictionary<string, object>
                 {
                     ["projection"] = "perspective",
@@ -354,6 +361,8 @@ namespace UNAvatar.UnityExporter
         [SerializeField] private List<WardrobeOperationDraft> importedBaseOperations = new List<WardrobeOperationDraft>();
         [SerializeField] private List<WardrobeSetDraft> capturedWardrobeSets = new List<WardrobeSetDraft>();
         [SerializeField] private int selectedWardrobeSetIndex = -1;
+        [SerializeField] private bool useHighQualitySampleRender = true;
+        [SerializeField] private bool useAntiAliasingForSampleImage = false;
         [SerializeField] private bool developerMode = false;
 
         private Vector2 scroll;
@@ -720,6 +729,10 @@ namespace UNAvatar.UnityExporter
         private void DrawWardrobeCaptureGui()
         {
             EditorGUILayout.Space(8);
+            useHighQualitySampleRender = EditorGUILayout.ToggleLeft("Use high quality render for sample image", useHighQualitySampleRender);
+            useAntiAliasingForSampleImage = EditorGUILayout.ToggleLeft("Use Anti-aliasing for sample image", useAntiAliasingForSampleImage);
+
+            EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("1. Base", EditorStyles.boldLabel);
             if (GUILayout.Button("Capture Current As Base", GUILayout.Height(24)))
             {
@@ -849,7 +862,7 @@ namespace UNAvatar.UnityExporter
                 return;
             }
             baseSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
-            basePreviewImages = WardrobePreviewCapture.Capture(avatarRoot);
+            basePreviewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             hasBaseSnapshot = true;
             hasImportedBaseOperations = false;
             importedBaseOperations.Clear();
@@ -873,7 +886,7 @@ namespace UNAvatar.UnityExporter
             var current = WardrobeSnapshotCapture.Capture(avatarRoot);
             var set = WardrobeSnapshotCapture.Diff(baseSnapshot, current, wardrobeSetName);
             set.capturedSnapshot = current;
-            set.previewImages = WardrobePreviewCapture.Capture(avatarRoot);
+            set.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             capturedWardrobeSets.Add(set);
             selectedWardrobeSetIndex = capturedWardrobeSets.Count - 1;
             lastSummary = $"Captured wardrobe set `{set.displayName}`: {set.operations.Count} operations, {set.previewImages.Count} previews.";
@@ -905,9 +918,18 @@ namespace UNAvatar.UnityExporter
             updated.displayName = nextName;
             updated.source = "unity_capture_diff_update";
             updated.capturedSnapshot = current;
-            updated.previewImages = WardrobePreviewCapture.Capture(avatarRoot);
+            updated.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             capturedWardrobeSets[selectedWardrobeSetIndex] = updated;
             lastSummary = $"Updated wardrobe set `{updated.displayName}`: {updated.operations.Count} operations, {updated.previewImages.Count} previews.";
+        }
+
+        private WardrobePreviewCaptureOptions CurrentPreviewCaptureOptions()
+        {
+            return new WardrobePreviewCaptureOptions
+            {
+                HighQualityRender = useHighQualitySampleRender,
+                AntiAliasing = useAntiAliasingForSampleImage
+            };
         }
 
         private void DuplicateWardrobeSet(int index)
@@ -1716,12 +1738,12 @@ namespace UNAvatar.UnityExporter
                 var previewBounds = CalculateWardrobePreviewBounds(previewClone);
 
                 ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
-                basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds);
+                basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
                 for (var i = 0; i < capturedWardrobeSets.Count; i++)
                 {
                     ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
                     ApplyWardrobeOperationsToRoot(previewClone, capturedWardrobeSets[i].operations);
-                    capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds);
+                    capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
                 }
             }
             finally
@@ -2285,6 +2307,15 @@ namespace UNAvatar.UnityExporter
         }
     }
 
+    internal sealed class WardrobePreviewCaptureOptions
+    {
+        public bool HighQualityRender;
+        public bool AntiAliasing;
+
+        public string RenderMode => HighQualityRender ? "high_quality_camera_render" : "standard_camera_render";
+        public int AntiAliasingSamples => AntiAliasing ? 8 : 1;
+    }
+
     internal static class WardrobePreviewCapture
     {
         private const int PreviewSize = 1024;
@@ -2294,16 +2325,27 @@ namespace UNAvatar.UnityExporter
 
         public static List<WardrobePreviewImageDraft> Capture(GameObject root)
         {
-            return Capture(root, CalculateVisibleBounds(root));
+            return Capture(root, CalculateVisibleBounds(root), new WardrobePreviewCaptureOptions());
+        }
+
+        public static List<WardrobePreviewImageDraft> Capture(GameObject root, WardrobePreviewCaptureOptions options)
+        {
+            return Capture(root, CalculateVisibleBounds(root), options);
         }
 
         public static List<WardrobePreviewImageDraft> Capture(GameObject root, Bounds bounds)
+        {
+            return Capture(root, bounds, new WardrobePreviewCaptureOptions());
+        }
+
+        public static List<WardrobePreviewImageDraft> Capture(GameObject root, Bounds bounds, WardrobePreviewCaptureOptions options)
         {
             var result = new List<WardrobePreviewImageDraft>();
             if (root == null)
             {
                 return result;
             }
+            options = options ?? new WardrobePreviewCaptureOptions();
 
             if (bounds.size == Vector3.zero)
             {
@@ -2315,11 +2357,11 @@ namespace UNAvatar.UnityExporter
             var distance = radius / Mathf.Sin(PreviewFovY * Mathf.Deg2Rad * 0.5f);
             distance *= 0.56f;
 
-            result.Add(CaptureView(root, "front", center + new Vector3(0.0f, radius * 0.08f, distance), center, Vector3.up));
-            result.Add(CaptureView(root, "back", center + new Vector3(0.0f, radius * 0.08f, -distance), center, Vector3.up));
-            result.Add(CaptureView(root, "side", center + new Vector3(distance, radius * 0.08f, 0.0f), center, Vector3.up));
-            result.Add(CaptureView(root, "top", center + new Vector3(0.0f, distance, 0.0f), center, Vector3.back));
-            result.Add(CaptureView(root, "threeQuarterTop", center + new Vector3(distance * 0.58f, distance * 0.48f, distance * 0.58f), center, Vector3.up));
+            result.Add(CaptureView(root, "front", center + new Vector3(0.0f, radius * 0.08f, distance), center, Vector3.up, options));
+            result.Add(CaptureView(root, "back", center + new Vector3(0.0f, radius * 0.08f, -distance), center, Vector3.up, options));
+            result.Add(CaptureView(root, "side", center + new Vector3(distance, radius * 0.08f, 0.0f), center, Vector3.up, options));
+            result.Add(CaptureView(root, "top", center + new Vector3(0.0f, distance, 0.0f), center, Vector3.back, options));
+            result.Add(CaptureView(root, "threeQuarterTop", center + new Vector3(distance * 0.58f, distance * 0.48f, distance * 0.58f), center, Vector3.up, options));
             return result;
         }
 
@@ -2338,6 +2380,8 @@ namespace UNAvatar.UnityExporter
                 mimeType = source.mimeType,
                 pixelFormat = source.pixelFormat,
                 colorSpace = source.colorSpace,
+                renderMode = source.renderMode,
+                antiAliasingSamples = source.antiAliasingSamples,
                 fovYDegrees = source.fovYDegrees,
                 nearClip = source.nearClip,
                 farClip = source.farClip,
@@ -2349,13 +2393,25 @@ namespace UNAvatar.UnityExporter
             };
         }
 
-        private static WardrobePreviewImageDraft CaptureView(GameObject root, string view, Vector3 position, Vector3 target, Vector3 up)
+        private static WardrobePreviewImageDraft CaptureView(
+            GameObject root,
+            string view,
+            Vector3 position,
+            Vector3 target,
+            Vector3 up,
+            WardrobePreviewCaptureOptions options)
         {
             var cameraObject = new GameObject("UNAvatar Wardrobe Preview Camera");
             cameraObject.hideFlags = HideFlags.HideAndDontSave;
             var camera = cameraObject.AddComponent<Camera>();
             var oldActive = RenderTexture.active;
-            var renderTexture = RenderTexture.GetTemporary(PreviewSize, PreviewSize, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+            var renderTexture = RenderTexture.GetTemporary(
+                PreviewSize,
+                PreviewSize,
+                24,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.sRGB,
+                Mathf.Max(1, options.AntiAliasingSamples));
             try
             {
                 camera.transform.position = position;
@@ -2364,10 +2420,15 @@ namespace UNAvatar.UnityExporter
                 camera.nearClipPlane = PreviewNear;
                 camera.farClipPlane = PreviewFar;
                 camera.aspect = 1.0f;
+                camera.allowHDR = options.HighQualityRender;
+                camera.allowMSAA = options.AntiAliasing;
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0, 0, 0, 0);
                 camera.targetTexture = renderTexture;
-                camera.Render();
+                using (new WardrobePreviewQualityScope(options))
+                {
+                    camera.Render();
+                }
 
                 RenderTexture.active = renderTexture;
                 var texture = new Texture2D(PreviewSize, PreviewSize, TextureFormat.RGBA32, false, false);
@@ -2384,6 +2445,8 @@ namespace UNAvatar.UnityExporter
                         mimeType = "image/png",
                         pixelFormat = "RGBA8",
                         colorSpace = "sRGB",
+                        renderMode = options.RenderMode,
+                        antiAliasingSamples = options.AntiAliasingSamples,
                         fovYDegrees = PreviewFovY,
                         nearClip = PreviewNear,
                         farClip = PreviewFar,
@@ -2404,6 +2467,62 @@ namespace UNAvatar.UnityExporter
                 RenderTexture.active = oldActive;
                 RenderTexture.ReleaseTemporary(renderTexture);
                 UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        private sealed class WardrobePreviewQualityScope : IDisposable
+        {
+            private readonly bool applied;
+            private readonly int oldAntiAliasing;
+            private readonly int oldPixelLightCount;
+            private readonly ShadowQuality oldShadows;
+            private readonly ShadowResolution oldShadowResolution;
+            private readonly ShadowProjection oldShadowProjection;
+            private readonly float oldShadowDistance;
+            private readonly float oldLodBias;
+            private readonly int oldMaximumLodLevel;
+
+            public WardrobePreviewQualityScope(WardrobePreviewCaptureOptions options)
+            {
+                options = options ?? new WardrobePreviewCaptureOptions();
+                if (!options.HighQualityRender)
+                {
+                    return;
+                }
+                applied = true;
+                oldAntiAliasing = QualitySettings.antiAliasing;
+                oldPixelLightCount = QualitySettings.pixelLightCount;
+                oldShadows = QualitySettings.shadows;
+                oldShadowResolution = QualitySettings.shadowResolution;
+                oldShadowProjection = QualitySettings.shadowProjection;
+                oldShadowDistance = QualitySettings.shadowDistance;
+                oldLodBias = QualitySettings.lodBias;
+                oldMaximumLodLevel = QualitySettings.maximumLODLevel;
+
+                QualitySettings.antiAliasing = options.AntiAliasing ? options.AntiAliasingSamples : 0;
+                QualitySettings.pixelLightCount = Mathf.Max(QualitySettings.pixelLightCount, 8);
+                QualitySettings.shadows = ShadowQuality.All;
+                QualitySettings.shadowResolution = ShadowResolution.VeryHigh;
+                QualitySettings.shadowProjection = ShadowProjection.StableFit;
+                QualitySettings.shadowDistance = Mathf.Max(QualitySettings.shadowDistance, 100.0f);
+                QualitySettings.lodBias = Mathf.Max(QualitySettings.lodBias, 2.0f);
+                QualitySettings.maximumLODLevel = 0;
+            }
+
+            public void Dispose()
+            {
+                if (!applied)
+                {
+                    return;
+                }
+                QualitySettings.antiAliasing = oldAntiAliasing;
+                QualitySettings.pixelLightCount = oldPixelLightCount;
+                QualitySettings.shadows = oldShadows;
+                QualitySettings.shadowResolution = oldShadowResolution;
+                QualitySettings.shadowProjection = oldShadowProjection;
+                QualitySettings.shadowDistance = oldShadowDistance;
+                QualitySettings.lodBias = oldLodBias;
+                QualitySettings.maximumLODLevel = oldMaximumLodLevel;
             }
         }
 
@@ -3041,6 +3160,11 @@ namespace UNAvatar.UnityExporter
                 image.cameraPosition = ReadVector3(camera, "position");
                 image.cameraRotationEuler = ReadVector3(camera, "rotationEulerDegrees");
                 image.target = ReadVector3(camera, "target");
+            }
+            if (TryGetMap(map, "render", out var render))
+            {
+                image.renderMode = ReadString(render, "mode", image.renderMode);
+                image.antiAliasingSamples = (int)ReadFloat(render, "antiAliasingSamples", image.antiAliasingSamples);
             }
             if (image.bufferView >= 0)
             {
