@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -286,10 +285,20 @@ namespace UNAvatar.UnityExporter
 
         private static List<WardrobePreviewImageDraft> ClonePreviewImages(List<WardrobePreviewImageDraft> previews)
         {
-            return (previews ?? new List<WardrobePreviewImageDraft>())
-                .Select(WardrobePreviewCapture.ClonePreview)
-                .Where(image => image != null)
-                .ToList();
+            var cloned = new List<WardrobePreviewImageDraft>(previews != null ? previews.Count : 0);
+            if (previews == null)
+            {
+                return cloned;
+            }
+            foreach (var preview in previews)
+            {
+                var image = WardrobePreviewCapture.ClonePreview(preview);
+                if (image != null)
+                {
+                    cloned.Add(image);
+                }
+            }
+            return cloned;
         }
     }
 }

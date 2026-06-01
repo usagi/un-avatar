@@ -309,19 +309,32 @@ namespace UNAvatar.UnityExporter
 
         private static void AddDisabledDescendantsUnderEnabledSubtrees(WardrobeSetDraft set, IEnumerable<NodeStateDraft> currentNodes)
         {
-            var enabledSubtreePaths = set.operations
-                .Where(operation => operation.type == "subtreeEnabled" && operation.boolValue && operation.target != null)
-                .Select(operation => NormalizePath(operation.target.path ?? ""))
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .ToList();
+            var enabledSubtreePaths = new List<string>();
+            foreach (var operation in set.operations)
+            {
+                if (operation.type != "subtreeEnabled" || !operation.boolValue || operation.target == null)
+                {
+                    continue;
+                }
+                var path = NormalizePath(operation.target.path ?? "");
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    enabledSubtreePaths.Add(path);
+                }
+            }
             if (enabledSubtreePaths.Count == 0)
             {
                 return;
             }
 
-            var existingVisibilityTargets = new HashSet<string>(set.operations
-                .Where(operation => (operation.type == "subtreeEnabled" || operation.type == "nodeEnabled") && operation.target != null)
-                .Select(operation => operation.target.nodeId ?? ""));
+            var existingVisibilityTargets = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in set.operations)
+            {
+                if ((operation.type == "subtreeEnabled" || operation.type == "nodeEnabled") && operation.target != null)
+                {
+                    existingVisibilityTargets.Add(operation.target.nodeId ?? "");
+                }
+            }
             foreach (var node in currentNodes)
             {
                 if (node.visible || existingVisibilityTargets.Contains(node.nodeId))

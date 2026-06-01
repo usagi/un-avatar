@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -136,12 +135,29 @@ namespace UNAvatar.UnityExporter
                 displayName = source.displayName + " Copy",
                 source = "unity_capture_diff_duplicate",
                 assetGroups = new List<string>(source.assetGroups),
-                operations = source.operations.Select(WardrobeSnapshotCapture.CloneOperation).ToList(),
-                previewImages = (source.previewImages ?? new List<WardrobePreviewImageDraft>()).Select(WardrobePreviewCapture.ClonePreview).Where(image => image != null).ToList(),
+                operations = CloneWardrobeSetOperations(source.operations),
+                previewImages = ClonePreviewImages(source.previewImages),
                 capturedSnapshot = source.capturedSnapshot
             };
             capturedWardrobeSets.Insert(index + 1, copy);
             selectedWardrobeSetIndex = index + 1;
+        }
+
+        private static List<WardrobeOperationDraft> CloneWardrobeSetOperations(List<WardrobeOperationDraft> operations)
+        {
+            var cloned = new List<WardrobeOperationDraft>(operations != null ? operations.Count : 0);
+            if (operations == null)
+            {
+                return cloned;
+            }
+            foreach (var operation in operations)
+            {
+                if (operation != null)
+                {
+                    cloned.Add(WardrobeSnapshotCapture.CloneOperation(operation));
+                }
+            }
+            return cloned;
         }
 
         private void SaveCaptureDraft()
