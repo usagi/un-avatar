@@ -5,8 +5,8 @@ use std::{borrow::Cow, collections::BTreeMap};
 use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaExpressionCatalog, UnaExpressionWeights, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode,
-	UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+	UnaAlphaMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonMaterial,
+	UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
 };
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
@@ -886,6 +886,25 @@ fn wgpu_filter_mode(mode: UnaTextureFilterMode) -> wgpu::FilterMode {
 	}
 }
 
+fn rgba_upload_uses_linear_format(role: TextureRole, source: Option<&UnaImageSourceMetadata>) -> bool {
+	if matches!(role, TextureRole::Normal | TextureRole::Occlusion | TextureRole::Data) {
+		return true;
+	}
+	if let Some(source) = source {
+		if source.srgb == Some(false) {
+			return true;
+		}
+		if source
+			.color_space
+			.as_deref()
+			.is_some_and(|value| value.eq_ignore_ascii_case("linear") || value.eq_ignore_ascii_case("data"))
+		{
+			return true;
+		}
+	}
+	false
+}
+
 fn create_solid_texture_1x1(
 	device: &wgpu::Device,
 	queue: &wgpu::Queue,
@@ -1641,6 +1660,7 @@ impl SceneMeshes {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
+			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
 			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
 				if let Some(source_upload) = source_texture_upload(im) {
@@ -1809,7 +1829,7 @@ impl SceneMeshes {
 			}
 			texture_summary.record_image(src_w, src_h, w, h, payload.byte_len());
 			let texture_format = match payload.kind {
-				TextureUploadKind::Rgba if role == TextureRole::Normal => wgpu::TextureFormat::Rgba8Unorm,
+				TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
 				TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
 				TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
 				TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
@@ -2538,6 +2558,33 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn linear_source_metadata_uses_linear_rgba_upload_format() {
+		let source = UnaImageSourceMetadata {
+			color_space: Some("linear".to_string()),
+			srgb: Some(false),
+			byte_length: 1,
+			source_hash: 1,
+			..UnaImageSourceMetadata {
+				name: None,
+				mime_type: None,
+				uri: None,
+				source_pixel_format: None,
+				channels: None,
+				color_space: None,
+				texture_type: None,
+				texture_shape: None,
+				srgb: None,
+				sampler: None,
+				byte_length: 0,
+				source_hash: 0,
+			}
+		};
+		assert!(rgba_upload_uses_linear_format(TextureRole::GenericColor, Some(&source)));
+		assert!(rgba_upload_uses_linear_format(TextureRole::Data, None));
+		assert!(!rgba_upload_uses_linear_format(TextureRole::GenericColor, None));
 	}
 
 	#[test]

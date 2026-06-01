@@ -240,6 +240,8 @@ PNG / JPEG で表現できない HDR / float / half float texture は、glTF cor
 
 `sampler` は glTF sampler と同じ数値定数 (`magFilter`, `minFilter`, `wrapS`, `wrapT`) を inline object として持てる。これは EXR など glTF core `textures` を経由しない source asset でも Unity の Filter / Wrap 設定を落とさないためである。glTF core image 経由の texture は通常の `textures[].sampler` を正とする。
 
+glTF core `images[].extras.UN_avatar_image` と `UN_avatar.textureAssets[]` は `colorSpace` (`srgb` / `linear` / `data`), `textureType`, `textureShape`, `sRGB` を保持できる。Renderer は material slot 由来の role を第一に使い、source metadata が `linear` / `data` または `sRGB=false` の場合は RGBA fallback upload でも sRGB texture format にしない。これは Normal / mask / data texture を色テクスチャとして劣化扱いしないための境界である。
+
 `RGB16F` source を wgpu upload で `RGBA16Float` に拡張するのは、wgpu の portable `TextureFormat` に `RGB16Float` が無く、一般的な GPU API でも 3ch half float texture は 4ch half float より互換性が低いためである。`.unavatar` と CPU decoded representation は `RGB16F` を維持し、alpha=1 の追加は renderer upload boundary の明示的 fallback とする。
 
 ```json
@@ -253,6 +255,9 @@ PNG / JPEG で表現できない HDR / float / half float texture は、glTF cor
       "sourcePixelFormat": "RGB16F",
       "colorSpace": "linear",
       "channels": "rgb",
+      "textureType": "Default",
+      "textureShape": "2D",
+      "sRGB": false,
       "sampler": {
         "magFilter": 9729,
         "minFilter": 9729,

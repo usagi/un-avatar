@@ -308,6 +308,12 @@ pub struct UnaImageSourceMetadata {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub color_space: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_type: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_shape: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub srgb: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sampler: Option<UnaTextureSampler>,
 	pub byte_length: u64,
 	pub source_hash: u64,

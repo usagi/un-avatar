@@ -93,6 +93,10 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 		.map(|image| {
 			let sampler = samplers.get(image.index()).copied().flatten();
 			let name = image.name().map(str::to_string);
+			let image_metadata = image
+				.extras()
+				.as_ref()
+				.and_then(|extras| unavatar_image_metadata_from_raw(extras.get()));
 			match image.source() {
 				gltf::image::Source::View { view, mime_type } => {
 					let buffer_index = view.buffer().index();
@@ -104,9 +108,22 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						name,
 						mime_type: Some(mime_type.to_string()),
 						uri: None,
-						source_pixel_format: None,
-						channels: None,
-						color_space: None,
+						source_pixel_format: image_metadata.as_ref().and_then(|metadata| {
+							json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))
+						}),
+						channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+						color_space: image_metadata
+							.as_ref()
+							.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+						texture_type: image_metadata
+							.as_ref()
+							.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+						texture_shape: image_metadata
+							.as_ref()
+							.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+						srgb: image_metadata
+							.as_ref()
+							.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 						sampler,
 						byte_length: bytes.len() as u64,
 						source_hash: fnv1a64(bytes),
@@ -116,9 +133,22 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					name,
 					mime_type: mime_type.map(str::to_string),
 					uri: Some(uri.to_string()),
-					source_pixel_format: None,
-					channels: None,
-					color_space: None,
+					source_pixel_format: image_metadata.as_ref().and_then(|metadata| {
+						json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))
+					}),
+					channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+					color_space: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+					texture_type: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+					texture_shape: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+					srgb: image_metadata
+						.as_ref()
+						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 					sampler,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
@@ -141,14 +171,28 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 			let sampler = samplers.get(image_index).copied().flatten();
 			let name = image.get("name").and_then(Value::as_str).map(str::to_string);
 			let mime_type = image.get("mimeType").and_then(Value::as_str).map(str::to_string);
+			let image_metadata = unavatar_image_metadata_from_image_json(image);
 			if let Some(uri) = image.get("uri").and_then(Value::as_str) {
 				return Some(UnaImageSourceMetadata {
 					name,
 					mime_type,
 					uri: Some(uri.to_string()),
-					source_pixel_format: None,
-					channels: None,
-					color_space: None,
+					source_pixel_format: image_metadata.as_ref().and_then(|metadata| {
+						json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))
+					}),
+					channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+					color_space: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+					texture_type: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+					texture_shape: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+					srgb: image_metadata
+						.as_ref()
+						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 					sampler,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
@@ -163,15 +207,46 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 				name,
 				mime_type,
 				uri: None,
-				source_pixel_format: None,
-				channels: None,
-				color_space: None,
+				source_pixel_format: image_metadata
+					.as_ref()
+					.and_then(|metadata| json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))),
+				channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+				color_space: image_metadata
+					.as_ref()
+					.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+				texture_type: image_metadata
+					.as_ref()
+					.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+				texture_shape: image_metadata
+					.as_ref()
+					.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+				srgb: image_metadata
+					.as_ref()
+					.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 				sampler,
 				byte_length: bytes.len() as u64,
 				source_hash: fnv1a64(bytes),
 			})
 		})
 		.collect()
+}
+
+fn unavatar_image_metadata_from_raw(raw: &str) -> Option<Value> {
+	let value = serde_json::from_str::<Value>(raw).ok()?;
+	if let Some(metadata) = value.get("UN_avatar_image") {
+		Some(metadata.clone())
+	} else {
+		Some(value)
+	}
+}
+
+fn unavatar_image_metadata_from_image_json(image: &Value) -> Option<Value> {
+	let extras = image.get("extras")?;
+	if let Some(metadata) = extras.get("UN_avatar_image") {
+		Some(metadata.clone())
+	} else {
+		Some(extras.clone())
+	}
 }
 
 fn image_samplers_from_document(document: &gltf::Document) -> Vec<Option<UnaTextureSampler>> {
@@ -320,6 +395,9 @@ fn append_unavatar_texture_assets(
 			source_pixel_format: source_pixel_format.map(str::to_string),
 			channels: channels.map(str::to_string),
 			color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
+			texture_type: asset.get("textureType").and_then(Value::as_str).map(str::to_string),
+			texture_shape: asset.get("textureShape").and_then(Value::as_str).map(str::to_string),
+			srgb: asset.get("sRGB").or_else(|| asset.get("srgb")).and_then(Value::as_bool),
 			sampler: asset.get("sampler").map(sampler_from_root_json),
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
@@ -1426,6 +1504,10 @@ fn json_bool(value: Option<&Value>) -> Option<bool> {
 	value.and_then(Value::as_bool)
 }
 
+fn json_string(value: Option<&Value>) -> Option<String> {
+	value.and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_string)
+}
+
 fn json_f32(value: Option<&Value>) -> Option<f32> {
 	value.and_then(Value::as_f64).map(|v| v as f32)
 }
@@ -1885,7 +1967,20 @@ mod tests {
 	#[test]
 	fn root_json_texture_samplers_map_to_image_sources() {
 		let root = serde_json::json!({
-			"images": [{}, {}],
+			"images": [
+				{
+					"uri": "normal.png",
+					"extras": {
+						"UN_avatar_image": {
+							"colorSpace": "linear",
+							"textureType": "NormalMap",
+							"textureShape": "2D",
+							"sRGB": false
+						}
+					}
+				},
+				{"uri": "base.png"}
+			],
 			"textures": [
 				{ "source": 0, "sampler": 0 },
 				{ "source": 1 }
@@ -1908,6 +2003,12 @@ mod tests {
 			})
 		);
 		assert_eq!(samplers[1], Some(UnaTextureSampler::default()));
+		let metadata = collect_glb_image_source_metadata(&root, &[]);
+		let source = metadata[0].as_ref().unwrap();
+		assert_eq!(source.color_space.as_deref(), Some("linear"));
+		assert_eq!(source.texture_type.as_deref(), Some("NormalMap"));
+		assert_eq!(source.texture_shape.as_deref(), Some("2D"));
+		assert_eq!(source.srgb, Some(false));
 	}
 
 	#[test]

@@ -200,6 +200,9 @@ namespace UNAvatar.UnityExporter
         public string SourcePixelFormat;
         public string ColorSpace;
         public string Channels;
+        public string TextureType;
+        public string TextureShape;
+        public bool? SRgb;
         public Dictionary<string, object> Sampler;
         public int Width;
         public int Height;
@@ -220,6 +223,18 @@ namespace UNAvatar.UnityExporter
                 ["channels"] = Channels ?? "",
                 ["byteLength"] = Bytes != null ? Bytes.Length : 0
             };
+            if (!string.IsNullOrEmpty(TextureType))
+            {
+                json["textureType"] = TextureType;
+            }
+            if (!string.IsNullOrEmpty(TextureShape))
+            {
+                json["textureShape"] = TextureShape;
+            }
+            if (SRgb.HasValue)
+            {
+                json["sRGB"] = SRgb.Value;
+            }
             if (Sampler != null)
             {
                 json["sampler"] = Sampler;
@@ -2994,7 +3009,11 @@ namespace UNAvatar.UnityExporter
                 {
                     ["name"] = texture.name,
                     ["bufferView"] = view,
-                    ["mimeType"] = encoded.MimeType
+                    ["mimeType"] = encoded.MimeType,
+                    ["extras"] = new Dictionary<string, object>
+                    {
+                        ["UN_avatar_image"] = BuildImageMetadataJson(texture)
+                    }
                 });
                 exportedTextures.Add(new ExportedTextureRecord
                 {
@@ -3058,6 +3077,30 @@ namespace UNAvatar.UnityExporter
                     ["wrapS"] = wrapS,
                     ["wrapT"] = wrapT
                 };
+            }
+
+            private static Dictionary<string, object> BuildImageMetadataJson(Texture texture)
+            {
+                var metadata = TextureAssetMetadata.FromTexture(texture, AssetDatabase.GetAssetPath(texture), null);
+                var json = new Dictionary<string, object>
+                {
+                    ["colorSpace"] = metadata.ColorSpace,
+                    ["textureType"] = metadata.TextureType ?? "",
+                    ["textureShape"] = metadata.TextureShape ?? ""
+                };
+                if (!string.IsNullOrEmpty(metadata.SourcePixelFormat))
+                {
+                    json["sourcePixelFormat"] = metadata.SourcePixelFormat;
+                }
+                if (!string.IsNullOrEmpty(metadata.Channels))
+                {
+                    json["channels"] = metadata.Channels;
+                }
+                if (metadata.SRgb.HasValue)
+                {
+                    json["sRGB"] = metadata.SRgb.Value;
+                }
+                return json;
             }
 
             private static int GltfWrapMode(TextureWrapMode mode)
@@ -3218,6 +3261,9 @@ namespace UNAvatar.UnityExporter
                         SourcePixelFormat = metadata.SourcePixelFormat,
                         ColorSpace = metadata.ColorSpace,
                         Channels = metadata.Channels,
+                        TextureType = metadata.TextureType,
+                        TextureShape = metadata.TextureShape,
+                        SRgb = metadata.SRgb,
                         Sampler = BuildSamplerJson(texture),
                         Width = metadata.Width,
                         Height = metadata.Height,
@@ -3256,24 +3302,38 @@ namespace UNAvatar.UnityExporter
                 public string SourcePixelFormat = "";
                 public string ColorSpace = "linear";
                 public string Channels = "";
+                public string TextureType = "";
+                public string TextureShape = "";
+                public bool? SRgb;
                 public int Width;
                 public int Height;
 
                 public static TextureAssetMetadata FromTexture(Texture texture, string assetPath, byte[] bytes)
                 {
-                    var extension = Path.GetExtension(assetPath).ToLowerInvariant();
+                    var extension = Path.GetExtension(assetPath ?? "").ToLowerInvariant();
+                    var importer = !string.IsNullOrEmpty(assetPath) ? AssetImporter.GetAtPath(assetPath) as TextureImporter : null;
+                    var colorSpace = TextureColorSpace(texture, importer);
+                    var textureType = importer != null ? importer.textureType.ToString() : "";
+                    var textureShape = importer != null ? importer.textureShape.ToString() : TextureShapeFromTexture(texture);
+                    var srgb = TextureSrgb(texture, importer);
                     if (extension == ".exr")
                     {
                         var exr = TryReadExrMetadata(bytes);
                         if (exr != null)
                         {
+                            exr.TextureType = textureType;
+                            exr.TextureShape = textureShape;
+                            exr.SRgb = srgb;
                             return exr;
                         }
                         return new TextureAssetMetadata
                         {
                             SourcePixelFormat = "unknown_float",
                             ColorSpace = "linear",
-                            Channels = ""
+                            Channels = "",
+                            TextureType = textureType,
+                            TextureShape = textureShape,
+                            SRgb = srgb
                         };
                     }
 
@@ -3281,8 +3341,11 @@ namespace UNAvatar.UnityExporter
                     return new TextureAssetMetadata
                     {
                         SourcePixelFormat = pixelFormat,
-                        ColorSpace = "linear",
+                        ColorSpace = colorSpace,
                         Channels = ChannelsHintFromPixelFormat(pixelFormat),
+                        TextureType = textureType,
+                        TextureShape = textureShape,
+                        SRgb = srgb,
                         Width = texture != null ? texture.width : 0,
                         Height = texture != null ? texture.height : 0
                     };
@@ -3461,7 +3524,7 @@ namespace UNAvatar.UnityExporter
 
             private static string SourcePixelFormatHintFromTexture(Texture texture, string assetPath)
             {
-                var extension = Path.GetExtension(assetPath).ToLowerInvariant();
+                var extension = Path.GetExtension(assetPath ?? "").ToLowerInvariant();
                 if (extension == ".exr")
                 {
                     return "unknown_float";
@@ -3471,6 +3534,46 @@ namespace UNAvatar.UnityExporter
                     return texture.graphicsFormat.ToString();
                 }
                 return "";
+            }
+
+            private static string TextureColorSpace(Texture texture, TextureImporter importer)
+            {
+                if (importer != null)
+                {
+                    return importer.sRGBTexture ? "srgb" : "linear";
+                }
+                var graphicsFormat = texture != null ? texture.graphicsFormat.ToString() : "";
+                return graphicsFormat.IndexOf("SRGB", StringComparison.OrdinalIgnoreCase) >= 0 ? "srgb" : "linear";
+            }
+
+            private static bool? TextureSrgb(Texture texture, TextureImporter importer)
+            {
+                if (importer != null)
+                {
+                    return importer.sRGBTexture;
+                }
+                if (texture == null)
+                {
+                    return null;
+                }
+                return texture.graphicsFormat.ToString().IndexOf("SRGB", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            private static string TextureShapeFromTexture(Texture texture)
+            {
+                if (texture is Cubemap)
+                {
+                    return "Cube";
+                }
+                if (texture is Texture3D)
+                {
+                    return "3D";
+                }
+                if (texture is Texture2DArray || texture is CubemapArray)
+                {
+                    return "Array";
+                }
+                return texture != null ? "2D" : "";
             }
 
             private static string ChannelsHintFromPixelFormat(string pixelFormat)
@@ -3517,7 +3620,9 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var oldActive = RenderTexture.active;
-                var temporary = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                var metadata = TextureAssetMetadata.FromTexture(texture, assetPath, null);
+                var readWrite = metadata.SRgb == true ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear;
+                var temporary = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32, readWrite);
                 try
                 {
                     Graphics.Blit(texture, temporary);

@@ -239,11 +239,11 @@ PNG / JPEG 非対応の pixel format は、PNG fallback だけで済ませない
 
 - Asset-backed EXR / HDR / KTX2 / DDS: 元ファイル bytes を `UN_avatar` texture asset として保持し、glTF core image は必要な場合だけ fallback として別に出す。
 - Runtime-generated / unreadable texture: GPU readback で用途に合う形式へ取り出す。HDR / half float は `RGBAHalf` readback を優先し、KTX2 raw `RGBA16F` として格納する。
-- Normal / mask / data texture: sRGB 変換を避け、linear/data として metadata に記録する。
+- Normal / mask / data texture: sRGB 変換を避け、`colorSpace` / `sRGB` / `textureType` / `textureShape` metadata に記録する。PNG fallback を作る場合も `sRGB=false` の texture は Linear readback を使う。
 - KTX2 encoder: v0.1 では最小 raw KTX2 writer を exporter 内蔵候補にする。BasisU / UASTC / BCn などの重い圧縮は optimizer 側の責務にする。
 - glTF compatibility: `KHR_texture_basisu` は BasisU/KTX2 圧縮互換の経路として使い、非圧縮 `RGBA16F` KTX2 は `UN_avatar` extension asset として扱う。
 
-v0.1 実装では asset-backed EXR を `UN_avatar.textureAssets` に保持する。EXR は glTF core `images` には入れず、LDR PNG fallback も自動生成しない。Exporter は EXR header の `channels` / `dataWindow` を読み、`sourcePixelFormat`、`channels`、`width`、`height`、Unity の filter / wrap sampler を metadata として記録する。material property は `matcapTextureIndexAsset` のように asset id を参照し、Runtime importer が decode 後に通常の texture index へ解決する。
+v0.1 実装では asset-backed EXR を `UN_avatar.textureAssets` に保持する。EXR は glTF core `images` には入れず、LDR PNG fallback も自動生成しない。Exporter は EXR header の `channels` / `dataWindow` を読み、`sourcePixelFormat`、`channels`、`width`、`height`、Unity の filter / wrap sampler、TextureImporter の color / type / shape 情報を metadata として記録する。material property は `matcapTextureIndexAsset` のように asset id を参照し、Runtime importer が decode 後に通常の texture index へ解決する。
 
 `.unavatar` の後段最適化は別途 `un-avatar-optimizer` のような専用 CLI で扱う。optimizer は WebP / KTX2 / BCn / texture resize / dedup / wardrobe asset group 単位の再配置を担当し、Supervisor からは Optimize ボタンで呼び出せる形にする。optimizer は既定で入力 `.unavatar` を上書きせず、別名の optimized package を出力する。
 
