@@ -1896,6 +1896,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCapLod") {
 		out.matcap.lod_factor = value.max(0.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapBackfaceMask") {
+		out.matcap.backface_mask_factor = value.clamp(0.0, 1.0);
+	}
 	out.matcap.second_enabled_factor = unavatar_material_float_param(extras, "_UseMatCap2nd")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
@@ -1930,6 +1933,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndLod") {
 		out.matcap.second_lod_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndBackfaceMask") {
+		out.matcap.second_backface_mask_factor = value.clamp(0.0, 1.0);
 	}
 
 	out.reflection.enabled_factor = unavatar_material_float_param(extras, "_UseReflection")
@@ -3741,6 +3747,7 @@ mod tests {
 					"_MatCapNormalStrength": 0.66,
 					"_MatCapShadowMask": 0.57,
 					"_MatCapLod": 2.5,
+					"_MatCapBackfaceMask": 0.35,
 					"_UseMatCap2nd": 1.0,
 					"_MatCap2ndMainStrength": 0.58,
 					"_MatCap2ndBlend": 0.68,
@@ -3748,6 +3755,7 @@ mod tests {
 					"_MatCap2ndBlendMode": 1.0,
 					"_MatCap2ndNormalStrength": 0.88,
 					"_MatCap2ndLod": 1.5,
+					"_MatCap2ndBackfaceMask": 0.45,
 					"_Smoothness": 0.6,
 					"_Metallic": 0.2,
 					"_Reflectance": 0.4,
@@ -3900,6 +3908,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.normal_strength_factor, 0.66);
 		assert_eq!(liltoon_like.matcap.shadow_mask_factor, 0.57);
 		assert_eq!(liltoon_like.matcap.lod_factor, 2.5);
+		assert_eq!(liltoon_like.matcap.backface_mask_factor, 0.35);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.matcap.second_texture_index, Some(22));
 		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(23));
@@ -3910,6 +3919,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.second_blend_mode, UnaLilToonLikeBlendMode::Add);
 		assert_eq!(liltoon_like.matcap.second_normal_strength_factor, 0.88);
 		assert_eq!(liltoon_like.matcap.second_lod_factor, 1.5);
+		assert_eq!(liltoon_like.matcap.second_backface_mask_factor, 0.45);
 		assert_eq!(liltoon_like.reflection.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.reflection.smoothness_factor, 0.6);

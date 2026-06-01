@@ -597,6 +597,8 @@ pub struct UnaLilToonLikeMatcap {
 	#[serde(default)]
 	pub lod_factor: f32,
 	#[serde(default)]
+	pub backface_mask_factor: f32,
+	#[serde(default)]
 	pub second_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub second_texture_index: Option<usize>,
@@ -616,6 +618,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub second_normal_strength_factor: f32,
 	#[serde(default)]
 	pub second_lod_factor: f32,
+	#[serde(default)]
+	pub second_backface_mask_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -898,6 +902,7 @@ impl Default for UnaLilToonLikeMatcap {
 			normal_strength_factor: 1.0,
 			shadow_mask_factor: 0.0,
 			lod_factor: 0.0,
+			backface_mask_factor: 0.0,
 			second_enabled_factor: 0.0,
 			second_texture_index: None,
 			second_blend_mask_texture_index: None,
@@ -908,6 +913,7 @@ impl Default for UnaLilToonLikeMatcap {
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_normal_strength_factor: 1.0,
 			second_lod_factor: 0.0,
+			second_backface_mask_factor: 0.0,
 		}
 	}
 }

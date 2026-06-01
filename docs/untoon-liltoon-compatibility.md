@@ -313,8 +313,8 @@ Status legend:
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap color を albedo に寄せる blend 量として WGSL に接続した。
   - remaining: lilToon 本家の lighting/shadow 合成後の albedo 参照位置と一致するか確認する。
 - `[~]` `_MatCapBlend`
-  - done: glTF `UN_avatar` extras / Unity property から読み取り、1st MatCap の final blend weight として WGSL に接続した。
-  - remaining: `_MatCapBlendMask` と backface/transparency mask を合成する。
+	- done: glTF `UN_avatar` extras / Unity property から読み取り、1st MatCap の final blend weight として WGSL に接続した。
+	- remaining: transparency mask を合成する。
 - `[~]` `_MatCapBlendMode`
   - done: Normal / Add / Screen / Multiply の 0..3 を読み取り、lilToon `lilBlendColor` 相当の WGSL branch に接続した。
   - remaining: mode default と unknown value の扱いを本家 material default と照合する。
@@ -331,11 +331,14 @@ Status legend:
   - done: source raw params を保持し、1st MatCap texture sample の explicit LOD に接続した。
   - remaining: mip availability、texture compression 後の LOD、2nd MatCap LOD との扱いを本家へ合わせる。
 - `[~]` `_MatCapBlendMask`
-  - done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
-  - remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
+	- done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
+	- remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
+- `[~]` `_MatCapBackfaceMask`
+	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
+	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
-  - done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod` を保持し、2nd MatCap contribution へ接続した。
-  - done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。
+	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
+	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。
   - remaining: VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
 
 ### Reflection / Specular

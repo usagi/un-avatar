@@ -1183,7 +1183,7 @@ fn mesh_draw_material_gpu(
 				u.matcap.normal_strength_factor.clamp(0.0, 1.0),
 				u.matcap.shadow_mask_factor.clamp(0.0, 1.0),
 				u.matcap.lod_factor.max(0.0),
-				0.0,
+				u.matcap.backface_mask_factor.clamp(0.0, 1.0),
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
@@ -1209,7 +1209,7 @@ fn mesh_draw_material_gpu(
 				u.matcap.second_normal_strength_factor.clamp(0.0, 1.0),
 				0.0,
 				u.matcap.second_lod_factor.max(0.0),
-				0.0,
+				u.matcap.second_backface_mask_factor.clamp(0.0, 1.0),
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
