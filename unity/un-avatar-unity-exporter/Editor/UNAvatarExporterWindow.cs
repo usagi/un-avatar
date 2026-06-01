@@ -1035,14 +1035,19 @@ namespace UNAvatar.UnityExporter
 
                 var sourceVariants = VariantExtractor.Extract(avatarRoot, exportMode);
                 var humanoid = HumanoidExtractor.Extract(avatarRoot);
+                var splitWardrobeMode = exportMode == UNAvatarExportMode.WardrobeSplit;
+                var bakedWardrobeMode = exportMode == UNAvatarExportMode.WardrobeBaked;
 
-                if (forceIncludeInactiveObjects && exportMode != UNAvatarExportMode.CurrentOnly)
+                if (forceIncludeInactiveObjects && bakedWardrobeMode)
                 {
                     SetActiveRecursive(clone.transform, true);
                 }
-                ApplyWardrobeOperationsToRoot(clone, CurrentBaseOperations());
+                if (bakedWardrobeMode)
+                {
+                    ApplyWardrobeOperationsToRoot(clone, CurrentBaseOperations());
+                }
 
-                var bakeAttempted = ModularAvatarBridge.IsAvailable;
+                var bakeAttempted = ModularAvatarBridge.IsAvailable && !splitWardrobeMode;
                 var bakeSucceeded = false;
                 if (bakeAttempted)
                 {
@@ -1143,7 +1148,7 @@ namespace UNAvatar.UnityExporter
                 },
                 ["unityExporter"] = new Dictionary<string, object>
                 {
-                    ["bakeModularAvatar"] = true,
+                    ["bakeModularAvatar"] = exportMode != UNAvatarExportMode.WardrobeSplit,
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
                     ["modularAvatarBakeAttempted"] = bakeAttempted,
                     ["modularAvatarBakeSucceeded"] = bakeSucceeded,

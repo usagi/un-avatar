@@ -126,6 +126,8 @@ Exporter は 3 つの export mode を持つ。
 - `Wardrobe (Baked)`: 現行 preview の wardrobe mode。複数衣装・小物を 1 ファイルに同梱し、`UN_avatar.wardrobe.sets` で切り替える。現時点では baked model + authored wardrobe operations を同居させる。
 - `Wardrobe (Split)`: v2 本命候補。ベイク前の素体 / 衣装 / Modular Avatar 由来 source graph を保持し、wardrobe set ごとに runtime resolve / cache できる形へ寄せる。大型衣装や多数衣装で `Wardrobe (Baked)` より有利かを検証する実験 mode。
 
+preview 実装では `Wardrobe (Split)` は Modular Avatar bake を実行せず、clone に Base operations も焼かない。inactive child も強制 ON にしない。GLB には Unity hierarchy の source graph をできるだけそのまま出し、`UN_avatar.wardrobe` に captured Base / set operations を保持する。Runtime 側の source graph resolver は未完成のため、この mode はまず `.unavatar` 出力と診断用である。
+
 短期 preview では `Wardrobe (Baked)` を残すが、`Wardrobe (Split)` のデータ量・編集性・runtime resolve/cache の利点が大きく、致命的な欠点がなければ v2 の唯一の wardrobe mode へ昇格する。その場合 `Wardrobe (Baked)` は開発停止し、UI から外す。
 
 ### Capture Diff Workflow

@@ -145,6 +145,8 @@ Unity Exporter の出力モード。
 
 `Wardrobe (Split)` の実験で致命的な欠点が出なければ、v2 では `Wardrobe (Baked)` の開発を停止し、UI から外して `Wardrobe (Split)` を唯一の wardrobe mode にする。
 
+preview 段階の `Wardrobe (Split)` は、Unity Exporter で Modular Avatar bake を実行せず、Base operations も export clone へ焼かない。まず `.unavatar` に source graph と captured wardrobe operations を同居させ、Runtime 側で resolver / cache / lazy upload を育てる。
+
 Modular Avatar 対応衣装は、Unity 側で MA / VRC menu / active state を解釈し、Runtime 側では visibility / blendshape / material / dynamics 差分として軽く切り替える。
 
 Unity Exporter は手入力を主導線にしない。`Capture Base` と `Capture Wardrobe Set` で Unity 上の現在状態を比較し、active state / renderer enabled / blendshape weight の差分を wardrobe operations として記録する。Color 1 / Color 13 のような色違いは set 複製後、対象 outfit group の ON/OFF 差分だけを変更できるようにする。
