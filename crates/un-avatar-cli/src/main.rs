@@ -211,6 +211,7 @@ struct DiagnoseTextureAlphaSummary {
 
 #[derive(Serialize)]
 struct DiagnoseMToonSummary {
+	transparent_with_z_write: bool,
 	shade_color_factor: [f32; 3],
 	shade_multiply_texture_index: Option<usize>,
 	shading_shift_factor: f32,
@@ -1058,6 +1059,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		.and_then(|v| v.as_i64())
 		.map(|v| v as i32);
 	let mtoon = material.mtoon.as_ref().map(|m| DiagnoseMToonSummary {
+		transparent_with_z_write: m.transparent_with_z_write,
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
 		shading_shift_factor: m.shading_shift_factor,
@@ -1937,7 +1939,8 @@ fn run_diagnose(
 		);
 		if let Some(mtoon) = &material.mtoon {
 			println!(
-				"  mtoon: shade={:?} shade_tex={:?} shift={} toony={} rim={:?} matcap_tex={:?} reflection_tex={:?} outline={:?}/{} emissive={:?}",
+				"  mtoon: zwrite={} shade={:?} shade_tex={:?} shift={} toony={} rim={:?} matcap_tex={:?} reflection_tex={:?} outline={:?}/{} emissive={:?}",
+				mtoon.transparent_with_z_write,
 				mtoon.shade_color_factor,
 				mtoon.shade_multiply_texture_index,
 				mtoon.shading_shift_factor,

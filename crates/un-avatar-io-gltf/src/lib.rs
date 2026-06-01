@@ -1219,6 +1219,8 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	let mut out = UnaMtoonMaterial::default();
 	if let Some(value) = json_bool(mtoon.get("transparentWithZWrite").or_else(|| mtoon.get("transparent_with_z_write"))) {
 		out.transparent_with_z_write = value;
+	} else if source_shader.to_ascii_lowercase().contains("twopass") {
+		out.transparent_with_z_write = true;
 	}
 	if let Some(value) = json_vec3(mtoon.get("shadeColorFactor").or_else(|| mtoon.get("shade_color_factor"))) {
 		out.shade_color_factor = value;
@@ -2356,5 +2358,18 @@ mod tests {
 		assert_eq!(materials[0].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[1].alpha_mode, UnaAlphaMode::Mask);
 		assert_eq!(materials[2].alpha_mode, UnaAlphaMode::Blend);
+	}
+
+	#[test]
+	fn infers_liltoon_twopass_transparent_zwrite_from_shader_name() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTwoPassTransparentOutline",
+			"mtoon": {}
+		});
+
+		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+
+		assert!(mtoon.transparent_with_z_write);
 	}
 }
