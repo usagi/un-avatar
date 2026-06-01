@@ -1336,7 +1336,7 @@ fn unavatar_material_inferred_alpha_mode(
 		return None;
 	}
 
-	if let Some(mode) = unavatar_material_alpha_mode_from_source_params(extras) {
+	if let Some(mode @ (UnaAlphaMode::Mask | UnaAlphaMode::Blend)) = unavatar_material_alpha_mode_from_source_params(extras) {
 		return Some(mode);
 	}
 
@@ -2696,6 +2696,11 @@ mod tests {
 			"sourceShader": "lilToon",
 			"floatParams": { "_AlphaMode": 1.0 }
 		});
+		let transparent_shader_with_opaque_source_param = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTransparent",
+			"floatParams": { "_TransparentMode": 0.0 }
+		});
 
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
@@ -2744,6 +2749,10 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&source_param_cutout), UnaAlphaMode::Opaque, None, true),
 			Some(UnaAlphaMode::Mask)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&transparent_shader_with_opaque_source_param), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
 		);
 		assert_eq!(
 			unavatar_material_alpha_cutoff_from_source_params(&serde_json::json!({
