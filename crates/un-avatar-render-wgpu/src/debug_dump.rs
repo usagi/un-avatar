@@ -42,11 +42,12 @@ pub fn log_material_skin_report(doc: &UnaDocument) {
 
 	for (mi, mat) in sc.materials.iter().enumerate() {
 		eprintln!(
-			"[debug-material] materials[{mi}] name={:?} shading={:?} alpha_mode={:?} alpha_cutoff={} double_sided={} base_color_factor.a={}",
+			"[debug-material] materials[{mi}] name={:?} shading={:?} alpha_mode={:?} alpha_cutoff={} cull={:?} double_sided={} base_color_factor.a={}",
 			mat.name,
 			mat.shading,
 			mat.alpha_mode,
 			mat.alpha_cutoff,
+			mat.cull_mode,
 			mat.double_sided,
 			mat.base_color_factor[3],
 		);

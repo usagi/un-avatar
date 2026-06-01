@@ -108,7 +108,7 @@ lilToon v0.1 優先項目。
 - cull mode
 - render queue hint
 
-Alpha mode は glTF fallback material へも反映する。transparent queue / alpha mode は `BLEND`、cutout queue は `MASK` として出し、髪・レース・服飾の alpha 抜けを Runtime 側で扱えるようにする。lilToon は通常の Opaque shader でも `_Cutoff` property を持つため、`_Cutoff` が存在するだけでは `MASK` にしない。lilToon では Cutout shader、cutout render queue、明示 alpha mode、または極小 cutoff による alpha shrink 用途を `MASK` とする。Cull mode は glTF が表現できる範囲で扱い、Cull Off は `doubleSided=true`、Cull Back は `doubleSided=false` にする。Cull Front は現段階では専用表現を持たない。
+Alpha mode は glTF fallback material へも反映する。transparent queue / alpha mode は `BLEND`、cutout queue は `MASK` として出し、髪・レース・服飾の alpha 抜けを Runtime 側で扱えるようにする。lilToon は通常の Opaque shader でも `_Cutoff` property を持つため、`_Cutoff` が存在するだけでは `MASK` にしない。lilToon では Cutout shader、cutout render queue、明示 alpha mode、または極小 cutoff による alpha shrink 用途を `MASK` とする。Cull mode は glTF fallback では Cull Off を `doubleSided=true`、Cull Back を `doubleSided=false` として出し、`.unavatar` Runtime では `UN_avatar_material.floatParams` の `_Cull` / `_CullMode` から Cull Off / Front / Back を正規化して扱う。
 
 Exporter は shader property の完全再現を狙わず、U.N. Avatar Runtime で自然に見える `UNToon` parameter へ正規化する。v2 の `UNToon` は lilToon-compatible を基準にし、MToon はそこへ変換する入力 profile として扱う。実装上 `mtoon` という JSON key や Rust 型名が残る段階でも、それを MToon-like 設計正本とは見なさない。
 

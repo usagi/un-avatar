@@ -178,6 +178,7 @@ const DBG_DISABLE_SHADE_COLOR: u32 = 64u;
 const DBG_BASE_TEXTURE_ONLY: u32 = 128u;
 const DBG_DISABLE_NORMAL_MAP: u32 = 256u;
 const MAT_DOUBLE_SIDED: u32 = 512u;
+const MAT_CULL_FRONT: u32 = 2048u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -221,8 +222,11 @@ fn discard_transparent_zprepass(a: f32, alpha_kind: f32, cutoff: f32, transparen
 	}
 }
 
-fn discard_backface_if_single_sided(front_facing: bool, flags: u32) {
-	if !front_facing && (flags & MAT_DOUBLE_SIDED) == 0u {
+fn discard_by_cull_mode(front_facing: bool, flags: u32) {
+	if front_facing && (flags & MAT_CULL_FRONT) != 0u {
+		discard;
+	}
+	if !front_facing && (flags & MAT_DOUBLE_SIDED) == 0u && (flags & MAT_CULL_FRONT) == 0u {
 		discard;
 	}
 }
@@ -310,7 +314,7 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 @fragment
 fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
-	discard_backface_if_single_sided(front_facing, dbg);
+	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;
@@ -335,7 +339,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 @fragment
 fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
-	discard_backface_if_single_sided(front_facing, dbg);
+	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;
@@ -353,7 +357,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 @fragment
 fn fs_mtoon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
-	discard_backface_if_single_sided(front_facing, dbg);
+	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = samp_tex.rgb;

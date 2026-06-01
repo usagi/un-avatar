@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, path::Path};
 use glam::Mat4;
 use serde_json::Value;
 use un_avatar_core::{
-	ReportStatus, UnaAlphaMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba,
+	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba,
 	UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
 	UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry,
 	UnaVrmExtension,
@@ -602,15 +602,21 @@ fn vrm0_mtoon_raw_implies_transparent_blend(raw: &Value, shader_name: &str) -> b
 }
 
 fn vrm0_mtoon_double_sided(raw: &Value) -> Option<bool> {
+	vrm0_mtoon_cull_mode(raw).map(|mode| mode == UnaCullMode::Off)
+}
+
+fn vrm0_mtoon_cull_mode(raw: &Value) -> Option<UnaCullMode> {
 	let mode = raw
 		.get("floatProperties")
 		.and_then(|x| x.as_object())
 		.and_then(|floats| floats.get("_CullMode"))
 		.and_then(|x| x.as_f64())?;
 	if (mode - 0.0).abs() < 0.5 {
-		Some(true)
+		Some(UnaCullMode::Off)
+	} else if (mode - 1.0).abs() < 0.5 {
+		Some(UnaCullMode::Front)
 	} else if (mode - 2.0).abs() < 0.5 {
-		Some(false)
+		Some(UnaCullMode::Back)
 	} else {
 		None
 	}
@@ -622,6 +628,9 @@ fn tag_mtoon_materials(scene: &mut UnaSceneSnapshot, vrm: &UnaVrmExtension) {
 			m.shading = UnaShadingModel::MToonLike;
 			if let Some(double_sided) = vrm0_mtoon_double_sided(&e.raw) {
 				m.double_sided = double_sided;
+			}
+			if let Some(cull_mode) = vrm0_mtoon_cull_mode(&e.raw) {
+				m.cull_mode = cull_mode;
 			}
 			if vrm0_mtoon_raw_implies_transparent_blend(&e.raw, &e.shader_name) {
 				m.alpha_mode = UnaAlphaMode::Blend;
@@ -1558,6 +1567,7 @@ mod tests {
 		};
 		tag_mtoon_materials(&mut scene, &vrm);
 		assert!(!scene.materials[0].double_sided);
+		assert_eq!(scene.materials[0].cull_mode, UnaCullMode::Back);
 	}
 
 	#[test]
@@ -2098,6 +2108,7 @@ mod tests {
 				pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
 				pixels: vec![127, 127, 255, 255, 128, 128, 255, 255],
 			}],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
@@ -2134,6 +2145,7 @@ mod tests {
 			meshes: vec![vec![prim_with_4(), prim_with_4()]],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
@@ -2188,6 +2200,7 @@ mod tests {
 			meshes: vec![vec![prim_n(4), prim_n(2)]],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],

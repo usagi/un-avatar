@@ -5,8 +5,9 @@ use std::{borrow::Cow, collections::BTreeMap};
 use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonMaterial,
-	UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+	UnaAlphaMode, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr, UnaMeshBuffers,
+	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
+	UnaTextureWrapMode,
 };
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
@@ -220,7 +221,7 @@ struct MeshDrawTransformGpu {
 /// bit0=bind pose rigid, bit1=単色プリミティブ, bit2=Rim Lighting OFF (debug),
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
 /// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=fs_mtoon を base のみで早期 return (debug),
-/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available。
+/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -1015,8 +1016,10 @@ fn mesh_draw_material_gpu(
 	if opts.debug_disable_normal_map {
 		flags |= 256;
 	}
-	if mat.double_sided {
-		flags |= 512;
+	match mat.cull_mode {
+		UnaCullMode::Off => flags |= 512,
+		UnaCullMode::Front => flags |= 2048,
+		UnaCullMode::Back => {}
 	}
 	if mat.occlusion_texture_index.is_some() {
 		flags |= 1024;
@@ -2760,5 +2763,50 @@ mod tests {
 
 		assert_eq!(draw.params[1], UnaAlphaMode::Opaque.as_shader_alpha_kind());
 		assert_eq!(draw.base_color[3], 1.0);
+	}
+
+	#[test]
+	fn cull_mode_sets_shader_flags() {
+		let opts = SceneMeshLoadOpts::default();
+		let mtoon = UnaMtoonMaterial::default();
+
+		let off = mesh_draw_material_gpu(
+			&UnaMaterialPbr {
+				cull_mode: UnaCullMode::Off,
+				..Default::default()
+			},
+			&mtoon,
+			&opts,
+			0,
+			0,
+		);
+		assert_ne!(off.params[3].to_bits() & 512, 0);
+		assert_eq!(off.params[3].to_bits() & 2048, 0);
+
+		let front = mesh_draw_material_gpu(
+			&UnaMaterialPbr {
+				cull_mode: UnaCullMode::Front,
+				..Default::default()
+			},
+			&mtoon,
+			&opts,
+			0,
+			0,
+		);
+		assert_eq!(front.params[3].to_bits() & 512, 0);
+		assert_ne!(front.params[3].to_bits() & 2048, 0);
+
+		let back = mesh_draw_material_gpu(
+			&UnaMaterialPbr {
+				cull_mode: UnaCullMode::Back,
+				..Default::default()
+			},
+			&mtoon,
+			&opts,
+			0,
+			0,
+		);
+		assert_eq!(back.params[3].to_bits() & 512, 0);
+		assert_eq!(back.params[3].to_bits() & 2048, 0);
 	}
 }

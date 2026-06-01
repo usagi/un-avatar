@@ -197,6 +197,7 @@ struct DiagnoseMaterialSummary {
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
 	double_sided: bool,
+	cull_mode: un_avatar_core::UnaCullMode,
 	base_color_factor: [f32; 4],
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_color_texture_index: Option<usize>,
@@ -1109,6 +1110,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		alpha_mode: material.alpha_mode,
 		alpha_cutoff: material.alpha_cutoff,
 		double_sided: material.double_sided,
+		cull_mode: material.cull_mode,
 		base_color_factor: material.base_color_factor,
 		base_color_texture_index: material.base_color_texture_index,
 		base_color_texture_alpha: texture_alpha_summary(scene, material.base_color_texture_index),
@@ -2023,7 +2025,7 @@ fn run_diagnose(
 		.filter(|material| !visible_materials_only || visible_material_indices.contains(&material.index))
 	{
 		println!(
-			"material[{}]: name={:?} source={:?}/{:?} rq={:?} source_params=float:{} color:{} shading={:?} alpha={:?} cutoff={} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
+			"material[{}]: name={:?} source={:?}/{:?} rq={:?} source_params=float:{} color:{} shading={:?} alpha={:?} cutoff={} cull={:?} double_sided={} tex={:?} normal={:?}/{} eye_like={}",
 			material.index,
 			material.name,
 			material.material_family,
@@ -2034,6 +2036,7 @@ fn run_diagnose(
 			material.shading,
 			material.alpha_mode,
 			material.alpha_cutoff,
+			material.cull_mode,
 			material.double_sided,
 			material.base_color_texture_index,
 			material.normal_texture_index,

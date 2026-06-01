@@ -12,9 +12,9 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
-	UnaSkin, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	Approximation, ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
+	UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot,
+	UnaShadingModel, UnaSkin, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1233,6 +1233,10 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			let extras = unavatar_material_extras(&m);
 			let name = m.name().map(|s| s.to_string());
 			let double_sided = m.double_sided();
+			let cull_mode = extras
+				.as_ref()
+				.and_then(unavatar_material_cull_mode_from_source_params)
+				.unwrap_or(if double_sided { UnaCullMode::Off } else { UnaCullMode::Back });
 			let pbr = m.pbr_metallic_roughness();
 			let factor = pbr.base_color_factor();
 			let tex = pbr.base_color_texture().map(|t| t.texture().source().index());
@@ -1270,6 +1274,7 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			UnaMaterialPbr {
 				name,
 				double_sided,
+				cull_mode,
 				base_color_factor: factor,
 				base_color_texture_index: tex,
 				normal_texture_index,
@@ -1367,6 +1372,17 @@ fn unavatar_material_alpha_cutoff_from_source_params(extras: &Value) -> Option<f
 	unavatar_material_float_param(extras, "_Cutoff")
 		.or_else(|| unavatar_material_float_param(extras, "_AlphaCutoff"))
 		.map(|value| value.clamp(0.0, 1.0))
+}
+
+fn unavatar_material_cull_mode_from_source_params(extras: &Value) -> Option<UnaCullMode> {
+	let value = unavatar_material_float_param(extras, "_Cull").or_else(|| unavatar_material_float_param(extras, "_CullMode"))?;
+	if value < 0.5 {
+		Some(UnaCullMode::Off)
+	} else if value < 1.5 {
+		Some(UnaCullMode::Front)
+	} else {
+		Some(UnaCullMode::Back)
+	}
 }
 
 fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
@@ -2709,6 +2725,24 @@ mod tests {
 				"floatParams": { "_Cutoff": 0.25 }
 			})),
 			Some(0.25)
+		);
+		assert_eq!(
+			unavatar_material_cull_mode_from_source_params(&serde_json::json!({
+				"floatParams": { "_Cull": 0.0 }
+			})),
+			Some(UnaCullMode::Off)
+		);
+		assert_eq!(
+			unavatar_material_cull_mode_from_source_params(&serde_json::json!({
+				"floatParams": { "_Cull": 1.0 }
+			})),
+			Some(UnaCullMode::Front)
+		);
+		assert_eq!(
+			unavatar_material_cull_mode_from_source_params(&serde_json::json!({
+				"floatParams": { "_CullMode": 2.0 }
+			})),
+			Some(UnaCullMode::Back)
 		);
 	}
 

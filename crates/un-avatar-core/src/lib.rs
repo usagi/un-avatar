@@ -56,6 +56,17 @@ impl UnaAlphaMode {
 	}
 }
 
+/// Material face culling. glTF only exposes `doubleSided`, but `.unavatar`
+/// keeps Unity/lilToon `Cull Off / Front / Back` as a first-class value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaCullMode {
+	Off,
+	Front,
+	#[default]
+	Back,
+}
+
 /// 1 モーフターゲット分のデルタ（頂点数はベース `UnaMeshBuffers::positions` と一致）。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaMorphTargetDeltas {
@@ -432,6 +443,8 @@ pub struct UnaMaterialPbr {
 	pub name: Option<String>,
 	#[serde(default)]
 	pub double_sided: bool,
+	#[serde(default)]
+	pub cull_mode: UnaCullMode,
 	pub base_color_factor: [f32; 4],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub base_color_texture_index: Option<usize>,
@@ -606,6 +619,7 @@ impl Default for UnaMaterialPbr {
 		Self {
 			name: None,
 			double_sided: false,
+			cull_mode: UnaCullMode::Back,
 			base_color_factor: [1.0, 1.0, 1.0, 1.0],
 			base_color_texture_index: None,
 			normal_texture_index: None,
