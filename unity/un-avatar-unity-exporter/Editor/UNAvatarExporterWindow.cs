@@ -125,6 +125,7 @@ namespace UNAvatar.UnityExporter
         public string renderMode = "standard";
         public int antiAliasingSamples = 1;
         public string stateDigest = "";
+        public List<string> stateDetails = new List<string>();
         public float fovYDegrees;
         public float nearClip;
         public float farClip;
@@ -149,7 +150,8 @@ namespace UNAvatar.UnityExporter
                 {
                     ["mode"] = renderMode ?? "standard",
                     ["antiAliasingSamples"] = antiAliasingSamples,
-                    ["stateDigest"] = stateDigest ?? ""
+                    ["stateDigest"] = stateDigest ?? "",
+                    ["stateDetails"] = (stateDetails ?? new List<string>()).Cast<object>().ToList()
                 },
                 ["camera"] = new Dictionary<string, object>
                 {
@@ -1674,6 +1676,7 @@ namespace UNAvatar.UnityExporter
                             ["view"] = image.view ?? "",
                             ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
                             ["stateDigest"] = image.stateDigest ?? "",
+                            ["stateDetails"] = (image.stateDetails ?? new List<string>()).Cast<object>().ToList(),
                             ["sha256"] = Sha256Hex(image.pngBytes)
                         })
                         .Cast<object>()
@@ -1938,11 +1941,13 @@ namespace UNAvatar.UnityExporter
         private static void AssignPreviewStateDigest(List<WardrobePreviewImageDraft> previews, string label, GameObject root)
         {
             var digest = WardrobePreviewStateDigest(label, root);
+            var details = WardrobePreviewStateDetails(root);
             foreach (var preview in previews ?? new List<WardrobePreviewImageDraft>())
             {
                 if (preview != null)
                 {
                     preview.stateDigest = digest;
+                    preview.stateDetails = details;
                 }
             }
         }
@@ -1980,6 +1985,43 @@ namespace UNAvatar.UnityExporter
                 }
                 return $"{label}|activeRenderers={active.Count}|activeHash={sb}|{string.Join(",", states)}";
             }
+        }
+
+        private static List<string> WardrobePreviewStateDetails(GameObject root)
+        {
+            if (root == null)
+            {
+                return new List<string>();
+            }
+
+            return root.GetComponentsInChildren<Renderer>(true)
+                .Where(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
+                .OrderBy(renderer => VariantExtractor.TransformPath(root.transform, renderer.transform), StringComparer.Ordinal)
+                .Select(renderer =>
+                {
+                    var path = VariantExtractor.TransformPath(root.transform, renderer.transform);
+                    var layerName = LayerMask.LayerToName(renderer.gameObject.layer);
+                    var bounds = renderer.bounds;
+                    var materials = string.Join(",",
+                        (renderer.sharedMaterials ?? Array.Empty<Material>())
+                            .Where(material => material != null)
+                            .Select(material => material.name
+                                + "/" + (material.shader != null ? material.shader.name : "<no-shader>")
+                                + "/rq" + material.renderQueue.ToString(CultureInfo.InvariantCulture)));
+                    return path
+                        + "|layer=" + renderer.gameObject.layer.ToString(CultureInfo.InvariantCulture) + ":" + layerName
+                        + "|boundsCenter=" + Vec3String(bounds.center)
+                        + "|boundsSize=" + Vec3String(bounds.size)
+                        + "|materials=" + materials;
+                })
+                .ToList();
+        }
+
+        private static string Vec3String(Vector3 value)
+        {
+            return value.x.ToString("R", CultureInfo.InvariantCulture)
+                + "," + value.y.ToString("R", CultureInfo.InvariantCulture)
+                + "," + value.z.ToString("R", CultureInfo.InvariantCulture);
         }
 
         private Bounds CalculateWardrobePreviewBoundsFromSceneApply()
@@ -2647,6 +2689,7 @@ namespace UNAvatar.UnityExporter
                 renderMode = source.renderMode,
                 antiAliasingSamples = source.antiAliasingSamples,
                 stateDigest = source.stateDigest,
+                stateDetails = source.stateDetails != null ? new List<string>(source.stateDetails) : new List<string>(),
                 fovYDegrees = source.fovYDegrees,
                 nearClip = source.nearClip,
                 farClip = source.farClip,
