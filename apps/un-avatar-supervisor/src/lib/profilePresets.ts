@@ -18,7 +18,7 @@ export const RENDER_QUALITY_RECOMMENDATIONS: Record<
   light: [
     ["render_quality.aa", "fxaa"],
     ["render_quality.texture_resolution_limit", "2k"],
-    ["render_quality.texture_compression", "balanced"],
+    ["render_quality.texture_compression", "memory"],
     ["render_quality.mipmap_filter", "bilinear"],
     ["render_quality.processed_texture_cache", true],
   ],

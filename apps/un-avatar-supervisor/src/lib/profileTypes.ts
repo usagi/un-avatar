@@ -19,6 +19,12 @@ export type TextureCompressionPreference =
   | "small"
   | "gpu_native";
 
+export type TextureCompressionMode =
+  | "source"
+  | "balanced"
+  | "memory"
+  | "compat";
+
 export type TextureCompressionAdvanced = {
   face: TextureCompressionPreference;
   eyes: TextureCompressionPreference;
@@ -50,7 +56,7 @@ export type SpoutResolutionPreset = "720p" | "1080p" | "1440p" | "4k";
 export type QualitySetting = {
   aa: string;
   texture_resolution_limit: string;
-  texture_compression: string;
+  texture_compression: TextureCompressionMode;
   mipmap_filter: string;
   render_backend: string;
   block_compression_encoder: string;
@@ -128,7 +134,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
   spout_height: number | null;
   aa: string;
   texture_resolution_limit: string;
-  texture_compression: string;
+  texture_compression: TextureCompressionMode;
   mipmap_filter: string;
   render_backend: string;
   block_compression_encoder: string;

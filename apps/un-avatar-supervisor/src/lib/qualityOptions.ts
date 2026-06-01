@@ -1,4 +1,4 @@
-import type { TextureCompressionAdvanced } from "./profileTypes";
+import type { TextureCompressionAdvanced, TextureCompressionMode } from "./profileTypes";
 
 export const BCN_CPU_THREAD_OPTIONS = [1, 2, 4, 8, 16, 32, 64] as const;
 
@@ -27,7 +27,7 @@ export const TEXTURE_COMPRESSION_OPTIONS = [
   ["balanced", "profiles.editor.options.compression_balanced"],
   ["memory", "profiles.editor.options.compression_memory"],
   ["compat", "profiles.editor.options.compression_compat"],
-] as const;
+] as const satisfies ReadonlyArray<readonly [TextureCompressionMode, string]>;
 
 /// Keep this in sync with renderer `TextureCompressionAdvancedOptions::default()`.
 const DEFAULT_TEXTURE_COMPRESSION_ADVANCED: TextureCompressionAdvanced = {
