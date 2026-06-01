@@ -74,6 +74,11 @@ impl std::error::Error for RunError {}
 
 /// `RendererControlEvent::Screenshot` の同期結果をコントロールチャネルへ返すための共有スロット。
 type ScreenshotResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
+type SceneStateResultSlot = Arc<Mutex<Option<String>>>;
+
+const SCENE_STATE_SPLASH: &str = "splash";
+const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
+const SCENE_STATE_FAILED: &str = "failed";
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -173,6 +178,9 @@ enum RendererControlEvent {
 	Screenshot {
 		path: std::path::PathBuf,
 		result: ScreenshotResultSlot,
+	},
+	SceneState {
+		result: SceneStateResultSlot,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -1492,14 +1500,17 @@ impl AvatarApp {
 		};
 		if let Ok(mut status) = status.lock() {
 			if let Some(progress) = &self.startup_progress {
+				status.scene_state = SCENE_STATE_SPLASH.to_string();
 				status.startup_phase = Some(progress.phase.as_str().to_string());
 				status.startup_progress = Some([progress.current, progress.total]);
 				status.startup_message = Some(progress.message.clone());
 			} else if let Some(error) = &self.startup_failed {
+				status.scene_state = SCENE_STATE_FAILED.to_string();
 				status.startup_phase = Some("failed".to_string());
 				status.startup_progress = None;
 				status.startup_message = Some(error.clone());
 			} else {
+				status.scene_state = SCENE_STATE_AVATAR_SCENE.to_string();
 				status.startup_phase = None;
 				status.startup_progress = None;
 				status.startup_message = None;
@@ -1665,24 +1676,36 @@ impl AvatarApp {
 			.name("un-avatar-gpu-scene-build".to_string())
 			.spawn(move || {
 				let gpu_started = Instant::now();
-				let result = context.prepare_document_scene(document, &options, |progress| {
-					let _ = proxy.send_event(RendererControlEvent::StartupProgress {
-						phase: StartupPhase::from(progress.phase),
-						current: progress.current,
-						total: progress.total,
-						message: startup_message(progress.message, gpu_started),
-					});
-				});
+				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+					context.prepare_document_scene(document, &options, |progress| {
+						let _ = proxy.send_event(RendererControlEvent::StartupProgress {
+							phase: StartupPhase::from(progress.phase),
+							current: progress.current,
+							total: progress.total,
+							message: startup_message(progress.message, gpu_started),
+						});
+					})
+				}));
 				match result {
-					Ok(prepared) => {
+					Ok(Ok(prepared)) => {
 						let _ = proxy.send_event(RendererControlEvent::StartupSceneReady {
 							prepared,
 							options,
 							fallback_texture_summary,
 						});
 					}
-					Err(error) => {
+					Ok(Err(error)) => {
 						let _ = proxy.send_event(RendererControlEvent::StartupFailed { message: error });
+					}
+					Err(panic) => {
+						let message = if let Some(message) = panic.downcast_ref::<&str>() {
+							(*message).to_string()
+						} else if let Some(message) = panic.downcast_ref::<String>() {
+							message.clone()
+						} else {
+							"GPU scene build panicked".to_string()
+						};
+						let _ = proxy.send_event(RendererControlEvent::StartupFailed { message });
 					}
 				}
 			})
@@ -2172,6 +2195,18 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				};
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SceneState { result } => {
+				let state = if self.startup_failed.is_some() {
+					SCENE_STATE_FAILED
+				} else if self.startup_progress.is_some() || self.startup_pending_document {
+					SCENE_STATE_SPLASH
+				} else {
+					SCENE_STATE_AVATAR_SCENE
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(state.to_string());
 				}
 			}
 			RendererControlEvent::SetExpressionOverride { name, weight } => {
@@ -2666,6 +2701,8 @@ struct RendererRuntimeSnapshot {
 	connected: bool,
 	protocol: String,
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
@@ -2799,7 +2836,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 			"set_bloom".to_string(),
 			"set_ssao".to_string(),
 			"set_contact_shadow".to_string(),
+			"scene_state".to_string(),
 		],
+		scene_state: SCENE_STATE_SPLASH.to_string(),
 		uptime_secs: 0,
 		fps: None,
 		cpu_ms: None,
@@ -3092,6 +3131,9 @@ fn handle_runtime_control_client(mut stream: std::net::TcpStream, proxy: EventLo
 }
 
 fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererControlEvent>) -> String {
+	if command == "scene_state" {
+		return dispatch_scene_state_command(proxy);
+	}
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
 		Ok(command) => match proxy.send_event(command.into_event()) {
@@ -3099,6 +3141,28 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			Err(_) => "err event-loop-closed".to_string(),
 		},
 		Err(e) => format!("err {e}"),
+	}
+}
+
+fn dispatch_scene_state_command(proxy: &EventLoopProxy<RendererControlEvent>) -> String {
+	let result: SceneStateResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SceneState {
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	let deadline = Instant::now() + Duration::from_secs(2);
+	loop {
+		if let Ok(guard) = result.lock() {
+			if let Some(state) = guard.as_ref() {
+				return state.clone();
+			}
+		}
+		if Instant::now() >= deadline {
+			return "err scene_state timeout".to_string();
+		}
+		thread::sleep(Duration::from_millis(20));
 	}
 }
 

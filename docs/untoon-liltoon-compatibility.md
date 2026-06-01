@@ -281,7 +281,12 @@ Status legend:
 - `[~]` `_MatCapEnableLighting`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap color と directional light color の mix 量として WGSL に接続した。
   - remaining: Unity の forward base light color / shadowmix との対応を確認し、必要なら環境光側も含める。
-- `[ ]` `_MatCapNormalStrength`
+- `[~]` `_MatCapNormalStrength`
+  - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap UV 計算用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: lilToon の `fd.matcapN` と完全一致する tangent / view-space 入力、VR parallax、backface behavior を検証する。
+- `[~]` `_MatCapShadowMask`
+  - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap blend weight を current shadowmix approximation (`shading`) で抑制する係数へ接続した。
+  - remaining: lilToon の `fd.shadowmix`、MatCap mask texture、2nd MatCap との合成順を本家へ合わせる。
 - `[~]` `_MatCapBlendMask`
   - done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
   - remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
@@ -319,6 +324,12 @@ Status legend:
 - `[~]` `_SpecularBlur`
   - done: v2 reflection parameter として保持し、toon specular blur に接続する。
   - remaining: 本家の `lilTooningScale(_AAStrength, ...)` と同等の anti-alias 補正を実装する。
+- `[~]` `_SpecularNormalStrength`
+  - done: source raw params を保持し、specular highlight 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: lilToon の `fd.N` と完全一致する tangent / view-space 入力、GSAA、backface behavior を検証する。
+- `[~]` `_ReflectionNormalStrength`
+  - done: source raw params を保持し、reflection UV / fresnel 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - remaining: lilToon の `fd.reflectionN`、roughness mip、cubemap / equirect policy、backface behavior と合わせて検証する。
 - `[~]` `_ApplyReflection`
   - done: source raw params を保持し、reflection texture / environment approximation の gate として接続した。
   - remaining: PMREM / roughness mip / environment source policy を定義して本実装に置き換える。
@@ -328,6 +339,9 @@ Status legend:
 - `[~]` `_ReflectionCubeTex` source asset import
   - done: EXR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
   - remaining: cubemap / equirect / PMREM / roughness mip としての意味論を決め、2D approximation と区別する。
+- `[~]` `_ReflectionCubeEnableLighting`
+  - done: source raw params を保持し、environment reflection approximation に main light color mix として接続した。
+  - remaining: Unity/lilToon の `fd.lightColor`、cubemap HDR decode、roughness mip、forward-add 条件との一致を検証する。
 - `[~]` `_ReflectionBlendMode`
   - done: source raw params を保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: reflection color texture と environment reflection の本家合成順に合わせる。
@@ -364,6 +378,9 @@ Status legend:
 - `[~]` `_RimBlendMode`
   - done: v2 rim parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体、RimShade / indirect rim との合成順を実装する。
+- `[~]` `_RimShadowMask`
+  - done: source raw params を保持し、lilToon-like rim contribution を current shadowmix approximation (`shading`) で抑制する係数へ接続した。
+  - remaining: lilToon の `fd.shadowmix`、directional / indirect rim 分離、shadow mask texture と合わせた合成順を検証する。
 - `[~]` `_UseRimShade`
   - done: v2 rim shade parameter として保持し、有効時は本家 `lilGetRimShade` と同じく rim shade factor で `lit -> lit * color` へ補間する。
   - remaining: `_RimShadeMask`、normal strength、AO/lighting との順序を本家へ合わせる。

@@ -28,13 +28,16 @@ struct DrawMaterial {
 	shadow_border_color: vec4<f32>,
 	matcap_factor: vec4<f32>,
 	matcap_params: vec4<f32>,
+	matcap_ext_params: vec4<f32>,
 	reflection_color: vec4<f32>,
 	reflection_control: vec4<f32>,
 	reflection_params: vec4<f32>,
+	reflection_ext_params: vec4<f32>,
 	specular_toon_params: vec4<f32>,
 	rim_color: vec4<f32>,
 	rim_params: vec4<f32>,
 	rim_control: vec4<f32>,
+	rim_ext_params: vec4<f32>,
 	rim_shade_color: vec4<f32>,
 	rim_shade_params: vec4<f32>,
 	emission_color: vec4<f32>,
@@ -469,8 +472,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
+	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
 	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
-	let shadow_n = normalize(mix(face_normal(normalize(i.wn), front_facing, dbg), n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
+	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 
@@ -535,7 +539,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
-	let matcap_uv = toon_matcap_uv(n, v);
+	let matcap_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+	let matcap_uv = toon_matcap_uv(matcap_n, v);
 	let matcap_tex_color = textureSample(matcap_tex, matcap_samp, matcap_uv);
 	let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 	if (!disable_matcap) {
@@ -543,7 +548,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
 			let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 			let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, uv).r;
-			let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w, 0.0, 1.0);
+			let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
+			let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow, 0.0, 1.0);
 			lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
 		} else {
 			lit = lit + matcap_raw * drawu.matcap_factor.w;
@@ -552,8 +558,10 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection = vec3<f32>(0.0, 0.0, 0.0);
 	let half_vec = normalize(l + v);
-	let reflection_uv = toon_reflection_uv(n, v);
-	let reflection_fresnel = pow(clamp(1.0 - dot(n, v), 0.0, 1.0), 2.0);
+	let specular_n = normalize(mix(geometry_n, n, clamp(drawu.specular_toon_params.w, 0.0, 1.0)));
+	let reflection_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
+	let reflection_uv = toon_reflection_uv(reflection_n, v);
+	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	if (drawu.shadow_params.x > 0.5) {
 		if (drawu.reflection_control.x > 0.5) {
 			let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, uv);
@@ -562,7 +570,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
 			let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
 			let specular_power = mix(8.0, 128.0, smoothness);
-			let nh = max(dot(n, half_vec), 0.0);
+			let nh = max(dot(specular_n, half_vec), 0.0);
 			var specular_shape = pow(nh, specular_power);
 			if (drawu.specular_toon_params.x > 0.5) {
 				let perceptual_roughness = max(1.0 - smoothness, 0.02);
@@ -576,7 +584,12 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			}
 			specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape * clamp(drawu.reflection_control.y, 0.0, 1.0);
 			let reflection_color = drawu.reflection_color * reflection_color_texel;
-			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb;
+			let reflection_lighting = mix(
+				vec3<f32>(1.0, 1.0, 1.0),
+				frame.light_color.rgb * frame.light_color.w,
+				clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
+			);
+			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * reflection_lighting;
 			authored_reflection = env * (0.18 + 0.32 * reflection_fresnel) * reflectance * clamp(drawu.reflection_control.z, 0.0, 1.0);
 		}
 	} else {
@@ -595,7 +608,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let rim_factor = lil_tooning_scale(rim_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
 			let lit_rim_color = mix(rim_color, rim_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
-			rim = lit_rim_color * rim_factor * rim_alpha;
+			let rim_shadow = mix(1.0, shading, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
+			rim = lit_rim_color * rim_factor * rim_alpha * rim_shadow;
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;

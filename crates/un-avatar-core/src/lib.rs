@@ -570,6 +570,10 @@ pub struct UnaLilToonLikeMatcap {
 	pub enable_lighting_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default = "one_f32")]
+	pub normal_strength_factor: f32,
+	#[serde(default)]
+	pub shadow_mask_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -596,6 +600,12 @@ pub struct UnaLilToonLikeReflection {
 	pub specular_border_factor: f32,
 	#[serde(default)]
 	pub specular_blur_factor: f32,
+	#[serde(default = "one_f32")]
+	pub specular_normal_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub reflection_normal_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub cube_enable_lighting_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -626,6 +636,8 @@ pub struct UnaLilToonLikeRim {
 	pub enable_lighting_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default)]
+	pub shadow_mask_factor: f32,
 	#[serde(default)]
 	pub shade_enabled_factor: f32,
 	#[serde(default = "default_liltoon_rim_shade_color")]
@@ -739,6 +751,8 @@ impl Default for UnaLilToonLikeMatcap {
 			main_strength_factor: 0.0,
 			enable_lighting_factor: 0.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
+			normal_strength_factor: 1.0,
+			shadow_mask_factor: 0.0,
 		}
 	}
 }
@@ -757,6 +771,9 @@ impl Default for UnaLilToonLikeReflection {
 			specular_toon_factor: 1.0,
 			specular_border_factor: default_liltoon_specular_border(),
 			specular_blur_factor: 0.0,
+			specular_normal_strength_factor: 1.0,
+			reflection_normal_strength_factor: 1.0,
+			cube_enable_lighting_factor: 1.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			cube_texture_index: None,
 			color_texture_index: None,
@@ -777,6 +794,7 @@ impl Default for UnaLilToonLikeRim {
 			fresnel_power_factor: default_liltoon_rim_fresnel_power(),
 			enable_lighting_factor: 1.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
+			shadow_mask_factor: 0.0,
 			shade_enabled_factor: 0.0,
 			shade_color_factor: default_liltoon_rim_shade_color(),
 			shade_border_factor: default_liltoon_rim_border(),

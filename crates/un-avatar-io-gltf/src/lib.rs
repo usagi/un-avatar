@@ -1825,6 +1825,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	{
 		out.matcap.blend_mode = liltoon_like_blend_mode(value);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapNormalStrength") {
+		out.matcap.normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapShadowMask") {
+		out.matcap.shadow_mask_factor = value.clamp(0.0, 1.0);
+	}
 
 	out.reflection.enabled_factor = unavatar_material_float_param(extras, "_UseReflection")
 		.unwrap_or(0.0)
@@ -1880,6 +1886,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_SpecularBlur") {
 		out.reflection.specular_blur_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_SpecularNormalStrength") {
+		out.reflection.specular_normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionNormalStrength") {
+		out.reflection.reflection_normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionCubeEnableLighting") {
+		out.reflection.cube_enable_lighting_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionBlendMode").map(float_to_u32_saturating) {
 		out.reflection.blend_mode = liltoon_like_blend_mode(value);
 	}
@@ -1911,6 +1926,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		.or_else(|| unavatar_material_float_param(extras, "_RimBlendMode").map(float_to_u32_saturating))
 	{
 		out.rim.blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimShadowMask") {
+		out.rim.shadow_mask_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_UseRimShade") {
 		out.rim.shade_enabled_factor = value.clamp(0.0, 1.0);
@@ -3518,6 +3536,8 @@ mod tests {
 					"_MatCapBlend": 0.25,
 					"_MatCapEnableLighting": 0.75,
 					"_MatCapBlendMode": 2.0,
+					"_MatCapNormalStrength": 0.66,
+					"_MatCapShadowMask": 0.57,
 					"_Smoothness": 0.6,
 					"_Metallic": 0.2,
 					"_Reflectance": 0.4,
@@ -3526,6 +3546,9 @@ mod tests {
 					"_SpecularToon": 1.0,
 					"_SpecularBorder": 0.37,
 					"_SpecularBlur": 0.12,
+					"_SpecularNormalStrength": 0.88,
+					"_ReflectionNormalStrength": 0.77,
+					"_ReflectionCubeEnableLighting": 0.69,
 					"_ReflectionBlendMode": 3.0,
 					"_RimMainStrength": 0.4,
 					"_RimBorder": 0.3,
@@ -3533,6 +3556,7 @@ mod tests {
 					"_RimFresnelPower": 4.0,
 					"_RimEnableLighting": 0.6,
 					"_RimBlendMode": 2.0,
+					"_RimShadowMask": 0.91,
 					"_UseRimShade": 1.0,
 					"_RimShadeBorder": 0.44,
 					"_RimShadeBlur": 0.22,
@@ -3605,6 +3629,8 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.blend_factor, 0.25);
 		assert_eq!(liltoon_like.matcap.enable_lighting_factor, 0.75);
 		assert_eq!(liltoon_like.matcap.blend_mode, UnaLilToonLikeBlendMode::Screen);
+		assert_eq!(liltoon_like.matcap.normal_strength_factor, 0.66);
+		assert_eq!(liltoon_like.matcap.shadow_mask_factor, 0.57);
 		assert_eq!(liltoon_like.reflection.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.reflection.smoothness_factor, 0.6);
@@ -3615,6 +3641,9 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.specular_toon_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.specular_border_factor, 0.37);
 		assert_eq!(liltoon_like.reflection.specular_blur_factor, 0.12);
+		assert_eq!(liltoon_like.reflection.specular_normal_strength_factor, 0.88);
+		assert_eq!(liltoon_like.reflection.reflection_normal_strength_factor, 0.77);
+		assert_eq!(liltoon_like.reflection.cube_enable_lighting_factor, 0.69);
 		assert_eq!(liltoon_like.reflection.blend_mode, UnaLilToonLikeBlendMode::Multiply);
 		assert_eq!(liltoon_like.reflection.color_texture_index, Some(16));
 		assert_eq!(liltoon_like.reflection.smoothness_texture_index, Some(17));
@@ -3628,6 +3657,7 @@ mod tests {
 		assert_eq!(liltoon_like.rim.fresnel_power_factor, 4.0);
 		assert_eq!(liltoon_like.rim.enable_lighting_factor, 0.6);
 		assert_eq!(liltoon_like.rim.blend_mode, UnaLilToonLikeBlendMode::Screen);
+		assert_eq!(liltoon_like.rim.shadow_mask_factor, 0.91);
 		assert_eq!(liltoon_like.rim.shade_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.rim.shade_color_factor, [0.6, 0.5, 0.4, 0.7]);
 		assert_eq!(liltoon_like.rim.shade_border_factor, 0.44);

@@ -234,13 +234,16 @@ struct MeshDrawMaterialGpu {
 	shadow_border_color: [f32; 4],
 	matcap_factor: [f32; 4],
 	matcap_params: [f32; 4],
+	matcap_ext_params: [f32; 4],
 	reflection_color: [f32; 4],
 	reflection_control: [f32; 4],
 	reflection_params: [f32; 4],
+	reflection_ext_params: [f32; 4],
 	specular_toon_params: [f32; 4],
 	rim_color: [f32; 4],
 	rim_params: [f32; 4],
 	rim_control: [f32; 4],
+	rim_ext_params: [f32; 4],
 	rim_shade_color: [f32; 4],
 	rim_shade_params: [f32; 4],
 	emission_color: [f32; 4],
@@ -263,7 +266,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 416);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 464);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1109,6 +1112,16 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 1.0]);
+	let matcap_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.matcap.normal_strength_factor.clamp(0.0, 1.0),
+				u.matcap.shadow_mask_factor.clamp(0.0, 1.0),
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_control = liltoon_like
 		.map(|u| {
@@ -1131,20 +1144,23 @@ fn mesh_draw_material_gpu(
 				u.reflection.smoothness_factor.clamp(0.0, 1.0),
 				u.reflection.metallic_factor.clamp(0.0, 1.0),
 				u.reflection.reflectance_factor.clamp(0.0, 1.0),
-				0.0,
+				u.reflection.reflection_normal_strength_factor.clamp(0.0, 1.0),
 			]
 		})
-		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let reflection_ext_params = liltoon_like
+		.map(|u| [u.reflection.cube_enable_lighting_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let specular_toon_params = liltoon_like
 		.map(|u| {
 			[
 				u.reflection.specular_toon_factor.clamp(0.0, 1.0),
 				u.reflection.specular_border_factor.clamp(0.0, 1.0),
 				u.reflection.specular_blur_factor.clamp(0.0, 1.0),
-				0.0,
+				u.reflection.specular_normal_strength_factor.clamp(0.0, 1.0),
 			]
 		})
-		.unwrap_or([0.0, 0.5, 0.0, 0.0]);
+		.unwrap_or([0.0, 0.5, 0.0, 1.0]);
 	let alpha_mask_params = liltoon_like
 		.map(|u| {
 			[
@@ -1182,6 +1198,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 1.0]);
+	let rim_ext_params = liltoon_like
+		.map(|u| [u.rim.shadow_mask_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let rim_shade_color = liltoon_like.map(|u| u.rim.shade_color_factor).unwrap_or([0.5, 0.5, 0.5, 1.0]);
 	let rim_shade_params = liltoon_like
 		.map(|u| {
@@ -1243,9 +1262,11 @@ fn mesh_draw_material_gpu(
 			opts.avatar_matcap.scale.clamp(0.0, 2.0),
 		],
 		matcap_params,
+		matcap_ext_params,
 		reflection_color,
 		reflection_control,
 		reflection_params,
+		reflection_ext_params,
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
@@ -1255,6 +1276,7 @@ fn mesh_draw_material_gpu(
 		],
 		rim_params,
 		rim_control,
+		rim_ext_params,
 		rim_shade_color,
 		rim_shade_params,
 		emission_color,

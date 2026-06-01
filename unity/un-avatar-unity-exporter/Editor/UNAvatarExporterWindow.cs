@@ -92,6 +92,7 @@ namespace UNAvatar.UnityExporter
         public string source = "unity_capture_diff";
         public List<string> assetGroups = new List<string>();
         public List<WardrobeOperationDraft> operations = new List<WardrobeOperationDraft>();
+        public List<WardrobePreviewImageDraft> previewImages = new List<WardrobePreviewImageDraft>();
         public WardrobeSnapshotDraft capturedSnapshot;
 
         public Dictionary<string, object> ToJson(bool isDefault)
@@ -103,9 +104,64 @@ namespace UNAvatar.UnityExporter
                 ["source"] = source ?? "",
                 ["default"] = isDefault,
                 ["assetGroups"] = assetGroups.Cast<object>().ToList(),
-                ["operations"] = operations.Select(op => op.ToJson()).Cast<object>().ToList()
+                ["operations"] = operations.Select(op => op.ToJson()).Cast<object>().ToList(),
+                ["previewImages"] = (previewImages ?? new List<WardrobePreviewImageDraft>()).Select(image => image.ToJson()).Cast<object>().ToList()
             };
             return json;
+        }
+    }
+
+    [Serializable]
+    internal sealed class WardrobePreviewImageDraft
+    {
+        public string id;
+        public string view;
+        public int width;
+        public int height;
+        public string mimeType = "image/png";
+        public string pixelFormat = "RGBA8";
+        public string colorSpace = "sRGB";
+        public float fovYDegrees;
+        public float nearClip;
+        public float farClip;
+        public Vector3 cameraPosition;
+        public Vector3 cameraRotationEuler;
+        public Vector3 target;
+        public int bufferView = -1;
+        public List<byte> pngBytes = new List<byte>();
+
+        public Dictionary<string, object> ToJson()
+        {
+            var json = new Dictionary<string, object>
+            {
+                ["id"] = id ?? "",
+                ["view"] = view ?? "",
+                ["width"] = width,
+                ["height"] = height,
+                ["mimeType"] = mimeType ?? "image/png",
+                ["pixelFormat"] = pixelFormat ?? "RGBA8",
+                ["colorSpace"] = colorSpace ?? "sRGB",
+                ["camera"] = new Dictionary<string, object>
+                {
+                    ["projection"] = "perspective",
+                    ["fovYDegrees"] = fovYDegrees,
+                    ["nearClip"] = nearClip,
+                    ["farClip"] = farClip,
+                    ["position"] = FloatArray(cameraPosition),
+                    ["rotationEulerDegrees"] = FloatArray(cameraRotationEuler),
+                    ["target"] = FloatArray(target)
+                }
+            };
+            if (bufferView >= 0)
+            {
+                json["bufferView"] = bufferView;
+            }
+            return json;
+        }
+
+        private static List<object> FloatArray(Vector3 value)
+        {
+            return new List<object> { value.x, value.y, value.z };
         }
     }
 
@@ -116,6 +172,27 @@ namespace UNAvatar.UnityExporter
         public List<NodeStateDraft> nodes = new List<NodeStateDraft>();
         public List<RendererStateDraft> renderers = new List<RendererStateDraft>();
         public List<BlendShapeStateDraft> blendShapes = new List<BlendShapeStateDraft>();
+    }
+
+    internal sealed class WardrobeApplyReport
+    {
+        public int Total;
+        public int Matched;
+        public int Missing;
+        public int VisibilityChanged;
+        public int RendererChanged;
+        public int BlendShapeChanged;
+        public List<string> MissingTargets = new List<string>();
+
+        public string ToSummary()
+        {
+            var summary = $"ops={Total}, matched={Matched}, missing={Missing}, active={VisibilityChanged}, renderer={RendererChanged}, blendshape={BlendShapeChanged}.";
+            if (MissingTargets.Count > 0)
+            {
+                summary += " Missing: " + string.Join(", ", MissingTargets.Take(8).ToArray());
+            }
+            return summary;
+        }
     }
 
     [Serializable]
@@ -153,6 +230,7 @@ namespace UNAvatar.UnityExporter
         public string setName;
         public bool hasBaseSnapshot;
         public WardrobeSnapshotDraft baseSnapshot = new WardrobeSnapshotDraft();
+        public List<WardrobePreviewImageDraft> basePreviewImages = new List<WardrobePreviewImageDraft>();
         public List<WardrobeSetDraft> sets = new List<WardrobeSetDraft>();
     }
 
@@ -271,6 +349,7 @@ namespace UNAvatar.UnityExporter
         [SerializeField] private bool hasBaseSnapshot = false;
         [SerializeField] private string wardrobeSetName = "New Outfit";
         [SerializeField] private WardrobeSnapshotDraft baseSnapshot = new WardrobeSnapshotDraft();
+        [SerializeField] private List<WardrobePreviewImageDraft> basePreviewImages = new List<WardrobePreviewImageDraft>();
         [SerializeField] private bool hasImportedBaseOperations = false;
         [SerializeField] private List<WardrobeOperationDraft> importedBaseOperations = new List<WardrobeOperationDraft>();
         [SerializeField] private List<WardrobeSetDraft> capturedWardrobeSets = new List<WardrobeSetDraft>();
@@ -291,9 +370,21 @@ namespace UNAvatar.UnityExporter
 
         private void OnGUI()
         {
+            TryAutoAssignAvatarRoot(false);
+
             scroll = EditorGUILayout.BeginScrollView(scroll);
             EditorGUILayout.LabelField("Export Target", EditorStyles.boldLabel);
-            avatarRoot = (GameObject)EditorGUILayout.ObjectField("Avatar Root", avatarRoot, typeof(GameObject), true);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                avatarRoot = (GameObject)EditorGUILayout.ObjectField("Avatar Root", avatarRoot, typeof(GameObject), true);
+                using (new EditorGUI.DisabledScope(avatarRoot != null))
+                {
+                    if (GUILayout.Button("Auto", GUILayout.Width(64)))
+                    {
+                        TryAutoAssignAvatarRoot(true);
+                    }
+                }
+            }
             exportPath = EditorGUILayout.TextField("Output", exportPath);
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -413,6 +504,119 @@ namespace UNAvatar.UnityExporter
             return string.Join("\n", lines);
         }
 
+        private bool TryAutoAssignAvatarRoot(bool updateSummary)
+        {
+            if (avatarRoot != null)
+            {
+                return true;
+            }
+
+            var candidate = ResolveAvatarRootCandidate();
+            if (candidate == null)
+            {
+                if (updateSummary)
+                {
+                    lastSummary = "Avatar Root auto-detect found no unique scene avatar. Select the avatar root once.";
+                }
+                return false;
+            }
+
+            avatarRoot = candidate;
+            if (updateSummary)
+            {
+                lastSummary = "Avatar Root auto-detected: " + avatarRoot.name;
+            }
+            return true;
+        }
+
+        private static GameObject ResolveAvatarRootCandidate()
+        {
+            var selected = Selection.activeGameObject;
+            var fromSelection = ResolveAvatarRootFromSelection(selected);
+            if (fromSelection != null)
+            {
+                return fromSelection;
+            }
+
+            var sceneObjects = Resources.FindObjectsOfTypeAll<GameObject>()
+                .Where(IsSceneObject)
+                .ToList();
+
+            var descriptorCandidates = sceneObjects
+                .Where(HasAvatarDescriptorComponent)
+                .ToList();
+            if (descriptorCandidates.Count == 1)
+            {
+                return descriptorCandidates[0];
+            }
+
+            var humanoidCandidates = sceneObjects
+                .Select(go => go.GetComponent<Animator>())
+                .Where(animator => animator != null && animator.avatar != null && animator.avatar.isHuman)
+                .Select(animator => animator.gameObject)
+                .Distinct()
+                .ToList();
+            if (humanoidCandidates.Count == 1)
+            {
+                return humanoidCandidates[0];
+            }
+
+            return null;
+        }
+
+        private static GameObject ResolveAvatarRootFromSelection(GameObject selected)
+        {
+            if (selected == null || !IsSceneObject(selected))
+            {
+                return null;
+            }
+
+            for (var transform = selected.transform; transform != null; transform = transform.parent)
+            {
+                if (HasAvatarDescriptorComponent(transform.gameObject))
+                {
+                    return transform.gameObject;
+                }
+            }
+
+            for (var transform = selected.transform; transform != null; transform = transform.parent)
+            {
+                var animator = transform.GetComponent<Animator>();
+                if (animator != null && animator.avatar != null && animator.avatar.isHuman)
+                {
+                    return transform.gameObject;
+                }
+            }
+
+            return selected.transform.parent == null ? selected : null;
+        }
+
+        private static bool IsSceneObject(GameObject go)
+        {
+            return go != null && go.scene.IsValid() && !EditorUtility.IsPersistent(go);
+        }
+
+        private static bool HasAvatarDescriptorComponent(GameObject go)
+        {
+            if (go == null)
+            {
+                return false;
+            }
+            foreach (var component in go.GetComponents<Component>())
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+                var type = component.GetType();
+                if (type.Name == "VRCAvatarDescriptor" || type.FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor")
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private static bool IsV01DirectTextureSource(string path)
         {
             var extension = Path.GetExtension(path).ToLowerInvariant();
@@ -526,7 +730,7 @@ namespace UNAvatar.UnityExporter
                 using (new EditorGUI.DisabledScope(!EnsureBaseCanBeApplied(false)))
                 {
                     var baseSelected = selectedWardrobeSetIndex == BaseSelectionIndex;
-                    if (GUILayout.Toggle(baseSelected, "Base", "Button", GUILayout.Height(22)) && !baseSelected)
+                    if (GUILayout.Button(baseSelected ? "Base ✓" : "Base", GUILayout.Height(22)))
                     {
                         selectedWardrobeSetIndex = BaseSelectionIndex;
                         ApplyBaseToScene();
@@ -553,7 +757,7 @@ namespace UNAvatar.UnityExporter
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     var selected = selectedWardrobeSetIndex == i;
-                    if (GUILayout.Toggle(selected, set.displayName, "Button") && !selected)
+                    if (GUILayout.Button(selected ? set.displayName + " ✓" : set.displayName))
                     {
                         selectedWardrobeSetIndex = i;
                         wardrobeSetName = set.displayName;
@@ -645,11 +849,12 @@ namespace UNAvatar.UnityExporter
                 return;
             }
             baseSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
+            basePreviewImages = WardrobePreviewCapture.Capture(avatarRoot);
             hasBaseSnapshot = true;
             hasImportedBaseOperations = false;
             importedBaseOperations.Clear();
             selectedWardrobeSetIndex = BaseSelectionIndex;
-            lastSummary = $"Captured base: {baseSnapshot.nodes.Count} nodes, {baseSnapshot.renderers.Count} renderers, {baseSnapshot.blendShapes.Count} blendshapes.";
+            lastSummary = $"Captured base: {baseSnapshot.nodes.Count} nodes, {baseSnapshot.renderers.Count} renderers, {baseSnapshot.blendShapes.Count} blendshapes, {basePreviewImages.Count} previews.";
         }
 
         private void CaptureWardrobeSet()
@@ -668,9 +873,10 @@ namespace UNAvatar.UnityExporter
             var current = WardrobeSnapshotCapture.Capture(avatarRoot);
             var set = WardrobeSnapshotCapture.Diff(baseSnapshot, current, wardrobeSetName);
             set.capturedSnapshot = current;
+            set.previewImages = WardrobePreviewCapture.Capture(avatarRoot);
             capturedWardrobeSets.Add(set);
             selectedWardrobeSetIndex = capturedWardrobeSets.Count - 1;
-            lastSummary = $"Captured wardrobe set `{set.displayName}`: {set.operations.Count} operations.";
+            lastSummary = $"Captured wardrobe set `{set.displayName}`: {set.operations.Count} operations, {set.previewImages.Count} previews.";
         }
 
         private void UpdateSelectedWardrobeSetFromScene()
@@ -699,8 +905,9 @@ namespace UNAvatar.UnityExporter
             updated.displayName = nextName;
             updated.source = "unity_capture_diff_update";
             updated.capturedSnapshot = current;
+            updated.previewImages = WardrobePreviewCapture.Capture(avatarRoot);
             capturedWardrobeSets[selectedWardrobeSetIndex] = updated;
-            lastSummary = $"Updated wardrobe set `{updated.displayName}`: {updated.operations.Count} operations.";
+            lastSummary = $"Updated wardrobe set `{updated.displayName}`: {updated.operations.Count} operations, {updated.previewImages.Count} previews.";
         }
 
         private void DuplicateWardrobeSet(int index)
@@ -717,6 +924,7 @@ namespace UNAvatar.UnityExporter
                 source = "unity_capture_diff_duplicate",
                 assetGroups = new List<string>(source.assetGroups),
                 operations = source.operations.Select(WardrobeSnapshotCapture.CloneOperation).ToList(),
+                previewImages = (source.previewImages ?? new List<WardrobePreviewImageDraft>()).Select(WardrobePreviewCapture.ClonePreview).Where(image => image != null).ToList(),
                 capturedSnapshot = source.capturedSnapshot
             };
             capturedWardrobeSets.Insert(index + 1, copy);
@@ -737,6 +945,7 @@ namespace UNAvatar.UnityExporter
                 setName = wardrobeSetName,
                 hasBaseSnapshot = hasBaseSnapshot,
                 baseSnapshot = baseSnapshot,
+                basePreviewImages = basePreviewImages,
                 sets = capturedWardrobeSets
             };
             File.WriteAllText(path, JsonUtility.ToJson(draft, true), new UTF8Encoding(false));
@@ -762,6 +971,7 @@ namespace UNAvatar.UnityExporter
             wardrobeSetName = string.IsNullOrWhiteSpace(draft.setName) ? wardrobeSetName : draft.setName;
             hasBaseSnapshot = draft.hasBaseSnapshot;
             baseSnapshot = draft.baseSnapshot ?? new WardrobeSnapshotDraft();
+            basePreviewImages = draft.basePreviewImages ?? new List<WardrobePreviewImageDraft>();
             hasImportedBaseOperations = false;
             importedBaseOperations.Clear();
             capturedWardrobeSets = draft.sets ?? new List<WardrobeSetDraft>();
@@ -781,13 +991,14 @@ namespace UNAvatar.UnityExporter
             {
                 var imported = UnavatarWardrobeImporter.Import(path);
                 importedBaseOperations = imported.baseOperations;
-                hasImportedBaseOperations = imported.hasBaseOperations;
+                basePreviewImages = imported.basePreviewImages;
+                hasImportedBaseOperations = imported.hasBaseOperations || importedBaseOperations.Count > 0;
                 hasBaseSnapshot = false;
                 baseSnapshot = new WardrobeSnapshotDraft();
                 capturedWardrobeSets = imported.sets;
                 selectedWardrobeSetIndex = hasImportedBaseOperations ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
                 wardrobeSetName = capturedWardrobeSets.Count > 0 ? capturedWardrobeSets[capturedWardrobeSets.Count - 1].displayName : wardrobeSetName;
-                lastSummary = $"Imported wardrobe sets from .unavatar: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}.";
+                lastSummary = $"Imported wardrobe sets from .unavatar: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}. Imported ids: {string.Join(", ", imported.importedSetIds.ToArray())}.";
             }
             catch (Exception ex)
             {
@@ -819,6 +1030,7 @@ namespace UNAvatar.UnityExporter
                 next.displayName = set.displayName;
                 next.source = set.source + "_rebased";
                 next.capturedSnapshot = set.capturedSnapshot;
+                next.previewImages = ClonePreviewImages(set.previewImages);
                 capturedWardrobeSets[i] = next;
                 rebased++;
             }
@@ -836,13 +1048,14 @@ namespace UNAvatar.UnityExporter
             if (hasBaseSnapshot)
             {
                 WardrobeSnapshotCapture.ApplyToRoot(avatarRoot, baseSnapshot);
+                lastSummary = "Applied base wardrobe snapshot to scene.";
             }
             else
             {
-                ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
+                var report = ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
+                lastSummary = "Applied base wardrobe state to scene. " + report.ToSummary();
             }
             selectedWardrobeSetIndex = BaseSelectionIndex;
-            lastSummary = "Applied base wardrobe state to scene.";
             SceneView.RepaintAll();
         }
 
@@ -866,9 +1079,9 @@ namespace UNAvatar.UnityExporter
             }
             else
             {
-                ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
-                ApplyWardrobeOperations(set.operations);
-                lastSummary = "Applied wardrobe set `" + set.displayName + "` to scene.";
+                var baseReport = ApplyWardrobeOperations(CurrentBaseOperationsForSceneApply());
+                var setReport = ApplyWardrobeOperations(set.operations);
+                lastSummary = "Applied wardrobe set `" + set.displayName + "` to scene. Base: " + baseReport.ToSummary() + " Set: " + setReport.ToSummary();
             }
             SceneView.RepaintAll();
         }
@@ -909,7 +1122,7 @@ namespace UNAvatar.UnityExporter
             }
             if (!hasBaseSnapshot && !hasImportedBaseOperations)
             {
-                lastSummary = "Capture Base or imported Base operations are missing.";
+                lastSummary = "Capture Base or imported Base operations are missing. Re-import the .unavatar; if this persists, the importer did not recognize the base set.";
                 return false;
             }
             return true;
@@ -929,29 +1142,33 @@ namespace UNAvatar.UnityExporter
             {
                 if (updateSummary)
                 {
-                    lastSummary = "Capture Base or imported Base operations are missing.";
+                    lastSummary = "Capture Base or imported Base operations are missing. Re-import the .unavatar; if this persists, the importer did not recognize the base set.";
                 }
                 return false;
             }
             return true;
         }
 
-        private void ApplyWardrobeOperations(IEnumerable<WardrobeOperationDraft> operations)
+        private WardrobeApplyReport ApplyWardrobeOperations(IEnumerable<WardrobeOperationDraft> operations)
         {
-            ApplyWardrobeOperationsToRoot(avatarRoot, operations);
+            return ApplyWardrobeOperationsToRoot(avatarRoot, operations);
         }
 
-        private static void ApplyWardrobeOperationsToRoot(GameObject root, IEnumerable<WardrobeOperationDraft> operations)
+        private static WardrobeApplyReport ApplyWardrobeOperationsToRoot(GameObject root, IEnumerable<WardrobeOperationDraft> operations)
         {
+            var report = new WardrobeApplyReport();
             if (root == null || operations == null)
             {
-                return;
+                return report;
             }
 
             var nodes = root.GetComponentsInChildren<Transform>(true)
                 .ToDictionary(transform => WardrobeSnapshotCapture.NodeIdFor(root.transform, transform), transform => transform);
             var nodesByPath = root.GetComponentsInChildren<Transform>(true)
                 .GroupBy(transform => VariantExtractor.TransformPath(root.transform, transform))
+                .ToDictionary(group => group.Key, group => group.First());
+            var nodesByNormalizedPath = root.GetComponentsInChildren<Transform>(true)
+                .GroupBy(transform => WardrobeSnapshotCapture.NormalizePath(VariantExtractor.TransformPath(root.transform, transform)))
                 .ToDictionary(group => group.Key, group => group.First());
 
             foreach (var operation in operations)
@@ -960,6 +1177,7 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
+                report.Total++;
                 var transform = default(Transform);
                 if (!string.IsNullOrEmpty(operation.target.nodeId))
                 {
@@ -969,13 +1187,27 @@ namespace UNAvatar.UnityExporter
                 {
                     nodesByPath.TryGetValue(operation.target.path, out transform);
                 }
+                if (transform == null && !string.IsNullOrEmpty(operation.target.path))
+                {
+                    transform = ResolveTransformByPathSuffix(nodesByNormalizedPath, operation.target.path);
+                }
                 if (transform == null)
                 {
+                    report.Missing++;
+                    if (report.MissingTargets.Count < 16)
+                    {
+                        report.MissingTargets.Add(TargetDebugName(operation));
+                    }
                     continue;
                 }
+                report.Matched++;
 
-                if (operation.type == "subtreeEnabled" || operation.type == "subtreeVisibility")
+                if (operation.type == "subtreeEnabled" || operation.type == "subtreeVisibility" || operation.type == "nodeEnabled" || operation.type == "nodeVisibility")
                 {
+                    if (transform.gameObject.activeSelf != operation.boolValue)
+                    {
+                        report.VisibilityChanged++;
+                    }
                     if (operation.boolValue)
                     {
                         transform.gameObject.SetActive(true);
@@ -989,6 +1221,10 @@ namespace UNAvatar.UnityExporter
                 {
                     foreach (var renderer in transform.GetComponents<Renderer>())
                     {
+                        if (renderer.enabled != operation.boolValue)
+                        {
+                            report.RendererChanged++;
+                        }
                         renderer.enabled = operation.boolValue;
                     }
                 }
@@ -1000,11 +1236,60 @@ namespace UNAvatar.UnityExporter
                         var index = mesh != null ? mesh.GetBlendShapeIndex(operation.name) : -1;
                         if (index >= 0)
                         {
+                            if (Math.Abs(skinned.GetBlendShapeWeight(index) - operation.floatValue) > 0.001f)
+                            {
+                                report.BlendShapeChanged++;
+                            }
                             skinned.SetBlendShapeWeight(index, operation.floatValue);
                         }
                     }
                 }
             }
+            return report;
+        }
+
+        private static Transform ResolveTransformByPathSuffix(Dictionary<string, Transform> nodesByNormalizedPath, string importedPath)
+        {
+            var path = WardrobeSnapshotCapture.NormalizePath(importedPath);
+            if (string.IsNullOrEmpty(path))
+            {
+                return null;
+            }
+            if (nodesByNormalizedPath.TryGetValue(path, out var exact))
+            {
+                return exact;
+            }
+
+            var suffix = "/" + path;
+            var match = default(Transform);
+            foreach (var entry in nodesByNormalizedPath)
+            {
+                if (!entry.Key.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (match != null)
+                {
+                    return null;
+                }
+                match = entry.Value;
+            }
+            return match;
+        }
+
+        private static string TargetDebugName(WardrobeOperationDraft operation)
+        {
+            var path = operation.target != null ? operation.target.path : "";
+            var nodeId = operation.target != null ? operation.target.nodeId : "";
+            if (!string.IsNullOrEmpty(path))
+            {
+                return operation.type + ":" + path;
+            }
+            if (!string.IsNullOrEmpty(nodeId))
+            {
+                return operation.type + ":" + nodeId;
+            }
+            return operation.type ?? "<unknown>";
         }
 
         private void ExportSelected()
@@ -1070,12 +1355,13 @@ namespace UNAvatar.UnityExporter
                 var tempGlb = exportResult.Path;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Patching UN_avatar extension", 0.8f);
+                RegenerateWardrobePreviewImagesForExport();
                 // Wardrobe sets are currently stored as authored capture diffs, not per-set baked diffs.
                 // Keep Base authored as well; post-bake snapshots can be altered by Modular Avatar and are
                 // only safe as the wardrobe baseline once per-set baked snapshots are enabled again.
                 var wardrobeBaseSnapshot = bakedWardrobeSets != null ? bakedBaseSnapshot : null;
                 var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.TextureAssets);
-                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets);
+                GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets, PreviewImagesForExport(bakedWardrobeSets));
 
                 var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, wardrobeBaseSnapshot, bakedWardrobeSets, exportResult.Textures);
                 File.WriteAllText(reportPath, MiniJson.Serialize(report), new UTF8Encoding(false));
@@ -1269,7 +1555,8 @@ namespace UNAvatar.UnityExporter
                     id = "base",
                     displayName = "Base",
                     source = hasExportBaseSnapshot ? "unity_baked_capture_base" : hasBaseSnapshot ? "unity_capture_base" : hasImportedBaseOperations ? "imported_unavatar_base" : "implicit_current_state",
-                    operations = baseOperations
+                    operations = baseOperations,
+                    previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()
                 }.ToJson(true)
             };
 
@@ -1303,6 +1590,81 @@ namespace UNAvatar.UnityExporter
             };
         }
 
+        private List<WardrobePreviewImageDraft> PreviewImagesForExport(List<WardrobeSetDraft> exportWardrobeSets = null)
+        {
+            var previews = new List<WardrobePreviewImageDraft>();
+            if (basePreviewImages != null)
+            {
+                previews.AddRange(basePreviewImages.Where(image => image != null));
+            }
+            var sets = exportWardrobeSets ?? WardrobeSetsForExport();
+            foreach (var set in sets)
+            {
+                if (set.previewImages == null)
+                {
+                    continue;
+                }
+                previews.AddRange(set.previewImages.Where(image => image != null));
+            }
+            return previews;
+        }
+
+        private void RegenerateWardrobePreviewImagesForExport()
+        {
+            if (avatarRoot == null)
+            {
+                return;
+            }
+
+            GameObject previewClone = null;
+            try
+            {
+                previewClone = Instantiate(avatarRoot);
+                previewClone.name = avatarRoot.name + " (UNAvatar Preview Capture)";
+                previewClone.hideFlags = HideFlags.HideAndDontSave;
+                previewClone.SetActive(true);
+
+                var previewBounds = CalculateWardrobePreviewBounds(previewClone);
+
+                ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
+                basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds);
+                for (var i = 0; i < capturedWardrobeSets.Count; i++)
+                {
+                    ApplyWardrobeOperationsToRoot(previewClone, CurrentBaseOperationsForSceneApply());
+                    ApplyWardrobeOperationsToRoot(previewClone, capturedWardrobeSets[i].operations);
+                    capturedWardrobeSets[i].previewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds);
+                }
+            }
+            finally
+            {
+                if (previewClone != null)
+                {
+                    DestroyImmediate(previewClone);
+                }
+            }
+        }
+
+        private Bounds CalculateWardrobePreviewBounds(GameObject previewRoot)
+        {
+            ApplyWardrobeOperationsToRoot(previewRoot, CurrentBaseOperationsForSceneApply());
+            var bounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
+            foreach (var set in capturedWardrobeSets)
+            {
+                ApplyWardrobeOperationsToRoot(previewRoot, CurrentBaseOperationsForSceneApply());
+                ApplyWardrobeOperationsToRoot(previewRoot, set.operations);
+                var setBounds = WardrobePreviewCapture.CalculateVisibleBounds(previewRoot);
+                if (bounds.size == Vector3.zero)
+                {
+                    bounds = setBounds;
+                }
+                else if (setBounds.size != Vector3.zero)
+                {
+                    bounds.Encapsulate(setBounds);
+                }
+            }
+            return bounds;
+        }
+
         private List<WardrobeSetDraft> WardrobeSetsForExport()
         {
             if (!hasBaseSnapshot)
@@ -1324,9 +1686,18 @@ namespace UNAvatar.UnityExporter
                 rebased.displayName = set.displayName;
                 rebased.source = set.source + "_export_rebased";
                 rebased.capturedSnapshot = set.capturedSnapshot;
+                rebased.previewImages = ClonePreviewImages(set.previewImages);
                 sets.Add(rebased);
             }
             return sets;
+        }
+
+        private static List<WardrobePreviewImageDraft> ClonePreviewImages(List<WardrobePreviewImageDraft> previews)
+        {
+            return (previews ?? new List<WardrobePreviewImageDraft>())
+                .Select(WardrobePreviewCapture.ClonePreview)
+                .Where(image => image != null)
+                .ToList();
         }
 
         private List<WardrobeSetDraft> BuildBakedWardrobeSets(WardrobeSnapshotDraft bakedBaseSnapshot, bool bakeWithModularAvatar)
@@ -1370,6 +1741,7 @@ namespace UNAvatar.UnityExporter
                     baked.displayName = source.displayName;
                     baked.source = source.source + "_baked";
                     baked.capturedSnapshot = snapshot;
+                    baked.previewImages = ClonePreviewImages(source.previewImages);
                     sets.Add(baked);
                 }
                 finally
@@ -1802,6 +2174,147 @@ namespace UNAvatar.UnityExporter
         }
     }
 
+    internal static class WardrobePreviewCapture
+    {
+        private const int PreviewSize = 1024;
+        private const float PreviewFovY = 52.6357f;
+        private const float PreviewNear = 0.05f;
+        private const float PreviewFar = 100.0f;
+
+        public static List<WardrobePreviewImageDraft> Capture(GameObject root)
+        {
+            return Capture(root, CalculateVisibleBounds(root));
+        }
+
+        public static List<WardrobePreviewImageDraft> Capture(GameObject root, Bounds bounds)
+        {
+            var result = new List<WardrobePreviewImageDraft>();
+            if (root == null)
+            {
+                return result;
+            }
+
+            if (bounds.size == Vector3.zero)
+            {
+                bounds = new Bounds(root.transform.position + Vector3.up, Vector3.one * 2.0f);
+            }
+
+            var center = bounds.center;
+            var radius = Mathf.Max(bounds.extents.magnitude, 0.5f);
+            var distance = radius / Mathf.Sin(PreviewFovY * Mathf.Deg2Rad * 0.5f);
+            distance *= 0.56f;
+
+            result.Add(CaptureView(root, "front", center + new Vector3(0.0f, radius * 0.08f, distance), center, Vector3.up));
+            result.Add(CaptureView(root, "back", center + new Vector3(0.0f, radius * 0.08f, -distance), center, Vector3.up));
+            result.Add(CaptureView(root, "side", center + new Vector3(distance, radius * 0.08f, 0.0f), center, Vector3.up));
+            result.Add(CaptureView(root, "top", center + new Vector3(0.0f, distance, 0.0f), center, Vector3.back));
+            result.Add(CaptureView(root, "threeQuarterTop", center + new Vector3(distance * 0.58f, distance * 0.48f, distance * 0.58f), center, Vector3.up));
+            return result;
+        }
+
+        public static WardrobePreviewImageDraft ClonePreview(WardrobePreviewImageDraft source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+            return new WardrobePreviewImageDraft
+            {
+                id = source.id,
+                view = source.view,
+                width = source.width,
+                height = source.height,
+                mimeType = source.mimeType,
+                pixelFormat = source.pixelFormat,
+                colorSpace = source.colorSpace,
+                fovYDegrees = source.fovYDegrees,
+                nearClip = source.nearClip,
+                farClip = source.farClip,
+                cameraPosition = source.cameraPosition,
+                cameraRotationEuler = source.cameraRotationEuler,
+                target = source.target,
+                bufferView = source.bufferView,
+                pngBytes = source.pngBytes != null ? new List<byte>(source.pngBytes) : new List<byte>()
+            };
+        }
+
+        private static WardrobePreviewImageDraft CaptureView(GameObject root, string view, Vector3 position, Vector3 target, Vector3 up)
+        {
+            var cameraObject = new GameObject("UNAvatar Wardrobe Preview Camera");
+            cameraObject.hideFlags = HideFlags.HideAndDontSave;
+            var camera = cameraObject.AddComponent<Camera>();
+            var oldActive = RenderTexture.active;
+            var renderTexture = RenderTexture.GetTemporary(PreviewSize, PreviewSize, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+            try
+            {
+                camera.transform.position = position;
+                camera.transform.LookAt(target, up);
+                camera.fieldOfView = PreviewFovY;
+                camera.nearClipPlane = PreviewNear;
+                camera.farClipPlane = PreviewFar;
+                camera.aspect = 1.0f;
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = new Color(0, 0, 0, 0);
+                camera.targetTexture = renderTexture;
+                camera.Render();
+
+                RenderTexture.active = renderTexture;
+                var texture = new Texture2D(PreviewSize, PreviewSize, TextureFormat.RGBA32, false, false);
+                try
+                {
+                    texture.ReadPixels(new Rect(0, 0, PreviewSize, PreviewSize), 0, 0);
+                    texture.Apply(false, false);
+                    return new WardrobePreviewImageDraft
+                    {
+                        id = view,
+                        view = view,
+                        width = PreviewSize,
+                        height = PreviewSize,
+                        mimeType = "image/png",
+                        pixelFormat = "RGBA8",
+                        colorSpace = "sRGB",
+                        fovYDegrees = PreviewFovY,
+                        nearClip = PreviewNear,
+                        farClip = PreviewFar,
+                        cameraPosition = camera.transform.position,
+                        cameraRotationEuler = camera.transform.rotation.eulerAngles,
+                        target = target,
+                        pngBytes = texture.EncodeToPNG().ToList()
+                    };
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(texture);
+                }
+            }
+            finally
+            {
+                camera.targetTexture = null;
+                RenderTexture.active = oldActive;
+                RenderTexture.ReleaseTemporary(renderTexture);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        public static Bounds CalculateVisibleBounds(GameObject root)
+        {
+            var renderers = root.GetComponentsInChildren<Renderer>(true)
+                .Where(renderer => renderer.enabled && renderer.gameObject.activeInHierarchy)
+                .ToList();
+            if (renderers.Count == 0)
+            {
+                return new Bounds(root.transform.position, Vector3.zero);
+            }
+
+            var bounds = renderers[0].bounds;
+            for (var i = 1; i < renderers.Count; i++)
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+            return bounds;
+        }
+    }
+
     internal static class WardrobeSnapshotCapture
     {
         private const float BlendShapeEpsilon = 0.001f;
@@ -1975,7 +2488,7 @@ namespace UNAvatar.UnityExporter
                 && !operation.boolValue;
         }
 
-        private static string NormalizePath(string path)
+        public static string NormalizePath(string path)
         {
             return string.IsNullOrEmpty(path)
                 ? string.Empty
@@ -2297,6 +2810,8 @@ namespace UNAvatar.UnityExporter
         public bool hasBaseOperations;
         public List<WardrobeOperationDraft> baseOperations = new List<WardrobeOperationDraft>();
         public List<WardrobeSetDraft> sets = new List<WardrobeSetDraft>();
+        public List<WardrobePreviewImageDraft> basePreviewImages = new List<WardrobePreviewImageDraft>();
+        public List<string> importedSetIds = new List<string>();
     }
 
     internal static class UnavatarWardrobeImporter
@@ -2326,13 +2841,16 @@ namespace UNAvatar.UnityExporter
                     continue;
                 }
 
-                var set = ReadSet(map);
+                var set = ReadSet(map, path);
+                result.importedSetIds.Add(string.IsNullOrEmpty(set.id) ? "<empty>" : set.id);
                 if (string.Equals(set.id, baseSetId, StringComparison.Ordinal) ||
                     string.Equals(set.id, "base", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(set.displayName, "base", StringComparison.OrdinalIgnoreCase) ||
                     ReadBool(map, "default", false))
                 {
                     result.hasBaseOperations = true;
                     result.baseOperations = set.operations;
+                    result.basePreviewImages = set.previewImages;
                     continue;
                 }
                 result.sets.Add(set);
@@ -2341,7 +2859,7 @@ namespace UNAvatar.UnityExporter
             return result;
         }
 
-        private static WardrobeSetDraft ReadSet(Dictionary<string, object> map)
+        private static WardrobeSetDraft ReadSet(Dictionary<string, object> map, string glbPath)
         {
             var set = new WardrobeSetDraft
             {
@@ -2375,7 +2893,50 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
+            if (TryGetList(map, "previewImages", out var previewImages))
+            {
+                foreach (var item in previewImages)
+                {
+                    var imageMap = item as Dictionary<string, object>;
+                    if (imageMap == null)
+                    {
+                        continue;
+                    }
+                    set.previewImages.Add(ReadPreviewImage(imageMap, glbPath));
+                }
+            }
+
             return set;
+        }
+
+        private static WardrobePreviewImageDraft ReadPreviewImage(Dictionary<string, object> map, string glbPath)
+        {
+            var image = new WardrobePreviewImageDraft
+            {
+                id = ReadString(map, "id", ""),
+                view = ReadString(map, "view", ""),
+                width = (int)ReadFloat(map, "width", 0),
+                height = (int)ReadFloat(map, "height", 0),
+                mimeType = ReadString(map, "mimeType", "image/png"),
+                pixelFormat = ReadString(map, "pixelFormat", "RGBA8"),
+                colorSpace = ReadString(map, "colorSpace", "sRGB"),
+                bufferView = (int)ReadFloat(map, "bufferView", -1)
+            };
+            if (TryGetMap(map, "camera", out var camera))
+            {
+                image.fovYDegrees = ReadFloat(camera, "fovYDegrees", 0.0f);
+                image.nearClip = ReadFloat(camera, "nearClip", 0.0f);
+                image.farClip = ReadFloat(camera, "farClip", 0.0f);
+                image.cameraPosition = ReadVector3(camera, "position");
+                image.cameraRotationEuler = ReadVector3(camera, "rotationEulerDegrees");
+                image.target = ReadVector3(camera, "target");
+            }
+            if (image.bufferView >= 0)
+            {
+                var bytes = GlbExtensionPatcher.ReadBufferViewBytes(glbPath, image.bufferView);
+                image.pngBytes = bytes != null ? bytes.ToList() : new List<byte>();
+            }
+            return image;
         }
 
         private static WardrobeOperationDraft ReadOperation(Dictionary<string, object> map)
@@ -2401,7 +2962,7 @@ namespace UNAvatar.UnityExporter
                     path = ReadString(map, "path", "")
                 };
             }
-            operation.boolValue = ReadBool(map, "visible", false);
+            operation.boolValue = ReadBool(map, "visible", ReadBool(map, "enabled", false));
             operation.floatValue = ReadFloat(map, "value", 0.0f);
             return operation;
         }
@@ -2457,6 +3018,33 @@ namespace UNAvatar.UnityExporter
                 return i;
             }
             return fallback;
+        }
+
+        private static Vector3 ReadVector3(Dictionary<string, object> map, string key)
+        {
+            if (!TryGetList(map, key, out var list) || list.Count < 3)
+            {
+                return Vector3.zero;
+            }
+            return new Vector3(ReadListFloat(list, 0), ReadListFloat(list, 1), ReadListFloat(list, 2));
+        }
+
+        private static float ReadListFloat(List<object> list, int index)
+        {
+            var value = list[index];
+            if (value is double d)
+            {
+                return (float)d;
+            }
+            if (value is float f)
+            {
+                return f;
+            }
+            if (value is int i)
+            {
+                return i;
+            }
+            return 0.0f;
         }
     }
 
@@ -4318,7 +4906,8 @@ namespace UNAvatar.UnityExporter
             string destinationGlb,
             string extensionName,
             Dictionary<string, object> payload,
-            List<UnavatarTextureAssetRecord> textureAssets = null)
+            List<UnavatarTextureAssetRecord> textureAssets = null,
+            List<WardrobePreviewImageDraft> wardrobePreviewImages = null)
         {
             var bytes = File.ReadAllBytes(sourceGlb);
             if (bytes.Length < 20)
@@ -4371,10 +4960,59 @@ namespace UNAvatar.UnityExporter
                     .Cast<object>()
                     .ToList();
             }
+            if (wardrobePreviewImages != null && wardrobePreviewImages.Count > 0)
+            {
+                json = AppendWardrobePreviewBufferViews(json, binChunk, wardrobePreviewImages);
+                PatchWardrobePreviewBufferViewsInPayload(payload, wardrobePreviewImages);
+            }
             json = PatchRootJson(json, extensionName, payload);
             jsonChunk.Data = Pad(Encoding.UTF8.GetBytes(json), 0x20);
 
             WriteGlb(destinationGlb, chunks);
+        }
+
+        public static byte[] ReadBufferViewBytes(string glbPath, int bufferViewIndex)
+        {
+            if (bufferViewIndex < 0)
+            {
+                return null;
+            }
+            var bytes = File.ReadAllBytes(glbPath);
+            if (bytes.Length < 20)
+            {
+                throw new InvalidDataException("GLB is too small.");
+            }
+
+            var chunks = ReadChunks(bytes);
+            var jsonChunk = chunks.FirstOrDefault(c => c.Type == JsonChunkType);
+            var binChunk = chunks.FirstOrDefault(c => c.Type == 0x004E4942);
+            if (jsonChunk == null || binChunk == null)
+            {
+                return null;
+            }
+
+            var json = Encoding.UTF8.GetString(jsonChunk.Data).TrimEnd('\0', ' ', '\t', '\r', '\n');
+            var root = MiniJson.Deserialize(json) as Dictionary<string, object>;
+            if (root == null || !TryGetRootList(root, "bufferViews", out var bufferViews) || bufferViewIndex >= bufferViews.Count)
+            {
+                return null;
+            }
+            var view = bufferViews[bufferViewIndex] as Dictionary<string, object>;
+            if (view == null)
+            {
+                return null;
+            }
+
+            var byteOffset = (int)ReadRootFloat(view, "byteOffset", 0);
+            var byteLength = (int)ReadRootFloat(view, "byteLength", 0);
+            if (byteOffset < 0 || byteLength <= 0 || byteOffset + byteLength > binChunk.Data.Length)
+            {
+                return null;
+            }
+
+            var data = new byte[byteLength];
+            Buffer.BlockCopy(binChunk.Data, byteOffset, data, 0, byteLength);
+            return data;
         }
 
         private static string AppendTextureAssetBufferViews(string json, GlbChunk binChunk, List<UnavatarTextureAssetRecord> textureAssets)
@@ -4413,6 +5051,161 @@ namespace UNAvatar.UnityExporter
             json = AppendRootArrayItems(json, "bufferViews", viewJson);
             json = UpdatePrimaryBufferByteLength(json, binChunk.Data.Length);
             return json;
+        }
+
+        private static string AppendWardrobePreviewBufferViews(string json, GlbChunk binChunk, List<WardrobePreviewImageDraft> previewImages)
+        {
+            if (previewImages == null || previewImages.Count == 0)
+            {
+                return json;
+            }
+
+            var bin = new List<byte>(binChunk.Data ?? Array.Empty<byte>());
+            var viewJson = new List<string>();
+            foreach (var image in previewImages)
+            {
+                if (image == null || image.pngBytes == null || image.pngBytes.Count == 0)
+                {
+                    if (image != null)
+                    {
+                        image.bufferView = -1;
+                    }
+                    continue;
+                }
+                while ((bin.Count & 3) != 0)
+                {
+                    bin.Add(0);
+                }
+                var byteOffset = bin.Count;
+                bin.AddRange(image.pngBytes);
+                while ((bin.Count & 3) != 0)
+                {
+                    bin.Add(0);
+                }
+                image.bufferView = ExistingArrayLength(json, "bufferViews") + viewJson.Count;
+                viewJson.Add("{\"buffer\":0,\"byteOffset\":" + byteOffset.ToString(CultureInfo.InvariantCulture) + ",\"byteLength\":" + image.pngBytes.Count.ToString(CultureInfo.InvariantCulture) + "}");
+            }
+            binChunk.Data = Pad(bin.ToArray(), 0x00);
+            if (viewJson.Count == 0)
+            {
+                return UpdatePrimaryBufferByteLength(json, binChunk.Data.Length);
+            }
+            json = AppendRootArrayItems(json, "bufferViews", viewJson);
+            json = UpdatePrimaryBufferByteLength(json, binChunk.Data.Length);
+            return json;
+        }
+
+        private static void PatchWardrobePreviewBufferViewsInPayload(Dictionary<string, object> payload, List<WardrobePreviewImageDraft> previewImages)
+        {
+            if (payload == null || previewImages == null || previewImages.Count == 0)
+            {
+                return;
+            }
+            if (!payload.TryGetValue("wardrobe", out var wardrobeRaw))
+            {
+                return;
+            }
+            var wardrobe = wardrobeRaw as Dictionary<string, object>;
+            if (wardrobe == null || !wardrobe.TryGetValue("sets", out var setsRaw))
+            {
+                return;
+            }
+            var sets = setsRaw as List<object>;
+            if (sets == null)
+            {
+                return;
+            }
+
+            var index = 0;
+            foreach (var setRaw in sets)
+            {
+                var set = setRaw as Dictionary<string, object>;
+                if (set == null || !set.TryGetValue("previewImages", out var previewsRaw))
+                {
+                    continue;
+                }
+                var previews = previewsRaw as List<object>;
+                if (previews == null)
+                {
+                    continue;
+                }
+                var retainedPreviews = new List<object>();
+                foreach (var previewRaw in previews)
+                {
+                    if (index >= previewImages.Count)
+                    {
+                        return;
+                    }
+                    var preview = previewRaw as Dictionary<string, object>;
+                    if (preview != null && previewImages[index] != null && previewImages[index].bufferView >= 0)
+                    {
+                        preview["bufferView"] = previewImages[index].bufferView;
+                        retainedPreviews.Add(preview);
+                    }
+                    index++;
+                }
+                set["previewImages"] = retainedPreviews;
+            }
+        }
+
+        private static List<GlbChunk> ReadChunks(byte[] bytes)
+        {
+            var magic = ReadUInt32(bytes, 0);
+            var version = ReadUInt32(bytes, 4);
+            if (magic != GlbMagic || version != 2)
+            {
+                throw new InvalidDataException("Expected GLB version 2.");
+            }
+
+            var chunks = new List<GlbChunk>();
+            var offset = 12;
+            while (offset + 8 <= bytes.Length)
+            {
+                var length = checked((int)ReadUInt32(bytes, offset));
+                var type = ReadUInt32(bytes, offset + 4);
+                offset += 8;
+                if (offset + length > bytes.Length)
+                {
+                    throw new InvalidDataException("GLB chunk exceeds file size.");
+                }
+                var data = new byte[length];
+                Buffer.BlockCopy(bytes, offset, data, 0, length);
+                chunks.Add(new GlbChunk { Type = type, Data = data });
+                offset += length;
+            }
+            return chunks;
+        }
+
+        private static bool TryGetRootList(Dictionary<string, object> map, string key, out List<object> value)
+        {
+            value = null;
+            if (!map.TryGetValue(key, out var raw))
+            {
+                return false;
+            }
+            value = raw as List<object>;
+            return value != null;
+        }
+
+        private static float ReadRootFloat(Dictionary<string, object> map, string key, float fallback)
+        {
+            if (!map.TryGetValue(key, out var value))
+            {
+                return fallback;
+            }
+            if (value is double d)
+            {
+                return (float)d;
+            }
+            if (value is float f)
+            {
+                return f;
+            }
+            if (value is int i)
+            {
+                return i;
+            }
+            return fallback;
         }
 
         private static int ExistingArrayLength(string json, string propertyName)

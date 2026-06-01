@@ -222,6 +222,8 @@ struct RendererRuntimeStatus {
 	connected: bool,
 	protocol: Option<String>,
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
@@ -417,6 +419,8 @@ struct RendererRuntimeTelemetry {
 	protocol: Option<String>,
 	#[serde(default)]
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
@@ -5365,6 +5369,11 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		control_capabilities: telemetry
 			.as_ref()
 			.map_or_else(Vec::new, |telemetry| telemetry.control_capabilities.clone()),
+		scene_state: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.scene_state.clone())
+			.filter(|state| !state.is_empty())
+			.unwrap_or_else(|| "unknown".to_string()),
 		uptime_secs: telemetry.as_ref().map_or(info.uptime_secs, |telemetry| telemetry.uptime_secs),
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
@@ -8502,6 +8511,7 @@ mod tests {
 			connected: true,
 			protocol: Some("local-tcp-json-v2".to_string()),
 			control_capabilities: Vec::new(),
+			scene_state: "avatar_scene".to_string(),
 			uptime_secs: 1,
 			fps: Some(60.0),
 			cpu_ms: Some(1.0),

@@ -881,6 +881,14 @@ impl GpuState {
 
 		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
 		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
+		limits.max_sampled_textures_per_shader_stage = limits
+			.max_sampled_textures_per_shader_stage
+			.max(18)
+			.min(adapter.limits().max_sampled_textures_per_shader_stage);
+		limits.max_samplers_per_shader_stage = limits
+			.max_samplers_per_shader_stage
+			.max(18)
+			.min(adapter.limits().max_samplers_per_shader_stage);
 
 		let adapter_features = adapter.features();
 		let texture_compression_features = if matches!(texture_compression, TextureCompressionMode::Source | TextureCompressionMode::Compat)
