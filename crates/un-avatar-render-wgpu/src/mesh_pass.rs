@@ -1299,7 +1299,7 @@ impl SceneMeshes {
 				},
 				wgpu::BindGroupLayoutEntry {
 					binding: 9,
-					visibility: wgpu::ShaderStages::FRAGMENT,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
 						view_dimension: wgpu::TextureViewDimension::D2,
