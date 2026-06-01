@@ -1117,8 +1117,8 @@ fn unavatar_node_id(node: &gltf::Node<'_>) -> Option<String> {
 
 fn unavatar_material_inferred_alpha_mode(
 	extras: Option<&Value>,
-	gltf_alpha_mode: UnaAlphaMode,
-	alpha_cutoff: Option<f32>,
+	_gltf_alpha_mode: UnaAlphaMode,
+	_alpha_cutoff: Option<f32>,
 	_has_base_color_texture: bool,
 ) -> Option<UnaAlphaMode> {
 	let extras = extras?;
@@ -1141,10 +1141,46 @@ fn unavatar_material_inferred_alpha_mode(
 		Some(UnaAlphaMode::Mask)
 	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
 		Some(UnaAlphaMode::Blend)
-	} else if gltf_alpha_mode == UnaAlphaMode::Mask && alpha_cutoff.is_some_and(|cutoff| cutoff <= 0.5) {
-		Some(UnaAlphaMode::Opaque)
 	} else {
 		None
+	}
+}
+
+fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
+	let Some(extras) = material.unavatar_material.as_ref() else {
+		return false;
+	};
+	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
+	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
+	if !family.eq_ignore_ascii_case("liltoon") && !source_shader.to_ascii_lowercase().contains("liltoon") {
+		return false;
+	}
+	let shader = source_shader.to_ascii_lowercase();
+	!(shader.contains("cutout") || shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur"))
+}
+
+fn image_alpha_has_transparency(image: &UnaImageRgba) -> bool {
+	match image.pixel_format {
+		UnaImagePixelFormat::R8G8 | UnaImagePixelFormat::R8G8B8A8 => image.rgba8_compat_pixels().chunks_exact(4).any(|px| px[3] < 255),
+		UnaImagePixelFormat::R16G16B16A16 | UnaImagePixelFormat::R16G16B16A16Float | UnaImagePixelFormat::R32G32B32A32Float => {
+			image.rgba8_compat_pixels().chunks_exact(4).any(|px| px[3] < 255)
+		}
+		_ => false,
+	}
+}
+
+fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[UnaImageRgba]) {
+	for material in materials {
+		if material.alpha_mode != UnaAlphaMode::Mask || material.alpha_cutoff > 0.5 || !unavatar_material_is_ordinary_liltoon(material) {
+			continue;
+		}
+		let has_transparent_alpha = material
+			.base_color_texture_index
+			.and_then(|index| images.get(index))
+			.is_some_and(image_alpha_has_transparency);
+		if !has_transparent_alpha {
+			material.alpha_mode = UnaAlphaMode::Opaque;
+		}
 	}
 }
 
@@ -1448,6 +1484,7 @@ pub fn scene_snapshot_from_gltf(
 
 	let image_sources = collect_image_source_metadata(document, buffers);
 	let images = collect_images(image_data, report).map_err(ImportError::Message)?;
+	refine_liltoon_alpha_from_images(&mut materials, &images);
 
 	let skins = build_skins(document, buffers)?;
 
@@ -2227,11 +2264,11 @@ mod tests {
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Mask, Some(0.001), true),
-			Some(UnaAlphaMode::Opaque)
+			None
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Mask, Some(0.5), true),
-			Some(UnaAlphaMode::Opaque)
+			None
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&opaque), UnaAlphaMode::Opaque, Some(0.5), true),
@@ -2245,5 +2282,46 @@ mod tests {
 			unavatar_material_inferred_alpha_mode(Some(&queue_transparent), UnaAlphaMode::Opaque, None, true),
 			Some(UnaAlphaMode::Blend)
 		);
+	}
+
+	#[test]
+	fn refines_ordinary_liltoon_mask_only_when_alpha_is_opaque() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonOutline"
+		});
+		let opaque_image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let transparent_image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 0],
+		};
+		let mut materials = vec![
+			UnaMaterialPbr {
+				alpha_mode: UnaAlphaMode::Mask,
+				alpha_cutoff: 0.5,
+				base_color_texture_index: Some(0),
+				unavatar_material: Some(extras.clone()),
+				..Default::default()
+			},
+			UnaMaterialPbr {
+				alpha_mode: UnaAlphaMode::Mask,
+				alpha_cutoff: 0.5,
+				base_color_texture_index: Some(1),
+				unavatar_material: Some(extras),
+				..Default::default()
+			},
+		];
+
+		refine_liltoon_alpha_from_images(&mut materials, &[opaque_image, transparent_image]);
+
+		assert_eq!(materials[0].alpha_mode, UnaAlphaMode::Opaque);
+		assert_eq!(materials[1].alpha_mode, UnaAlphaMode::Mask);
 	}
 }
