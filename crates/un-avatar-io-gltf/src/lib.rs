@@ -2207,6 +2207,24 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_BlendOp") {
 		out.blend_state.operation_factor = value;
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlendAlpha") {
+		out.blend_state.alpha_source_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_DstBlendAlpha") {
+		out.blend_state.alpha_destination_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BlendOpAlpha") {
+		out.blend_state.alpha_operation_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlendAlphaFA") {
+		out.blend_state.forward_add_alpha_source_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_DstBlendAlphaFA") {
+		out.blend_state.forward_add_alpha_destination_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BlendOpAlphaFA") {
+		out.blend_state.forward_add_alpha_operation_factor = value;
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_AlphaBoostFA") {
 		out.blend_state.alpha_boost_factor = value.max(0.0);
 	}
@@ -3816,6 +3834,12 @@ mod tests {
 					"_SrcBlend": 1.0,
 					"_DstBlend": 10.0,
 					"_BlendOp": 0.0,
+					"_SrcBlendAlpha": 1.0,
+					"_DstBlendAlpha": 10.0,
+					"_BlendOpAlpha": 0.0,
+					"_SrcBlendAlphaFA": 0.0,
+					"_DstBlendAlphaFA": 1.0,
+					"_BlendOpAlphaFA": 4.0,
 					"_AlphaBoostFA": 10.0,
 					"_SubpassCutoff": 0.4,
 					"_LightMinLimit": 0.06,
@@ -3999,6 +4023,12 @@ mod tests {
 		assert_eq!(liltoon_like.blend_state.source_factor, 1.0);
 		assert_eq!(liltoon_like.blend_state.destination_factor, 10.0);
 		assert_eq!(liltoon_like.blend_state.operation_factor, 0.0);
+		assert_eq!(liltoon_like.blend_state.alpha_source_factor, 1.0);
+		assert_eq!(liltoon_like.blend_state.alpha_destination_factor, 10.0);
+		assert_eq!(liltoon_like.blend_state.alpha_operation_factor, 0.0);
+		assert_eq!(liltoon_like.blend_state.forward_add_alpha_source_factor, 0.0);
+		assert_eq!(liltoon_like.blend_state.forward_add_alpha_destination_factor, 1.0);
+		assert_eq!(liltoon_like.blend_state.forward_add_alpha_operation_factor, 4.0);
 		assert_eq!(liltoon_like.blend_state.alpha_boost_factor, 10.0);
 		assert_eq!(liltoon_like.blend_state.subpass_cutoff_factor, 0.4);
 		assert_eq!(mtoon.parametric_rim_color_factor, [0.040000003, 0.080000006, 0.120000005]);

@@ -809,6 +809,18 @@ pub struct UnaLilToonLikeBlendState {
 	#[serde(default)]
 	pub operation_factor: f32,
 	#[serde(default = "one_f32")]
+	pub alpha_source_factor: f32,
+	#[serde(default = "default_liltoon_alpha_destination_factor")]
+	pub alpha_destination_factor: f32,
+	#[serde(default)]
+	pub alpha_operation_factor: f32,
+	#[serde(default)]
+	pub forward_add_alpha_source_factor: f32,
+	#[serde(default = "one_f32")]
+	pub forward_add_alpha_destination_factor: f32,
+	#[serde(default = "default_liltoon_forward_add_alpha_operation_factor")]
+	pub forward_add_alpha_operation_factor: f32,
+	#[serde(default = "one_f32")]
 	pub alpha_boost_factor: f32,
 	#[serde(default = "default_liltoon_subpass_cutoff")]
 	pub subpass_cutoff_factor: f32,
@@ -1043,6 +1055,12 @@ impl Default for UnaLilToonLikeBlendState {
 			source_factor: 1.0,
 			destination_factor: 0.0,
 			operation_factor: 0.0,
+			alpha_source_factor: 1.0,
+			alpha_destination_factor: default_liltoon_alpha_destination_factor(),
+			alpha_operation_factor: 0.0,
+			forward_add_alpha_source_factor: 0.0,
+			forward_add_alpha_destination_factor: 1.0,
+			forward_add_alpha_operation_factor: default_liltoon_forward_add_alpha_operation_factor(),
 			alpha_boost_factor: 1.0,
 			subpass_cutoff_factor: default_liltoon_subpass_cutoff(),
 		}
@@ -1252,6 +1270,14 @@ fn default_liltoon_outline_fix_width() -> f32 {
 
 fn default_liltoon_subpass_cutoff() -> f32 {
 	0.5
+}
+
+fn default_liltoon_alpha_destination_factor() -> f32 {
+	10.0
+}
+
+fn default_liltoon_forward_add_alpha_operation_factor() -> f32 {
+	4.0
 }
 
 fn default_liltoon_light_min_limit() -> f32 {
