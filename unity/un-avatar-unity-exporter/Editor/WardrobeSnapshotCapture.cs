@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -469,8 +468,10 @@ namespace UNAvatar.UnityExporter
 
         private static void CompressVisibilityOperations(List<WardrobeOperationDraft> operations)
         {
+            var sorted = new List<WardrobeOperationDraft>(operations);
+            sorted.Sort((left, right) => OperationPathDepth(left).CompareTo(OperationPathDepth(right)));
             var compressed = new List<WardrobeOperationDraft>();
-            foreach (var operation in operations.OrderBy(OperationPathDepth))
+            foreach (var operation in sorted)
             {
                 if (operation.type != "subtreeEnabled" && operation.type != "subtreeVisibility")
                 {
@@ -479,10 +480,17 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var path = operation.target != null ? operation.target.path ?? "" : "";
-                var isRedundant = compressed.Any(existing =>
-                    (existing.type == "subtreeEnabled" || existing.type == "subtreeVisibility") &&
-                    existing.boolValue == operation.boolValue &&
-                    IsAncestorOrSelf(existing.target != null ? existing.target.path ?? "" : "", path));
+                var isRedundant = false;
+                foreach (var existing in compressed)
+                {
+                    if ((existing.type == "subtreeEnabled" || existing.type == "subtreeVisibility") &&
+                        existing.boolValue == operation.boolValue &&
+                        IsAncestorOrSelf(existing.target != null ? existing.target.path ?? "" : "", path))
+                    {
+                        isRedundant = true;
+                        break;
+                    }
+                }
                 if (!isRedundant)
                 {
                     compressed.Add(operation);
