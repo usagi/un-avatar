@@ -1645,6 +1645,11 @@ namespace UNAvatar.UnityExporter
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
+                ["unityExporter"] = new Dictionary<string, object>
+                {
+                    ["buildMarker"] = ExporterBuildMarker,
+                    ["gltfWriter"] = "built-in"
+                },
                 ["bake"] = new Dictionary<string, object>
                 {
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
@@ -2624,6 +2629,7 @@ namespace UNAvatar.UnityExporter
         private const float PreviewFovY = 52.6357f;
         private const float PreviewNear = 0.05f;
         private const float PreviewFar = 100.0f;
+        private const int PreviewCaptureLayer = 31;
 
         public static List<WardrobePreviewImageDraft> Capture(GameObject root)
         {
@@ -2659,12 +2665,15 @@ namespace UNAvatar.UnityExporter
             var distance = radius / Mathf.Sin(PreviewFovY * Mathf.Deg2Rad * 0.5f);
             distance *= 0.56f;
 
-            result.Add(CaptureView(root, "front", center + new Vector3(0.0f, radius * 0.08f, distance), center, Vector3.up, options));
-            result.Add(CaptureView(root, "back", center + new Vector3(0.0f, radius * 0.08f, -distance), center, Vector3.up, options));
-            result.Add(CaptureView(root, "side", center + new Vector3(distance, radius * 0.08f, 0.0f), center, Vector3.up, options));
-            result.Add(CaptureView(root, "top", center + new Vector3(0.0f, distance, 0.0f), center, Vector3.back, options));
-            result.Add(CaptureView(root, "threeQuarterTop", center + new Vector3(distance * 0.58f, distance * 0.48f, distance * 0.58f), center, Vector3.up, options));
-            return result;
+            using (new WardrobePreviewLayerScope(root, PreviewCaptureLayer))
+            {
+                result.Add(CaptureView(root, "front", center + new Vector3(0.0f, radius * 0.08f, distance), center, Vector3.up, options));
+                result.Add(CaptureView(root, "back", center + new Vector3(0.0f, radius * 0.08f, -distance), center, Vector3.up, options));
+                result.Add(CaptureView(root, "side", center + new Vector3(distance, radius * 0.08f, 0.0f), center, Vector3.up, options));
+                result.Add(CaptureView(root, "top", center + new Vector3(0.0f, distance, 0.0f), center, Vector3.back, options));
+                result.Add(CaptureView(root, "threeQuarterTop", center + new Vector3(distance * 0.58f, distance * 0.48f, distance * 0.58f), center, Vector3.up, options));
+                return result;
+            }
         }
 
         public static WardrobePreviewImageDraft ClonePreview(WardrobePreviewImageDraft source)
@@ -2728,6 +2737,7 @@ namespace UNAvatar.UnityExporter
                 camera.allowMSAA = options.AntiAliasing;
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0, 0, 0, 0);
+                camera.cullingMask = 1 << PreviewCaptureLayer;
                 camera.targetTexture = renderTexture;
                 using (new WardrobePreviewQualityScope(options))
                 {
@@ -2771,6 +2781,35 @@ namespace UNAvatar.UnityExporter
                 RenderTexture.active = oldActive;
                 RenderTexture.ReleaseTemporary(renderTexture);
                 UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        private sealed class WardrobePreviewLayerScope : IDisposable
+        {
+            private readonly List<Transform> transforms;
+            private readonly List<int> layers;
+
+            public WardrobePreviewLayerScope(GameObject root, int layer)
+            {
+                transforms = root != null
+                    ? root.GetComponentsInChildren<Transform>(true).ToList()
+                    : new List<Transform>();
+                layers = transforms.Select(transform => transform.gameObject.layer).ToList();
+                foreach (var transform in transforms)
+                {
+                    transform.gameObject.layer = layer;
+                }
+            }
+
+            public void Dispose()
+            {
+                for (var i = 0; i < transforms.Count; i++)
+                {
+                    if (transforms[i] != null)
+                    {
+                        transforms[i].gameObject.layer = layers[i];
+                    }
+                }
             }
         }
 
