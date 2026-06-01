@@ -22,29 +22,11 @@ namespace UNAvatar.UnityExporter
             }
 
             var renderers = avatarRoot.GetComponentsInChildren<Renderer>(true);
-            var materials = renderers
-                .SelectMany(renderer => renderer.sharedMaterials)
-                .Where(material => material != null)
-                .Distinct()
-                .ToList();
+            var materials = DistinctRendererMaterials(renderers);
             var textures = CollectMaterialTextures(materials);
-            var sourceTextures = textures
-                .Where(texture => !string.IsNullOrEmpty(texture.AssetPath))
-                .ToList();
-            var generatedTextures = textures.Count - sourceTextures.Count;
-            var byExtension = sourceTextures
-                .GroupBy(texture => texture.Extension)
-                .OrderByDescending(group => group.Sum(texture => texture.ByteLength))
-                .Select(group => $"{group.Key}: {group.Count()} files, {FormatBytes(group.Sum(texture => texture.ByteLength))}");
-            var largest = sourceTextures
-                .OrderByDescending(texture => texture.ByteLength)
-                .Take(8)
-                .Select(texture => $"{FormatBytes(texture.ByteLength)}  {texture.Name}  ({texture.Extension})");
-            var fallbackExtensions = sourceTextures
-                .Where(texture => !IsV01DirectTextureSource(texture.AssetPath))
-                .GroupBy(texture => texture.Extension)
-                .OrderByDescending(group => group.Sum(texture => texture.ByteLength))
-                .Select(group => $"{group.Key}: {group.Count()} files, {FormatBytes(group.Sum(texture => texture.ByteLength))}");
+            var textureDiagnostics = BuildTextureDiagnostics(textures);
+            var sourceTextureCount = textureDiagnostics.SourceCount;
+            var generatedTextures = textures.Count - sourceTextureCount;
 
             var lines = new List<string>
             {
@@ -52,17 +34,17 @@ namespace UNAvatar.UnityExporter
                 $"Renderers: {renderers.Length}",
                 $"Materials: {materials.Count}",
                 $"Distinct material textures: {textures.Count}",
-                $"Source-backed textures: {sourceTextures.Count}",
+                $"Source-backed textures: {sourceTextureCount}",
                 $"Generated/fallback textures: {generatedTextures}",
                 "",
                 "Source texture bytes by extension:",
-                byExtension.Any() ? string.Join("\n", byExtension) : "(none)",
+                textureDiagnostics.ByExtension,
                 "",
                 "Largest source textures:",
-                largest.Any() ? string.Join("\n", largest) : "(none)",
+                textureDiagnostics.Largest,
                 "",
                 "Source extensions that will use PNG fallback in v0.1:",
-                fallbackExtensions.Any() ? string.Join("\n", fallbackExtensions) : "(none)",
+                textureDiagnostics.FallbackExtensions,
                 "",
                 "Wardrobe preview state probe:",
                 BuildWardrobePreviewStateDiagnostics(),
@@ -72,6 +54,109 @@ namespace UNAvatar.UnityExporter
                 "Large PNG normal/mask textures may be smaller after exporter PNG fallback or later optimizer transcode.",
                 "If generated/fallback textures are high, export time will include GPU readback and PNG encode."
             };
+            return string.Join("\n", lines);
+        }
+
+        private static List<Material> DistinctRendererMaterials(Renderer[] renderers)
+        {
+            var materials = new List<Material>();
+            var seen = new HashSet<Material>();
+            foreach (var renderer in renderers)
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material != null && seen.Add(material))
+                    {
+                        materials.Add(material);
+                    }
+                }
+            }
+            return materials;
+        }
+
+        private sealed class TextureDiagnosticsSummary
+        {
+            public int SourceCount;
+            public string ByExtension;
+            public string Largest;
+            public string FallbackExtensions;
+        }
+
+        private static TextureDiagnosticsSummary BuildTextureDiagnostics(List<TextureProbe> textures)
+        {
+            var sourceTextures = new List<TextureProbe>();
+            var byExtension = new Dictionary<string, TextureExtensionSummary>(StringComparer.Ordinal);
+            var fallbackByExtension = new Dictionary<string, TextureExtensionSummary>(StringComparer.Ordinal);
+            foreach (var texture in textures)
+            {
+                if (string.IsNullOrEmpty(texture.AssetPath))
+                {
+                    continue;
+                }
+                sourceTextures.Add(texture);
+                AddTextureExtensionSummary(byExtension, texture);
+                if (!IsV01DirectTextureSource(texture.AssetPath))
+                {
+                    AddTextureExtensionSummary(fallbackByExtension, texture);
+                }
+            }
+            sourceTextures.Sort((a, b) => b.ByteLength.CompareTo(a.ByteLength));
+            return new TextureDiagnosticsSummary
+            {
+                SourceCount = sourceTextures.Count,
+                ByExtension = FormatTextureExtensionSummaries(byExtension.Values),
+                Largest = FormatLargestTextures(sourceTextures),
+                FallbackExtensions = FormatTextureExtensionSummaries(fallbackByExtension.Values)
+            };
+        }
+
+        private sealed class TextureExtensionSummary
+        {
+            public string Extension;
+            public int Count;
+            public long ByteLength;
+        }
+
+        private static void AddTextureExtensionSummary(Dictionary<string, TextureExtensionSummary> summaries, TextureProbe texture)
+        {
+            if (!summaries.TryGetValue(texture.Extension, out var summary))
+            {
+                summary = new TextureExtensionSummary { Extension = texture.Extension };
+                summaries[texture.Extension] = summary;
+            }
+            summary.Count++;
+            summary.ByteLength += texture.ByteLength;
+        }
+
+        private static string FormatTextureExtensionSummaries(IEnumerable<TextureExtensionSummary> summaries)
+        {
+            var list = new List<TextureExtensionSummary>(summaries);
+            if (list.Count == 0)
+            {
+                return "(none)";
+            }
+            list.Sort((a, b) => b.ByteLength.CompareTo(a.ByteLength));
+            var lines = new List<string>(list.Count);
+            foreach (var summary in list)
+            {
+                lines.Add($"{summary.Extension}: {summary.Count} files, {FormatBytes(summary.ByteLength)}");
+            }
+            return string.Join("\n", lines);
+        }
+
+        private static string FormatLargestTextures(List<TextureProbe> sourceTextures)
+        {
+            if (sourceTextures.Count == 0)
+            {
+                return "(none)";
+            }
+            var count = Math.Min(8, sourceTextures.Count);
+            var lines = new List<string>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var texture = sourceTextures[i];
+                lines.Add($"{FormatBytes(texture.ByteLength)}  {texture.Name}  ({texture.Extension})");
+            }
             return string.Join("\n", lines);
         }
 
