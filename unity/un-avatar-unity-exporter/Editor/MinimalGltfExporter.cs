@@ -319,7 +319,7 @@ namespace UNAvatar.UnityExporter
                 return meshes.Count - 1;
             }
 
-            private static List<object> MorphTargetNames(List<MorphTargetData> morphTargets)
+            private static List<object> MorphTargetNames(List<MorphTargetRecord> morphTargets)
             {
                 var names = new List<object>(morphTargets.Count);
                 foreach (var target in morphTargets)

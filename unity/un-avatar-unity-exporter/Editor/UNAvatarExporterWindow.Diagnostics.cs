@@ -82,9 +82,9 @@ namespace UNAvatar.UnityExporter
             public string FallbackExtensions;
         }
 
-        private static TextureDiagnosticsSummary BuildTextureDiagnostics(List<TextureProbe> textures)
+        private static TextureDiagnosticsSummary BuildTextureDiagnostics(List<TextureDiagnostic> textures)
         {
-            var sourceTextures = new List<TextureProbe>();
+            var sourceTextures = new List<TextureDiagnostic>();
             var byExtension = new Dictionary<string, TextureExtensionSummary>(StringComparer.Ordinal);
             var fallbackByExtension = new Dictionary<string, TextureExtensionSummary>(StringComparer.Ordinal);
             foreach (var texture in textures)
@@ -117,7 +117,7 @@ namespace UNAvatar.UnityExporter
             public long ByteLength;
         }
 
-        private static void AddTextureExtensionSummary(Dictionary<string, TextureExtensionSummary> summaries, TextureProbe texture)
+        private static void AddTextureExtensionSummary(Dictionary<string, TextureExtensionSummary> summaries, TextureDiagnostic texture)
         {
             if (!summaries.TryGetValue(texture.Extension, out var summary))
             {
@@ -144,7 +144,7 @@ namespace UNAvatar.UnityExporter
             return string.Join("\n", lines);
         }
 
-        private static string FormatLargestTextures(List<TextureProbe> sourceTextures)
+        private static string FormatLargestTextures(List<TextureDiagnostic> sourceTextures)
         {
             if (sourceTextures.Count == 0)
             {
