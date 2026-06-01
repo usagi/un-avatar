@@ -138,7 +138,7 @@ namespace UNAvatar.UnityExporter
                 var mainTex = ReadTexture(material, "_BaseMap") ?? ReadTexture(material, "_MainTex");
                 if (mainTex != null)
                 {
-                    var mainTextureProperty = material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
+                    var mainTextureProperty = HasProperty(material, "_BaseMap") ? "_BaseMap" : "_MainTex";
                     var textureIndex = ExportTexture(mainTex);
                     if (textureIndex >= 0)
                     {
@@ -194,7 +194,7 @@ namespace UNAvatar.UnityExporter
                     gltfMaterial["alphaMode"] = "MASK";
                     gltfMaterial["alphaCutoff"] = ReadFloat(material, "_Cutoff", 0.5f);
                 }
-                else if (material.HasProperty("_Cutoff"))
+                else if (HasProperty(material, "_Cutoff"))
                 {
                     gltfMaterial["alphaCutoff"] = ReadFloat(material, "_Cutoff", 0.5f);
                 }

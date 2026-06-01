@@ -49,6 +49,7 @@ namespace UNAvatar.UnityExporter
             private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
             private readonly Dictionary<Texture, TextureSourceInfo> textureSourceInfos = new Dictionary<Texture, TextureSourceInfo>();
             private readonly Dictionary<string, Texture> materialTextureCache = new Dictionary<string, Texture>(StringComparer.Ordinal);
+            private readonly Dictionary<string, bool> materialPropertyCache = new Dictionary<string, bool>(StringComparer.Ordinal);
             private readonly Dictionary<string, int> samplerIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             private int defaultMaterialIndex = -1;
             private readonly List<object> nodes = new List<object>();
@@ -511,19 +512,35 @@ namespace UNAvatar.UnityExporter
                 };
             }
 
-            private static Color ReadColor(Material material, string property, Color fallback)
+            private bool HasProperty(Material material, string property)
             {
-                return material.HasProperty(property) ? material.GetColor(property) : fallback;
+                if (material == null || string.IsNullOrEmpty(property))
+                {
+                    return false;
+                }
+                var key = material.GetInstanceID().ToString(CultureInfo.InvariantCulture) + "\n" + property;
+                if (materialPropertyCache.TryGetValue(key, out var hasProperty))
+                {
+                    return hasProperty;
+                }
+                hasProperty = material.HasProperty(property);
+                materialPropertyCache[key] = hasProperty;
+                return hasProperty;
             }
 
-            private static float ReadFloat(Material material, string property, float fallback)
+            private Color ReadColor(Material material, string property, Color fallback)
             {
-                return material.HasProperty(property) ? material.GetFloat(property) : fallback;
+                return HasProperty(material, property) ? material.GetColor(property) : fallback;
             }
 
-            private static Vector4 ReadVector(Material material, string property, Vector4 fallback)
+            private float ReadFloat(Material material, string property, float fallback)
             {
-                return material.HasProperty(property) ? material.GetVector(property) : fallback;
+                return HasProperty(material, property) ? material.GetFloat(property) : fallback;
+            }
+
+            private Vector4 ReadVector(Material material, string property, Vector4 fallback)
+            {
+                return HasProperty(material, property) ? material.GetVector(property) : fallback;
             }
 
             private Texture ReadTexture(Material material, string property)
@@ -537,7 +554,7 @@ namespace UNAvatar.UnityExporter
                 {
                     return texture;
                 }
-                texture = material.HasProperty(property) ? material.GetTexture(property) : null;
+                texture = HasProperty(material, property) ? material.GetTexture(property) : null;
                 materialTextureCache[key] = texture;
                 return texture;
             }

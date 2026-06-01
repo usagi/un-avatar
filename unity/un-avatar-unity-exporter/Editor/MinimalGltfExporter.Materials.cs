@@ -16,7 +16,7 @@ namespace UNAvatar.UnityExporter
     {
         private sealed partial class Writer
         {
-            private static bool IsAlphaBlendMaterial(Material material, Color baseColor)
+            private bool IsAlphaBlendMaterial(Material material, Color baseColor)
             {
                 if (IsLilToonCutoutShader(material))
                 {
@@ -36,7 +36,7 @@ namespace UNAvatar.UnityExporter
                     ReadFloat(material, "_Mode", 0.0f) >= 1.5f;
             }
 
-            private static bool IsAlphaMaskMaterial(Material material)
+            private bool IsAlphaMaskMaterial(Material material)
             {
                 if (IsLilToonCutoutShader(material))
                 {
@@ -53,7 +53,7 @@ namespace UNAvatar.UnityExporter
                         ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
                         ReadFloat(material, "_Mode", 0.0f) >= 0.5f;
                 }
-                return material.HasProperty("_Cutoff") ||
+                return HasProperty(material, "_Cutoff") ||
                     ReadFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
                     ReadFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
@@ -82,7 +82,7 @@ namespace UNAvatar.UnityExporter
                 return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0;
             }
 
-            private static bool IsDoubleSidedMaterial(Material material)
+            private bool IsDoubleSidedMaterial(Material material)
             {
                 var cull = ReadFloat(material, "_Cull", ReadFloat(material, "_CullMode", -1.0f));
                 if (cull >= 1.5f)
@@ -99,7 +99,7 @@ namespace UNAvatar.UnityExporter
             private Dictionary<string, object> TextureInfo(int textureIndex, Material material, string property)
             {
                 var info = new Dictionary<string, object> { ["index"] = textureIndex };
-                if (material == null || string.IsNullOrEmpty(property) || !material.HasProperty(property))
+                if (material == null || string.IsNullOrEmpty(property) || !HasProperty(material, property))
                 {
                     return info;
                 }
@@ -124,9 +124,9 @@ namespace UNAvatar.UnityExporter
                 return info;
             }
 
-            private static bool IsMaterialFeatureEnabled(Material material, string property, bool fallback)
+            private bool IsMaterialFeatureEnabled(Material material, string property, bool fallback)
             {
-                return material.HasProperty(property) ? ReadFloat(material, property, fallback ? 1.0f : 0.0f) > 0.5f : fallback;
+                return HasProperty(material, property) ? ReadFloat(material, property, fallback ? 1.0f : 0.0f) > 0.5f : fallback;
             }
 
             private int ExportDefaultMaterial()
@@ -154,7 +154,7 @@ namespace UNAvatar.UnityExporter
             {
                 var shaderName = material.shader != null ? material.shader.name : "";
                 var lowerShader = shaderName.ToLowerInvariant();
-                var looksToon = lowerShader.Contains("liltoon") || lowerShader.Contains("mtoon") || material.HasProperty("_ShadeColor") || material.HasProperty("_ShadeTex");
+                var looksToon = lowerShader.Contains("liltoon") || lowerShader.Contains("mtoon") || HasProperty(material, "_ShadeColor") || HasProperty(material, "_ShadeTex");
                 if (!looksToon)
                 {
                     return null;
@@ -162,7 +162,7 @@ namespace UNAvatar.UnityExporter
 
                 var mtoon = new Dictionary<string, object>();
                 var baseColor = ReadColor(material, "_BaseColor", ReadColor(material, "_Color", Color.white));
-                var useShadow = IsMaterialFeatureEnabled(material, "_UseShadow", material.HasProperty("_ShadeColor") || material.HasProperty("_ShadowColor"));
+                var useShadow = IsMaterialFeatureEnabled(material, "_UseShadow", HasProperty(material, "_ShadeColor") || HasProperty(material, "_ShadowColor"));
                 var shadeColor = useShadow
                     ? ReadColor(material, "_ShadeColor", ReadColor(material, "_ShadowColor", new Color(0.97f, 0.97f, 0.97f, 1.0f)))
                     : baseColor;
@@ -190,7 +190,7 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "matcap2ndTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndTex") : null);
                 AddTextureIndex(mtoon, "matcap2ndBlendMaskTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndBlendMask") : null);
 
-                var useRim = IsMaterialFeatureEnabled(material, "_UseRim", material.HasProperty("_RimColor") || ReadTexture(material, "_RimColorTex") != null);
+                var useRim = IsMaterialFeatureEnabled(material, "_UseRim", HasProperty(material, "_RimColor") || ReadTexture(material, "_RimColorTex") != null);
                 var rimMainStrength = ReadFloat(material, "_RimMainStrength", 1.0f);
                 var rimColor = useRim ? ReadColor(material, "_RimColor", Color.black) * rimMainStrength : Color.black;
                 mtoon["parametricRimColorFactor"] = FloatArray(rimColor.r, rimColor.g, rimColor.b);
@@ -223,10 +223,10 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", useOutline ? ReadTexture(material, "_OutlineWidthMask") : null);
                 AddTextureIndex(mtoon, "alphaMaskTextureIndex", ReadTexture(material, "_AlphaMask"));
 
-                var mainTextureProperty = material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
+                var mainTextureProperty = HasProperty(material, "_BaseMap") ? "_BaseMap" : "_MainTex";
                 var mainTextureScale = Vector2.one;
                 var mainTextureOffset = Vector2.zero;
-                if (material.HasProperty(mainTextureProperty))
+                if (HasProperty(material, mainTextureProperty))
                 {
                     mainTextureScale = material.GetTextureScale(mainTextureProperty);
                     mainTextureOffset = material.GetTextureOffset(mainTextureProperty);
@@ -257,7 +257,7 @@ namespace UNAvatar.UnityExporter
                 };
             }
 
-            private static Dictionary<string, object> BuildMaterialFloatParams(Material material)
+            private Dictionary<string, object> BuildMaterialFloatParams(Material material)
             {
                 var values = new Dictionary<string, object>();
                 var shader = material.shader;
@@ -275,7 +275,7 @@ namespace UNAvatar.UnityExporter
                         continue;
                     }
                     var name = shader.GetPropertyName(i);
-                    if (!string.IsNullOrEmpty(name) && material.HasProperty(name))
+                    if (!string.IsNullOrEmpty(name) && HasProperty(material, name))
                     {
                         values[name] = material.GetFloat(name);
                     }
@@ -283,7 +283,7 @@ namespace UNAvatar.UnityExporter
                 return values;
             }
 
-            private static Dictionary<string, object> BuildMaterialColorParams(Material material)
+            private Dictionary<string, object> BuildMaterialColorParams(Material material)
             {
                 var values = new Dictionary<string, object>();
                 var shader = material.shader;
@@ -299,7 +299,7 @@ namespace UNAvatar.UnityExporter
                         continue;
                     }
                     var name = shader.GetPropertyName(i);
-                    if (string.IsNullOrEmpty(name) || !material.HasProperty(name))
+                    if (string.IsNullOrEmpty(name) || !HasProperty(material, name))
                     {
                         continue;
                     }
