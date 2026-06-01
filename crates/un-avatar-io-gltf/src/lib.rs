@@ -1490,11 +1490,24 @@ fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
 	};
 	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	if !family.eq_ignore_ascii_case("liltoon") && !source_shader.to_ascii_lowercase().contains("liltoon") {
+	if !unavatar_material_source_is_liltoon(family, source_shader) {
 		return false;
 	}
 	let shader = source_shader.to_ascii_lowercase();
 	!(shader.contains("cutout") || shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur"))
+}
+
+fn unavatar_material_is_liltoon(material: &UnaMaterialPbr) -> bool {
+	let Some(extras) = material.unavatar_material.as_ref() else {
+		return false;
+	};
+	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
+	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
+	unavatar_material_source_is_liltoon(family, source_shader)
+}
+
+fn unavatar_material_source_is_liltoon(family: &str, source_shader: &str) -> bool {
+	family.eq_ignore_ascii_case("liltoon") || source_shader.to_ascii_lowercase().contains("liltoon")
 }
 
 fn image_alpha_has_transparency(image: &UnaImageRgba) -> bool {
@@ -1521,19 +1534,31 @@ fn image_alpha_has_translucency(image: &UnaImageRgba) -> bool {
 
 fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[UnaImageRgba]) {
 	for material in materials {
-		if material.alpha_mode != UnaAlphaMode::Mask || material.alpha_cutoff > 0.5 || !unavatar_material_is_ordinary_liltoon(material) {
+		if !unavatar_material_is_liltoon(material) {
 			continue;
 		}
 		let Some(image) = material.base_color_texture_index.and_then(|index| images.get(index)) else {
 			continue;
 		};
 		let has_transparent_alpha = image_alpha_has_transparency(image);
-		if !has_transparent_alpha {
-			material.alpha_mode = UnaAlphaMode::Opaque;
+		if material.alpha_mode == UnaAlphaMode::Mask && has_transparent_alpha && material.alpha_cutoff <= 0.0 {
+			material.alpha_cutoff = 1.0 / 255.0;
+		}
+		if !unavatar_material_is_ordinary_liltoon(material) {
 			continue;
 		}
-		if material.alpha_cutoff <= 0.01 && image_alpha_has_translucency(image) {
-			material.alpha_mode = UnaAlphaMode::Blend;
+		match material.alpha_mode {
+			UnaAlphaMode::Opaque if material.alpha_cutoff > 0.0 && material.alpha_cutoff <= 0.01 && has_transparent_alpha => {
+				material.alpha_mode = UnaAlphaMode::Mask;
+			}
+			UnaAlphaMode::Mask if material.alpha_cutoff <= 0.5 => {
+				if !has_transparent_alpha {
+					material.alpha_mode = UnaAlphaMode::Opaque;
+				} else if material.alpha_cutoff <= 0.01 && image_alpha_has_translucency(image) {
+					material.alpha_mode = UnaAlphaMode::Blend;
+				}
+			}
+			_ => {}
 		}
 	}
 }
@@ -2925,6 +2950,26 @@ mod tests {
 				})),
 				..Default::default()
 			},
+			UnaMaterialPbr {
+				alpha_mode: UnaAlphaMode::Opaque,
+				alpha_cutoff: 0.001,
+				base_color_texture_index: Some(1),
+				unavatar_material: Some(serde_json::json!({
+					"family": "liltoon",
+					"sourceShader": "Hidden/lilToonOutline"
+				})),
+				..Default::default()
+			},
+			UnaMaterialPbr {
+				alpha_mode: UnaAlphaMode::Mask,
+				alpha_cutoff: 0.0,
+				base_color_texture_index: Some(1),
+				unavatar_material: Some(serde_json::json!({
+					"family": "liltoon",
+					"sourceShader": "Hidden/lilToonTransparentOutline"
+				})),
+				..Default::default()
+			},
 		];
 
 		refine_liltoon_alpha_from_images(&mut materials, &[opaque_image, transparent_image, translucent_image]);
@@ -2932,6 +2977,9 @@ mod tests {
 		assert_eq!(materials[0].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[1].alpha_mode, UnaAlphaMode::Mask);
 		assert_eq!(materials[2].alpha_mode, UnaAlphaMode::Blend);
+		assert_eq!(materials[3].alpha_mode, UnaAlphaMode::Mask);
+		assert_eq!(materials[4].alpha_mode, UnaAlphaMode::Mask);
+		assert_eq!(materials[4].alpha_cutoff, 1.0 / 255.0);
 	}
 
 	#[test]
