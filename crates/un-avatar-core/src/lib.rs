@@ -806,6 +806,8 @@ pub struct UnaLilToonLikeBlendState {
 	pub operation_factor: f32,
 	#[serde(default = "one_f32")]
 	pub alpha_boost_factor: f32,
+	#[serde(default = "default_liltoon_subpass_cutoff")]
+	pub subpass_cutoff_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1018,6 +1020,7 @@ impl Default for UnaLilToonLikeBlendState {
 			destination_factor: 0.0,
 			operation_factor: 0.0,
 			alpha_boost_factor: 1.0,
+			subpass_cutoff_factor: default_liltoon_subpass_cutoff(),
 		}
 	}
 }
@@ -1206,6 +1209,10 @@ fn default_liltoon_rim_shade_color() -> [f32; 4] {
 }
 
 fn default_liltoon_outline_fix_width() -> f32 {
+	0.5
+}
+
+fn default_liltoon_subpass_cutoff() -> f32 {
 	0.5
 }
 

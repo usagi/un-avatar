@@ -181,17 +181,20 @@ Status legend:
 ### Alpha / Masks
 
 - `[~]` `_Cutoff`
-  - done: Mask material の cutoff として保持し、fragment discard に使う。
-  - remaining: lilToon subpass cutoff、alpha mask、dither、Transparent ZWrite depth prepass との関係を整理する。
+	- done: Mask material の cutoff として保持し、fragment discard に使う。
+	- remaining: alpha mask、dither、Transparent ZWrite color pass との関係を整理する。
 - `[~]` Opaque texture-alpha handling: do not infer cutout from ordinary Opaque
   - done: ordinary lilToon Opaque は texture alpha だけで Mask へ昇格しない。
   - remaining: Cutout shader / explicit alpha mode / renderQueue と texture alpha の診断を compatibility report に出す。
 - `[~]` `_AlphaMaskMode`
-  - done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
-  - remaining: subpass cutoff、dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
+	- done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
+	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
-  - done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
-  - remaining: per-texture UV transform / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
+	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
+	- remaining: per-texture UV transform / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
+- `[~]` `_SubpassCutoff`
+	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
+	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
 - `[ ]` dither / alpha-to-mask
 - `[defer]` refraction alpha interactions
 

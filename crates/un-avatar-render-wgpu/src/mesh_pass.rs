@@ -265,6 +265,7 @@ struct MeshDrawMaterialGpu {
 	outline_lit_params: [f32; 4],
 	outline_ext_params: [f32; 4],
 	alpha_mask_params: [f32; 4],
+	alpha_ext_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -280,7 +281,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 688);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 704);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1270,6 +1271,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let alpha_ext_params = liltoon_like
+		.map(|u| [u.blend_state.subpass_cutoff_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.5, 0.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
@@ -1426,6 +1430,7 @@ fn mesh_draw_material_gpu(
 		outline_lit_params,
 		outline_ext_params,
 		alpha_mask_params,
+		alpha_ext_params,
 		emissive_factor: [
 			mat.emissive_factor[0],
 			mat.emissive_factor[1],

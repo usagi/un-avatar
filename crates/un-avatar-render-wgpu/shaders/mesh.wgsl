@@ -59,6 +59,7 @@ struct DrawMaterial {
 	outline_lit_params: vec4<f32>,
 	outline_ext_params: vec4<f32>,
 	alpha_mask_params: vec4<f32>,
+	alpha_ext_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
@@ -295,11 +296,11 @@ fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwr
 	}
 }
 
-fn discard_transparent_zprepass(a: f32, alpha_kind: f32, cutoff: f32, transparent_zwrite: f32) {
-	// lilToon Transparent+ZWrite materials can author cutoff as 0.0.
+fn discard_transparent_zprepass(a: f32, alpha_kind: f32, subpass_cutoff: f32, transparent_zwrite: f32) {
+	// lilToon Transparent+ZWrite materials use _SubpassCutoff for the depth prepass.
 	// Still avoid writing depth for fully transparent texels; the color pass
 	// discards them and stale depth would incorrectly hide later surfaces.
-	let z_cutoff = max(cutoff, 1.0 / 255.0);
+	let z_cutoff = max(subpass_cutoff, 1.0 / 255.0);
 	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < z_cutoff {
 		discard;
 	}
@@ -744,6 +745,6 @@ fn fs_toon_zprepass(i: VsOut) -> @location(0) vec4<f32> {
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let a = apply_lil_alpha_mask(samp_tex.a * drawu.base_color.a, uv);
-	discard_transparent_zprepass(a, drawu.params.y, drawu.params.z, drawu.outline_params.w);
+	discard_transparent_zprepass(a, drawu.params.y, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	return vec4<f32>(0.0, 0.0, 0.0, 0.0);
 }
