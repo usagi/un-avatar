@@ -456,23 +456,6 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	}
 }
 
-fn sorted_blended_batches(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, camera_pos: Vec3) -> Vec<DrawBatch> {
-	let batch_capacity = (draws.len() / 10).max(1);
-	let mut ordered: Vec<(usize, f32)> = draws
-		.iter()
-		.enumerate()
-		.filter(|(_, draw)| draw.alpha_mode == UnaAlphaMode::Blend)
-		.map(|(draw_index, draw)| (draw_index, draw.world_origin.distance_squared(camera_pos)))
-		.collect();
-	ordered.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-	let mut batches = Vec::new();
-	for (draw_index, _) in ordered {
-		let shading = effective_mesh_shading(&draws[draw_index], opts);
-		append_ordered_draw_batch(&mut batches, blend_pipeline_for_shading(shading), draw_index, batch_capacity);
-	}
-	batches
-}
-
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
 	let mut transparent_zwrite_draw_indices = Vec::new();
@@ -2318,9 +2301,6 @@ impl SceneMeshes {
 		ambient_color: Vec4,
 		time_secs: f32,
 	) {
-		if !self.blended_batches.is_empty() {
-			self.blended_batches = sorted_blended_batches(&self.draws, &self.opts, camera_pos.truncate());
-		}
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
 			light_dir: light_dir.to_array(),
