@@ -336,6 +336,7 @@ struct ExpandedPrimitive {
 	indices: Vec<u32>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	default_morph_weights: Vec<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -558,7 +559,11 @@ pub(crate) struct SceneMeshes {
 	opts: SceneMeshLoadOpts,
 }
 
-fn expand_primitive(buf: &UnaMeshBuffers) -> Option<ExpandedPrimitive> {
+fn default_morph_weight_for(buf: &UnaMeshBuffers, target_index: usize) -> f32 {
+	buf.default_morph_weights.get(target_index).copied().unwrap_or(0.0).clamp(0.0, 1.0)
+}
+
+fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
 	let positions = &buf.positions;
 	if positions.is_empty() {
@@ -583,12 +588,35 @@ fn expand_primitive(buf: &UnaMeshBuffers) -> Option<ExpandedPrimitive> {
 
 	let mut verts = Vec::with_capacity(positions.len());
 	for pi in 0..positions.len() {
-		let n = normals.and_then(|nn| nn.get(pi)).copied().unwrap_or(default_n);
+		let mut pos = positions[pi];
+		let mut n = normals.and_then(|nn| nn.get(pi)).copied().unwrap_or(default_n);
+		if bake_static_default_morphs {
+			for (target_index, target) in buf.morph_targets.iter().enumerate() {
+				let weight = default_morph_weight_for(buf, target_index);
+				if weight.abs() <= 0.000001 {
+					continue;
+				}
+				if let Some(delta) = target.position_deltas.get(pi) {
+					pos[0] += delta[0] * weight;
+					pos[1] += delta[1] * weight;
+					pos[2] += delta[2] * weight;
+				}
+				if let Some(delta) = target.normal_deltas.as_ref().and_then(|deltas| deltas.get(pi)) {
+					n[0] += delta[0] * weight;
+					n[1] += delta[1] * weight;
+					n[2] += delta[2] * weight;
+				}
+			}
+		}
 		let uv = uvs.and_then(|uu| uu.get(pi)).copied().unwrap_or([0.0, 0.0]);
 		let jo = joints_buf.and_then(|jj| jj.get(pi)).copied().unwrap_or(j_default);
 		let we = weights_buf.and_then(|ww| ww.get(pi)).copied().unwrap_or(w_default);
+		let n = Vec3::from_array(n)
+			.try_normalize()
+			.unwrap_or(Vec3::from_array(default_n))
+			.to_array();
 		verts.push(Vertex {
-			pos: positions[pi],
+			pos,
 			norm: n,
 			uv,
 			joints: jo,
@@ -633,6 +661,11 @@ fn expand_primitive(buf: &UnaMeshBuffers) -> Option<ExpandedPrimitive> {
 		indices,
 		morph_pos: morph_push,
 		morph_nrm: morph_nrm_push,
+		default_morph_weights: if bake_static_default_morphs {
+			vec![0.0; num_morph]
+		} else {
+			buf.default_morph_weights.clone()
+		},
 	})
 }
 
@@ -1793,12 +1826,15 @@ impl SceneMeshes {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
 				}
-				let Some(exp) = expand_primitive(buf) else { continue };
+				let Some(exp) = expand_primitive(buf, !opts.debug_zero_morphs) else {
+					continue;
+				};
 				let ExpandedPrimitive {
 					mut verts,
 					indices,
 					morph_pos,
 					morph_nrm,
+					default_morph_weights,
 				} = exp;
 				// スキニング: ノードに skin が無いのに JOINTS があると、bone[0] 以外を参照して頂点が吹き飛ぶ（前腕欠落など）。
 				if node.skin.is_none() && buf.joints.is_some() {
@@ -2047,7 +2083,7 @@ impl SceneMeshes {
 					shading: mat.shading,
 					morph_pos,
 					expression_bindings: expression_bindings.get(&(mesh_i, prim_i)).cloned().unwrap_or_default(),
-					default_morph_weights: buf.default_morph_weights.clone(),
+					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_meta.target_count as usize),
 					morph_weight_scratch: Vec::with_capacity(morph_meta.target_count as usize),
 					alpha_mode: mat.alpha_mode,
@@ -2374,7 +2410,7 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::UnaSceneNode;
+	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
 
 	#[test]
 	fn skin_tone_matching_disables_mtoon_shade_color_on_skin_materials() {
@@ -2395,6 +2431,34 @@ mod tests {
 		assert!(morph_weights_match_default(&[0.25, 0.0, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.1, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.0], &[0.25], 3));
+	}
+
+	#[test]
+	fn expand_primitive_bakes_static_default_morphs() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			positions: vec![[1.0, 2.0, 3.0]],
+			normals: Some(vec![[0.0, 1.0, 0.0]]),
+			tex_coords_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![UnaMorphTargetDeltas {
+				position_deltas: vec![[2.0, 0.0, -1.0]],
+				normal_deltas: Some(vec![[0.0, 1.0, 0.0]]),
+			}],
+			morph_target_names: Vec::new(),
+			default_morph_weights: vec![0.5],
+		};
+
+		let baked = expand_primitive(&buf, true).expect("expanded primitive");
+		assert_eq!(baked.verts[0].pos, [2.0, 2.0, 2.5]);
+		assert_eq!(baked.default_morph_weights, vec![0.0]);
+
+		let dynamic = expand_primitive(&buf, false).expect("expanded primitive");
+		assert_eq!(dynamic.verts[0].pos, [1.0, 2.0, 3.0]);
+		assert_eq!(dynamic.default_morph_weights, vec![0.5]);
 	}
 
 	#[test]
