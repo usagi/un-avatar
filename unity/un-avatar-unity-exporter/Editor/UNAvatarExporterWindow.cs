@@ -1243,7 +1243,7 @@ namespace UNAvatar.UnityExporter
                 }.ToJson(true)
             };
 
-            var nonBaseSets = exportWardrobeSets ?? capturedWardrobeSets;
+            var nonBaseSets = exportWardrobeSets ?? WardrobeSetsForExport();
             foreach (var set in nonBaseSets)
             {
                 sets.Add(set.ToJson(false));
@@ -1271,6 +1271,32 @@ namespace UNAvatar.UnityExporter
                 ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
+        }
+
+        private List<WardrobeSetDraft> WardrobeSetsForExport()
+        {
+            if (!hasBaseSnapshot)
+            {
+                return capturedWardrobeSets;
+            }
+
+            var sets = new List<WardrobeSetDraft>(capturedWardrobeSets.Count);
+            foreach (var set in capturedWardrobeSets)
+            {
+                if (set.capturedSnapshot == null || set.capturedSnapshot.nodes.Count == 0)
+                {
+                    sets.Add(set);
+                    continue;
+                }
+
+                var rebased = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName);
+                rebased.id = set.id;
+                rebased.displayName = set.displayName;
+                rebased.source = set.source + "_export_rebased";
+                rebased.capturedSnapshot = set.capturedSnapshot;
+                sets.Add(rebased);
+            }
+            return sets;
         }
 
         private List<WardrobeSetDraft> BuildBakedWardrobeSets(WardrobeSnapshotDraft bakedBaseSnapshot, bool bakeWithModularAvatar)
