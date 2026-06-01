@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -38,11 +37,8 @@ namespace UNAvatar.UnityExporter
                 },
                 ["humanoid"] = humanoid,
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
-                ["textureAssets"] = (textureAssets ?? new List<UnavatarTextureAssetRecord>())
-                    .Select(asset => asset.ToJson())
-                    .Cast<object>()
-                    .ToList(),
-                ["variants"] = variants.Select(v => v.ToJson()).ToList<object>(),
+                ["textureAssets"] = TextureAssetsToJson(textureAssets),
+                ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["provenance"] = new Dictionary<string, object>
                 {
@@ -95,21 +91,28 @@ namespace UNAvatar.UnityExporter
             List<ExportedTextureRecord> exportedTextures)
         {
             exportedTextures = exportedTextures ?? new List<ExportedTextureRecord>();
-            var fallbackTextures = exportedTextures
-                .Where(texture => texture.ExportMode == "png_fallback")
-                .ToList();
-            var textureSourceBytesByExtension = exportedTextures
-                .Where(texture => !string.IsNullOrEmpty(texture.SourceExtension))
-                .GroupBy(texture => texture.SourceExtension)
-                .OrderByDescending(group => group.Sum(texture => texture.SourceByteLength))
-                .Select(group => new Dictionary<string, object>
+            var fallbackTextures = new List<ExportedTextureRecord>();
+            var textureSourceBytes = new Dictionary<string, TextureSourceByteSummary>(StringComparer.Ordinal);
+            foreach (var texture in exportedTextures)
+            {
+                if (texture.ExportMode == "png_fallback")
                 {
-                    ["extension"] = group.Key,
-                    ["count"] = group.Count(),
-                    ["sourceByteLength"] = group.Sum(texture => texture.SourceByteLength)
-                })
-                .Cast<object>()
-                .ToList();
+                    fallbackTextures.Add(texture);
+                }
+                if (string.IsNullOrEmpty(texture.SourceExtension))
+                {
+                    continue;
+                }
+                if (!textureSourceBytes.TryGetValue(texture.SourceExtension, out var summary))
+                {
+                    summary = new TextureSourceByteSummary { Extension = texture.SourceExtension };
+                    textureSourceBytes[texture.SourceExtension] = summary;
+                }
+                summary.Count++;
+                summary.SourceByteLength += texture.SourceByteLength;
+            }
+            var textureSourceBytesByExtension = TextureSourceByteSummariesToJson(textureSourceBytes.Values);
+            fallbackTextures.Sort((a, b) => b.SourceByteLength.CompareTo(a.SourceByteLength));
 
             var unsupported = BuildUnsupportedReportItems();
 
@@ -124,7 +127,7 @@ namespace UNAvatar.UnityExporter
                 ["validation"] = validation.ToJson(),
                 ["humanoidBoneCount"] = humanoid.Count,
                 ["variantCount"] = variants.Count,
-                ["variants"] = variants.Select(v => v.ToJson()).ToList<object>(),
+                ["variants"] = VariantsToJson(variants),
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
@@ -144,18 +147,49 @@ namespace UNAvatar.UnityExporter
                     ["count"] = exportedTextures.Count,
                     ["fallbackCount"] = fallbackTextures.Count,
                     ["sourceBytesByExtension"] = textureSourceBytesByExtension,
-                    ["fallbacks"] = fallbackTextures
-                        .OrderByDescending(texture => texture.SourceByteLength)
-                        .Select(texture => texture.ToJson())
-                        .Cast<object>()
-                        .ToList(),
-                    ["items"] = exportedTextures
-                        .Select(texture => texture.ToJson())
-                        .Cast<object>()
-                        .ToList()
+                    ["fallbacks"] = TextureRecordsToJson(fallbackTextures),
+                    ["items"] = TextureRecordsToJson(exportedTextures)
                 },
                 ["unsupported"] = unsupported
             };
+        }
+
+        private sealed class TextureSourceByteSummary
+        {
+            public string Extension;
+            public int Count;
+            public long SourceByteLength;
+        }
+
+        private static List<object> TextureSourceByteSummariesToJson(IEnumerable<TextureSourceByteSummary> summaries)
+        {
+            var list = new List<TextureSourceByteSummary>(summaries);
+            list.Sort((a, b) => b.SourceByteLength.CompareTo(a.SourceByteLength));
+            var json = new List<object>(list.Count);
+            foreach (var summary in list)
+            {
+                json.Add(new Dictionary<string, object>
+                {
+                    ["extension"] = summary.Extension,
+                    ["count"] = summary.Count,
+                    ["sourceByteLength"] = summary.SourceByteLength
+                });
+            }
+            return json;
+        }
+
+        private static List<object> TextureRecordsToJson(List<ExportedTextureRecord> textures)
+        {
+            var json = new List<object>(textures != null ? textures.Count : 0);
+            if (textures == null)
+            {
+                return json;
+            }
+            foreach (var texture in textures)
+            {
+                json.Add(texture.ToJson());
+            }
+            return json;
         }
 
         private Dictionary<string, object> BuildWardrobePreviewDiagnostics(List<WardrobeSetDraft> exportWardrobeSets)
@@ -173,24 +207,91 @@ namespace UNAvatar.UnityExporter
 
             return new Dictionary<string, object>
             {
-                ["sets"] = sets.Select(set => new Dictionary<string, object>
+                ["sets"] = WardrobePreviewDiagnosticSetsToJson(sets)
+            };
+        }
+
+        private static List<object> TextureAssetsToJson(List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            var json = new List<object>(textureAssets != null ? textureAssets.Count : 0);
+            if (textureAssets == null)
+            {
+                return json;
+            }
+            foreach (var asset in textureAssets)
+            {
+                json.Add(asset.ToJson());
+            }
+            return json;
+        }
+
+        private static List<object> VariantsToJson(List<VariantRecord> variants)
+        {
+            var json = new List<object>(variants != null ? variants.Count : 0);
+            if (variants == null)
+            {
+                return json;
+            }
+            foreach (var variant in variants)
+            {
+                json.Add(variant.ToJson());
+            }
+            return json;
+        }
+
+        private static List<object> WardrobePreviewDiagnosticSetsToJson(List<WardrobeSetDraft> sets)
+        {
+            var json = new List<object>(sets.Count);
+            foreach (var set in sets)
+            {
+                json.Add(new Dictionary<string, object>
                 {
                     ["id"] = set.id ?? "",
                     ["displayName"] = set.displayName ?? "",
                     ["previewCount"] = set.previewImages != null ? set.previewImages.Count : 0,
-                    ["previews"] = (set.previewImages ?? new List<WardrobePreviewImageDraft>())
-                        .Select(image => new Dictionary<string, object>
-                        {
-                            ["view"] = image.view ?? "",
-                            ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
-                            ["stateDigest"] = image.stateDigest ?? "",
-                            ["stateDetails"] = (image.stateDetails ?? new List<string>()).Cast<object>().ToList(),
-                            ["sha256"] = Sha256Hex(image.pngBytes)
-                        })
-                        .Cast<object>()
-                        .ToList()
-                }).Cast<object>().ToList()
-            };
+                    ["previews"] = WardrobePreviewDiagnosticsToJson(set.previewImages)
+                });
+            }
+            return json;
+        }
+
+        private static List<object> WardrobePreviewDiagnosticsToJson(List<WardrobePreviewImageDraft> previews)
+        {
+            var json = new List<object>(previews != null ? previews.Count : 0);
+            if (previews == null)
+            {
+                return json;
+            }
+            foreach (var image in previews)
+            {
+                if (image == null)
+                {
+                    continue;
+                }
+                json.Add(new Dictionary<string, object>
+                {
+                    ["view"] = image.view ?? "",
+                    ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
+                    ["stateDigest"] = image.stateDigest ?? "",
+                    ["stateDetails"] = StringListToObjectList(image.stateDetails),
+                    ["sha256"] = Sha256Hex(image.pngBytes)
+                });
+            }
+            return json;
+        }
+
+        private static List<object> StringListToObjectList(List<string> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
         }
 
         private static string Sha256Hex(List<byte> bytes)
@@ -255,13 +356,31 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            return reports.Values
-                .OrderBy(report => report.Category)
-                .ThenBy(report => report.Property)
-                .ThenBy(report => report.Value)
-                .Select(report => report.ToJson())
-                .Cast<object>()
-                .ToList();
+            var sorted = new List<UnsupportedMaterialPropertyReport>(reports.Values);
+            sorted.Sort(CompareUnsupportedMaterialPropertyReport);
+            var json = new List<object>(sorted.Count);
+            foreach (var report in sorted)
+            {
+                json.Add(report.ToJson());
+            }
+            return json;
+        }
+
+        private static int CompareUnsupportedMaterialPropertyReport(
+            UnsupportedMaterialPropertyReport left,
+            UnsupportedMaterialPropertyReport right)
+        {
+            var category = string.Compare(left.Category, right.Category, StringComparison.Ordinal);
+            if (category != 0)
+            {
+                return category;
+            }
+            var property = string.Compare(left.Property, right.Property, StringComparison.Ordinal);
+            if (property != 0)
+            {
+                return property;
+            }
+            return left.Value.CompareTo(right.Value);
         }
 
         private static void AddUnsupportedMaterialFloat(
@@ -313,7 +432,7 @@ namespace UNAvatar.UnityExporter
                 ? WardrobeSnapshotCapture.BaseOperations(exportBaseSnapshot)
                 : hasBaseSnapshot
                 ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot)
-                : importedBaseOperations.Select(WardrobeSnapshotCapture.CloneOperation).ToList();
+                : CloneWardrobeOperations(importedBaseOperations);
             var sets = new List<object>
             {
                 new WardrobeSetDraft
@@ -334,8 +453,12 @@ namespace UNAvatar.UnityExporter
 
             if (nonBaseSets.Count == 0 && variants != null)
             {
-                foreach (var variant in variants.Where(v => v.Id != "current-state"))
+                foreach (var variant in variants)
                 {
+                    if (variant.Id == "current-state")
+                    {
+                        continue;
+                    }
                     sets.Add(new Dictionary<string, object>
                     {
                         ["id"] = "candidate-" + variant.Id,
@@ -343,7 +466,7 @@ namespace UNAvatar.UnityExporter
                         ["source"] = variant.Source,
                         ["default"] = false,
                         ["assetGroups"] = new List<object>(),
-                        ["operations"] = variant.Operations.Cast<object>().ToList()
+                        ["operations"] = WardrobeOperationsAsObjects(variant.Operations)
                     });
                 }
             }
@@ -354,6 +477,37 @@ namespace UNAvatar.UnityExporter
                 ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
+        }
+
+        private static List<WardrobeOperationDraft> CloneWardrobeOperations(List<WardrobeOperationDraft> operations)
+        {
+            var cloned = new List<WardrobeOperationDraft>(operations != null ? operations.Count : 0);
+            if (operations == null)
+            {
+                return cloned;
+            }
+            foreach (var operation in operations)
+            {
+                if (operation != null)
+                {
+                    cloned.Add(WardrobeSnapshotCapture.CloneOperation(operation));
+                }
+            }
+            return cloned;
+        }
+
+        private static List<object> WardrobeOperationsAsObjects(List<WardrobeOperationDraft> operations)
+        {
+            var json = new List<object>(operations != null ? operations.Count : 0);
+            if (operations == null)
+            {
+                return json;
+            }
+            foreach (var operation in operations)
+            {
+                json.Add(operation);
+            }
+            return json;
         }
     }
 }
