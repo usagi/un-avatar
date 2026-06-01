@@ -556,6 +556,7 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		outline_color_factor: obj_vec3(obj, "outlineColorFactor", [0.0, 0.0, 0.0]),
 		outline_lighting_mix_factor: obj_f32(obj, &["outlineLightingMixFactor"], 1.0).clamp(0.0, 1.0),
 		uv_animation_mask_texture_index: value_mtoon_texture_index(ext, "uvAnimationMaskTexture", root),
+		uv_offset_scale: [0.0, 0.0, 1.0, 1.0],
 		uv_animation_scroll_x_speed_factor: obj_f32(obj, &["uvAnimationScrollXSpeedFactor"], 0.0),
 		uv_animation_scroll_y_speed_factor: obj_f32(obj, &["uvAnimationScrollYSpeedFactor"], 0.0),
 		uv_animation_rotation_speed_factor: obj_f32(obj, &["uvAnimationRotationSpeedFactor"], 0.0),

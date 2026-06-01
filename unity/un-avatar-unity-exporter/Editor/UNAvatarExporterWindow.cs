@@ -2852,7 +2852,6 @@ namespace UNAvatar.UnityExporter
                 }
 
                 var mtoon = new Dictionary<string, object>();
-                var mainTexture = ReadTexture(material, "_BaseMap") ?? ReadTexture(material, "_MainTex");
                 var baseColor = ReadColor(material, "_BaseColor", ReadColor(material, "_Color", Color.white));
                 var useShadow = IsMaterialFeatureEnabled(material, "_UseShadow", material.HasProperty("_ShadeColor") || material.HasProperty("_ShadowColor"));
                 var shadeColor = useShadow
@@ -2892,6 +2891,16 @@ namespace UNAvatar.UnityExporter
                 mtoon["outlineColorFactor"] = FloatArray(outlineColor.r, outlineColor.g, outlineColor.b);
                 mtoon["outlineLightingMixFactor"] = ReadFloat(material, "_OutlineEnableLighting", 1.0f);
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", ReadTexture(material, "_OutlineWidthMask"));
+
+                var mainTextureProperty = material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
+                var mainTextureScale = Vector2.one;
+                var mainTextureOffset = Vector2.zero;
+                if (material.HasProperty(mainTextureProperty))
+                {
+                    mainTextureScale = material.GetTextureScale(mainTextureProperty);
+                    mainTextureOffset = material.GetTextureOffset(mainTextureProperty);
+                }
+                mtoon["uvOffsetScale"] = FloatArray(mainTextureOffset.x, mainTextureOffset.y, mainTextureScale.x, mainTextureScale.y);
 
                 var lilMainScrollRotate = ReadVector(material, "_MainTex_ScrollRotate", Vector4.zero);
                 mtoon["uvAnimationScrollXSpeedFactor"] = ReadFloat(material, "_UvAnimScrollX", lilMainScrollRotate.x);

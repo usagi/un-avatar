@@ -235,6 +235,7 @@ struct MeshDrawMaterialGpu {
 	outline_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
+	uv_offset_scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -247,7 +248,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 176);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 192);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1089,6 +1090,7 @@ fn mesh_draw_material_gpu(
 				0.0
 			},
 		],
+		uv_offset_scale: mtoon.uv_offset_scale,
 	}
 }
 

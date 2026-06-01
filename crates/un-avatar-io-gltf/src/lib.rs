@@ -1567,6 +1567,9 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	) {
 		out.uv_animation_mask_texture_index = Some(value);
 	}
+	if let Some(value) = json_vec4(mtoon.get("uvOffsetScale").or_else(|| mtoon.get("uv_offset_scale"))) {
+		out.uv_offset_scale = value;
+	}
 	if let Some(value) = json_f32(
 		mtoon
 			.get("uvAnimationScrollXSpeedFactor")
@@ -1643,6 +1646,15 @@ fn json_vec3(value: Option<&Value>) -> Option<[f32; 3]> {
 	let y = array.get(1)?.as_f64()? as f32;
 	let z = array.get(2)?.as_f64()? as f32;
 	Some([x, y, z])
+}
+
+fn json_vec4(value: Option<&Value>) -> Option<[f32; 4]> {
+	let array = value?.as_array()?;
+	let x = array.first()?.as_f64()? as f32;
+	let y = array.get(1)?.as_f64()? as f32;
+	let z = array.get(2)?.as_f64()? as f32;
+	let w = array.get(3)?.as_f64()? as f32;
+	Some([x, y, z, w])
 }
 
 fn mesh_target_names(mesh: gltf::Mesh<'_>) -> Vec<String> {
@@ -2834,6 +2846,7 @@ mod tests {
 			"family": "liltoon",
 			"sourceShader": "lilToon",
 			"mtoon": {
+				"uvOffsetScale": [0.1, 0.2, 2.0, 3.0],
 				"uvAnimationMaskTextureIndex": 7,
 				"uvAnimationScrollXSpeedFactor": 0.25,
 				"uvAnimationScrollYSpeedFactor": -0.5,
@@ -2843,6 +2856,7 @@ mod tests {
 
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
+		assert_eq!(mtoon.uv_offset_scale, [0.1, 0.2, 2.0, 3.0]);
 		assert_eq!(mtoon.uv_animation_mask_texture_index, Some(7));
 		assert_eq!(mtoon.uv_animation_scroll_x_speed_factor, 0.25);
 		assert_eq!(mtoon.uv_animation_scroll_y_speed_factor, -0.5);

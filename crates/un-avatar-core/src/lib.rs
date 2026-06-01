@@ -523,6 +523,10 @@ pub struct UnaMtoonMaterial {
 	pub outline_lighting_mix_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub uv_animation_mask_texture_index: Option<usize>,
+	/// Base UV transform shared by the current UNToon compatibility path:
+	/// `[offset_x, offset_y, scale_x, scale_y]`.
+	#[serde(default = "default_uv_offset_scale")]
+	pub uv_offset_scale: [f32; 4],
 	#[serde(default)]
 	pub uv_animation_scroll_x_speed_factor: f32,
 	#[serde(default)]
@@ -557,6 +561,7 @@ impl Default for UnaMtoonMaterial {
 			outline_color_factor: [0.0, 0.0, 0.0],
 			outline_lighting_mix_factor: 1.0,
 			uv_animation_mask_texture_index: None,
+			uv_offset_scale: default_uv_offset_scale(),
 			uv_animation_scroll_x_speed_factor: 0.0,
 			uv_animation_scroll_y_speed_factor: 0.0,
 			uv_animation_rotation_speed_factor: 0.0,
@@ -570,6 +575,10 @@ fn one_f32() -> f32 {
 
 fn one_vec3() -> [f32; 3] {
 	[1.0, 1.0, 1.0]
+}
+
+fn default_uv_offset_scale() -> [f32; 4] {
+	[0.0, 0.0, 1.0, 1.0]
 }
 
 fn default_mtoon_shading_toony() -> f32 {

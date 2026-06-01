@@ -29,6 +29,7 @@ struct DrawMaterial {
 	outline_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
+	uv_offset_scale: vec4<f32>,
 }
 
 struct MorphU {
@@ -254,19 +255,20 @@ fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
+	let base_uv = uv * drawu.uv_offset_scale.zw + drawu.uv_offset_scale.xy;
 	let speed = drawu.uv_anim_params.xyz;
 	if (abs(speed.x) + abs(speed.y) + abs(speed.z) < 0.000001) {
-		return uv;
+		return base_uv;
 	}
-	let mask = textureSampleLevel(uv_anim_mask_tex, uv_anim_mask_samp, uv, 0.0).r;
+	let mask = textureSampleLevel(uv_anim_mask_tex, uv_anim_mask_samp, base_uv, 0.0).r;
 	let t = frame.time_params.x;
-	var out_uv = uv + speed.xy * t;
+	var out_uv = base_uv + speed.xy * t;
 	let angle = speed.z * t;
 	let s = sin(angle);
 	let c = cos(angle);
 	let centered = out_uv - vec2<f32>(0.5, 0.5);
 	out_uv = vec2<f32>(centered.x * c - centered.y * s, centered.x * s + centered.y * c) + vec2<f32>(0.5, 0.5);
-	return mix(uv, out_uv, clamp(mask, 0.0, 1.0));
+	return mix(base_uv, out_uv, clamp(mask, 0.0, 1.0));
 }
 
 fn normal_mapped(n_in: vec3<f32>, wp: vec3<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
