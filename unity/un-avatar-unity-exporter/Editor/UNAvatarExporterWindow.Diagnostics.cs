@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -211,8 +210,7 @@ namespace UNAvatar.UnityExporter
                 ApplyWardrobeSetStateToRoot(probeRoot, set);
             }
 
-            var renderers = probeRoot.GetComponentsInChildren<Renderer>(true);
-            var activeRenderers = renderers.Count(renderer => renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy);
+            var activeRenderers = CountActiveRenderers(probeRoot);
             var probes = new[]
             {
                 "Color  1",
@@ -221,14 +219,38 @@ namespace UNAvatar.UnityExporter
                 "Maid",
                 "Outer"
             };
-            var states = probes.Select(path => path + "=" + ProbePathState(probeRoot, path));
+            var states = new List<string>(probes.Length);
+            foreach (var path in probes)
+            {
+                states.Add(path + "=" + ProbePathState(probeRoot, path));
+            }
             return $"{label}: snapshot={(set == null ? hasBaseSnapshot : set.capturedSnapshot != null && set.capturedSnapshot.nodes.Count > 0)}, ops={(set != null ? set.operations.Count : CurrentBaseOperations().Count)}, activeRenderers={activeRenderers}; {string.Join(", ", states)}";
+        }
+
+        private static int CountActiveRenderers(GameObject root)
+        {
+            var count = 0;
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy)
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         private static string ProbePathState(GameObject root, string path)
         {
-            var transform = root.GetComponentsInChildren<Transform>(true)
-                .FirstOrDefault(candidate => VariantExtractor.TransformPath(root.transform, candidate) == path);
+            var transform = default(Transform);
+            foreach (var candidate in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (VariantExtractor.TransformPath(root.transform, candidate) == path)
+                {
+                    transform = candidate;
+                    break;
+                }
+            }
             if (transform == null)
             {
                 return "missing";
@@ -270,30 +292,49 @@ namespace UNAvatar.UnityExporter
                 return fromSelection;
             }
 
-            var sceneObjects = Resources.FindObjectsOfTypeAll<GameObject>()
-                .Where(IsSceneObject)
-                .ToList();
-
-            var descriptorCandidates = sceneObjects
-                .Where(HasAvatarDescriptorComponent)
-                .ToList();
+            var sceneObjects = SceneObjects();
+            var descriptorCandidates = new List<GameObject>();
+            foreach (var go in sceneObjects)
+            {
+                if (HasAvatarDescriptorComponent(go))
+                {
+                    descriptorCandidates.Add(go);
+                }
+            }
             if (descriptorCandidates.Count == 1)
             {
                 return descriptorCandidates[0];
             }
 
-            var humanoidCandidates = sceneObjects
-                .Select(go => go.GetComponent<Animator>())
-                .Where(animator => animator != null && animator.avatar != null && animator.avatar.isHuman)
-                .Select(animator => animator.gameObject)
-                .Distinct()
-                .ToList();
+            var humanoidCandidates = new List<GameObject>();
+            var seenHumanoid = new HashSet<GameObject>();
+            foreach (var go in sceneObjects)
+            {
+                var animator = go.GetComponent<Animator>();
+                if (animator != null && animator.avatar != null && animator.avatar.isHuman && seenHumanoid.Add(animator.gameObject))
+                {
+                    humanoidCandidates.Add(animator.gameObject);
+                }
+            }
             if (humanoidCandidates.Count == 1)
             {
                 return humanoidCandidates[0];
             }
 
             return null;
+        }
+
+        private static List<GameObject> SceneObjects()
+        {
+            var objects = new List<GameObject>();
+            foreach (var go in Resources.FindObjectsOfTypeAll<GameObject>())
+            {
+                if (IsSceneObject(go))
+                {
+                    objects.Add(go);
+                }
+            }
+            return objects;
         }
 
         private static GameObject ResolveAvatarRootFromSelection(GameObject selected)
@@ -409,7 +450,7 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            return byKey.Values.ToList();
+            return new List<TextureDiagnostic>(byKey.Values);
         }
 
         private static string FormatBytes(long bytes)
@@ -436,18 +477,43 @@ namespace UNAvatar.UnityExporter
             {
                 var renderers = avatarRoot.GetComponentsInChildren<Renderer>(true);
                 validation.RendererCount = renderers.Length;
-                validation.SkinnedMeshRendererCount = renderers.Count(renderer => renderer is SkinnedMeshRenderer);
-                validation.MaterialCount = renderers
-                    .SelectMany(r => r.sharedMaterials)
-                    .Where(m => m != null)
-                    .Distinct()
-                    .Count();
+                validation.SkinnedMeshRendererCount = CountSkinnedMeshRenderers(renderers);
+                validation.MaterialCount = CountDistinctMaterials(renderers);
                 validation.VariantCount = VariantExtractor.Extract(avatarRoot, exportMode).Count;
                 validation.WardrobeSetCount = capturedWardrobeSets.Count;
                 validation.HumanoidBoneCount = HumanoidExtractor.Extract(avatarRoot).Count;
             }
 
             return validation;
+        }
+
+        private static int CountSkinnedMeshRenderers(Renderer[] renderers)
+        {
+            var count = 0;
+            foreach (var renderer in renderers)
+            {
+                if (renderer is SkinnedMeshRenderer)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static int CountDistinctMaterials(Renderer[] renderers)
+        {
+            var materials = new HashSet<Material>();
+            foreach (var renderer in renderers)
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material != null)
+                    {
+                        materials.Add(material);
+                    }
+                }
+            }
+            return materials.Count;
         }
     }
 }

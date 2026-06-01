@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -146,7 +145,7 @@ namespace UNAvatar.UnityExporter
             if (image.bufferView >= 0)
             {
                 var bytes = GlbExtensionPatcher.ReadBufferViewBytes(glbPath, image.bufferView);
-                image.pngBytes = bytes != null ? bytes.ToList() : new List<byte>();
+                image.pngBytes = bytes != null ? new List<byte>(bytes) : new List<byte>();
             }
             return image;
         }
