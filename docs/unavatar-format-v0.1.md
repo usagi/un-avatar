@@ -420,6 +420,7 @@ wardrobe set の適用順。
 
 Unity Exporter の preview 実装では、wardrobe operations は bake 後 snapshot から再生成しない。`base` も non-base set も Unity 上で capture した authored state / diff を正本にする。Modular Avatar bake は export mesh を整える処理であり、wardrobe の意味論を上書きする正本ではない。
 Exporter は `activeInHierarchy` ではなく `activeSelf` を capture する。親が OFF のため実効的に見えていない子でも、子自身の Inspector チェックボックス状態は維持する必要があるためである。特定の子だけを落としたい場合は、親を `subtreeEnabled=true` した後に、その子へ `nodeEnabled=false` または `subtreeEnabled=false` を置く。
+Unity Exporter は親を ON にする set の配下にある inactive child を明示的な `nodeEnabled=false` として出力する。これにより、衣装 root をまとめて ON にしつつ帽子や pants/skirt のような相互排他部品だけを OFF にできる。
 
 ### Asset Groups And Lazy Loading
 

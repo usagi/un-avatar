@@ -144,7 +144,7 @@ capture 対象。
 - SkinnedMeshRenderer blendshape weight
 - 将来: material property, dynamics enable
 
-GameObject active state は `activeSelf` を記録する。`activeInHierarchy` は親 OFF の影響を受ける実効状態であり、wardrobe の local state 正本には使わない。`subtreeEnabled` は対象 node と子孫をまとめて切り替える操作として扱い、特定の子だけを落としたい場合は同じ set の後続 operation で `nodeEnabled=false` または `subtreeEnabled=false` を出す。
+GameObject active state は `activeSelf` を記録する。`activeInHierarchy` は親 OFF の影響を受ける実効状態であり、wardrobe の local state 正本には使わない。`subtreeEnabled` は対象 node と子孫をまとめて切り替える操作として扱い、特定の子だけを落としたい場合は同じ set の後続 operation で `nodeEnabled=false` または `subtreeEnabled=false` を出す。Exporter は親を ON にする set の配下にある inactive child を明示的な `nodeEnabled=false` として出力し、`Color 1=true` と `Color 1/Noble Trace_Pants=false` のような組み合わせを保持する。
 
 ### Variant Extraction Sources
 

@@ -1820,6 +1820,7 @@ namespace UNAvatar.UnityExporter
                     AddAssetGroupIfVisible(set, node.path, node.visible);
                 }
             }
+            AddDisabledDescendantsUnderEnabledSubtrees(set, current.nodes);
 
             var baseRenderers = ToFirstDictionary(baseline.renderers, RendererKey);
             foreach (var renderer in current.renderers)
@@ -1852,6 +1853,41 @@ namespace UNAvatar.UnityExporter
             }
 
             return set;
+        }
+
+        private static void AddDisabledDescendantsUnderEnabledSubtrees(WardrobeSetDraft set, IEnumerable<NodeStateDraft> currentNodes)
+        {
+            var enabledSubtreePaths = set.operations
+                .Where(operation => operation.type == "subtreeEnabled" && operation.boolValue && operation.target != null)
+                .Select(operation => operation.target.path ?? "")
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .ToList();
+            if (enabledSubtreePaths.Count == 0)
+            {
+                return;
+            }
+
+            var existingVisibilityTargets = new HashSet<string>(set.operations
+                .Where(operation => (operation.type == "subtreeEnabled" || operation.type == "nodeEnabled") && operation.target != null)
+                .Select(operation => operation.target.nodeId ?? ""));
+            foreach (var node in currentNodes)
+            {
+                if (node.visible || existingVisibilityTargets.Contains(node.nodeId))
+                {
+                    continue;
+                }
+                if (!enabledSubtreePaths.Any(path => IsAncestorOrSelf(path, node.path) && !string.Equals(path, node.path, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+                set.operations.Add(new WardrobeOperationDraft
+                {
+                    type = "nodeEnabled",
+                    target = Target(node.nodeId, node.path),
+                    boolValue = false
+                });
+                existingVisibilityTargets.Add(node.nodeId);
+            }
         }
 
         public static List<WardrobeOperationDraft> BaseOperations(WardrobeSnapshotDraft snapshot)
