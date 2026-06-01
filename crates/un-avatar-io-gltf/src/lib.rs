@@ -320,7 +320,7 @@ fn append_unavatar_texture_assets(
 			source_pixel_format: source_pixel_format.map(str::to_string),
 			channels: channels.map(str::to_string),
 			color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
-			sampler: None,
+			sampler: asset.get("sampler").map(sampler_from_root_json),
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
 		}));
@@ -2043,6 +2043,7 @@ mod tests {
 							"sourcePixelFormat": "RGBA32F",
 							"colorSpace": "linear",
 							"channels": "rgba",
+							"sampler": {{"magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 10497}},
 							"bufferView": 1
 						}}]
 					}}
@@ -2073,6 +2074,15 @@ mod tests {
 			Some("RGBA32F")
 		);
 		assert_eq!(scene.image_sources[0].as_ref().unwrap().channels.as_deref(), Some("rgba"));
+		assert_eq!(
+			scene.image_sources[0].as_ref().unwrap().sampler,
+			Some(UnaTextureSampler {
+				mag_filter: UnaTextureFilterMode::Nearest,
+				min_filter: UnaTextureFilterMode::Nearest,
+				wrap_s: UnaTextureWrapMode::ClampToEdge,
+				wrap_t: UnaTextureWrapMode::Repeat,
+			})
+		);
 		assert_eq!(scene.materials[0].mtoon.as_ref().unwrap().matcap_texture_index, Some(0));
 	}
 

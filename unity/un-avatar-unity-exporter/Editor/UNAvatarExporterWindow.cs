@@ -200,6 +200,7 @@ namespace UNAvatar.UnityExporter
         public string SourcePixelFormat;
         public string ColorSpace;
         public string Channels;
+        public Dictionary<string, object> Sampler;
         public int Width;
         public int Height;
         public byte[] Bytes;
@@ -219,6 +220,10 @@ namespace UNAvatar.UnityExporter
                 ["channels"] = Channels ?? "",
                 ["byteLength"] = Bytes != null ? Bytes.Length : 0
             };
+            if (Sampler != null)
+            {
+                json["sampler"] = Sampler;
+            }
             if (Width > 0)
             {
                 json["width"] = Width;
@@ -3027,16 +3032,32 @@ namespace UNAvatar.UnityExporter
                 {
                     return existing;
                 }
-                samplers.Add(new Dictionary<string, object>
+                samplers.Add(BuildSamplerJson(magFilter, minFilter, wrapS, wrapT));
+                var index = samplers.Count - 1;
+                samplerIndices[key] = index;
+                return index;
+            }
+
+            private static Dictionary<string, object> BuildSamplerJson(Texture texture)
+            {
+                var magFilter = texture.filterMode == FilterMode.Point ? 9728 : 9729;
+                var minFilter = magFilter;
+                return BuildSamplerJson(
+                    magFilter,
+                    minFilter,
+                    GltfWrapMode(texture.wrapModeU),
+                    GltfWrapMode(texture.wrapModeV));
+            }
+
+            private static Dictionary<string, object> BuildSamplerJson(int magFilter, int minFilter, int wrapS, int wrapT)
+            {
+                return new Dictionary<string, object>
                 {
                     ["magFilter"] = magFilter,
                     ["minFilter"] = minFilter,
                     ["wrapS"] = wrapS,
                     ["wrapT"] = wrapT
-                });
-                var index = samplers.Count - 1;
-                samplerIndices[key] = index;
-                return index;
+                };
             }
 
             private static int GltfWrapMode(TextureWrapMode mode)
@@ -3197,6 +3218,7 @@ namespace UNAvatar.UnityExporter
                         SourcePixelFormat = metadata.SourcePixelFormat,
                         ColorSpace = metadata.ColorSpace,
                         Channels = metadata.Channels,
+                        Sampler = BuildSamplerJson(texture),
                         Width = metadata.Width,
                         Height = metadata.Height,
                         Bytes = bytes

@@ -238,6 +238,8 @@ PNG / JPEG で表現できない HDR / float / half float texture は、glTF cor
 
 `UN_avatar.textureAssets` は glTF core `images` では扱えない texture source の入口にする。`bufferView` は GLB BIN chunk 内の source bytes を指す。`sourcePixelFormat` は正本の実形式を記録し、GPU upload 形式ではない。例えば `RGB16F` EXR は source として `RGB16F` のまま記録し、wgpu backend が必要な場合だけ upload 時に `RGBA16Float` へ拡張する。
 
+`sampler` は glTF sampler と同じ数値定数 (`magFilter`, `minFilter`, `wrapS`, `wrapT`) を inline object として持てる。これは EXR など glTF core `textures` を経由しない source asset でも Unity の Filter / Wrap 設定を落とさないためである。glTF core image 経由の texture は通常の `textures[].sampler` を正とする。
+
 `RGB16F` source を wgpu upload で `RGBA16Float` に拡張するのは、wgpu の portable `TextureFormat` に `RGB16Float` が無く、一般的な GPU API でも 3ch half float texture は 4ch half float より互換性が低いためである。`.unavatar` と CPU decoded representation は `RGB16F` を維持し、alpha=1 の追加は renderer upload boundary の明示的 fallback とする。
 
 ```json
@@ -251,6 +253,12 @@ PNG / JPEG で表現できない HDR / float / half float texture は、glTF cor
       "sourcePixelFormat": "RGB16F",
       "colorSpace": "linear",
       "channels": "rgb",
+      "sampler": {
+        "magFilter": 9729,
+        "minFilter": 9729,
+        "wrapS": 10497,
+        "wrapT": 10497
+      },
       "width": 4096,
       "height": 2048,
       "bufferView": 42,
