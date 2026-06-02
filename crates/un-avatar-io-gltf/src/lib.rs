@@ -1758,7 +1758,11 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		0.01
 	};
 	let mut out = UnaLilToonLikeMaterial {
-		source_profile: UnaLilToonLikeSourceProfile::Liltoon,
+		source_profile: if source_shader.to_ascii_lowercase().contains("liltoongem") {
+			UnaLilToonLikeSourceProfile::LiltoonGem
+		} else {
+			UnaLilToonLikeSourceProfile::Liltoon
+		},
 		..Default::default()
 	};
 	out.texture_uv_offset_scales = unavatar_material_uv_offset_scales(extras);
@@ -2206,6 +2210,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionBlendMode").map(float_to_u32_saturating) {
 		out.reflection.blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_GemEnvColor") {
+		out.reflection.gem_env_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GemEnvContrast") {
+		out.reflection.gem_env_contrast_factor = value.max(0.0001);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RefractionFresnelPower") {
+		out.reflection.gem_refraction_fresnel_power_factor = value.max(0.0001);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_UseAnisotropy") {
 		out.reflection.anisotropy_enabled_factor = value.clamp(0.0, 1.0);
@@ -4484,6 +4497,29 @@ mod tests {
 			mtoon.parametric_rim_color_factor,
 			UnaMtoonMaterial::default().parametric_rim_color_factor
 		);
+	}
+
+	#[test]
+	fn imports_liltoon_gem_source_profile_and_reflection_params() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonGem",
+			"floatParams": {
+				"_GemEnvContrast": 2.5,
+				"_RefractionFresnelPower": 4.25
+			},
+			"colorParams": {
+				"_GemEnvColor": [0.8, 0.9, 1.0, 0.7]
+			},
+			"mtoon": {}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon gem material");
+
+		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::LiltoonGem);
+		assert_eq!(liltoon_like.reflection.gem_env_color_factor, [0.8, 0.9, 1.0, 0.7]);
+		assert_eq!(liltoon_like.reflection.gem_env_contrast_factor, 2.5);
+		assert_eq!(liltoon_like.reflection.gem_refraction_fresnel_power_factor, 4.25);
 	}
 
 	#[test]

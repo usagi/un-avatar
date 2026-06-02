@@ -42,6 +42,7 @@ struct DrawMaterial {
 	reflection_params: vec4<f32>,
 	reflection_ext_params: vec4<f32>,
 	reflection_cube_color: vec4<f32>,
+	gem_env_color: vec4<f32>,
 	specular_toon_params: vec4<f32>,
 	rim_color: vec4<f32>,
 	rim_params: vec4<f32>,
@@ -264,6 +265,7 @@ const DBG_DISABLE_NORMAL_MAP: u32 = 256u;
 const MAT_DOUBLE_SIDED: u32 = 512u;
 const MAT_CULL_FRONT: u32 = 2048u;
 const SRC_LILTOON: u32 = 4096u;
+const SRC_LILTOON_GEM: u32 = 8192u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -546,6 +548,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
+	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
@@ -733,6 +736,22 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
 		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
+	} else if (is_liltoon_gem) {
+		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
+		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		let perceptual_roughness = max(1.0 - smoothness, 0.02);
+		let roughness = perceptual_roughness * perceptual_roughness;
+		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
+		var env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * cube_tint;
+		let contrast = max(drawu.reflection_ext_params.y, 0.0001);
+		env = pow(clamp(env, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast * drawu.gem_env_color.rgb;
+		let env_luma = dot(env, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
+		env = mix(vec3<f32>(env_luma), env, clamp(1.0 / contrast, 0.0, 1.0));
+		let one_minus_reflectivity = 0.96;
+		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
+		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
+		let reflectance = vec3<f32>(clamp(drawu.reflection_params.z, 0.0, 1.0));
+		authored_reflection = (surface_reduction * fresnel_lerp(reflectance, grazing_term, max(dot(reflection_n, v), 0.0)) + vec3<f32>(0.5)) * 0.5 * env;
 	} else if (!is_liltoon) {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
 		let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
@@ -785,7 +804,11 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			lit = lit - reflection_metallic * lit;
 		}
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
-		lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
+		if (is_liltoon_gem) {
+			lit = lit + authored_reflection;
+		} else {
+			lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
+		}
 		if (drawu.rim_shade_params.x > 0.5) {
 			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
 			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));

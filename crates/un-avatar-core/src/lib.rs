@@ -507,6 +507,7 @@ pub enum UnaLilToonLikeSourceProfile {
 	#[default]
 	Unknown,
 	Liltoon,
+	LiltoonGem,
 	MtoonConverted,
 }
 
@@ -750,6 +751,12 @@ pub struct UnaLilToonLikeReflection {
 	pub anisotropy_second_tangent_width_factor: f32,
 	#[serde(default = "one_f32")]
 	pub anisotropy_second_bitangent_width_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub gem_env_color_factor: [f32; 4],
+	#[serde(default = "one_f32")]
+	pub gem_env_contrast_factor: f32,
+	#[serde(default = "default_liltoon_refraction_fresnel_power")]
+	pub gem_refraction_fresnel_power_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cube_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1123,6 +1130,9 @@ impl Default for UnaLilToonLikeReflection {
 			anisotropy_second_specular_strength_factor: 0.0,
 			anisotropy_second_tangent_width_factor: 1.0,
 			anisotropy_second_bitangent_width_factor: 1.0,
+			gem_env_color_factor: [1.0, 1.0, 1.0, 1.0],
+			gem_env_contrast_factor: 1.0,
+			gem_refraction_fresnel_power_factor: default_liltoon_refraction_fresnel_power(),
 			cube_texture_index: None,
 			color_texture_index: None,
 			smoothness_texture_index: None,
@@ -1428,6 +1438,10 @@ fn default_liltoon_smoothness() -> f32 {
 
 fn default_liltoon_reflectance() -> f32 {
 	0.5
+}
+
+fn default_liltoon_refraction_fresnel_power() -> f32 {
+	5.0
 }
 
 fn default_liltoon_specular_border() -> f32 {

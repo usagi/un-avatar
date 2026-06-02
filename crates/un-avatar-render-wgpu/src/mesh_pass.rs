@@ -222,7 +222,7 @@ struct MeshDrawTransformGpu {
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
 /// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
 /// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
-/// bit12=lilToon-like source material。
+/// bit12=lilToon-like source material, bit13=lilToon Gem source material。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -249,6 +249,7 @@ struct MeshDrawMaterialGpu {
 	reflection_params: [f32; 4],
 	reflection_ext_params: [f32; 4],
 	reflection_cube_color: [f32; 4],
+	gem_env_color: [f32; 4],
 	specular_toon_params: [f32; 4],
 	rim_color: [f32; 4],
 	rim_params: [f32; 4],
@@ -302,7 +303,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1024);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1040);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -412,6 +413,8 @@ enum DrawPipelineKind {
 	BlendUnlit,
 	BlendToon,
 	BlendToonZWrite,
+	BlendToonAdd,
+	BlendToonAddZWrite,
 }
 
 #[derive(Clone, Debug)]
@@ -511,6 +514,29 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	}
 }
 
+fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
+	let Some(liltoon_like) = material.liltoon_like.as_ref() else {
+		return false;
+	};
+	(liltoon_like.blend_state.source_factor - 1.0).abs() < 0.001
+		&& (liltoon_like.blend_state.destination_factor - 1.0).abs() < 0.001
+		&& liltoon_like.blend_state.operation_factor.abs() < 0.001
+}
+
+fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bool) -> DrawPipelineKind {
+	if matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) && liltoon_uses_additive_color_blend(&draw.material) {
+		if zwrite {
+			DrawPipelineKind::BlendToonAddZWrite
+		} else {
+			DrawPipelineKind::BlendToonAdd
+		}
+	} else if zwrite && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) {
+		DrawPipelineKind::BlendToonZWrite
+	} else {
+		blend_pipeline_for_shading(shading)
+	}
+}
+
 fn material_render_queue_number(material: &UnaMaterialPbr, alpha_mode: UnaAlphaMode) -> i32 {
 	if let Some(render_queue) = material
 		.liltoon_like
@@ -571,10 +597,10 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaAlphaMode::Blend
 				if draw.mtoon.transparent_with_z_write && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) =>
 			{
-				blended_draws.push((DrawPipelineKind::BlendToonZWrite, draw_index));
+				blended_draws.push((blend_pipeline_for_draw(draw, shading, true), draw_index));
 			}
 			UnaAlphaMode::Blend => {
-				blended_draws.push((blend_pipeline_for_shading(shading), draw_index));
+				blended_draws.push((blend_pipeline_for_draw(draw, shading, false), draw_index));
 			}
 		}
 	}
@@ -589,11 +615,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
-	(
-		outline_draw_indices,
-		opaque_batches,
-		blended_batches,
-	)
+	(outline_draw_indices, opaque_batches, blended_batches)
 }
 
 pub(crate) struct SceneMeshes {
@@ -605,6 +627,8 @@ pub(crate) struct SceneMeshes {
 	pipeline_blend_unlit: wgpu::RenderPipeline,
 	pipeline_blend_toon: wgpu::RenderPipeline,
 	pipeline_blend_toon_zwrite: wgpu::RenderPipeline,
+	pipeline_blend_toon_add: wgpu::RenderPipeline,
+	pipeline_blend_toon_add_zwrite: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_bind_group: wgpu::BindGroup,
@@ -1171,6 +1195,12 @@ fn mesh_draw_material_gpu(
 	if liltoon_like.is_some() {
 		flags |= 4096;
 	}
+	if liltoon_like
+		.map(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem)
+		.unwrap_or(false)
+	{
+		flags |= 8192;
+	}
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -1403,7 +1433,14 @@ fn mesh_draw_material_gpu(
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
 	let reflection_ext_params = liltoon_like
-		.map(|u| [u.reflection.cube_enable_lighting_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.map(|u| {
+			[
+				u.reflection.cube_enable_lighting_factor.clamp(0.0, 1.0),
+				u.reflection.gem_env_contrast_factor.max(0.0001),
+				u.reflection.gem_refraction_fresnel_power_factor.max(0.0001),
+				u.reflection.gem_env_color_factor[3].clamp(0.0, 1.0),
+			]
+		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let reflection_cube_color = liltoon_like
 		.map(|u| {
@@ -1415,6 +1452,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 1.0, 1.0, 0.0]);
+	let gem_env_color = liltoon_like
+		.map(|u| u.reflection.gem_env_color_factor)
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let specular_toon_params = liltoon_like
 		.map(|u| {
 			[
@@ -1615,6 +1655,7 @@ fn mesh_draw_material_gpu(
 		reflection_params,
 		reflection_ext_params,
 		reflection_cube_color,
+		gem_env_color,
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
@@ -2251,6 +2292,18 @@ impl SceneMeshes {
 		// with shader-side premultiply. The lilToon-like v2 path follows the same
 		// premultiplied-alpha convention while it still shares this pipeline.
 		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+		let additive_toon_blend = Some(wgpu::BlendState {
+			color: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::One,
+				operation: wgpu::BlendOperation::Add,
+			},
+			alpha: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+				operation: wgpu::BlendOperation::Add,
+			},
+		});
 		let pipeline_blend_lit = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
@@ -2309,6 +2362,38 @@ impl SceneMeshes {
 			"vs_main",
 			"fs_toon",
 			premultiplied_blend,
+			wgpu::ColorWrites::ALL,
+			true,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
+		let pipeline_blend_toon_add = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_blend_toon_add",
+			"vs_main",
+			"fs_toon",
+			additive_toon_blend,
+			wgpu::ColorWrites::ALL,
+			false,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
+		let pipeline_blend_toon_add_zwrite = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_blend_toon_add_zwrite",
+			"vs_main",
+			"fs_toon",
+			additive_toon_blend,
 			wgpu::ColorWrites::ALL,
 			true,
 			wgpu::CompareFunction::LessEqual,
@@ -3128,6 +3213,8 @@ impl SceneMeshes {
 			pipeline_blend_unlit,
 			pipeline_blend_toon,
 			pipeline_blend_toon_zwrite,
+			pipeline_blend_toon_add,
+			pipeline_blend_toon_add_zwrite,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_bind_group,
@@ -3299,6 +3386,8 @@ impl SceneMeshes {
 			DrawPipelineKind::BlendUnlit => &self.pipeline_blend_unlit,
 			DrawPipelineKind::BlendToon => &self.pipeline_blend_toon,
 			DrawPipelineKind::BlendToonZWrite => &self.pipeline_blend_toon_zwrite,
+			DrawPipelineKind::BlendToonAdd => &self.pipeline_blend_toon_add,
+			DrawPipelineKind::BlendToonAddZWrite => &self.pipeline_blend_toon_add_zwrite,
 		}
 	}
 
@@ -3665,6 +3754,22 @@ mod tests {
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & 4096, 0);
+	}
+
+	#[test]
+	fn liltoon_gem_source_flag_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let flags = draw.params[3].to_bits();
+
+		assert_ne!(flags & 4096, 0);
+		assert_ne!(flags & 8192, 0);
 	}
 
 	#[test]

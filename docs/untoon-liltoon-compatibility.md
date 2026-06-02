@@ -15,6 +15,7 @@ UNToon v2 は lilToon 互換を基準にする。v1 の MToon 互換 shader は�
 - Current first-pass source blocks:
   - `lil_common_functions.hlsl`: `lilTooningScale`, `lilBlendColor`
   - `lil_common_frag.hlsl`: `lilGetShading`, `lilGetMatCap`, reflection / rim / emission blocks
+  - `lil_pass_forward_gem.hlsl`: Gem environment reflection block
 
 WGSL は独立実装とする。ただし、挙動を移植する機能では lilToon の該当 HLSL block を source reference として明示的に読む。
 
@@ -139,7 +140,8 @@ Status legend:
 
 - `[~]` lilToon material detection: `sourceShader`, `family`, shader variant names
   - done: Unity Exporter が `sourceShader` / `family` と raw material params を `UN_avatar_material` に保持し、Importer が lilToon family を検出する。
-  - remaining: shader variant ごとの feature set (`Lite`, `Cutout`, `Transparent`, `TwoPass`, `Outline`, `Fur`, `Gem`, `Refraction`) を compatibility report で分類する。
+  - done: Importer は `Hidden/lilToonGem` を `LiltoonGem` source profile として分類する。
+  - remaining: shader variant ごとの feature set (`Lite`, `Cutout`, `Transparent`, `TwoPass`, `Outline`, `Fur`, `Refraction`) を compatibility report で分類する。
 - `[~]` alpha mode: Opaque / Cutout / Transparent / Transparent ZWrite
   - done: lilToon shader name、renderQueue、`_ZWrite` から Opaque / Mask / Blend / Transparent ZWrite の基本を推定する。
   - done: Transparent ZWrite は color write なし prepass ではなく、lilToon Forward pass と同じく transparent color pass 自体を depth write 有効で描く。
@@ -147,6 +149,7 @@ Status legend:
 - `[~]` blend state: lilToon premultiply path for transparent materials
 	- done: Transparent 系は shader-side premultiply + premultiplied blend path へ寄せ始めている。
 	- done: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_SrcBlendAlpha` / `_DstBlendAlpha` / `_BlendOpAlpha` / `_SrcBlendAlphaFA` / `_DstBlendAlphaFA` / `_BlendOpAlphaFA` / `_AlphaBoostFA` を lilToon-like material に保持する。`_AlphaBoostFA` は forward-add 系の値なので、通常 transparent color pass の alpha には掛けない。
+	- done: lilToon-like material の RGB blend が `_SrcBlend = One` / `_DstBlend = One` / `_BlendOp = Add` の場合は additive toon pipeline で描く。
 	- remaining: RGB / alpha / forward-add alpha blend state の組み合わせを wgpu pipeline blend state へより厳密に反映する。
 - `[~]` cull mode: `_Cull`, double-sided handling
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
@@ -455,6 +458,11 @@ Status legend:
 - `[~]` environment reflection approximation policy
   - done: 現時点では reflection texture を equirectangular 2D approximation として扱い、`_UseReflection` / `_ApplyReflection` で明示的に gate する。
   - remaining: cubemap / equirect / PMREM / roughness mip の仕様を `.unavatar` metadata と renderer pipeline に分離して定義する。
+- `[~]` lilToon Gem: environment reflection
+  - done: `Hidden/lilToonGem` を source profile として保持し、`_GemEnvColor` / `_GemEnvContrast` / `_RefractionFresnelPower` を import する。
+  - done: Gem material は `_UseReflection = 0` でも `lil_pass_forward_gem.hlsl` と同じく environment reflection を Fresnel で加算する。
+  - done: field_drape の懐中時計で、ガラス面の白い反射が出る最低限の改善を確認した。
+  - remaining: `GrabPass` / `_lilBackgroundTexture` 相当の背景屈折、chromatic aberration、front/back face 差分、roughness mip、HDR cubemap decode を実装する。
 
 ### Rim / Rim Shade / Backlight
 
@@ -595,7 +603,10 @@ Status legend:
 - `[defer]` Distance fade
 - `[defer]` dissolve
 - `[defer]` ID mask / UDIM discard
-- `[defer]` fur / gem / refraction variants
+- `[defer]` fur / refraction variants
+- `[~]` gem variant
+  - done: Gem の source profile / additive blend / environment reflection approximation まで実装した。
+  - remaining: 背景屈折と Gem particle / chromatic aberration を含む full Gem pass は未実装。
 
 ## Completion Rule
 
