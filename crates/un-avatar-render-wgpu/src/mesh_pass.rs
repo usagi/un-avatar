@@ -185,9 +185,45 @@ pub struct SceneMeshLoadOpts {
 	pub skin_tone_matching: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MaterialTier {
+	FullOnePass,
+	Portable16,
+}
+
 use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
+
+fn mesh_shader_source_for_tier(tier: MaterialTier) -> Cow<'static, str> {
+	match tier {
+		MaterialTier::FullOnePass => Cow::Borrowed(SHADER_MESH),
+		MaterialTier::Portable16 => Cow::Owned(portable_mesh_shader_source()),
+	}
+}
+
+fn portable_mesh_shader_source() -> String {
+	let mut shader = SHADER_MESH.to_string();
+	for snippet in [
+		"@group(1) @binding(24) var shadow_border_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(25) var shadow_blur_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(26) var shadow_border_mask_samp: sampler;\n",
+		"@group(1) @binding(27) var shadow_blur_mask_samp: sampler;\n",
+		"@group(1) @binding(38) var matcap2_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(39) var matcap2_blend_mask_tex: texture_2d<f32>;\n",
+	] {
+		shader = shader.replace(snippet, "");
+	}
+	shader = shader.replace(
+		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).r;\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).r;",
+		"let shadow_border_mask = 1.0;\n\t\tlet shadow_blur_mask = 1.0;",
+	);
+	shader = shader.replace(
+		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;\n\t\t\tlet matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);\n\t\t\tlit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
+		"",
+	);
+	shader
+}
 
 /// シェーダとボーンバッファの上限（io-gltf のスキン joint 上限と同値に保つ）。
 pub(crate) const MAX_BONES: usize = 512;
@@ -250,6 +286,8 @@ struct MeshDrawMaterialGpu {
 	reflection_ext_params: [f32; 4],
 	reflection_cube_color: [f32; 4],
 	gem_env_color: [f32; 4],
+	gem_params: [f32; 4],
+	gem_particle_color: [f32; 4],
 	specular_toon_params: [f32; 4],
 	rim_color: [f32; 4],
 	rim_params: [f32; 4],
@@ -303,7 +341,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1040);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1072);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -467,6 +505,7 @@ struct MeshDraw {
 	draw_transform_uploaded: Option<MeshDrawTransformGpu>,
 	draw_material: wgpu::Buffer,
 	bind_material: wgpu::BindGroup,
+	bind_outline_material: wgpu::BindGroup,
 	skin_palette_index: usize,
 	_morph_meta_buffer: wgpu::Buffer,
 	morph_weight_buffer: wgpu::Buffer,
@@ -633,7 +672,10 @@ pub(crate) struct SceneMeshes {
 	pipeline_blend_toon_add_zwrite: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
+	frame_layout: wgpu::BindGroupLayout,
 	frame_bind_group: wgpu::BindGroup,
+	screen_grab_sampler: wgpu::Sampler,
+	_screen_grab_fallback_texture: wgpu::Texture,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	#[allow(dead_code)]
@@ -1003,6 +1045,80 @@ fn sampler_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages)
 		ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
 		count: None,
 	}
+}
+
+fn texture_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+	wgpu::BindGroupLayoutEntry {
+		binding,
+		visibility,
+		ty: wgpu::BindingType::Texture {
+			multisampled: false,
+			view_dimension: wgpu::TextureViewDimension::D2,
+			sample_type: wgpu::TextureSampleType::Float { filterable: true },
+		},
+		count: None,
+	}
+}
+
+fn uniform_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+	wgpu::BindGroupLayoutEntry {
+		binding,
+		visibility,
+		ty: wgpu::BindingType::Buffer {
+			ty: wgpu::BufferBindingType::Uniform,
+			has_dynamic_offset: false,
+			min_binding_size: None,
+		},
+		count: None,
+	}
+}
+
+fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayoutEntry> {
+	let mut entries = vec![
+		uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
+		texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(2, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(4, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(5, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(6, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(7, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(9, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		uniform_bind_group_layout_entry(10, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(11, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(12, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(13, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(14, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(15, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(16, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(17, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(18, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(20, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(21, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(22, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(28, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(29, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(30, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(31, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(32, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(33, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(34, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(35, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(36, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
+	];
+	if tier == MaterialTier::FullOnePass {
+		entries.extend([
+			texture_bind_group_layout_entry(24, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(25, wgpu::ShaderStages::FRAGMENT),
+			sampler_bind_group_layout_entry(26, wgpu::ShaderStages::FRAGMENT),
+			sampler_bind_group_layout_entry(27, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(38, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(39, wgpu::ShaderStages::FRAGMENT),
+		]);
+	}
+	entries
 }
 
 fn create_mesh_sampler(device: &wgpu::Device, label: &'static str, sampler: &UnaTextureSampler) -> wgpu::Sampler {
@@ -1457,6 +1573,19 @@ fn mesh_draw_material_gpu(
 	let gem_env_color = liltoon_like
 		.map(|u| u.reflection.gem_env_color_factor)
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let gem_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.gem_refraction_strength_factor,
+				u.reflection.gem_chromatic_aberration_factor.max(0.0),
+				u.reflection.gem_particle_loop_factor.max(0.0),
+				u.reflection.gem_vr_parallax_strength_factor,
+			]
+		})
+		.unwrap_or([0.5, 0.02, 8.0, 1.0]);
+	let gem_particle_color = liltoon_like
+		.map(|u| u.reflection.gem_particle_color_factor)
+		.unwrap_or([4.0, 4.0, 4.0, 1.0]);
 	let specular_toon_params = liltoon_like
 		.map(|u| {
 			[
@@ -1658,6 +1787,8 @@ fn mesh_draw_material_gpu(
 		reflection_ext_params,
 		reflection_cube_color,
 		gem_env_color,
+		gem_params,
+		gem_particle_color,
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
@@ -1798,6 +1929,7 @@ impl SceneMeshes {
 		queue: &wgpu::Queue,
 		format: wgpu::TextureFormat,
 		sample_count: u32,
+		material_tier: MaterialTier,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
 		opts: SceneMeshLoadOpts,
@@ -1850,19 +1982,37 @@ impl SceneMeshes {
 		report("gpu-upload", "Preparing GPU scene layouts".to_string());
 		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_frame"),
-			entries: &[wgpu::BindGroupLayoutEntry {
-				binding: 0,
-				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: None,
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
 				},
-				count: None,
-			}],
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+					count: None,
+				},
+			],
 		});
 
-		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+		let full_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_material"),
 			entries: &[
 				wgpu::BindGroupLayoutEntry {
@@ -1934,16 +2084,6 @@ impl SceneMeshes {
 				wgpu::BindGroupLayoutEntry {
 					binding: 7,
 					visibility: wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-				wgpu::BindGroupLayoutEntry {
-					binding: 8,
-					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
 						view_dimension: wgpu::TextureViewDimension::D2,
@@ -2108,6 +2248,84 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+			],
+		});
+		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
+		let portable_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_material_portable16"),
+			entries: &portable_material_entries,
+		});
+		let material_layout = match material_tier {
+			MaterialTier::FullOnePass => &full_material_layout,
+			MaterialTier::Portable16 => &portable_material_layout,
+		};
+		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_outline_material"),
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(2, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 8,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 9,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 10,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(19, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				wgpu::BindGroupLayoutEntry {
+					binding: 36,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
 				wgpu::BindGroupLayoutEntry {
 					binding: 40,
 					visibility: wgpu::ShaderStages::FRAGMENT,
@@ -2175,7 +2393,17 @@ impl SceneMeshes {
 			label: Some("mesh"),
 			bind_group_layouts: &[
 				Some(&frame_layout),
-				Some(&material_layout),
+				Some(material_layout),
+				Some(&skin_bind_group_layout),
+				Some(&morph_bind_group_layout),
+			],
+			immediate_size: 0,
+		});
+		let outline_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("mesh_outline"),
+			bind_group_layouts: &[
+				Some(&frame_layout),
+				Some(&outline_material_layout),
 				Some(&skin_bind_group_layout),
 				Some(&morph_bind_group_layout),
 			],
@@ -2184,7 +2412,7 @@ impl SceneMeshes {
 
 		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 			label: Some("mesh"),
-			source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_MESH)),
+			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
 		});
 
 		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
@@ -2227,7 +2455,7 @@ impl SceneMeshes {
 
 		let pipeline_outline_toon = Self::create_mesh_pipeline(
 			device,
-			&pipeline_layout,
+			&outline_pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
@@ -2409,14 +2637,42 @@ impl SceneMeshes {
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		});
+		let screen_grab_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+			label: Some("mesh_screen_grab_sampler"),
+			address_mode_u: wgpu::AddressMode::ClampToEdge,
+			address_mode_v: wgpu::AddressMode::ClampToEdge,
+			address_mode_w: wgpu::AddressMode::ClampToEdge,
+			mag_filter: wgpu::FilterMode::Linear,
+			min_filter: wgpu::FilterMode::Linear,
+			mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+			..Default::default()
+		});
+		let screen_grab_fallback_texture = create_solid_texture_1x1(
+			device,
+			queue,
+			"screen-grab-fallback",
+			wgpu::TextureFormat::Rgba8Unorm,
+			[0, 0, 0, 255],
+		);
+		let screen_grab_fallback_view = screen_grab_fallback_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
 		let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("mesh_frame"),
 			layout: &frame_layout,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: frame_buffer.as_entire_binding(),
-			}],
+			entries: &[
+				wgpu::BindGroupEntry {
+					binding: 0,
+					resource: frame_buffer.as_entire_binding(),
+				},
+				wgpu::BindGroupEntry {
+					binding: 1,
+					resource: wgpu::BindingResource::TextureView(&screen_grab_fallback_view),
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
+					resource: wgpu::BindingResource::Sampler(&screen_grab_sampler),
+				},
+			],
 		});
 
 		let mut samplers = vec![create_mesh_sampler(device, "mesh_sampler_default", &UnaTextureSampler::default())];
@@ -2957,105 +3213,141 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 				});
 
-				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("mesh_mat"),
-					layout: &material_layout,
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: draw_transform.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 10,
-							resource: draw_material_buffer.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: wgpu::BindingResource::TextureView(tex_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: wgpu::BindingResource::Sampler(tex_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 3,
-							resource: wgpu::BindingResource::TextureView(shade_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 4,
-							resource: wgpu::BindingResource::TextureView(shift_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 5,
-							resource: wgpu::BindingResource::TextureView(matcap_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 6,
-							resource: wgpu::BindingResource::TextureView(rim_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 7,
-							resource: wgpu::BindingResource::TextureView(emissive_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 8,
-							resource: wgpu::BindingResource::TextureView(outline_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 9,
-							resource: wgpu::BindingResource::TextureView(uv_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 11,
-							resource: wgpu::BindingResource::TextureView(normal_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 12,
-							resource: wgpu::BindingResource::TextureView(occlusion_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 13,
-							resource: wgpu::BindingResource::TextureView(reflection_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 14,
-							resource: wgpu::BindingResource::Sampler(shade_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 15,
-							resource: wgpu::BindingResource::Sampler(shift_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 16,
-							resource: wgpu::BindingResource::Sampler(matcap_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 17,
-							resource: wgpu::BindingResource::Sampler(rim_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 18,
-							resource: wgpu::BindingResource::Sampler(emissive_sampler),
-						},
+				let mut bind_material_entries = vec![
+					wgpu::BindGroupEntry {
+						binding: 0,
+						resource: draw_transform.as_entire_binding(),
+					},
+					wgpu::BindGroupEntry {
+						binding: 10,
+						resource: draw_material_buffer.as_entire_binding(),
+					},
+					wgpu::BindGroupEntry {
+						binding: 1,
+						resource: wgpu::BindingResource::TextureView(tex_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 2,
+						resource: wgpu::BindingResource::Sampler(tex_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 3,
+						resource: wgpu::BindingResource::TextureView(shade_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 4,
+						resource: wgpu::BindingResource::TextureView(shift_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 5,
+						resource: wgpu::BindingResource::TextureView(matcap_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 6,
+						resource: wgpu::BindingResource::TextureView(rim_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 7,
+						resource: wgpu::BindingResource::TextureView(emissive_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 9,
+						resource: wgpu::BindingResource::TextureView(uv_mask_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 11,
+						resource: wgpu::BindingResource::TextureView(normal_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 12,
+						resource: wgpu::BindingResource::TextureView(occlusion_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 13,
+						resource: wgpu::BindingResource::TextureView(reflection_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 14,
+						resource: wgpu::BindingResource::Sampler(shade_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 15,
+						resource: wgpu::BindingResource::Sampler(shift_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 16,
+						resource: wgpu::BindingResource::Sampler(matcap_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 17,
+						resource: wgpu::BindingResource::Sampler(rim_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 18,
+						resource: wgpu::BindingResource::Sampler(emissive_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 20,
+						resource: wgpu::BindingResource::Sampler(normal_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 21,
+						resource: wgpu::BindingResource::Sampler(occlusion_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 22,
+						resource: wgpu::BindingResource::Sampler(reflection_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 23,
+						resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 28,
+						resource: wgpu::BindingResource::TextureView(reflection_color_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 29,
+						resource: wgpu::BindingResource::TextureView(smoothness_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 30,
+						resource: wgpu::BindingResource::TextureView(metallic_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 31,
+						resource: wgpu::BindingResource::Sampler(reflection_color_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 32,
+						resource: wgpu::BindingResource::Sampler(smoothness_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 33,
+						resource: wgpu::BindingResource::Sampler(metallic_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 34,
+						resource: wgpu::BindingResource::TextureView(matcap_blend_mask_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 35,
+						resource: wgpu::BindingResource::Sampler(matcap_blend_mask_sampler),
+					},
+					wgpu::BindGroupEntry {
+						binding: 36,
+						resource: wgpu::BindingResource::TextureView(alpha_mask_view),
+					},
+					wgpu::BindGroupEntry {
+						binding: 37,
+						resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
+					},
+				];
+				if material_tier == MaterialTier::FullOnePass {
+					bind_material_entries.extend([
 						wgpu::BindGroupEntry {
 							binding: 19,
 							resource: wgpu::BindingResource::Sampler(outline_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 20,
-							resource: wgpu::BindingResource::Sampler(normal_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 21,
-							resource: wgpu::BindingResource::Sampler(occlusion_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 22,
-							resource: wgpu::BindingResource::Sampler(reflection_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 23,
-							resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
 						},
 						wgpu::BindGroupEntry {
 							binding: 24,
@@ -3074,36 +3366,55 @@ impl SceneMeshes {
 							resource: wgpu::BindingResource::Sampler(shadow_blur_mask_sampler),
 						},
 						wgpu::BindGroupEntry {
-							binding: 28,
-							resource: wgpu::BindingResource::TextureView(reflection_color_view),
+							binding: 38,
+							resource: wgpu::BindingResource::TextureView(matcap2_view),
 						},
 						wgpu::BindGroupEntry {
-							binding: 29,
-							resource: wgpu::BindingResource::TextureView(smoothness_view),
+							binding: 39,
+							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
+						},
+					]);
+				}
+				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
+					label: Some("mesh_mat"),
+					layout: material_layout,
+					entries: &bind_material_entries,
+				});
+				let bind_outline_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
+					label: Some("mesh_outline_mat"),
+					layout: &outline_material_layout,
+					entries: &[
+						wgpu::BindGroupEntry {
+							binding: 0,
+							resource: draw_transform.as_entire_binding(),
 						},
 						wgpu::BindGroupEntry {
-							binding: 30,
-							resource: wgpu::BindingResource::TextureView(metallic_view),
+							binding: 1,
+							resource: wgpu::BindingResource::TextureView(tex_view),
 						},
 						wgpu::BindGroupEntry {
-							binding: 31,
-							resource: wgpu::BindingResource::Sampler(reflection_color_sampler),
+							binding: 2,
+							resource: wgpu::BindingResource::Sampler(tex_sampler),
 						},
 						wgpu::BindGroupEntry {
-							binding: 32,
-							resource: wgpu::BindingResource::Sampler(smoothness_sampler),
+							binding: 8,
+							resource: wgpu::BindingResource::TextureView(outline_view),
 						},
 						wgpu::BindGroupEntry {
-							binding: 33,
-							resource: wgpu::BindingResource::Sampler(metallic_sampler),
+							binding: 9,
+							resource: wgpu::BindingResource::TextureView(uv_mask_view),
 						},
 						wgpu::BindGroupEntry {
-							binding: 34,
-							resource: wgpu::BindingResource::TextureView(matcap_blend_mask_view),
+							binding: 10,
+							resource: draw_material_buffer.as_entire_binding(),
 						},
 						wgpu::BindGroupEntry {
-							binding: 35,
-							resource: wgpu::BindingResource::Sampler(matcap_blend_mask_sampler),
+							binding: 19,
+							resource: wgpu::BindingResource::Sampler(outline_sampler),
+						},
+						wgpu::BindGroupEntry {
+							binding: 23,
+							resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
 						},
 						wgpu::BindGroupEntry {
 							binding: 36,
@@ -3112,14 +3423,6 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 37,
 							resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 38,
-							resource: wgpu::BindingResource::TextureView(matcap2_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 39,
-							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
 						},
 						wgpu::BindGroupEntry {
 							binding: 40,
@@ -3182,6 +3485,7 @@ impl SceneMeshes {
 					draw_transform_uploaded: None,
 					draw_material: draw_material_buffer,
 					bind_material,
+					bind_outline_material,
 					skin_palette_index,
 					_morph_meta_buffer: morph_meta_buffer,
 					morph_weight_buffer,
@@ -3221,7 +3525,10 @@ impl SceneMeshes {
 			pipeline_blend_toon_add_zwrite,
 			frame_buffer,
 			frame_uploaded: None,
+			frame_layout,
 			frame_bind_group,
+			screen_grab_sampler,
+			_screen_grab_fallback_texture: screen_grab_fallback_texture,
 			_samplers: samplers,
 			_textures: textures,
 			draws,
@@ -3296,14 +3603,20 @@ impl SceneMeshes {
 		}
 	}
 
-	fn draw_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) {
+	fn draw_inner_with_material(
+		&self,
+		pass: &mut wgpu::RenderPass<'_>,
+		state: &mut DrawBindState,
+		draw_index: usize,
+		bind_material: &wgpu::BindGroup,
+	) {
 		let d = &self.draws[draw_index];
 		let palette = &self.skin_palettes[d.skin_palette_index];
 		if !state.frame_bound {
 			pass.set_bind_group(0, &self.frame_bind_group, &[]);
 			state.frame_bound = true;
 		}
-		pass.set_bind_group(1, &d.bind_material, &[]);
+		pass.set_bind_group(1, bind_material, &[]);
 		if state.skin_palette_index != Some(d.skin_palette_index) {
 			pass.set_bind_group(2, &palette.bind_group, &[]);
 			state.skin_palette_index = Some(d.skin_palette_index);
@@ -3312,6 +3625,11 @@ impl SceneMeshes {
 		pass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
 		pass.set_index_buffer(d.index_buffer.slice(..), d.index_format);
 		pass.draw_indexed(0..d.index_count, 0, 0..1);
+	}
+
+	fn draw_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) {
+		let bind_material = &self.draws[draw_index].bind_material;
+		self.draw_inner_with_material(pass, state, draw_index, bind_material);
 	}
 
 	pub fn draw_toon_outlines(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -3325,7 +3643,8 @@ impl SceneMeshes {
 		pass.set_pipeline(&self.pipeline_outline_toon);
 		let mut state = DrawBindState::default();
 		for &draw_index in &self.outline_draw_indices {
-			self.draw_inner(pass, &mut state, draw_index);
+			let bind_material = &self.draws[draw_index].bind_outline_material;
+			self.draw_inner_with_material(pass, &mut state, draw_index, bind_material);
 		}
 	}
 
@@ -3507,6 +3826,36 @@ impl SceneMeshes {
 		self.draws.is_empty()
 	}
 
+	pub fn needs_screen_refraction(&self) -> bool {
+		self.draws.iter().any(|draw| {
+			draw.material.liltoon_like.as_ref().is_some_and(|u| {
+				u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
+					&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
+			})
+		})
+	}
+
+	pub fn set_screen_grab_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
+		self.frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("mesh_frame"),
+			layout: &self.frame_layout,
+			entries: &[
+				wgpu::BindGroupEntry {
+					binding: 0,
+					resource: self.frame_buffer.as_entire_binding(),
+				},
+				wgpu::BindGroupEntry {
+					binding: 1,
+					resource: wgpu::BindingResource::TextureView(view),
+				},
+				wgpu::BindGroupEntry {
+					binding: 2,
+					resource: wgpu::BindingResource::Sampler(&self.screen_grab_sampler),
+				},
+			],
+		});
+	}
+
 	pub(crate) fn texture_summary(&self) -> TextureUploadSummary {
 		self.texture_summary.clone()
 	}
@@ -3532,6 +3881,24 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn portable_mesh_shader_strips_high_tier_bindings_and_validates() {
+		let source = portable_mesh_shader_source();
+		for binding in [
+			"@group(1) @binding(24)",
+			"@group(1) @binding(25)",
+			"@group(1) @binding(26)",
+			"@group(1) @binding(27)",
+			"@group(1) @binding(38)",
+			"@group(1) @binding(39)",
+		] {
+			assert!(!source.contains(binding), "portable shader still contains {binding}");
+		}
+		let module = naga::front::wgsl::parse_str(&source).expect("portable mesh shader parses");
+		let mut validator = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+		validator.validate(&module).expect("portable mesh shader validates");
 	}
 
 	#[test]
@@ -3637,6 +4004,8 @@ mod tests {
 					children: vec![1],
 					mesh: None,
 					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
 				},
 				UnaSceneNode {
 					source_node_id: None,
@@ -3646,6 +4015,8 @@ mod tests {
 					children: Vec::new(),
 					mesh: Some(0),
 					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
 				},
 			],
 			roots: vec![0],
@@ -3769,6 +4140,11 @@ mod tests {
 	fn liltoon_gem_source_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
+		liltoon_like.reflection.gem_refraction_strength_factor = 0.45;
+		liltoon_like.reflection.gem_chromatic_aberration_factor = 0.03;
+		liltoon_like.reflection.gem_particle_loop_factor = 6.0;
+		liltoon_like.reflection.gem_vr_parallax_strength_factor = 0.8;
+		liltoon_like.reflection.gem_particle_color_factor = [2.0, 3.0, 4.0, 0.5];
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -3779,6 +4155,8 @@ mod tests {
 
 		assert_ne!(flags & 4096, 0);
 		assert_ne!(flags & 8192, 0);
+		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
+		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
 	}
 
 	#[test]

@@ -25,6 +25,8 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 - `UnaMtoonMaterial`: legacy MToon / VRM import 用。v2 lilToon 互換機能をここへ追加しない。
 - `UnaMaterialPbr`: glTF/PBR由来の共通 material container。UNPBR の設計正本ではなく、`liltoon_like` / `mtoon` などの model-specific payload をぶら下げる既存構造。
 - Renderer は v2 開発中、`material.liltoon_like` があればこれを優先する。v1 互換性は v2 安定後に MToon-like 変換または別 pipeline として扱う。
+- Renderer は full lilToon 1-pass target として `max_sampled_textures_per_shader_stage = 32` / `max_samplers_per_shader_stage = 24` を先に要求する。Adapter が満たす場合は high-tier 1-pass material layout で追加mask/layerを復帰する。満たさない場合のみ portable tier へ落とし、UNAvatar側で警告を出す。
+- Portable tier は最低限 `screen-grab + material textures <= 16 sampled textures` で動く制約にする。これは fallback であり、lilToon利用層の標準品質目標ではない。
 
 ## Development Rule
 
@@ -178,7 +180,9 @@ Status legend:
 - `[~]` per-texture UV set selection / UV mode
   - done: Unity Exporter が既知 texture slot ごとの non-identity Tiling / Offset を `textureUvOffsetScales`、`*_UVMode` を `textureUvModeFactors` として保存し、Importer が `UnaLilToonLikeMaterial` へ保持する。
   - done: renderer は normal map sampling で `_BumpMap` / `_NormalMap` / `_BumpTex` の slot 別 Tiling / Offset を使う。
-  - done: renderer は `_ShadowStrengthMask` / `_ShadowBorderMask` / `_ShadowBlurMask` / `_MatCapBlendMask` / `_MatCap2ndBlendMask` / `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - done: renderer は `_ShadowStrengthMask` / `_MatCapBlendMask` / `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - done: high-tier 1-pass material では `_ShadowBorderMask` / `_ShadowBlurMask` / `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: Portable16 tier では16 sampled textures以内へ収めるため、これらの追加 mask runtime sampling は mask packing または multi-pass 化まで抑制する。
   - done: renderer は `_ShadowColorTex` / `_ShadeTex` / `_1st_ShadeMap` / `_RimColorTex` / `_EmissionMap` / `_ReflectionColorTex` / `_SmoothnessTex` / `_MetallicGlossMap` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: renderer の他 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
 - `[~]` lilToon `_MainTex_ScrollRotate`
@@ -271,13 +275,13 @@ Status legend:
   - done: Renderer は `_ShadowStrengthMask` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: UV mode / UV set、mask LOD、face SDF shadow mode、2nd/3rd channel 利用を本家に合わせる。
 - `[~]` `_ShadowBorderMask`
-  - done: Unity Exporter が `_ShadowBorderMask` を `shadowBorderMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.border_mask_texture_index` へ読み込み、Renderer は 1st shadow の `NdotL` 相当値に mask.r を掛けて toon border へ渡す。
-  - done: Renderer は `_ShadowBorderMask` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: UV mode / UV set、`_ShadowAOShift`、`_ShadowPostAO`、mask LOD、2nd/3rd channel 利用、本家の `lilTooningNoSaturateScale` path を実装する。
+  - done: Unity Exporter が `_ShadowBorderMask` を `shadowBorderMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.border_mask_texture_index` へ読み込む。
+  - done: high-tier 1-pass material では Renderer が `_ShadowBorderMask` を runtime sampling し、shadow border 入力に mask.r を掛ける。
+  - remaining: Portable16 tier では16 texture budgetのため runtime sampling を抑制する。UV mode / UV set、`_ShadowAOShift`、`_ShadowPostAO`、mask LOD、2nd/3rd channel 利用、本家の `lilTooningNoSaturateScale` path は継続。
 - `[~]` `_ShadowBlurMask`
-  - done: Unity Exporter が `_ShadowBlurMask` を `shadowBlurMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.blur_mask_texture_index` へ読み込み、Renderer は 1st shadow blur に mask.r を掛ける。
-  - done: Renderer は `_ShadowBlurMask` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: UV mode / UV set、mask LOD、2nd/3rd channel 利用、本家の `aastrencth` と blur scale の対応を検証する。
+  - done: Unity Exporter が `_ShadowBlurMask` を `shadowBlurMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.blur_mask_texture_index` へ読み込む。
+  - done: high-tier 1-pass material では Renderer が `_ShadowBlurMask` を runtime sampling し、shadow blur 入力に mask.r を掛ける。
+  - remaining: Portable16 tier では16 texture budgetのため runtime sampling を抑制する。UV mode / UV set、mask LOD、2nd/3rd channel 利用、本家の `aastrencth` と blur scale の対応を検証する。
 - `[~]` `_ShadowReceive`
   - done: source raw params を v2 shadow parameter として保持する。
   - remaining: Unity/lilToon の shadow attenuation 相当入力を UNAvatar lighting に追加して、`lns *= lerp(1.0, calculatedShadow, _ShadowReceive)` へ接続する。
@@ -383,10 +387,9 @@ Status legend:
 	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
 	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
-	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
-	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。Renderer は `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
-	- done: `_MatCap2ndPerspective` / `_MatCap2ndZRotCancel` / `_MatCap2ndVRParallaxStrength` を v2 material に保持し、Perspective は 2nd MatCap UV の view direction selection へ接続する。
-  - remaining: mask UV mode / UV set、VR parallax、camera roll を含む Z rotation cancel false path、1st MatCap との本家合成順、sampler 分離要否を検証する。
+	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask`、`_MatCap2ndBlendMask`、`_MatCap2ndPerspective` / `_MatCap2ndZRotCancel` / `_MatCap2ndVRParallaxStrength` を source params として保持する。
+  - done: high-tier 1-pass material では `_MatCap2ndTex` / `_MatCap2ndBlendMask` を runtime sampling し、2nd MatCap contribution を合成する。
+  - remaining: Portable16 tier では16 texture budgetのため runtime contribution を抑制する。mask UV mode / UV set、VR parallax、camera roll を含む Z rotation cancel false path、1st MatCap との本家合成順を詰める。
 
 ### Reflection / Specular
 
@@ -462,9 +465,14 @@ Status legend:
   - remaining: cubemap / equirect / PMREM / roughness mip の仕様を `.unavatar` metadata と renderer pipeline に分離して定義する。
 - `[~]` lilToon Gem: environment reflection
   - done: `Hidden/lilToonGem` を source profile として保持し、`_GemEnvColor` / `_GemEnvContrast` / `_RefractionFresnelPower` を import する。
+  - done: `_RefractionStrength` / `_GemChromaticAberration` / `_GemParticleLoop` / `_GemParticleColor` / `_GemVRParallaxStrength` を Gem source params として保持する。
   - done: Gem material は `_UseReflection = 0` でも `lil_pass_forward_gem.hlsl` と同じく environment reflection を Fresnel で加算する。
+  - done: environment reflection 側は backface の RGB 別 sampling / base color multiplication / Gem particle を conservative approximation として反映する。
+  - done: `_lilBackgroundTexture` 相当として opaque/outline 後のscreen-grab textureを透明/Gem passへ渡し、`_RefractionStrength` / `_RefractionFresnelPower` / `_GemChromaticAberration` による背景屈折近似を反映する。
+  - done: 背景屈折offsetは `view_proj` で world normal endpoint を投影する view-space normal offset approximation に寄せ、`_GemVRParallaxStrength` を Gem view direction selection に反映する。
+  - done: Gem environment reflection は smoothness 由来の roughness LOD で `textureSampleLevel` する。現状は入力reflection textureのmipに依存する近似。
   - done: field_drape の懐中時計で、ガラス面の白い反射が出る最低限の改善を確認した。
-  - remaining: `GrabPass` / `_lilBackgroundTexture` 相当の背景屈折、chromatic aberration、front/back face 差分、roughness mip、HDR cubemap decode を実装する。
+  - remaining: lilToon 本家と同じ cubemap / PMREM policy、HDR cubemap decode、VR stereo差分を実装する。
 
 ### Rim / Rim Shade / Backlight
 
@@ -575,13 +583,13 @@ Status legend:
   - remaining: screen/world mode、camera distance scaling を本家の単位系に合わせる。
 - `[~]` `_OutlineColor`
   - done: outline color factor として保持し、v2 authored outline color に接続する。
-  - done: `_OutlineTex` の color / alpha を outline color に乗算する。
+  - done: `_OutlineTex` の color / alpha を outline color に乗算する。Gem screen-grab 追加後は outline pass 専用 material layout に分離し、FullToon/Gem pass の sampled texture budget を消費しない。
   - remaining: alpha discard、lighting mix との合成を本家に合わせる。
 - `[~]` `_OutlineLitColor`
   - done: source raw color params を保持し、alpha がある場合は outline NdotL / `_OutlineLitScale` / `_OutlineLitOffset` による lit outline color への補間へ接続した。
   - remaining: view-space outline NdotL、`_OutlineLitShadowReceive` の shadow attenuation、`_OutlineLitApplyTex` の texture source を本家へ合わせる。
 - `[~]` `_OutlineTex`
-  - done: Exporter / importer / v2 material で texture reference を保持し、outline fragment shader で color / alpha texture として sample する。
+  - done: Exporter / importer / v2 material で texture reference を保持し、outline専用 material layout の runtime sampling に接続する。
   - remaining: sampler / UV transform / color space / alpha discard の本家互換性を照合する。
 - `[~]` `_OutlineWidthMask`
   - done: Exporter / importer / v2 material で texture reference を保持し、outline width mask binding に接続する。
@@ -607,8 +615,8 @@ Status legend:
 - `[defer]` ID mask / UDIM discard
 - `[defer]` fur / refraction variants
 - `[~]` gem variant
-  - done: Gem の source profile / additive blend / environment reflection approximation まで実装した。
-  - remaining: 背景屈折と Gem particle / chromatic aberration を含む full Gem pass は未実装。
+  - done: Gem の source profile / additive blend / environment reflection approximation / screen-grab background refraction approximation / view-space normal offset approximation / VR parallax strength / roughness LOD / backface chromatic environment sampling / Gem particle approximation まで実装した。
+  - remaining: cubemap / PMREM policy、HDR cubemap decode、VR stereo差分を含む full Gem pass は未実装。
 
 ## Completion Rule
 

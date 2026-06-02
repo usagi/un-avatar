@@ -451,6 +451,10 @@ impl PostProcess {
 		&self.source_view
 	}
 
+	pub(crate) fn source_texture(&self) -> &wgpu::Texture {
+		&self.source_texture
+	}
+
 	pub(crate) fn depth_view(&self) -> &wgpu::TextureView {
 		&self.depth_view
 	}
@@ -923,7 +927,7 @@ fn create_source_texture(
 		sample_count: 1,
 		dimension: wgpu::TextureDimension::D2,
 		format,
-		usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+		usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
 		view_formats: &[],
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

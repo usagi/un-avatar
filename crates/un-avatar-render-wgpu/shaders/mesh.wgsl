@@ -43,6 +43,8 @@ struct DrawMaterial {
 	reflection_ext_params: vec4<f32>,
 	reflection_cube_color: vec4<f32>,
 	gem_env_color: vec4<f32>,
+	gem_params: vec4<f32>,
+	gem_particle_color: vec4<f32>,
 	specular_toon_params: vec4<f32>,
 	rim_color: vec4<f32>,
 	rim_params: vec4<f32>,
@@ -93,6 +95,8 @@ struct MorphU {
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
+@group(0) @binding(1) var screen_tex: texture_2d<f32>;
+@group(0) @binding(2) var screen_samp: sampler;
 @group(1) @binding(0) var<uniform> drawt: DrawTransform;
 @group(1) @binding(1) var tex: texture_2d<f32>;
 @group(1) @binding(2) var base_samp: sampler;
@@ -378,6 +382,19 @@ fn toon_reflection_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
 	return vec2<f32>(u, vv);
 }
 
+fn screen_uv(clip: vec4<f32>) -> vec2<f32> {
+	let ndc = clip.xy / max(clip.w, 0.000001);
+	return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+fn screen_normal_offset(world_pos: vec3<f32>, normal: vec3<f32>, base_uv: vec2<f32>) -> vec2<f32> {
+	let shifted_clip = frame.view_proj * vec4<f32>(world_pos + normalize(normal) * 0.05, 1.0);
+	let projected = screen_uv(shifted_clip) - base_uv;
+	let fallback = vec2<f32>(normal.x, -normal.y) * 0.02;
+	let use_fallback = length(projected) < 0.000001 || !all(projected == projected);
+	return clamp(select(projected, fallback, use_fallback), vec2<f32>(-0.08), vec2<f32>(0.08));
+}
+
 fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 	return clamp((x - edge0) / max(edge1 - edge0, 0.00001), 0.0, 1.0);
 }
@@ -574,6 +591,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
+	let camera_pos_len = length(frame.camera_pos.xyz);
+	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
+	let gem_view = normalize(mix(camera_dir, v, clamp(drawu.gem_params.w, 0.0, 1.0)));
 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
 	var shading: f32;
@@ -742,16 +762,34 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		let perceptual_roughness = max(1.0 - smoothness, 0.02);
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-		var env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * cube_tint;
+		let gem_reflection_uv = toon_reflection_uv(reflection_n, gem_view);
+		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
+		let nv = clamp(abs(dot(reflection_n, gem_view)), 0.0, 1.0);
+		let inv_nv = 1.0 - nv;
+		let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
+		let gem_n_g = normalize(reflection_n + gem_view * inv_nv * chroma);
+		let gem_n_b = normalize(reflection_n + gem_view * inv_nv * chroma * 2.0);
+		let env_base = textureSampleLevel(reflection_tex, reflection_samp, gem_reflection_uv, gem_env_lod).rgb;
+		let env_r = env_base.r;
+		let env_g = select(env_base.g, textureSampleLevel(reflection_tex, reflection_samp, toon_reflection_uv(gem_n_g, gem_view), gem_env_lod).g, !front_facing);
+		let env_b = select(env_base.b, textureSampleLevel(reflection_tex, reflection_samp, toon_reflection_uv(gem_n_b, gem_view), gem_env_lod).b, !front_facing);
+		var env = vec3<f32>(env_r, env_g, env_b) * cube_tint;
 		let contrast = max(drawu.reflection_ext_params.y, 0.0001);
 		env = pow(clamp(env, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast * drawu.gem_env_color.rgb;
 		let env_luma = dot(env, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
 		env = mix(vec3<f32>(env_luma), env, clamp(1.0 / contrast, 0.0, 1.0));
+		env = select(env * base, env, front_facing);
 		let one_minus_reflectivity = 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
 		let reflectance = vec3<f32>(clamp(drawu.reflection_params.z, 0.0, 1.0));
-		authored_reflection = (surface_reduction * fresnel_lerp(reflectance, grazing_term, max(dot(reflection_n, v), 0.0)) + vec3<f32>(0.5)) * 0.5 * env;
+		let particle_loop = drawu.gem_params.z;
+		let particle_1 = step(0.5, fract(nv * particle_loop));
+		let particle_2 = step(0.5, fract(abs(dot(reflection_n, normalize(gem_view.yzx))) * particle_loop));
+		let particle_3 = step(0.5, fract(abs(dot(reflection_n, normalize(gem_view.zxy))) * particle_loop));
+		let particle = select(particle_1 * particle_2 * particle_3, 0.0, particle_loop <= 0.0);
+		let particle_color = select(vec3<f32>(1.0) + particle * drawu.gem_particle_color.rgb, vec3<f32>(1.0), front_facing);
+		authored_reflection = (surface_reduction * fresnel_lerp(reflectance, grazing_term, max(dot(reflection_n, gem_view), 0.0)) + vec3<f32>(0.5)) * 0.5 * particle_color * env;
 	} else if (!is_liltoon) {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
 		let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
@@ -805,6 +843,21 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		}
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		if (is_liltoon_gem) {
+			let refraction_strength = abs(drawu.gem_params.x);
+			if (refraction_strength > 0.00001) {
+				let refraction_fresnel = pow(clamp(1.0 - abs(dot(reflection_n, gem_view)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
+				let base_screen_uv = screen_uv(i.clip);
+				let screen_offset = screen_normal_offset(i.wp, reflection_n, base_screen_uv) * refraction_strength * refraction_fresnel * 4.0;
+				let chroma_offset = screen_offset * clamp(drawu.gem_params.y, 0.0, 1.0);
+				let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset - chroma_offset, vec2<f32>(0.0), vec2<f32>(1.0))).r;
+				let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset, vec2<f32>(0.0), vec2<f32>(1.0))).g;
+				let refract_b = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset + chroma_offset, vec2<f32>(0.0), vec2<f32>(1.0))).b;
+				let contrast = max(drawu.reflection_ext_params.y, 0.0001);
+				var refract_color = pow(clamp(vec3<f32>(refract_r, refract_g, refract_b), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast;
+				let refract_luma = dot(refract_color, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
+				refract_color = mix(vec3<f32>(refract_luma), refract_color, clamp(1.0 / contrast, 0.0, 1.0));
+				lit = lit * refract_color;
+			}
 			lit = lit + authored_reflection;
 		} else {
 			lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);

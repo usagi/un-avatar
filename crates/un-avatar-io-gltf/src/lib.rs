@@ -2704,6 +2704,21 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_RefractionFresnelPower") {
 		out.reflection.gem_refraction_fresnel_power_factor = value.max(0.0001);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RefractionStrength") {
+		out.reflection.gem_refraction_strength_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GemChromaticAberration") {
+		out.reflection.gem_chromatic_aberration_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GemParticleLoop") {
+		out.reflection.gem_particle_loop_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_GemParticleColor") {
+		out.reflection.gem_particle_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GemVRParallaxStrength") {
+		out.reflection.gem_vr_parallax_strength_factor = value;
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_UseAnisotropy") {
 		out.reflection.anisotropy_enabled_factor = value.clamp(0.0, 1.0);
 	}
@@ -5074,10 +5089,15 @@ mod tests {
 			"sourceShader": "Hidden/lilToonGem",
 			"floatParams": {
 				"_GemEnvContrast": 2.5,
-				"_RefractionFresnelPower": 4.25
+				"_RefractionFresnelPower": 4.25,
+				"_RefractionStrength": 0.45,
+				"_GemChromaticAberration": 0.03,
+				"_GemParticleLoop": 6.0,
+				"_GemVRParallaxStrength": 0.8
 			},
 			"colorParams": {
-				"_GemEnvColor": [0.8, 0.9, 1.0, 0.7]
+				"_GemEnvColor": [0.8, 0.9, 1.0, 0.7],
+				"_GemParticleColor": [2.0, 3.0, 4.0, 0.5]
 			},
 			"mtoon": {}
 		});
@@ -5088,6 +5108,11 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.gem_env_color_factor, [0.8, 0.9, 1.0, 0.7]);
 		assert_eq!(liltoon_like.reflection.gem_env_contrast_factor, 2.5);
 		assert_eq!(liltoon_like.reflection.gem_refraction_fresnel_power_factor, 4.25);
+		assert_eq!(liltoon_like.reflection.gem_refraction_strength_factor, 0.45);
+		assert_eq!(liltoon_like.reflection.gem_chromatic_aberration_factor, 0.03);
+		assert_eq!(liltoon_like.reflection.gem_particle_loop_factor, 6.0);
+		assert_eq!(liltoon_like.reflection.gem_particle_color_factor, [2.0, 3.0, 4.0, 0.5]);
+		assert_eq!(liltoon_like.reflection.gem_vr_parallax_strength_factor, 0.8);
 	}
 
 	#[test]

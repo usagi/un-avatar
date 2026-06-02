@@ -772,6 +772,16 @@ pub struct UnaLilToonLikeReflection {
 	pub gem_env_contrast_factor: f32,
 	#[serde(default = "default_liltoon_refraction_fresnel_power")]
 	pub gem_refraction_fresnel_power_factor: f32,
+	#[serde(default = "default_liltoon_gem_refraction_strength")]
+	pub gem_refraction_strength_factor: f32,
+	#[serde(default = "default_liltoon_gem_chromatic_aberration")]
+	pub gem_chromatic_aberration_factor: f32,
+	#[serde(default = "default_liltoon_gem_particle_loop")]
+	pub gem_particle_loop_factor: f32,
+	#[serde(default = "default_liltoon_gem_particle_color")]
+	pub gem_particle_color_factor: [f32; 4],
+	#[serde(default = "one_f32")]
+	pub gem_vr_parallax_strength_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cube_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1148,6 +1158,11 @@ impl Default for UnaLilToonLikeReflection {
 			gem_env_color_factor: [1.0, 1.0, 1.0, 1.0],
 			gem_env_contrast_factor: 1.0,
 			gem_refraction_fresnel_power_factor: default_liltoon_refraction_fresnel_power(),
+			gem_refraction_strength_factor: default_liltoon_gem_refraction_strength(),
+			gem_chromatic_aberration_factor: default_liltoon_gem_chromatic_aberration(),
+			gem_particle_loop_factor: default_liltoon_gem_particle_loop(),
+			gem_particle_color_factor: default_liltoon_gem_particle_color(),
+			gem_vr_parallax_strength_factor: 1.0,
 			cube_texture_index: None,
 			color_texture_index: None,
 			smoothness_texture_index: None,
@@ -1457,6 +1472,22 @@ fn default_liltoon_reflectance() -> f32 {
 
 fn default_liltoon_refraction_fresnel_power() -> f32 {
 	5.0
+}
+
+fn default_liltoon_gem_refraction_strength() -> f32 {
+	0.5
+}
+
+fn default_liltoon_gem_chromatic_aberration() -> f32 {
+	0.02
+}
+
+fn default_liltoon_gem_particle_loop() -> f32 {
+	8.0
+}
+
+fn default_liltoon_gem_particle_color() -> [f32; 4] {
+	[4.0, 4.0, 4.0, 1.0]
 }
 
 fn default_liltoon_specular_border() -> f32 {

@@ -22,7 +22,10 @@ use crate::{
 	camera::OrbitCamera,
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
-	mesh_pass::{AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshes, TextureUploadSummary},
+	mesh_pass::{
+		AvatarOutlineOptions, AvatarOutlinePolicy, MaterialTier, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshes,
+		TextureUploadSummary,
+	},
 	options::{BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions},
 	post_process::PostProcess,
 	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
@@ -34,6 +37,13 @@ const SHADER_AXES: &str = include_str!("../shaders/axes.wgsl");
 const SHADER_BONE_COLLIDERS: &str = include_str!("../shaders/bone_colliders.wgsl");
 const SHADER_STARTUP_SPLASH: &str = include_str!("../shaders/startup_splash.wgsl");
 const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl");
+
+const PORTABLE_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
+const PORTABLE_SAMPLERS_PER_STAGE: u32 = 16;
+const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 32;
+const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE: u32 = 24;
+const CAMERA_NEAR_CLIP_M: f32 = 0.01;
+const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
 fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document: &UnaDocument) -> String {
 	let left_fingers = frame.left_hand.as_ref().map(|h| h.fingers.len()).unwrap_or(0);
@@ -219,6 +229,7 @@ pub(crate) struct GpuSceneBuildContext {
 	queue: wgpu::Queue,
 	format: wgpu::TextureFormat,
 	aa: AaMode,
+	material_tier: MaterialTier,
 }
 
 /// `Mat4::perspective_rh` 用の縦方向 FOV（ラジアン）を、対角画角と幅÷高さから求める。
@@ -743,6 +754,52 @@ pub struct CameraStateSnapshot {
 	pub diagonal_fov_deg: f32,
 }
 
+struct ScreenGrabTarget {
+	width: u32,
+	height: u32,
+	format: wgpu::TextureFormat,
+	texture: wgpu::Texture,
+	view: wgpu::TextureView,
+}
+
+impl ScreenGrabTarget {
+	fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+		let width = width.max(1);
+		let height = height.max(1);
+		let (texture, view) = create_screen_grab_texture(device, width, height, format);
+		Self {
+			width,
+			height,
+			format,
+			texture,
+			view,
+		}
+	}
+
+	fn resize_to(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
+		let width = width.max(1);
+		let height = height.max(1);
+		if self.width == width && self.height == height && self.format == format {
+			return;
+		}
+		self.texture.destroy();
+		let (texture, view) = create_screen_grab_texture(device, width, height, format);
+		self.width = width;
+		self.height = height;
+		self.format = format;
+		self.texture = texture;
+		self.view = view;
+	}
+
+	fn texture(&self) -> &wgpu::Texture {
+		&self.texture
+	}
+
+	fn view(&self) -> &wgpu::TextureView {
+		&self.view
+	}
+}
+
 pub(crate) struct GpuState {
 	pub(crate) surface: wgpu::Surface<'static>,
 	pub(crate) device: wgpu::Device,
@@ -773,6 +830,7 @@ pub(crate) struct GpuState {
 	/// VMC 受信スレッドが起動済みか。受信データは描画直前に pending buffer から適用する。
 	vmc_live: bool,
 	scene_meshes: Option<SceneMeshes>,
+	material_tier: MaterialTier,
 	avatar_outline: AvatarOutlineOptions,
 	environment_color: EnvironmentColorOptions,
 	lighting: LightingOptions,
@@ -785,6 +843,7 @@ pub(crate) struct GpuState {
 	aa: AaMode,
 	post_process: Option<PostProcess>,
 	msaa_target: Option<crate::post_process::MsaaTarget>,
+	screen_grab_target: Option<ScreenGrabTarget>,
 	#[cfg(windows)]
 	spout: Option<crate::spout::SpoutCapture>,
 	#[cfg(windows)]
@@ -879,16 +938,43 @@ impl GpuState {
 		}))
 		.map_err(|e| format!("request_adapter: {e}"))?;
 
-		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+		let adapter_limits = adapter.limits();
+		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
 		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
-		limits.max_sampled_textures_per_shader_stage = limits
-			.max_sampled_textures_per_shader_stage
-			.max(21)
-			.min(adapter.limits().max_sampled_textures_per_shader_stage);
-		limits.max_samplers_per_shader_stage = limits
-			.max_samplers_per_shader_stage
-			.max(18)
-			.min(adapter.limits().max_samplers_per_shader_stage);
+		let full_liltoon_one_pass_supported = adapter_limits.max_sampled_textures_per_shader_stage
+			>= FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE
+			&& adapter_limits.max_samplers_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE;
+		let material_tier = if full_liltoon_one_pass_supported {
+			MaterialTier::FullOnePass
+		} else {
+			MaterialTier::Portable16
+		};
+		if full_liltoon_one_pass_supported {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+		} else {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(PORTABLE_SAMPLED_TEXTURES_PER_STAGE)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(PORTABLE_SAMPLERS_PER_STAGE)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+			eprintln!(
+				"un-avatar-renderer: GPU sampled texture/sampler limits are below full lilToon 1-pass target; using portable material tier (adapter sampled={} samplers={}, target sampled={} samplers={})",
+				adapter_limits.max_sampled_textures_per_shader_stage,
+				adapter_limits.max_samplers_per_shader_stage,
+				FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE,
+				FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE,
+			);
+		}
 
 		let adapter_features = adapter.features();
 		let texture_compression_features = if matches!(texture_compression, TextureCompressionMode::Source | TextureCompressionMode::Compat)
@@ -1114,6 +1200,7 @@ impl GpuState {
 			applied_document_revision: 0,
 			vmc_live,
 			scene_meshes,
+			material_tier,
 			avatar_outline,
 			environment_color,
 			lighting,
@@ -1128,6 +1215,7 @@ impl GpuState {
 			aa,
 			post_process: None,
 			msaa_target: None,
+			screen_grab_target: None,
 			#[cfg(windows)]
 			spout,
 			#[cfg(windows)]
@@ -1673,23 +1761,38 @@ impl GpuState {
 		let use_color_adjust = !self.environment_color.is_identity();
 		let use_bloom = self.bloom.is_enabled();
 		let use_ssao = self.ssao.is_enabled();
-		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao;
+		let needs_screen_refraction = self.scene_meshes.as_ref().is_some_and(SceneMeshes::needs_screen_refraction);
+		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction;
 		if use_msaa {
 			msaa = Some(crate::post_process::MsaaTarget::new(&self.device, w, h, format, aa_sample_count));
 		}
 		if use_post {
 			post = Some(PostProcess::new(&self.device, w, h, format));
 		}
+		if needs_screen_refraction {
+			if let Some(grab) = &mut self.screen_grab_target {
+				grab.resize_to(&self.device, w, h, format);
+			} else {
+				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, w, h, format));
+			}
+		}
 		let (depth_tex, depth_view) = create_depth(&self.device, w, h);
 		let draw_scene = self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
 		let draw_contact_shadow = draw_scene && self.contact_shadow.is_enabled();
 		let draw_contact_shadow_in_main = draw_contact_shadow && !use_avatar_outline;
-		let (main_color, main_depth, main_resolve) = if let Some(post) = &post {
-			(post.source_view(), post.depth_view(), None)
+		let mut main_resolve: Option<&wgpu::TextureView> = None;
+		let (main_color, main_depth) = if let Some(post) = &post {
+			if let Some(msaa) = &msaa {
+				main_resolve = Some(post.source_view());
+				(msaa.color_view(), msaa.depth_view())
+			} else {
+				(post.source_view(), post.depth_view())
+			}
 		} else if let Some(msaa) = &msaa {
-			(msaa.color_view(), msaa.depth_view(), Some(&target_view))
+			main_resolve = Some(&target_view);
+			(msaa.color_view(), msaa.depth_view())
 		} else {
-			(&target_view, &depth_view, None)
+			(&target_view, &depth_view)
 		};
 		// depth_tex は MSAA/PostAA で使われないが、Drop されないよう束縛しておく。
 		let _ = &depth_tex;
@@ -1697,7 +1800,95 @@ impl GpuState {
 		let mut encoder = self
 			.device
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("screenshot") });
-		{
+		if draw_scene && needs_screen_refraction {
+			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("screenshot-main-opaque"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: main_color,
+					depth_slice: None,
+					resolve_target: main_resolve,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Clear(clear_color),
+						store: wgpu::StoreOp::Store,
+					},
+				})],
+				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+					view: main_depth,
+					depth_ops: Some(wgpu::Operations {
+						load: wgpu::LoadOp::Clear(1.0),
+						store: wgpu::StoreOp::Store,
+					}),
+					stencil_ops: None,
+				}),
+				timestamp_writes: None,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			});
+			if let Some(sm) = &self.scene_meshes {
+				sm.draw_opaque(&mut pass);
+				if draw_contact_shadow_in_main {
+					self.write_contact_shadow_uniform();
+					self.draw_contact_shadow(&mut pass);
+				}
+				sm.draw_toon_outlines(&mut pass);
+			}
+			drop(pass);
+
+			if let (Some(post), Some(grab), Some(sm)) = (&post, &self.screen_grab_target, &mut self.scene_meshes) {
+				encoder.copy_texture_to_texture(
+					wgpu::TexelCopyTextureInfo {
+						texture: post.source_texture(),
+						mip_level: 0,
+						origin: wgpu::Origin3d::ZERO,
+						aspect: wgpu::TextureAspect::All,
+					},
+					wgpu::TexelCopyTextureInfo {
+						texture: grab.texture(),
+						mip_level: 0,
+						origin: wgpu::Origin3d::ZERO,
+						aspect: wgpu::TextureAspect::All,
+					},
+					wgpu::Extent3d {
+						width: w.max(1),
+						height: h.max(1),
+						depth_or_array_layers: 1,
+					},
+				);
+				sm.set_screen_grab_view(&self.device, grab.view());
+			}
+
+			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("screenshot-main-blended"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: main_color,
+					depth_slice: None,
+					resolve_target: main_resolve,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Load,
+						store: wgpu::StoreOp::Store,
+					},
+				})],
+				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+					view: main_depth,
+					depth_ops: Some(wgpu::Operations {
+						load: wgpu::LoadOp::Load,
+						store: wgpu::StoreOp::Store,
+					}),
+					stencil_ops: None,
+				}),
+				timestamp_writes: None,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			});
+			if let Some(sm) = &self.scene_meshes {
+				sm.draw_blended(&mut pass);
+			}
+			if self.show_axes {
+				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_bind_group(0, &self.bind_group, &[]);
+				pass.draw(0..6, 0..1);
+			}
+		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("screenshot-main"),
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1968,6 +2159,7 @@ impl GpuState {
 			queue: self.queue.clone(),
 			format: self.config.format,
 			aa: self.aa,
+			material_tier: self.material_tier,
 		}
 	}
 
@@ -2006,7 +2198,13 @@ impl GpuSceneBuildContext {
 		options: &DocumentAttachOptions,
 		mut progress: impl FnMut(SceneMeshBuildProgress),
 	) -> Result<PreparedDocumentScene, String> {
-		let GpuSceneBuildContext { device, queue, format, aa } = self;
+		let GpuSceneBuildContext {
+			device,
+			queue,
+			format,
+			aa,
+			material_tier,
+		} = self;
 		let mut document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		if document.expression_catalog.as_ref().is_some_and(|c| !c.presets.is_empty()) {
 			document.expression_weights.get_or_insert_with(Default::default);
@@ -2034,6 +2232,7 @@ impl GpuSceneBuildContext {
 					&queue,
 					format,
 					aa_sample_count(aa),
+					material_tier,
 					sc,
 					guard.expression_catalog.as_ref(),
 					options.mesh_diagnostics.clone(),
@@ -2389,7 +2588,7 @@ impl GpuState {
 		let aspect = width.max(1) as f32 / height.max(1) as f32;
 		let diagonal_rad = self.camera.diagonal_fov_deg.to_radians();
 		let fovy = vertical_fov_from_diagonal(diagonal_rad, aspect);
-		let proj = Mat4::perspective_rh(fovy, aspect, 0.1, 200.0);
+		let proj = Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M);
 		let cam_pos = self.camera.position();
 		let look_at = self.camera.target;
 		let view = Mat4::look_at_rh(cam_pos, look_at, Vec3::Y);
@@ -2604,13 +2803,21 @@ impl GpuState {
 		let use_color_adjust = !self.environment_color.is_identity();
 		let use_bloom = self.bloom.is_enabled();
 		let use_ssao = self.ssao.is_enabled();
-		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao;
+		let needs_screen_refraction = self.scene_meshes.as_ref().is_some_and(SceneMeshes::needs_screen_refraction);
+		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction;
 		let use_msaa = matches!(self.aa, AaMode::Msaa);
 		if use_post {
 			if let Some(post) = &mut self.post_process {
 				post.resize_to(&self.device, gw, gh, self.config.format);
 			} else {
 				self.post_process = Some(PostProcess::new(&self.device, gw, gh, self.config.format));
+			}
+		}
+		if needs_screen_refraction {
+			if let Some(grab) = &mut self.screen_grab_target {
+				grab.resize_to(&self.device, gw, gh, self.config.format);
+			} else {
+				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, gw, gh, self.config.format));
 			}
 		}
 		if use_msaa {
@@ -2685,32 +2892,29 @@ impl GpuState {
 		let final_target_view = &swap_view;
 
 		let mut main_resolve_target: Option<&wgpu::TextureView> = None;
-		let (main_color, main_depth): (&wgpu::TextureView, &wgpu::TextureView) = if use_spout {
-			if use_post {
-				let post = self.post_process.as_ref().expect("post target is initialized");
-				(post.source_view(), post.depth_view())
-			} else if use_msaa {
+		let (main_color, main_depth): (&wgpu::TextureView, &wgpu::TextureView) = if use_post {
+			let post = self.post_process.as_ref().expect("post target is initialized");
+			if use_msaa {
 				let msaa = self.msaa_target.as_ref().expect("msaa target is initialized");
-				main_resolve_target = Some(final_target_view);
+				main_resolve_target = Some(post.source_view());
 				(msaa.color_view(), msaa.depth_view())
 			} else {
-				#[cfg(windows)]
-				{
-					let sp = self.spout.as_ref().unwrap();
-					(sp.color_view(), sp.depth_view())
-				}
-				#[cfg(not(windows))]
-				{
-					unreachable!()
-				}
+				(post.source_view(), post.depth_view())
 			}
-		} else if use_post {
-			let post = self.post_process.as_ref().expect("post target is initialized");
-			(post.source_view(), post.depth_view())
 		} else if use_msaa {
 			let msaa = self.msaa_target.as_ref().expect("msaa target is initialized");
 			main_resolve_target = Some(final_target_view);
 			(msaa.color_view(), msaa.depth_view())
+		} else if use_spout {
+			#[cfg(windows)]
+			{
+				let sp = self.spout.as_ref().unwrap();
+				(sp.color_view(), sp.depth_view())
+			}
+			#[cfg(not(windows))]
+			{
+				unreachable!()
+			}
 		} else {
 			(&swap_view, &self.depth_view)
 		};
@@ -2735,7 +2939,119 @@ impl GpuState {
 			clear_color
 		};
 
-		{
+		if draw_scene && needs_screen_refraction {
+			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("main-opaque"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: main_color,
+					depth_slice: None,
+					resolve_target: main_resolve_target,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Clear(scene_clear_color),
+						store: wgpu::StoreOp::Store,
+					},
+				})],
+				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+					view: main_depth,
+					depth_ops: Some(wgpu::Operations {
+						load: wgpu::LoadOp::Clear(1.0),
+						store: wgpu::StoreOp::Store,
+					}),
+					stencil_ops: None,
+				}),
+				timestamp_writes,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			});
+			if let Some(sm) = &self.scene_meshes {
+				sm.draw_opaque(&mut pass);
+				if draw_contact_shadow_in_main {
+					self.write_contact_shadow_uniform();
+					self.draw_contact_shadow(&mut pass);
+				}
+				sm.draw_toon_outlines(&mut pass);
+			}
+			drop(pass);
+
+			if let (Some(post), Some(grab), Some(sm)) = (&self.post_process, &self.screen_grab_target, &mut self.scene_meshes) {
+				encoder.copy_texture_to_texture(
+					wgpu::TexelCopyTextureInfo {
+						texture: post.source_texture(),
+						mip_level: 0,
+						origin: wgpu::Origin3d::ZERO,
+						aspect: wgpu::TextureAspect::All,
+					},
+					wgpu::TexelCopyTextureInfo {
+						texture: grab.texture(),
+						mip_level: 0,
+						origin: wgpu::Origin3d::ZERO,
+						aspect: wgpu::TextureAspect::All,
+					},
+					wgpu::Extent3d {
+						width: gw.max(1),
+						height: gh.max(1),
+						depth_or_array_layers: 1,
+					},
+				);
+				sm.set_screen_grab_view(&self.device, grab.view());
+			}
+
+			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+				label: Some("main-blended"),
+				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+					view: main_color,
+					depth_slice: None,
+					resolve_target: main_resolve_target,
+					ops: wgpu::Operations {
+						load: wgpu::LoadOp::Load,
+						store: wgpu::StoreOp::Store,
+					},
+				})],
+				depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+					view: main_depth,
+					depth_ops: Some(wgpu::Operations {
+						load: wgpu::LoadOp::Load,
+						store: wgpu::StoreOp::Store,
+					}),
+					stencil_ops: None,
+				}),
+				timestamp_writes: None,
+				occlusion_query_set: None,
+				multiview_mask: None,
+			});
+			if let Some(sm) = &self.scene_meshes {
+				sm.draw_blended(&mut pass);
+			}
+			if self.show_axes {
+				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_bind_group(0, &self.bind_group, &[]);
+				pass.draw(0..6, 0..1);
+			}
+			if self.show_bone_colliders && self.bone_collider_vertex_count > 0 {
+				if let Some(buffer) = &self.bone_collider_vertex_buffer {
+					pass.set_pipeline(&self.bone_collider_pipeline);
+					pass.set_bind_group(0, &self.bind_group, &[]);
+					pass.set_vertex_buffer(0, buffer.slice(..));
+					pass.draw(0..self.bone_collider_vertex_count, 0..1);
+				}
+			}
+			if let Some(splash) = startup_splash {
+				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
+				self.queue.write_buffer(
+					&self.startup_splash_buffer,
+					0,
+					bytemuck::bytes_of(&StartupSplashGpu {
+						time: splash.time_secs,
+						progress: splash.progress,
+						aspect,
+						phase: splash.phase,
+					}),
+				);
+				pass.set_pipeline(&self.startup_splash_pipeline);
+				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+				pass.draw(0..3, 0..1);
+			}
+		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("main"),
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2949,6 +3265,30 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Textur
 		dimension: wgpu::TextureDimension::D2,
 		format: wgpu::TextureFormat::Depth24Plus,
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+		view_formats: &[],
+	});
+	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+	(texture, view)
+}
+
+fn create_screen_grab_texture(
+	device: &wgpu::Device,
+	width: u32,
+	height: u32,
+	format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+	let texture = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some("screen-grab"),
+		size: wgpu::Extent3d {
+			width,
+			height,
+			depth_or_array_layers: 1,
+		},
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format,
+		usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
 		view_formats: &[],
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
