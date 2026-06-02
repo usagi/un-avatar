@@ -191,8 +191,8 @@ Status legend:
   - done: base color factor として保持し、main texture に乗算する。
   - remaining: color space、HDR color、lilToon main color adjustment との順序を本家に合わせる。
 - `[~]` `_MainTexHSVG`
-  - done: Unity Exporter が `_MainTexHSVG` を `mainTexHsvgFactor` として保存し、Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。
-  - remaining: hue/saturation/value/gamma 補正を renderer の main texture color adjustment に接続し、本家の color space と順序を照合する。
+  - done: Unity Exporter が `_MainTexHSVG` を `mainTexHsvgFactor` として保存し、Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。Renderer は base texture RGB に hue/saturation/value/gamma 近似補正を適用する。
+  - remaining: 本家の color space、gamma 係数、main texture color adjustment の適用順を照合する。
 - `[~]` gradation map
   - done: Unity Exporter が `_GradationMap` を `gradationMapTextureIndex` として保存し、Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。
   - remaining: gradation sampling、mask/alpha/shadow との合成順、per-slot UV mode を renderer へ接続する。

@@ -271,6 +271,7 @@ struct MeshDrawMaterialGpu {
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
 	normal_uv_offset_scale: [f32; 4],
+	main_color_adjust_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -283,7 +284,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 736);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 752);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1156,6 +1157,9 @@ fn mesh_draw_material_gpu(
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main_color_adjust_params = liltoon_like
+		.map(|u| u.main_color.main_texture_hsvg_factor)
+		.unwrap_or([0.0, 1.0, 1.0, 1.0]);
 	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
@@ -1568,6 +1572,7 @@ fn mesh_draw_material_gpu(
 		],
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
+		main_color_adjust_params,
 	}
 }
 
@@ -3496,6 +3501,20 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
+	}
+
+	#[test]
+	fn main_texture_hsvg_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.main_color.main_texture_hsvg_factor = [0.25, 0.8, 1.2, 0.9];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.main_color_adjust_params, [0.25, 0.8, 1.2, 0.9]);
 	}
 
 	#[test]

@@ -65,6 +65,7 @@ struct DrawMaterial {
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
 	normal_uv_offset_scale: vec4<f32>,
+	main_color_adjust_params: vec4<f32>,
 }
 
 struct MorphU {
@@ -391,6 +392,33 @@ fn lil_blend_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) 
 	return mix(dst, out_col, clamp(src_a, 0.0, 1.0));
 }
 
+fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
+	let k = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+	let p = mix(vec4<f32>(c.bg, k.wz), vec4<f32>(c.gb, k.xy), select(0.0, 1.0, c.b < c.g));
+	let q = mix(vec4<f32>(p.xyw, c.r), vec4<f32>(c.r, p.yzx), select(0.0, 1.0, p.x < c.r));
+	let d = q.x - min(q.w, q.y);
+	let e = 0.0000001;
+	return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+	let p = abs(fract(c.xxx + vec3<f32>(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - vec3<f32>(3.0));
+	return c.z * mix(vec3<f32>(1.0), clamp(p - vec3<f32>(1.0), vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+fn apply_main_hsvg(color: vec3<f32>) -> vec3<f32> {
+	let p = drawu.main_color_adjust_params;
+	if (abs(p.x) + abs(p.y - 1.0) + abs(p.z - 1.0) + abs(p.w - 1.0) < 0.000001) {
+		return color;
+	}
+	var hsv = rgb_to_hsv(max(color, vec3<f32>(0.0)));
+	hsv.x = fract(hsv.x + p.x);
+	hsv.y = clamp(hsv.y * p.y, 0.0, 1.0);
+	hsv.z = max(hsv.z * p.z, 0.0);
+	let rgb = hsv_to_rgb(hsv);
+	return pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / max(p.w, 0.0001)));
+}
+
 fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
 	let base_uv = uv * drawu.uv_offset_scale.zw + drawu.uv_offset_scale.xy;
 	let speed = drawu.uv_anim_params.xyz;
@@ -450,7 +478,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = samp_tex.rgb;
+	let alb = apply_main_hsvg(samp_tex.rgb);
 	let tex_a = samp_tex.a;
 	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
 	let alpha_kind = drawu.params.y;
@@ -475,7 +503,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = samp_tex.rgb;
+	let alb = apply_main_hsvg(samp_tex.rgb);
 	let tex_a = samp_tex.a;
 	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
 	let alpha_kind = drawu.params.y;
@@ -493,7 +521,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = samp_tex.rgb;
+	let alb = apply_main_hsvg(samp_tex.rgb);
 	let tex_a = samp_tex.a;
 	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
 	let alpha_kind = drawu.params.y;
