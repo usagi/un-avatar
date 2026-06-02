@@ -612,7 +612,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
 		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
-		indirect_col = mix(indirect_col, drawu.shadow2_color.rgb * light_color, shadow2_strength);
+		indirect_col = mix(indirect_col, base * drawu.shadow2_color.rgb * light_color, shadow2_strength);
 		let shadow3_value = dot(shadow3_n, l) * 0.5 + 0.5;
 		let shadow3 = lil_tooning_scale_range(
 			shadow3_value,
@@ -621,7 +621,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
 		let shadow3_strength = clamp((1.0 - shadow3) * drawu.shadow3_color.a, 0.0, 1.0);
-		indirect_col = mix(indirect_col, drawu.shadow3_color.rgb * light_color, shadow3_strength);
+		indirect_col = mix(indirect_col, base * drawu.shadow3_color.rgb * light_color, shadow3_strength);
 		indirect_col = mix(indirect_col, indirect_col * base, clamp(drawu.shadow_ext_params.y, 0.0, 1.0));
 		indirect_col = mix(
 			indirect_col,

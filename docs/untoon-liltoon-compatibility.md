@@ -277,9 +277,10 @@ Status legend:
   - remaining: 2nd/3rd shadow normal strength、backface behavior、normal map scale との順序を本家へ合わせる。
 - `[~]` 2nd / 3rd shadow layers
   - done: 2nd / 3rd shadow color、border、blur、normal strength の raw params を保持し、1st shadow branch へ近似接続した。
+  - done: shadow color texture 無し path では本家 `lerp(albedo, tex, tex.a) * _Shadow2ndColor.rgb` 相当として albedo を shadow color に乗算する。
   - remaining: 本家 `lilGetShading` の layer ordering、mask texture、feature gate、3rd shadow color alpha semantics を Unity reference で検証する。
 - `[~]` `_Shadow2ndColor`
-  - done: source raw color params を保持し、alpha を strength として 1st shadow の indirect color を 2nd shadow color へ寄せる近似へ接続した。
+  - done: source raw color params を保持し、alpha を strength として 1st shadow の indirect color を `albedo * _Shadow2ndColor.rgb` へ寄せる近似へ接続した。
   - remaining: `_UseShadow2nd` 相当の feature gate、texture alpha blend、2nd shadow color texture、3rd shadow との本家合成順を検証する。
 - `[~]` `_Shadow2ndBorder`
   - done: source raw params を保持し、2nd shadow toon threshold へ接続した。
@@ -294,7 +295,7 @@ Status legend:
   - done: source raw params を保持する。
   - remaining: Unity/lilToon の shadow attenuation 相当入力を UNAvatar lighting に追加して 2nd shadow receive へ接続する。
 - `[~]` `_Shadow3rdColor`
-  - done: source raw color params を保持し、alpha を strength として 2nd shadow 後の indirect color を 3rd shadow color へ寄せる近似へ接続した。
+  - done: source raw color params を保持し、alpha を strength として 2nd shadow 後の indirect color を `albedo * _Shadow3rdColor.rgb` へ寄せる近似へ接続した。
   - remaining: `_UseShadow3rd` 相当の feature gate、texture alpha blend、2nd shadow との順序を本家へ合わせる。
 - `[~]` `_Shadow3rdBorder`
   - done: source raw params を保持し、3rd shadow toon threshold へ接続した。
