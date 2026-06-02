@@ -242,6 +242,7 @@ struct MeshDrawMaterialGpu {
 	matcap2_factor: [f32; 4],
 	matcap2_params: [f32; 4],
 	matcap2_ext_params: [f32; 4],
+	matcap_uv_params: [f32; 4],
 	reflection_color: [f32; 4],
 	reflection_control: [f32; 4],
 	reflection_params: [f32; 4],
@@ -297,7 +298,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 960);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 976);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1362,6 +1363,16 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let matcap_uv_params = liltoon_like
+		.map(|u| {
+			[
+				u.matcap.perspective_factor.clamp(0.0, 1.0),
+				u.matcap.z_rotation_cancel_factor.clamp(0.0, 1.0),
+				u.matcap.second_perspective_factor.clamp(0.0, 1.0),
+				u.matcap.second_z_rotation_cancel_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_control = liltoon_like
 		.map(|u| {
@@ -1574,6 +1585,7 @@ fn mesh_draw_material_gpu(
 		matcap2_factor,
 		matcap2_params,
 		matcap2_ext_params,
+		matcap_uv_params,
 		reflection_color,
 		reflection_control,
 		reflection_params,
@@ -3601,6 +3613,23 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
+	}
+
+	#[test]
+	fn liltoon_matcap_uv_flags_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.perspective_factor = 0.1;
+		liltoon_like.matcap.z_rotation_cancel_factor = 0.2;
+		liltoon_like.matcap.second_perspective_factor = 0.3;
+		liltoon_like.matcap.second_z_rotation_cancel_factor = 0.4;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.matcap_uv_params, [0.1, 0.2, 0.3, 0.4]);
 	}
 
 	#[test]

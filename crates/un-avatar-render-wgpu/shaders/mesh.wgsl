@@ -36,6 +36,7 @@ struct DrawMaterial {
 	matcap2_factor: vec4<f32>,
 	matcap2_params: vec4<f32>,
 	matcap2_ext_params: vec4<f32>,
+	matcap_uv_params: vec4<f32>,
 	reflection_color: vec4<f32>,
 	reflection_control: vec4<f32>,
 	reflection_params: vec4<f32>,
@@ -352,12 +353,15 @@ fn face_normal(n: vec3<f32>, front_facing: bool, flags: u32) -> vec3<f32> {
 	return -n;
 }
 
-fn toon_matcap_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
-	var world_view_x = normalize(vec3<f32>(v.z, 0.0, -v.x));
+fn toon_matcap_uv(n: vec3<f32>, v: vec3<f32>, perspective: f32) -> vec2<f32> {
+	let camera_pos_len = length(frame.camera_pos.xyz);
+	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
+	let normal_vd = normalize(mix(camera_dir, v, clamp(perspective, 0.0, 1.0)));
+	var world_view_x = normalize(vec3<f32>(normal_vd.z, 0.0, -normal_vd.x));
 	if (length(world_view_x) < 0.0001) {
 		world_view_x = vec3<f32>(1.0, 0.0, 0.0);
 	}
-	let world_view_y = cross(v, world_view_x);
+	let world_view_y = cross(normal_vd, world_view_x);
 	return vec2<f32>(dot(world_view_x, n), dot(world_view_y, n)) * 0.495 + vec2<f32>(0.5, 0.5);
 }
 
@@ -647,7 +651,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
 	let matcap_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
-	let matcap_uv = toon_matcap_uv(matcap_n, v);
+	let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x);
 	let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 	let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 	if (!disable_matcap) {
@@ -666,7 +670,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		}
 		if (drawu.matcap2_params.x > 0.0) {
 			let matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
-			let matcap2_uv = toon_matcap_uv(matcap2_n, v);
+			let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);
 			let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
 			let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;

@@ -622,6 +622,12 @@ pub struct UnaLilToonLikeMatcap {
 	pub lod_factor: f32,
 	#[serde(default)]
 	pub backface_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub perspective_factor: f32,
+	#[serde(default = "one_f32")]
+	pub z_rotation_cancel_factor: f32,
+	#[serde(default = "one_f32")]
+	pub vr_parallax_strength_factor: f32,
 	#[serde(default)]
 	pub second_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -648,6 +654,12 @@ pub struct UnaLilToonLikeMatcap {
 	pub second_lod_factor: f32,
 	#[serde(default)]
 	pub second_backface_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_perspective_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_z_rotation_cancel_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_vr_parallax_strength_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1024,6 +1036,9 @@ impl Default for UnaLilToonLikeMatcap {
 			apply_transparency_factor: 1.0,
 			lod_factor: 0.0,
 			backface_mask_factor: 0.0,
+			perspective_factor: 1.0,
+			z_rotation_cancel_factor: 1.0,
+			vr_parallax_strength_factor: 1.0,
 			second_enabled_factor: 0.0,
 			second_texture_index: None,
 			second_blend_mask_texture_index: None,
@@ -1037,6 +1052,9 @@ impl Default for UnaLilToonLikeMatcap {
 			second_normal_strength_factor: 1.0,
 			second_lod_factor: 0.0,
 			second_backface_mask_factor: 0.0,
+			second_perspective_factor: 1.0,
+			second_z_rotation_cancel_factor: 1.0,
+			second_vr_parallax_strength_factor: 1.0,
 		}
 	}
 }

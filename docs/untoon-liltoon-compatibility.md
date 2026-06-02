@@ -336,7 +336,8 @@ Status legend:
   - remaining: texture slot があるが `_UseMatCap = 0` の material を sample wardrobe で確認し、material feature flag として明示分離する。
 - `[~]` `_MatCapTex`
   - done: 1st MatCap texture index / source asset ref を読み込む。
-  - remaining: MatCap UV 計算、VR parallax、Z rotation cancel、blend mask を本家仕様へ近づける。
+  - done: `_MatCapPerspective` / `_MatCapZRotCancel` / `_MatCapVRParallaxStrength` を v2 material に保持し、Perspective は MatCap UV の view direction selection へ接続する。
+  - remaining: VR parallax、camera roll を含む Z rotation cancel false path、UV1 blend を本家仕様へ近づける。
 - `[~]` `_MatCapColor`
   - done: `_MatCapColor` を strength と混ぜずに material color として保持する。
   - remaining: HDR color / alpha と `_MatCapColorTex` 相当の拡張が必要か確認する。
@@ -372,7 +373,8 @@ Status legend:
 - `[~]` 2nd MatCap
 	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
 	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。Renderer は `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: mask UV mode / UV set、VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
+	- done: `_MatCap2ndPerspective` / `_MatCap2ndZRotCancel` / `_MatCap2ndVRParallaxStrength` を v2 material に保持し、Perspective は 2nd MatCap UV の view direction selection へ接続する。
+  - remaining: mask UV mode / UV set、VR parallax、camera roll を含む Z rotation cancel false path、1st MatCap との本家合成順、sampler 分離要否を検証する。
 
 ### Reflection / Specular
 

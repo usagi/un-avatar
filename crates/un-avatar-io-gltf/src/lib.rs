@@ -2017,6 +2017,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCapBackfaceMask") {
 		out.matcap.backface_mask_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapPerspective") {
+		out.matcap.perspective_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapZRotCancel") {
+		out.matcap.z_rotation_cancel_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapVRParallaxStrength") {
+		out.matcap.vr_parallax_strength_factor = value.clamp(0.0, 1.0);
+	}
 	out.matcap.second_enabled_factor = unavatar_material_float_param(extras, "_UseMatCap2nd")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
@@ -2060,6 +2069,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndBackfaceMask") {
 		out.matcap.second_backface_mask_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndPerspective") {
+		out.matcap.second_perspective_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndZRotCancel") {
+		out.matcap.second_z_rotation_cancel_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndVRParallaxStrength") {
+		out.matcap.second_vr_parallax_strength_factor = value.clamp(0.0, 1.0);
 	}
 
 	out.reflection.enabled_factor = unavatar_material_float_param(extras, "_UseReflection")
@@ -4033,6 +4051,9 @@ mod tests {
 					"_MatCapApplyTransparency": 0.47,
 					"_MatCapLod": 2.5,
 					"_MatCapBackfaceMask": 0.35,
+					"_MatCapPerspective": 0.64,
+					"_MatCapZRotCancel": 0.74,
+					"_MatCapVRParallaxStrength": 0.84,
 					"_UseMatCap2nd": 1.0,
 					"_MatCap2ndMainStrength": 0.58,
 					"_MatCap2ndBlend": 0.68,
@@ -4043,6 +4064,9 @@ mod tests {
 					"_MatCap2ndNormalStrength": 0.88,
 					"_MatCap2ndLod": 1.5,
 					"_MatCap2ndBackfaceMask": 0.45,
+					"_MatCap2ndPerspective": 0.54,
+					"_MatCap2ndZRotCancel": 0.44,
+					"_MatCap2ndVRParallaxStrength": 0.34,
 					"_Smoothness": 0.6,
 					"_Metallic": 0.2,
 					"_Reflectance": 0.4,
@@ -4248,6 +4272,9 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.apply_transparency_factor, 0.47);
 		assert_eq!(liltoon_like.matcap.lod_factor, 2.5);
 		assert_eq!(liltoon_like.matcap.backface_mask_factor, 0.35);
+		assert_eq!(liltoon_like.matcap.perspective_factor, 0.64);
+		assert_eq!(liltoon_like.matcap.z_rotation_cancel_factor, 0.74);
+		assert_eq!(liltoon_like.matcap.vr_parallax_strength_factor, 0.84);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.matcap.second_texture_index, Some(22));
 		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(23));
@@ -4261,6 +4288,9 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.second_normal_strength_factor, 0.88);
 		assert_eq!(liltoon_like.matcap.second_lod_factor, 1.5);
 		assert_eq!(liltoon_like.matcap.second_backface_mask_factor, 0.45);
+		assert_eq!(liltoon_like.matcap.second_perspective_factor, 0.54);
+		assert_eq!(liltoon_like.matcap.second_z_rotation_cancel_factor, 0.44);
+		assert_eq!(liltoon_like.matcap.second_vr_parallax_strength_factor, 0.34);
 		assert_eq!(liltoon_like.reflection.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.reflection.smoothness_factor, 0.6);
