@@ -173,7 +173,8 @@ Status legend:
   - remaining: baseColor 以外の textureInfo transform と `.unavatar` extension asset 参照時の transform 表現を揃える。
 - `[~]` per-texture UV set selection / UV mode
   - done: Unity Exporter が既知 texture slot ごとの non-identity Tiling / Offset を `textureUvOffsetScales`、`*_UVMode` を `textureUvModeFactors` として保存し、Importer が `UnaLilToonLikeMaterial` へ保持する。
-  - remaining: renderer の各 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
+  - done: renderer は normal map sampling で `_BumpMap` / `_NormalMap` / `_BumpTex` の slot 別 Tiling / Offset を使う。
+  - remaining: renderer の他 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
 - `[~]` lilToon `_MainTex_ScrollRotate`
   - done: Unity Exporter が `_MainTex_ScrollRotate` を `uvAnimationScrollX/Y/RotationSpeedFactor` へ正規化し、Importer / Renderer が base UV animation として適用する。
   - remaining: main texture 以外の slot 別 UV mode / UV transform との組み合わせを本家へ合わせる。
@@ -305,8 +306,8 @@ Status legend:
 ### Normal / Geometry Basis
 
 - `[~]` normal texture slot
-  - done: glTF normalTexture / lilToon-like normal slot として読み込む。
-  - remaining: lilToon 2nd normal、normal map UV mode、normal strength mask を保持する。
+  - done: glTF normalTexture / lilToon-like normal slot として読み込み、1st normal map の slot 別 Tiling / Offset を renderer に接続した。
+  - remaining: lilToon 2nd normal、normal map UV mode、normal strength mask を保持・接続する。
 - `[~]` normal scale
   - done: normalTexture scale を shader uniform に渡す。
   - remaining: Unity/lilToon tangent-space parity、green channel convention、backface normal behavior を検証する。

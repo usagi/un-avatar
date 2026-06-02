@@ -64,6 +64,7 @@ struct DrawMaterial {
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
+	normal_uv_offset_scale: vec4<f32>,
 }
 
 struct MorphU {
@@ -412,7 +413,8 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f
 	if (abs(scale) < 0.000001) {
 		return n;
 	}
-	let packed = textureSample(normal_tex, normal_samp, uv).xyz;
+	let normal_uv = uv * drawu.normal_uv_offset_scale.zw + drawu.normal_uv_offset_scale.xy;
+	let packed = textureSample(normal_tex, normal_samp, normal_uv).xyz;
 	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
 	tn.x = tn.x * scale;
 	tn.y = tn.y * scale;
@@ -459,7 +461,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
-	let n = face_normal(normal_mapped(i.wn, i.wt, uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
 	let ndl = max(dot(n, l), 0.0);
 	let ambient = frame.ambient_color.rgb * (frame.ambient_color.w * 0.57);
 	let direct = lil_direct_light_color() * (0.8 * ndl);
@@ -507,7 +509,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
 	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
-	let n = face_normal(normal_mapped(i.wn, i.wt, uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));

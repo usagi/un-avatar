@@ -270,6 +270,7 @@ struct MeshDrawMaterialGpu {
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
+	normal_uv_offset_scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -282,7 +283,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 720);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 736);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1152,6 +1153,9 @@ fn mesh_draw_material_gpu(
 		1.0
 	};
 	let liltoon_like = mat.liltoon_like.as_ref();
+	let normal_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
@@ -1563,7 +1567,12 @@ fn mesh_draw_material_gpu(
 			},
 		],
 		uv_offset_scale: mat.uv_offset_scale,
+		normal_uv_offset_scale,
 	}
+}
+
+fn texture_slot_uv_offset_scale(liltoon_like: &un_avatar_core::UnaLilToonLikeMaterial, keys: &[&str]) -> Option<[f32; 4]> {
+	keys.iter().find_map(|key| liltoon_like.texture_uv_offset_scales.get(*key).copied())
 }
 
 impl SceneMeshes {
@@ -3470,6 +3479,23 @@ mod tests {
 		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Opaque), 2000);
 		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Mask), 2450);
 		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Blend), 3000);
+	}
+
+	#[test]
+	fn normal_map_uv_transform_prefers_liltoon_bump_slot() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_BumpMap".to_string(), [0.1, 0.2, 0.75, 1.5]);
+		let mat = UnaMaterialPbr {
+			normal_texture_index: Some(0),
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
 	}
 
 	#[test]
