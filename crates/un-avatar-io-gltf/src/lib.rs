@@ -647,6 +647,13 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.alpha_mask
 				.texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "gradationMapTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.main_color
+				.gradation_texture_index = Some(image_index);
+		}
 	}
 }
 
@@ -1727,6 +1734,32 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		..Default::default()
 	};
 	out.rendering.render_queue_number = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue")));
+	if let Some(value) = mtoon.and_then(|m| {
+		json_vec4(
+			m.get("mainTexHsvgFactor")
+				.or_else(|| m.get("main_tex_hsvg_factor"))
+				.or_else(|| m.get("mainTextureHsvgFactor"))
+				.or_else(|| m.get("main_texture_hsvg_factor")),
+		)
+	}) {
+		out.main_color.main_texture_hsvg_factor = value;
+	}
+	out.main_color.gradation_enabled_factor = unavatar_material_float_param(extras, "_UseGradationMap")
+		.unwrap_or_else(|| {
+			if mtoon
+				.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
+				.is_some()
+			{
+				1.0
+			} else {
+				0.0
+			}
+		})
+		.clamp(0.0, 1.0);
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
+	{
+		out.main_color.gradation_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_LightMinLimit") {
 		out.rendering.light_min_limit_factor = value.max(0.0);
 	}
@@ -3948,7 +3981,9 @@ mod tests {
 					"matcap2ndTextureIndex": 22,
 					"matcap2ndBlendMaskTextureIndex": 23,
 					"normal2ndTextureIndex": 24,
-					"alphaMaskTextureIndex": 21
+					"alphaMaskTextureIndex": 21,
+					"gradationMapTextureIndex": 25,
+					"mainTexHsvgFactor": [0.12, 0.8, 1.2, 0.9]
 				}
 			}"#,
 		)
@@ -3958,6 +3993,9 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
+		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
+		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
 		assert_eq!(liltoon_like.rendering.render_queue_number, Some(2461));
 		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
 		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);

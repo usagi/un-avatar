@@ -521,6 +521,16 @@ pub enum UnaLilToonLikeBlendMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeMainColor {
+	#[serde(default = "default_liltoon_main_texture_hsvg")]
+	pub main_texture_hsvg_factor: [f32; 4],
+	#[serde(default)]
+	pub gradation_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub gradation_texture_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeShadow {
 	#[serde(default = "one_f32")]
 	pub enabled_factor: f32,
@@ -865,6 +875,8 @@ pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
 	#[serde(default)]
+	pub main_color: UnaLilToonLikeMainColor,
+	#[serde(default)]
 	pub rendering: UnaLilToonLikeRendering,
 	#[serde(default)]
 	pub normal: UnaLilToonLikeNormal,
@@ -916,6 +928,16 @@ impl Default for UnaLilToonLikeShadow {
 			third_blur_factor: 0.0,
 			third_normal_strength_factor: 1.0,
 			third_receive_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeMainColor {
+	fn default() -> Self {
+		Self {
+			main_texture_hsvg_factor: default_liltoon_main_texture_hsvg(),
+			gradation_enabled_factor: 0.0,
+			gradation_texture_index: None,
 		}
 	}
 }
@@ -1117,6 +1139,7 @@ impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			main_color: UnaLilToonLikeMainColor::default(),
 			rendering: UnaLilToonLikeRendering::default(),
 			normal: UnaLilToonLikeNormal::default(),
 			shadow: UnaLilToonLikeShadow::default(),
@@ -1312,6 +1335,10 @@ fn default_liltoon_alpha_destination_factor() -> f32 {
 
 fn default_liltoon_forward_add_alpha_operation_factor() -> f32 {
 	4.0
+}
+
+fn default_liltoon_main_texture_hsvg() -> [f32; 4] {
+	[0.0, 1.0, 1.0, 1.0]
 }
 
 fn default_liltoon_light_min_limit() -> f32 {

@@ -92,6 +92,10 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "outlineTextureIndex", useOutline ? ReadTexture(material, "_OutlineTex") : null);
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", useOutline ? ReadTexture(material, "_OutlineWidthMask") : null);
                 AddTextureIndex(mtoon, "alphaMaskTextureIndex", ReadTexture(material, "_AlphaMask"));
+                var useGradationMap = IsMaterialFeatureEnabled(material, "_UseGradationMap", ReadTexture(material, "_GradationMap") != null);
+                AddTextureIndex(mtoon, "gradationMapTextureIndex", useGradationMap ? ReadTexture(material, "_GradationMap") : null);
+                var mainTextureHsvg = ReadVector(material, "_MainTexHSVG", new Vector4(0.0f, 1.0f, 1.0f, 1.0f));
+                mtoon["mainTexHsvgFactor"] = FloatArray(mainTextureHsvg.x, mainTextureHsvg.y, mainTextureHsvg.z, mainTextureHsvg.w);
 
                 var mainTextureProperty = HasProperty(material, "_BaseMap") ? "_BaseMap" : "_MainTex";
                 var mainTextureScale = Vector2.one;
