@@ -267,6 +267,7 @@ struct MeshDrawMaterialGpu {
 	alpha_mask_params: [f32; 4],
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
+	transparency_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -296,7 +297,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 944);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 960);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1440,6 +1441,16 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let transparency_params = liltoon_like
+		.map(|u| {
+			[
+				u.matcap.apply_transparency_factor.clamp(0.0, 1.0),
+				u.matcap.second_apply_transparency_factor.clamp(0.0, 1.0),
+				u.rim.apply_transparency_factor.clamp(0.0, 1.0),
+				u.reflection.apply_transparency_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
@@ -1598,6 +1609,7 @@ fn mesh_draw_material_gpu(
 		alpha_mask_params,
 		alpha_ext_params,
 		lighting_ext_params,
+		transparency_params,
 		emissive_factor: [
 			mat.emissive_factor[0],
 			mat.emissive_factor[1],
@@ -3589,6 +3601,23 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
+	}
+
+	#[test]
+	fn liltoon_apply_transparency_factors_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.apply_transparency_factor = 0.1;
+		liltoon_like.matcap.second_apply_transparency_factor = 0.2;
+		liltoon_like.rim.apply_transparency_factor = 0.3;
+		liltoon_like.reflection.apply_transparency_factor = 0.4;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
 	}
 
 	#[test]

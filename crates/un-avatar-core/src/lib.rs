@@ -616,6 +616,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub normal_strength_factor: f32,
 	#[serde(default)]
 	pub shadow_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_transparency_factor: f32,
 	#[serde(default)]
 	pub lod_factor: f32,
 	#[serde(default)]
@@ -636,6 +638,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub second_enable_lighting_factor: f32,
 	#[serde(default)]
 	pub second_shadow_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_apply_transparency_factor: f32,
 	#[serde(default)]
 	pub second_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
@@ -666,6 +670,8 @@ pub struct UnaLilToonLikeReflection {
 	pub apply_specular_forward_add_factor: f32,
 	#[serde(default = "one_f32")]
 	pub apply_reflection_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_transparency_factor: f32,
 	#[serde(default = "one_f32")]
 	pub specular_toon_factor: f32,
 	#[serde(default = "default_liltoon_specular_border")]
@@ -750,6 +756,8 @@ pub struct UnaLilToonLikeRim {
 	pub blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default)]
 	pub shadow_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_transparency_factor: f32,
 	#[serde(default = "one_f32")]
 	pub normal_strength_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1013,6 +1021,7 @@ impl Default for UnaLilToonLikeMatcap {
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			normal_strength_factor: 1.0,
 			shadow_mask_factor: 0.0,
+			apply_transparency_factor: 1.0,
 			lod_factor: 0.0,
 			backface_mask_factor: 0.0,
 			second_enabled_factor: 0.0,
@@ -1023,6 +1032,7 @@ impl Default for UnaLilToonLikeMatcap {
 			second_blend_factor: 1.0,
 			second_enable_lighting_factor: 1.0,
 			second_shadow_mask_factor: 0.0,
+			second_apply_transparency_factor: 1.0,
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_normal_strength_factor: 1.0,
 			second_lod_factor: 0.0,
@@ -1043,6 +1053,7 @@ impl Default for UnaLilToonLikeReflection {
 			apply_specular_factor: 1.0,
 			apply_specular_forward_add_factor: 1.0,
 			apply_reflection_factor: 1.0,
+			apply_transparency_factor: 1.0,
 			specular_toon_factor: 1.0,
 			specular_border_factor: default_liltoon_specular_border(),
 			specular_blur_factor: 0.0,
@@ -1090,6 +1101,7 @@ impl Default for UnaLilToonLikeRim {
 			enable_lighting_factor: 1.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			shadow_mask_factor: 0.0,
+			apply_transparency_factor: 1.0,
 			normal_strength_factor: 1.0,
 			backface_mask_factor: 1.0,
 			directional_strength_factor: 0.0,

@@ -345,7 +345,8 @@ Status legend:
   - remaining: lilToon 本家の lighting/shadow 合成後の albedo 参照位置と一致するか確認する。
 - `[~]` `_MatCapBlend`
 	- done: glTF `UN_avatar` extras / Unity property から読み取り、1st MatCap の final blend weight として WGSL に接続した。
-	- remaining: transparency mask を合成する。
+	- done: `_MatCapApplyTransparency` を保持し、1st MatCap blend weight へ fragment alpha を反映する。
+	- remaining: blend mask / transparency / shadowmix の本家合成順を検証する。
 - `[~]` `_MatCapBlendMode`
   - done: Normal / Add / Screen / Multiply の 0..3 を読み取り、lilToon `lilBlendColor` 相当の WGSL branch に接続した。
   - remaining: mode default と unknown value の扱いを本家 material default と照合する。
@@ -369,7 +370,7 @@ Status legend:
 	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
 	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
-	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
+	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
 	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。Renderer は `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: mask UV mode / UV set、VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
 
@@ -422,7 +423,8 @@ Status legend:
 - `[~]` `_ReflectionColor`
   - done: source raw color params と `_ReflectionColorTex` reference を保持し、specular/reflection color と alpha strength に接続した。
   - done: Renderer は `_ReflectionColorTex` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: transparent application、color space handling、HDR range を本家に合わせる。
+  - done: `_ReflectionApplyTransparency` を保持し、specular/reflection alpha strength へ fragment alpha を反映する。
+  - remaining: color space handling、HDR range を本家に合わせる。
 - `[~]` `_ReflectionCubeTex` source asset import
   - done: EXR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
   - remaining: cubemap / equirect / PMREM / roughness mip としての意味論を決め、2D approximation と区別する。
@@ -456,6 +458,7 @@ Status legend:
   - remaining: alpha semantics、directional rim / indirect rim での共用順を本家に合わせる。
 - `[~]` `_RimMainStrength`
   - done: v2 rim parameter として保持し、shader で `lerp(rimColor, rimColor * albedo, value)` 相当へ接続した。
+  - done: `_RimApplyTransparency` を保持し、direct / indirect rim contribution へ fragment alpha を反映する。
   - remaining: texture alpha、indirect rim、RimShade との順序を照合する。
 - `[~]` `_RimBorder`
   - done: v2 rim parameter として保持し、rim factor の toon border へ接続した。

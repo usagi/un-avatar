@@ -2008,6 +2008,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCapShadowMask") {
 		out.matcap.shadow_mask_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCapApplyTransparency") {
+		out.matcap.apply_transparency_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCapLod") {
 		out.matcap.lod_factor = value.max(0.0);
 	}
@@ -2042,6 +2045,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndShadowMask") {
 		out.matcap.second_shadow_mask_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndApplyTransparency") {
+		out.matcap.second_apply_transparency_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndBlendMode").map(float_to_u32_saturating) {
 		out.matcap.second_blend_mode = liltoon_like_blend_mode(value);
@@ -2127,6 +2133,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ApplyReflection") {
 		out.reflection.apply_reflection_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionApplyTransparency") {
+		out.reflection.apply_transparency_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_SpecularToon") {
 		out.reflection.specular_toon_factor = value.clamp(0.0, 1.0);
@@ -2231,6 +2240,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimShadowMask") {
 		out.rim.shadow_mask_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RimApplyTransparency") {
+		out.rim.apply_transparency_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimNormalStrength") {
 		out.rim.normal_strength_factor = value.clamp(0.0, 1.0);
@@ -4018,6 +4030,7 @@ mod tests {
 					"_MatCapBlendMode": 2.0,
 					"_MatCapNormalStrength": 0.66,
 					"_MatCapShadowMask": 0.57,
+					"_MatCapApplyTransparency": 0.47,
 					"_MatCapLod": 2.5,
 					"_MatCapBackfaceMask": 0.35,
 					"_UseMatCap2nd": 1.0,
@@ -4025,6 +4038,7 @@ mod tests {
 					"_MatCap2ndBlend": 0.68,
 					"_MatCap2ndEnableLighting": 0.78,
 					"_MatCap2ndShadowMask": 0.48,
+					"_MatCap2ndApplyTransparency": 0.38,
 					"_MatCap2ndBlendMode": 1.0,
 					"_MatCap2ndNormalStrength": 0.88,
 					"_MatCap2ndLod": 1.5,
@@ -4035,6 +4049,7 @@ mod tests {
 					"_ApplySpecular": 0.8,
 					"_ApplySpecularFA": 0.9,
 					"_ApplyReflection": 0.7,
+					"_ReflectionApplyTransparency": 0.67,
 					"_SpecularToon": 1.0,
 					"_SpecularBorder": 0.37,
 					"_SpecularBlur": 0.12,
@@ -4065,6 +4080,7 @@ mod tests {
 					"_RimEnableLighting": 0.6,
 					"_RimBlendMode": 2.0,
 					"_RimShadowMask": 0.91,
+					"_RimApplyTransparency": 0.83,
 					"_RimNormalStrength": 0.82,
 					"_RimBackfaceMask": 0.73,
 					"_RimDirStrength": 0.52,
@@ -4229,6 +4245,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.blend_mode, UnaLilToonLikeBlendMode::Screen);
 		assert_eq!(liltoon_like.matcap.normal_strength_factor, 0.66);
 		assert_eq!(liltoon_like.matcap.shadow_mask_factor, 0.57);
+		assert_eq!(liltoon_like.matcap.apply_transparency_factor, 0.47);
 		assert_eq!(liltoon_like.matcap.lod_factor, 2.5);
 		assert_eq!(liltoon_like.matcap.backface_mask_factor, 0.35);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
@@ -4239,6 +4256,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.second_blend_factor, 0.68);
 		assert_eq!(liltoon_like.matcap.second_enable_lighting_factor, 0.78);
 		assert_eq!(liltoon_like.matcap.second_shadow_mask_factor, 0.48);
+		assert_eq!(liltoon_like.matcap.second_apply_transparency_factor, 0.38);
 		assert_eq!(liltoon_like.matcap.second_blend_mode, UnaLilToonLikeBlendMode::Add);
 		assert_eq!(liltoon_like.matcap.second_normal_strength_factor, 0.88);
 		assert_eq!(liltoon_like.matcap.second_lod_factor, 1.5);
@@ -4251,6 +4269,7 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.apply_specular_factor, 0.8);
 		assert_eq!(liltoon_like.reflection.apply_specular_forward_add_factor, 0.9);
 		assert_eq!(liltoon_like.reflection.apply_reflection_factor, 0.7);
+		assert_eq!(liltoon_like.reflection.apply_transparency_factor, 0.67);
 		assert_eq!(liltoon_like.reflection.specular_toon_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.specular_border_factor, 0.37);
 		assert_eq!(liltoon_like.reflection.specular_blur_factor, 0.12);
@@ -4291,6 +4310,7 @@ mod tests {
 		assert_eq!(liltoon_like.rim.enable_lighting_factor, 0.6);
 		assert_eq!(liltoon_like.rim.blend_mode, UnaLilToonLikeBlendMode::Screen);
 		assert_eq!(liltoon_like.rim.shadow_mask_factor, 0.91);
+		assert_eq!(liltoon_like.rim.apply_transparency_factor, 0.83);
 		assert_eq!(liltoon_like.rim.normal_strength_factor, 0.82);
 		assert_eq!(liltoon_like.rim.backface_mask_factor, 0.73);
 		assert_eq!(liltoon_like.rim.directional_strength_factor, 0.52);
