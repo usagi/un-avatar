@@ -268,12 +268,12 @@ namespace UNAvatar.UnityExporter
             {
                 if (set.capturedSnapshot == null || set.capturedSnapshot.nodes.Count == 0)
                 {
-                    sets.Add(set);
+                    sets.Add(CloneWardrobeSetForExport(set));
                     continue;
                 }
 
-                var rebased = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName);
-                rebased.id = set.id;
+                var rebased = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName, avatarRoot);
+                rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
                 rebased.displayName = set.displayName;
                 rebased.source = set.source + "_export_rebased";
                 rebased.capturedSnapshot = set.capturedSnapshot;
@@ -281,6 +281,24 @@ namespace UNAvatar.UnityExporter
                 sets.Add(rebased);
             }
             return sets;
+        }
+
+        private WardrobeSetDraft CloneWardrobeSetForExport(WardrobeSetDraft source)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+            return new WardrobeSetDraft
+            {
+                id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(source.id, source.displayName),
+                displayName = source.displayName,
+                source = source.source,
+                assetGroups = new List<string>(source.assetGroups ?? new List<string>()),
+                operations = CloneWardrobeSetOperations(source.operations),
+                previewImages = ClonePreviewImages(source.previewImages),
+                capturedSnapshot = source.capturedSnapshot
+            };
         }
 
         private static List<WardrobePreviewImageDraft> ClonePreviewImages(List<WardrobePreviewImageDraft> previews)

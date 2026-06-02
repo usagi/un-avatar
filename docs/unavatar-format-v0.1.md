@@ -372,7 +372,7 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
         "operations": []
       },
       {
-        "id": "noble-trace-color-1",
+        "id": "Noble Trace Color 1",
         "displayName": "Noble Trace Color 1",
         "source": "unity_capture_diff",
         "assetGroups": ["outfit:noble-trace-color-1"],
@@ -388,6 +388,8 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
   }
 }
 ```
+
+`wardrobe.sets[].id` は profile / CLI / renderer から参照される外部キーなので、Exporter はユーザー入力名を勝手に slug 化しない。`displayName` は UI 表示用、`assetGroups[]` は lazy upload / unload 用の内部 grouping key であり、ここでは slug 化してよい。
 
 v0.1 の operation 候補。
 

@@ -12,10 +12,10 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
-	UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetDeltas,
-	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaTextureFilterMode,
-	UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba,
+	UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers,
+	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
+	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1376,12 +1376,7 @@ fn decompose_finite(m: Mat4) -> (Vec3, Quat, Vec3) {
 }
 
 fn bone_proxy_local_transform(mode: &str, match_scale: bool, target_world: Mat4, old_world: Mat4) -> Mat4 {
-	let target_inverse = target_world.inverse();
-	let target_inverse = if target_inverse.to_cols_array().iter().all(|v| v.is_finite()) {
-		target_inverse
-	} else {
-		Mat4::IDENTITY
-	};
+	let target_inverse = inverse_finite_or_identity(target_world);
 	let (_old_scale, old_rotation, old_translation) = decompose_finite(old_world);
 	let local = match mode {
 		"AsChildAtRoot" | "Unset" | "" => Mat4::IDENTITY,
@@ -1395,6 +1390,15 @@ fn bone_proxy_local_transform(mode: &str, match_scale: bool, target_world: Mat4,
 		Mat4::from_scale_rotation_translation(Vec3::ONE, rotation, translation)
 	} else {
 		local
+	}
+}
+
+fn inverse_finite_or_identity(m: Mat4) -> Mat4 {
+	let inverse = m.inverse();
+	if inverse.to_cols_array().iter().all(|v| v.is_finite()) {
+		inverse
+	} else {
+		Mat4::IDENTITY
 	}
 }
 
@@ -1424,6 +1428,243 @@ fn reparent_scene_node(scene: &mut UnaSceneSnapshot, child: usize, new_parent: u
 	true
 }
 
+#[derive(Clone, Debug)]
+struct BoneProxyResolverInfo {
+	child: usize,
+	new_parent: usize,
+	old_world: Mat4,
+	mode: String,
+	match_scale: bool,
+}
+
+fn collect_merge_armature_bone_mappings(
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (BTreeMap<usize, usize>, usize, usize) {
+	let mut mappings = BTreeMap::new();
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarMergeArmature") {
+			continue;
+		}
+		if component.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(bone_mappings) = component.get("boneMappings").and_then(|v| v.as_array()) else {
+			missing += 1;
+			continue;
+		};
+		for mapping in bone_mappings {
+			let Some(source_ref) = mapping.get("sourceBone") else {
+				missing += 1;
+				continue;
+			};
+			let Some(target_ref) = mapping.get("targetBone") else {
+				missing += 1;
+				continue;
+			};
+			let Some(source) = unavatar_node_ref_index(source_ref, node_ids, registry_paths, paths, normalized_paths) else {
+				missing += 1;
+				continue;
+			};
+			let Some(target) = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+				missing += 1;
+				continue;
+			};
+			if source != target {
+				mappings.insert(source, target);
+			}
+		}
+	}
+	(mappings, missing, skipped)
+}
+
+fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &BTreeMap<usize, usize>) -> usize {
+	if mappings.is_empty() {
+		return 0;
+	}
+	let world = scene_world_matrices(scene);
+	let mut retargeted = 0usize;
+	for skin in &mut scene.skins {
+		for joint_idx in 0..skin.joint_nodes.len() {
+			let source_node = skin.joint_nodes[joint_idx];
+			let Some(&target_node) = mappings.get(&source_node) else {
+				continue;
+			};
+			let Some(source_world) = world.get(source_node).copied() else {
+				continue;
+			};
+			let Some(target_world) = world.get(target_node).copied() else {
+				continue;
+			};
+			let old_bind = skin
+				.inverse_bind_matrices
+				.get(joint_idx)
+				.copied()
+				.map(|m| Mat4::from_cols_array(&m))
+				.unwrap_or(Mat4::IDENTITY);
+			let new_bind = inverse_finite_or_identity(target_world) * source_world * old_bind;
+			if let Some(bind) = skin.inverse_bind_matrices.get_mut(joint_idx) {
+				*bind = new_bind.to_cols_array();
+			}
+			skin.joint_nodes[joint_idx] = target_node;
+			retargeted += 1;
+		}
+		if let Some(skeleton_node) = skin.skeleton_node {
+			if let Some(&target_node) = mappings.get(&skeleton_node) {
+				skin.skeleton_node = Some(target_node);
+			}
+		}
+	}
+	retargeted
+}
+
+fn modular_avatar_reference_index(
+	reference: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Option<usize> {
+	if let Some(resolved) = reference.get("resolvedTarget") {
+		if let Some(idx) = unavatar_node_ref_index(resolved, node_ids, registry_paths, paths, normalized_paths) {
+			return Some(idx);
+		}
+	}
+	if let Some(target) = reference.get("targetObject") {
+		if let Some(idx) = unavatar_node_ref_index(target, node_ids, registry_paths, paths, normalized_paths) {
+			return Some(idx);
+		}
+	}
+	unavatar_node_ref_index(reference, node_ids, registry_paths, paths, normalized_paths)
+}
+
+fn mesh_settings_mode_sets(mode: Option<&str>) -> bool {
+	matches!(mode, Some("Set") | Some("SetOrInherit"))
+}
+
+fn value_vec3(value: &Value) -> Option<[f32; 3]> {
+	let values = value.as_array()?;
+	if values.len() != 3 {
+		return None;
+	}
+	Some([values[0].as_f64()? as f32, values[1].as_f64()? as f32, values[2].as_f64()? as f32])
+}
+
+fn mesh_settings_bounds(value: &Value) -> Option<UnaBounds> {
+	let object = value.as_object()?;
+	let center = object.get("center").and_then(value_vec3)?;
+	let extents = object.get("extents").and_then(value_vec3).or_else(|| {
+		object
+			.get("size")
+			.and_then(value_vec3)
+			.map(|size| [(size[0] * 0.5).abs(), (size[1] * 0.5).abs(), (size[2] * 0.5).abs()])
+	})?;
+	Some(UnaBounds { center, extents })
+}
+
+fn apply_mesh_settings_to_subtree(
+	scene: &mut UnaSceneSnapshot,
+	target_root: usize,
+	root_bone: Option<usize>,
+	probe_anchor: Option<usize>,
+	local_bounds: Option<UnaBounds>,
+) -> usize {
+	let parents = scene_parent_indices(scene);
+	let mut applied = 0usize;
+	for idx in 0..scene.nodes.len() {
+		if idx != target_root && !scene_is_descendant_of(&parents, idx, target_root) {
+			continue;
+		}
+		let Some(skin_idx) = scene.nodes.get(idx).and_then(|node| node.skin) else {
+			continue;
+		};
+		let Some(skin) = scene.skins.get_mut(skin_idx) else {
+			continue;
+		};
+		skin.skeleton_node = root_bone.or(Some(idx));
+		if let Some(node) = scene.nodes.get_mut(idx) {
+			node.probe_anchor_node = probe_anchor;
+			node.local_bounds = local_bounds;
+		}
+		applied += 1;
+	}
+	applied
+}
+
+fn apply_unavatar_mesh_settings(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize, usize) {
+	let mut root_bone_applied = 0usize;
+	let mut probe_anchor_applied = 0usize;
+	let mut bounds_applied = 0usize;
+	let mut missing = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarMeshSettings") {
+			continue;
+		}
+		if component.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+			continue;
+		}
+		let Some(target_ref) = component.get("target") else {
+			missing += 1;
+			continue;
+		};
+		let Some(target_root) = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let fields = component.get("fields").and_then(|v| v.as_object());
+		let probe_anchor = if fields
+			.and_then(|fields| fields.get("InheritProbeAnchor"))
+			.and_then(|v| v.as_str())
+			.is_some_and(|mode| mesh_settings_mode_sets(Some(mode)))
+		{
+			let probe_anchor = fields
+				.and_then(|fields| fields.get("ProbeAnchor"))
+				.and_then(|reference| modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths));
+			if probe_anchor.is_some() {
+				probe_anchor
+			} else {
+				missing += 1;
+				None
+			}
+		} else {
+			None
+		};
+		if !fields
+			.and_then(|fields| fields.get("InheritBounds"))
+			.and_then(|v| v.as_str())
+			.is_some_and(|mode| mesh_settings_mode_sets(Some(mode)))
+		{
+			continue;
+		}
+		let root_bone = fields
+			.and_then(|fields| fields.get("RootBone"))
+			.and_then(|reference| modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths));
+		let local_bounds = fields.and_then(|fields| fields.get("Bounds")).and_then(mesh_settings_bounds);
+		let applied = apply_mesh_settings_to_subtree(scene, target_root, root_bone, probe_anchor, local_bounds);
+		root_bone_applied += applied;
+		if probe_anchor.is_some() {
+			probe_anchor_applied += applied;
+		}
+		if local_bounds.is_some() {
+			bounds_applied += applied;
+		}
+	}
+	(root_bone_applied, probe_anchor_applied, bounds_applied, missing)
+}
+
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
 		return;
@@ -1435,32 +1676,59 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
-	let mut applied = 0usize;
-	let mut missing = 0usize;
-	let mut skipped = 0usize;
+	let (mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing) =
+		apply_unavatar_mesh_settings(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if mesh_settings_root_bones > 0 || mesh_settings_probe_anchors > 0 || mesh_settings_bounds > 0 || mesh_settings_missing > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: mesh_settings_root_bones={}, mesh_settings_probe_anchors={}, mesh_settings_bounds={}, mesh_settings_missing={}",
+			mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing
+		));
+	}
+
+	let (merge_mappings, merge_missing, merge_skipped) =
+		collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	let merge_retargeted = retarget_merge_armature_skins(scene, &merge_mappings);
+	if merge_retargeted > 0 || merge_missing > 0 || merge_skipped > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_missing={}, merge_armature_skipped={}",
+			merge_mappings.len(),
+			merge_retargeted,
+			merge_missing,
+			merge_skipped
+		));
+	}
+
+	let node_ids = scene_node_ids(scene);
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut bone_proxy_applied = 0usize;
+	let mut bone_proxy_missing = 0usize;
+	let mut bone_proxy_skipped = 0usize;
+	let initial_world = scene_world_matrices(scene);
+	let mut bone_proxies = Vec::new();
 
 	for component in components {
 		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarBoneProxy") {
 			continue;
 		}
 		if component.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
-			skipped += 1;
+			bone_proxy_skipped += 1;
 			continue;
 		}
 		let Some(target_ref) = component.get("target") else {
-			missing += 1;
+			bone_proxy_missing += 1;
 			continue;
 		};
 		let Some(resolved_ref) = component.get("resolvedTarget") else {
-			missing += 1;
+			bone_proxy_missing += 1;
 			continue;
 		};
 		let Some(child) = unavatar_node_ref_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths) else {
-			missing += 1;
+			bone_proxy_missing += 1;
 			continue;
 		};
 		let Some(new_parent) = unavatar_node_ref_index(resolved_ref, &node_ids, &registry_paths, &paths, &normalized_paths) else {
-			missing += 1;
+			bone_proxy_missing += 1;
 			continue;
 		};
 		let fields = component.get("fields").and_then(|v| v.as_object());
@@ -1472,20 +1740,47 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 			.and_then(|fields| fields.get("matchScale"))
 			.and_then(|v| v.as_bool())
 			.unwrap_or(false);
-		let world = scene_world_matrices(scene);
-		let old_world = world.get(child).copied().unwrap_or(Mat4::IDENTITY);
-		let parent_world = world.get(new_parent).copied().unwrap_or(Mat4::IDENTITY);
-		let local = bone_proxy_local_transform(mode, match_scale, parent_world, old_world);
-		if reparent_scene_node(scene, child, new_parent, local) {
-			applied += 1;
+		bone_proxies.push(BoneProxyResolverInfo {
+			child,
+			new_parent,
+			old_world: initial_world.get(child).copied().unwrap_or(Mat4::IDENTITY),
+			mode: mode.to_string(),
+			match_scale,
+		});
+	}
+
+	let reparent_world = scene_world_matrices(scene);
+	for proxy in &bone_proxies {
+		let parent_world = reparent_world.get(proxy.new_parent).copied().unwrap_or(Mat4::IDENTITY);
+		let local = inverse_finite_or_identity(parent_world) * proxy.old_world;
+		if reparent_scene_node(scene, proxy.child, proxy.new_parent, local) {
+			bone_proxy_applied += 1;
 		} else {
-			missing += 1;
+			bone_proxy_missing += 1;
+		}
+	}
+	let parents = scene_parent_indices(scene);
+	bone_proxies.sort_by_key(|proxy| {
+		let mut depth = 0usize;
+		let mut node = proxy.child;
+		while let Some(parent) = parents.get(node).copied().flatten() {
+			depth += 1;
+			node = parent;
+		}
+		depth
+	});
+	for proxy in &bone_proxies {
+		let world = scene_world_matrices(scene);
+		let parent_world = world.get(proxy.new_parent).copied().unwrap_or(Mat4::IDENTITY);
+		let local = bone_proxy_local_transform(&proxy.mode, proxy.match_scale, parent_world, proxy.old_world);
+		if let Some(node) = scene.nodes.get_mut(proxy.child) {
+			node.transform = local.to_cols_array();
 		}
 	}
 
-	if applied > 0 || missing > 0 || skipped > 0 {
+	if bone_proxy_applied > 0 || bone_proxy_missing > 0 || bone_proxy_skipped > 0 {
 		report.push_info(format!(
-			".unavatar Modular Avatar: bone_proxy_applied={applied}, bone_proxy_missing={missing}, bone_proxy_skipped={skipped}"
+			".unavatar Modular Avatar: bone_proxy_applied={bone_proxy_applied}, bone_proxy_missing={bone_proxy_missing}, bone_proxy_skipped={bone_proxy_skipped}"
 		));
 	}
 }
@@ -1642,6 +1937,7 @@ fn build_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Res
 		out.push(UnaSkin {
 			joint_nodes,
 			inverse_bind_matrices,
+			skeleton_node: skin.skeleton().map(|node| node.index()),
 		});
 	}
 	Ok(out)
@@ -3220,6 +3516,8 @@ pub fn scene_snapshot_from_gltf(
 			children,
 			mesh: node.mesh().map(|m| m.index()),
 			skin: node.skin().map(|s| s.index()),
+			probe_anchor_node: None,
+			local_bounds: None,
 		});
 	}
 
@@ -4853,6 +5151,8 @@ mod tests {
 					children: vec![1, 2],
 					mesh: None,
 					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
 				},
 				UnaSceneNode {
 					name: Some("Head".to_string()),
@@ -4862,6 +5162,8 @@ mod tests {
 					children: Vec::new(),
 					mesh: None,
 					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
 				},
 				UnaSceneNode {
 					name: Some("Proxy".to_string()),
@@ -4871,6 +5173,8 @@ mod tests {
 					children: Vec::new(),
 					mesh: None,
 					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
 				},
 			],
 			roots: vec![0],
@@ -4902,5 +5206,325 @@ mod tests {
 		assert_eq!(scene.nodes[1].children, vec![2]);
 		assert_eq!(after[2].transform_point3(Vec3::ZERO), before[2].transform_point3(Vec3::ZERO));
 		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_applied=1")));
+	}
+
+	#[test]
+	fn modular_avatar_nested_bone_proxy_uses_prepass_world_pose() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_head".to_string()),
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("ParentProxy".to_string()),
+					source_node_id: Some("node_parent_proxy".to_string()),
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(0.0, 10.0, 0.0)).to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("ChildProxy".to_string()),
+					source_node_id: Some("node_child_proxy".to_string()),
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [
+						{
+							"shortType": "ModularAvatarBoneProxy",
+							"enabled": true,
+							"target": {"nodeId": "node_parent_proxy", "path": "ParentProxy"},
+							"resolvedTarget": {"nodeId": "node_head", "path": "Head"},
+							"fields": {
+								"attachmentMode": "AsChildAtRoot",
+								"matchScale": false
+							}
+						},
+						{
+							"shortType": "ModularAvatarBoneProxy",
+							"enabled": true,
+							"target": {"nodeId": "node_child_proxy", "path": "ParentProxy/ChildProxy"},
+							"resolvedTarget": {"nodeId": "node_head", "path": "Head"},
+							"fields": {
+								"attachmentMode": "AsChildKeepWorldPose",
+								"matchScale": false
+							}
+						}
+					]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+
+		assert_eq!(scene.nodes[1].children, vec![2, 3]);
+		assert_eq!(after[2].transform_point3(Vec3::ZERO), before[1].transform_point3(Vec3::ZERO));
+		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_applied=2")));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_retargets_skin_bindposes() {
+		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
+		let old_bind = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("TargetBone".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					visible: true,
+					transform: target_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("SourceBone".to_string()),
+					source_node_id: Some("node_source".to_string()),
+					visible: true,
+					transform: source_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![2],
+				inverse_bind_matrices: vec![old_bind.to_cols_array()],
+				skeleton_node: Some(2),
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source", "path": "SourceBone"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source", "path": "SourceBone"},
+							"targetBone": {"nodeId": "node_target", "path": "TargetBone"}
+						}]
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.skins[0].joint_nodes, vec![1]);
+		let expected = target_world.inverse() * source_world * old_bind;
+		let actual = Mat4::from_cols_array(&scene.skins[0].inverse_bind_matrices[0]);
+		for (a, e) in actual.to_cols_array().iter().zip(expected.to_cols_array()) {
+			assert!((a - e).abs() < 0.0001, "actual={actual:?} expected={expected:?}");
+		}
+		assert!(report
+			.messages
+			.iter()
+			.any(|m| { m.contains("merge_armature_mappings=1") && m.contains("mesh_retargeter_joints=1") }));
+	}
+
+	#[test]
+	fn modular_avatar_mesh_settings_sets_skin_skeleton_node() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2, 3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Outfit".to_string()),
+					source_node_id: Some("node_outfit".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![4],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Hips".to_string()),
+					source_node_id: Some("node_hips".to_string()),
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("OtherMesh".to_string()),
+					source_node_id: Some("node_other_mesh".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: Some(1),
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("OutfitMesh".to_string()),
+					source_node_id: Some("node_outfit_mesh".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: Some(0),
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			skins: vec![
+				UnaSkin {
+					joint_nodes: vec![2],
+					inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+					skeleton_node: None,
+				},
+				UnaSkin {
+					joint_nodes: vec![2],
+					inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+					skeleton_node: None,
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMeshSettings",
+						"enabled": true,
+						"target": {"nodeId": "node_outfit", "path": "Outfit"},
+						"fields": {
+							"InheritProbeAnchor": "SetOrInherit",
+							"ProbeAnchor": {
+								"resolvedTarget": {"nodeId": "node_hips", "path": "Hips"}
+							},
+							"InheritBounds": "SetOrInherit",
+							"RootBone": {
+								"resolvedTarget": {"nodeId": "node_hips", "path": "Hips"}
+							},
+							"Bounds": {
+								"center": [0.0, 0.0, 0.0],
+								"extents": [1.0, 1.0, 1.0]
+							}
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.skins[0].skeleton_node, Some(2));
+		assert_eq!(scene.skins[1].skeleton_node, None);
+		assert_eq!(scene.nodes[4].probe_anchor_node, Some(2));
+		assert_eq!(
+			scene.nodes[4].local_bounds,
+			Some(UnaBounds {
+				center: [0.0, 0.0, 0.0],
+				extents: [1.0, 1.0, 1.0],
+			})
+		);
+		assert!(report.messages.iter().any(|m| {
+			m.contains("mesh_settings_root_bones=1") && m.contains("mesh_settings_probe_anchors=1") && m.contains("mesh_settings_bounds=1")
+		}));
+	}
+
+	#[test]
+	fn wardrobe_set_lookup_uses_exact_id() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"wardrobe": {
+					"sets": [{
+						"id": "field_drape",
+						"displayName": "Field Drape",
+						"operations": [{
+							"type": "nodeEnabled",
+							"target": {"path": "Hair"},
+							"visible": true
+						}]
+					}]
+				}
+			}),
+		};
+
+		assert!(unavatar_wardrobe_set_operations(&unavatar, "field_drape").is_some());
+		assert!(unavatar_wardrobe_set_operations(&unavatar, "Field Drape").is_none());
 	}
 }

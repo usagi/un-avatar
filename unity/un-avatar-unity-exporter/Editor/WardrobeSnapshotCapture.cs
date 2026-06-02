@@ -68,6 +68,7 @@ namespace UNAvatar.UnityExporter
             }
 
             var nodes = BuildNodeLookup(root);
+            DisableNodesMissingFromSnapshot(root, snapshot);
 
             foreach (var node in snapshot.nodes)
             {
@@ -106,6 +107,24 @@ namespace UNAvatar.UnityExporter
                     {
                         skinned.SetBlendShapeWeight(index, shape.weight);
                     }
+                }
+            }
+        }
+
+        private static void DisableNodesMissingFromSnapshot(GameObject root, WardrobeSnapshotDraft snapshot)
+        {
+            var known = SnapshotNodeKeys(snapshot);
+            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (transform == root.transform)
+                {
+                    continue;
+                }
+                var nodeId = NodeIdFor(root.transform, transform);
+                var path = NormalizePath(VariantExtractor.TransformPath(root.transform, transform));
+                if (!known.Contains(nodeId) && !known.Contains(path))
+                {
+                    transform.gameObject.SetActive(false);
                 }
             }
         }
@@ -252,7 +271,7 @@ namespace UNAvatar.UnityExporter
             var setName = string.IsNullOrWhiteSpace(displayName) ? "Outfit" : displayName.Trim();
             var set = new WardrobeSetDraft
             {
-                id = MakeId(setName),
+                id = MakeWardrobeSetId(setName),
                 displayName = setName,
                 source = "unity_capture_diff"
             };
@@ -366,6 +385,11 @@ namespace UNAvatar.UnityExporter
 
         public static List<WardrobeOperationDraft> BaseOperations(WardrobeSnapshotDraft snapshot)
         {
+            return BaseOperations(snapshot, null);
+        }
+
+        public static List<WardrobeOperationDraft> BaseOperations(WardrobeSnapshotDraft snapshot, GameObject referenceRoot)
+        {
             var operations = new List<WardrobeOperationDraft>();
             foreach (var node in snapshot.nodes)
             {
@@ -379,6 +403,7 @@ namespace UNAvatar.UnityExporter
                     });
                 }
             }
+            AddMissingReferenceNodesAsDisabled(operations, snapshot, referenceRoot);
             foreach (var shape in snapshot.blendShapes)
             {
                 operations.Add(new WardrobeOperationDraft
@@ -389,7 +414,94 @@ namespace UNAvatar.UnityExporter
                     floatValue = shape.weight
                 });
             }
+            CompressVisibilityOperations(operations);
             return operations;
+        }
+
+        public static WardrobeSetDraft Diff(
+            WardrobeSnapshotDraft baseline,
+            WardrobeSnapshotDraft current,
+            string displayName,
+            GameObject referenceRoot)
+        {
+            var set = Diff(baseline, current, displayName);
+            AddMissingReferenceNodesAsDisabled(set.operations, current, referenceRoot);
+            CompressVisibilityOperations(set.operations);
+            return set;
+        }
+
+        private static void AddMissingReferenceNodesAsDisabled(
+            List<WardrobeOperationDraft> operations,
+            WardrobeSnapshotDraft snapshot,
+            GameObject referenceRoot)
+        {
+            if (snapshot == null || referenceRoot == null)
+            {
+                return;
+            }
+
+            var known = SnapshotNodeKeys(snapshot);
+            var existingTargets = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in operations)
+            {
+                if (operation == null || operation.target == null)
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(operation.target.nodeId))
+                {
+                    existingTargets.Add(operation.target.nodeId);
+                }
+                var path = NormalizePath(operation.target.path);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    existingTargets.Add(path);
+                }
+            }
+
+            foreach (var transform in referenceRoot.GetComponentsInChildren<Transform>(true))
+            {
+                if (transform == referenceRoot.transform)
+                {
+                    continue;
+                }
+                var nodeId = NodeIdFor(referenceRoot.transform, transform);
+                var path = NormalizePath(VariantExtractor.TransformPath(referenceRoot.transform, transform));
+                if (known.Contains(nodeId) || known.Contains(path) || existingTargets.Contains(nodeId) || existingTargets.Contains(path))
+                {
+                    continue;
+                }
+                operations.Add(new WardrobeOperationDraft
+                {
+                    type = "subtreeEnabled",
+                    target = Target(nodeId, path),
+                    boolValue = false
+                });
+                existingTargets.Add(nodeId);
+                existingTargets.Add(path);
+            }
+        }
+
+        private static HashSet<string> SnapshotNodeKeys(WardrobeSnapshotDraft snapshot)
+        {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            if (snapshot == null)
+            {
+                return keys;
+            }
+            foreach (var node in snapshot.nodes)
+            {
+                if (!string.IsNullOrEmpty(node.nodeId))
+                {
+                    keys.Add(node.nodeId);
+                }
+                var path = NormalizePath(node.path);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    keys.Add(path);
+                }
+            }
+            return keys;
         }
 
         public static WardrobeOperationDraft CloneOperation(WardrobeOperationDraft source)
@@ -425,6 +537,22 @@ namespace UNAvatar.UnityExporter
             }
             var normalized = sb.ToString().Trim('-');
             return string.IsNullOrEmpty(normalized) ? "outfit" : normalized;
+        }
+
+        public static string MakeWardrobeSetId(string value)
+        {
+            var source = (value ?? "").Trim();
+            return string.IsNullOrEmpty(source) ? "Outfit" : source;
+        }
+
+        public static string NormalizeWardrobeSetId(string existingId, string displayName)
+        {
+            var displayId = MakeWardrobeSetId(displayName);
+            if (string.IsNullOrWhiteSpace(existingId) || string.Equals(existingId, MakeId(displayName), StringComparison.Ordinal))
+            {
+                return displayId;
+            }
+            return existingId.Trim();
         }
 
         private static WardrobeTargetDraft Target(string nodeId, string path)

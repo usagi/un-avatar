@@ -31,8 +31,8 @@ namespace UNAvatar.UnityExporter
                     skipped++;
                     continue;
                 }
-                var next = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName);
-                next.id = set.id;
+                var next = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName, avatarRoot);
+                next.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
                 next.displayName = set.displayName;
                 next.source = set.source + "_rebased";
                 next.capturedSnapshot = set.capturedSnapshot;
@@ -116,7 +116,7 @@ namespace UNAvatar.UnityExporter
         {
             if (hasBaseSnapshot)
             {
-                return WardrobeSnapshotCapture.BaseOperations(baseSnapshot);
+                return WardrobeSnapshotCapture.BaseOperations(baseSnapshot, avatarRoot);
             }
             if (!hasImportedBaseOperations)
             {

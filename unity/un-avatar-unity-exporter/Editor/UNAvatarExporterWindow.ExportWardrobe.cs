@@ -39,7 +39,7 @@ namespace UNAvatar.UnityExporter
                     {
                         SetActiveRecursive(setClone.transform, true);
                     }
-                    ApplyWardrobeOperationsToRoot(setClone, CurrentBaseOperations());
+                    ApplyWardrobeOperationsToRoot(setClone, hasBaseSnapshot ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot, setClone) : CurrentBaseOperations());
                     ApplyWardrobeOperationsToRoot(setClone, source.operations);
                     if (bakeWithModularAvatar)
                     {
@@ -49,8 +49,8 @@ namespace UNAvatar.UnityExporter
                         }
                     }
                     var snapshot = WardrobeSnapshotCapture.Capture(setClone);
-                    var baked = WardrobeSnapshotCapture.Diff(bakedBaseSnapshot, snapshot, source.displayName);
-                    baked.id = source.id;
+                    var baked = WardrobeSnapshotCapture.Diff(bakedBaseSnapshot, snapshot, source.displayName, setClone);
+                    baked.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(source.id, source.displayName);
                     baked.displayName = source.displayName;
                     baked.source = source.source + "_baked";
                     baked.capturedSnapshot = snapshot;

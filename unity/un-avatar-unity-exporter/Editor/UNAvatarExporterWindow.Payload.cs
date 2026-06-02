@@ -39,7 +39,7 @@ namespace UNAvatar.UnityExporter
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
-                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
+                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot),
                 ["modularAvatar"] = BuildModularAvatarPayload(registryRoot),
                 ["provenance"] = new Dictionary<string, object>
                 {
@@ -131,11 +131,11 @@ namespace UNAvatar.UnityExporter
                 ["validation"] = validation.ToJson(),
                 ["humanoidBoneCount"] = humanoid.Count,
                 ["variantCount"] = variants.Count,
-                ["variants"] = VariantsToJson(variants),
+                ["variants"] = VariantSummariesToJson(variants),
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
-                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
+                ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
-                ["modularAvatar"] = BuildModularAvatarPayload(avatarRoot),
+                ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
                     ["buildMarker"] = ExporterBuildMarker,
@@ -152,8 +152,7 @@ namespace UNAvatar.UnityExporter
                     ["count"] = exportedTextures.Count,
                     ["fallbackCount"] = fallbackTextures.Count,
                     ["sourceBytesByExtension"] = textureSourceBytesByExtension,
-                    ["fallbacks"] = TextureRecordsToJson(fallbackTextures),
-                    ["items"] = TextureRecordsToJson(exportedTextures)
+                    ["fallbacks"] = TextureRecordsToJson(fallbackTextures, 16)
                 },
                 ["unsupported"] = unsupported
             };
@@ -183,18 +182,152 @@ namespace UNAvatar.UnityExporter
             return json;
         }
 
-        private static List<object> TextureRecordsToJson(List<ExportedTextureRecord> textures)
+        private static List<object> TextureRecordsToJson(List<ExportedTextureRecord> textures, int limit = int.MaxValue)
         {
             var json = new List<object>(textures != null ? textures.Count : 0);
             if (textures == null)
             {
                 return json;
             }
+            var count = 0;
             foreach (var texture in textures)
             {
+                if (count >= limit)
+                {
+                    break;
+                }
                 json.Add(texture.ToJson());
+                count++;
             }
             return json;
+        }
+
+        private static List<object> VariantSummariesToJson(List<VariantRecord> variants)
+        {
+            var json = new List<object>(variants != null ? variants.Count : 0);
+            if (variants == null)
+            {
+                return json;
+            }
+            foreach (var variant in variants)
+            {
+                json.Add(new Dictionary<string, object>
+                {
+                    ["id"] = variant.Id ?? "",
+                    ["name"] = variant.Name ?? "",
+                    ["source"] = variant.Source ?? "",
+                    ["operationCount"] = variant.Operations != null ? variant.Operations.Count : 0
+                });
+            }
+            return json;
+        }
+
+        private Dictionary<string, object> BuildWardrobeReportSummary(
+            List<VariantRecord> variants,
+            WardrobeSnapshotDraft exportBaseSnapshot,
+            List<WardrobeSetDraft> exportWardrobeSets,
+            GameObject referenceRoot)
+        {
+            var full = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, referenceRoot);
+            var sets = new List<object>();
+            if (full.TryGetValue("sets", out var rawSets) && rawSets is List<object> fullSets)
+            {
+                foreach (var item in fullSets)
+                {
+                    if (!(item is Dictionary<string, object> set))
+                    {
+                        continue;
+                    }
+                    var operations = set.TryGetValue("operations", out var rawOps) && rawOps is List<object> ops ? ops : new List<object>();
+                    sets.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = set.TryGetValue("id", out var id) ? id : "",
+                        ["displayName"] = set.TryGetValue("displayName", out var displayName) ? displayName : "",
+                        ["source"] = set.TryGetValue("source", out var source) ? source : "",
+                        ["default"] = set.TryGetValue("default", out var isDefault) ? isDefault : false,
+                        ["assetGroups"] = set.TryGetValue("assetGroups", out var assetGroups) ? assetGroups : new List<object>(),
+                        ["operationCount"] = operations.Count,
+                        ["operationCounts"] = CountOperationTypes(operations)
+                    });
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["baseSet"] = full.TryGetValue("baseSet", out var baseSet) ? baseSet : "base",
+                ["setCount"] = sets.Count,
+                ["sets"] = sets
+            };
+        }
+
+        private static Dictionary<string, object> CountOperationTypes(List<object> operations)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var item in operations)
+            {
+                if (!(item is Dictionary<string, object> operation))
+                {
+                    continue;
+                }
+                var type = operation.TryGetValue("type", out var rawType) ? rawType as string : null;
+                if (string.IsNullOrEmpty(type))
+                {
+                    type = "unknown";
+                }
+                counts[type] = counts.TryGetValue(type, out var count) ? count + 1 : 1;
+            }
+            var json = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var pair in counts)
+            {
+                json[pair.Key] = pair.Value;
+            }
+            return json;
+        }
+
+        private Dictionary<string, object> BuildModularAvatarReportSummary(GameObject root)
+        {
+            var typeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var samples = new List<object>();
+            var componentCount = 0;
+            if (root != null)
+            {
+                foreach (var component in root.GetComponentsInChildren<Component>(true))
+                {
+                    if (!IsModularAvatarComponent(component))
+                    {
+                        continue;
+                    }
+                    componentCount++;
+                    var typeName = component.GetType().Name;
+                    typeCounts[typeName] = typeCounts.TryGetValue(typeName, out var count) ? count + 1 : 1;
+                    if (samples.Count < 32 && (typeName == "ModularAvatarBoneProxy" || typeName == "ModularAvatarMergeArmature" || typeName == "ModularAvatarMeshSettings"))
+                    {
+                        var sample = new Dictionary<string, object>
+                        {
+                            ["shortType"] = typeName,
+                            ["target"] = TransformTargetJson(root.transform, component.transform),
+                            ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled
+                        };
+                        if (typeName == "ModularAvatarBoneProxy")
+                        {
+                            sample["resolvedTarget"] = BuildBoneProxyResolvedTarget(root.transform, component);
+                        }
+                        samples.Add(sample);
+                    }
+                }
+            }
+            var countsJson = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var pair in typeCounts)
+            {
+                countsJson[pair.Key] = pair.Value;
+            }
+            return new Dictionary<string, object>
+            {
+                ["schemaVersion"] = "0.1-preview",
+                ["available"] = ModularAvatarBridge.IsAvailable,
+                ["componentCount"] = componentCount,
+                ["componentCounts"] = countsJson,
+                ["samples"] = samples
+            };
         }
 
         private Dictionary<string, object> BuildWardrobePreviewDiagnostics(List<WardrobeSetDraft> exportWardrobeSets)
@@ -253,8 +386,7 @@ namespace UNAvatar.UnityExporter
                 {
                     ["id"] = set.id ?? "",
                     ["displayName"] = set.displayName ?? "",
-                    ["previewCount"] = set.previewImages != null ? set.previewImages.Count : 0,
-                    ["previews"] = WardrobePreviewDiagnosticsToJson(set.previewImages)
+                    ["previewCount"] = set.previewImages != null ? set.previewImages.Count : 0
                 });
             }
             return json;
@@ -430,13 +562,15 @@ namespace UNAvatar.UnityExporter
         private Dictionary<string, object> BuildWardrobePayload(
             List<VariantRecord> variants,
             WardrobeSnapshotDraft exportBaseSnapshot = null,
-            List<WardrobeSetDraft> exportWardrobeSets = null)
+            List<WardrobeSetDraft> exportWardrobeSets = null,
+            GameObject referenceRoot = null)
         {
+            var rootForReference = referenceRoot != null ? referenceRoot : avatarRoot;
             var hasExportBaseSnapshot = exportBaseSnapshot != null && exportBaseSnapshot.nodes.Count > 0;
             var baseOperations = hasExportBaseSnapshot
-                ? WardrobeSnapshotCapture.BaseOperations(exportBaseSnapshot)
+                ? WardrobeSnapshotCapture.BaseOperations(exportBaseSnapshot, rootForReference)
                 : hasBaseSnapshot
-                ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot)
+                ? WardrobeSnapshotCapture.BaseOperations(baseSnapshot, rootForReference)
                 : CloneWardrobeOperations(importedBaseOperations);
             var sets = new List<object>
             {

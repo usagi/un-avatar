@@ -197,6 +197,15 @@ namespace UNAvatar.UnityExporter
             {
                 return FloatList(color.r, color.g, color.b, color.a);
             }
+            if (value is Bounds bounds)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["center"] = FloatList(bounds.center.x, bounds.center.y, bounds.center.z),
+                    ["extents"] = FloatList(bounds.extents.x, bounds.extents.y, bounds.extents.z),
+                    ["size"] = FloatList(bounds.size.x, bounds.size.y, bounds.size.z)
+                };
+            }
             if (value is UnityEngine.Object unityObject)
             {
                 return ModularAvatarObjectReferenceToJson(root, unityObject);

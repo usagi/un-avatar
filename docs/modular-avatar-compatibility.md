@@ -57,22 +57,25 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` object reference resolution: `AvatarObjectReference`, direct object reference, humanoid bone reference, sub-path
   - done: Exporter serializes `AvatarObjectReference.referencePath`, direct target object, resolved target, and Transform/GameObject references as stable node id + path.
   - remaining: humanoid bone references, ambiguous duplicate path diagnostics, and component-specific reference schemas.
-- `[ ]` execution order model: NDMF / Modular Avatar pass order summary
-  - required: Runtime resolver の処理順を固定し、MergeArmature と BoneProxy の依存関係を壊さない。
+- `[~]` execution order model: NDMF / Modular Avatar pass order summary
+  - done: Runtime resolver order follows the relevant MA transform passes for current support: MeshSettings, MergeArmature / MeshRetargeter, then BoneProxy with prepass-captured world pose.
+  - remaining: extend pass ordering as ReplaceObject, MeshCutter, MaterialSetter, dynamics, and late transform features are implemented.
 
 ### Armature / Skin / Mesh Retargeting
 
 - `[~]` MA Merge Armature: bone mapping, prefix/suffix, mangleNames, lock mode
-  - done: Exporter stores MergeArmature public fields and resolved source bone -> target bone mappings.
-  - remaining: Runtime resolver must rewrite renderer.bones and inverse bind matrices with the MA MeshRetargeter-equivalent formula.
+  - done: Exporter stores MergeArmature public fields and resolved source bone -> target bone mappings. Runtime resolver rewrites `UnaSkin.joint_nodes` and inverse bind matrices from saved source bone -> target bone mappings.
+  - remaining: retained merged bones / transform lookthrough, nested topology order, and components / constraints / PhysBone cases where MA preserves intermediate bones.
   - sample: `Color  1`, `Color  13`, `B_White&Brown` armature merge.
-- `[ ]` MeshRetargeter bindpose rewrite
+- `[~]` MeshRetargeter bindpose rewrite
   - reference formula: `newBindTarget.worldToLocalMatrix * originalBone.localToWorldMatrix * originalBindPose`
-  - required: glTF coordinate conversion 後の同等式を exporter/runtime のどちらで適用するか固定する。
+  - done: Runtime applies the equivalent formula after glTF import using `UnaSceneSnapshot` world matrices.
+  - remaining: renderer rootBone / localBounds scale adjustment and fixture coverage for multi-bone wardrobe assets.
 - `[ ]` retained merged bones / transform lookthrough
   - required: components, constraints, PhysBone roots, and rootBone offset cases where MA keeps intermediate bones.
-- `[ ]` rootBone / localBounds / probeAnchor retarget
-  - required: SkinnedMeshRenderer local bounds を selected graph に合わせる。
+- `[~]` rootBone / localBounds / probeAnchor retarget
+  - done: Importer preserves glTF `skin.skeleton` as `UnaSkin.skeleton_node`. Runtime MeshRetargeter retargets `skeleton_node` through MergeArmature mappings. Runtime MeshSettings applies RootBone to selected subtree skins, stores ProbeAnchor / localBounds on renderer nodes, and renderer debug/draw metadata can observe them.
+  - remaining: full renderer culling/cache policy for localBounds and exact rootBone-vs-probeAnchor reference handling.
 - `[ ]` nested MergeArmature topology
   - required: parent/child merge order, cycle diagnostics.
 - `[ ]` Visible Head Accessory
@@ -81,8 +84,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Reparenting / Proxy / Object Replacement
 
 - `[~]` MA Bone Proxy
-  - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, and `matchScale`.
-  - remaining: regression-check `field_drape` visually and add broader fixture coverage for nested proxies / duplicate names / missing targets.
+  - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, and `matchScale`. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting.
+  - remaining: regression-check `field_drape` visually and add broader fixture coverage for duplicate names / missing targets.
 - `[ ]` MA Replace Object
   - required: replacement object and child migration as render graph operation.
 - `[ ]` MA Move Independently
@@ -92,8 +95,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ### Mesh Settings / Geometry Mutation
 
-- `[ ]` MA Mesh Settings
-  - required: rootBone override, bounds, probe anchor, inverted root bone behavior.
+- `[~]` MA Mesh Settings
+  - done: Exporter serializes `Bounds` as structured center/extents/size. Runtime applies RootBone override to skin skeleton metadata, stores ProbeAnchor / Bounds on target renderer nodes, and exposes them in renderer debug metadata.
+  - remaining: exact renderer culling behavior, inverted root bone behavior, and unskinned mesh conversion.
 - `[ ]` MA Mesh Cutter
   - required: mesh vertex / primitive filtering, generated mesh cache key.
 - `[ ]` MA Shape Changer
@@ -161,7 +165,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[ ]` numeric resolver tests
   - required: MergeArmature one-bone retarget, BoneProxy reparent, MeshSettings rootBone override.
 - `[~]` BoneProxy numeric test
-  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy.
+  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target.
   - remaining: cover all attachment modes and matchScale.
 - `[ ]` visual regression screenshots
   - required: front/back/detail views for mizuki field_drape after each resolver milestone.

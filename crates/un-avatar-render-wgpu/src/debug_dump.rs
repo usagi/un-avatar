@@ -21,7 +21,18 @@ pub fn log_material_skin_report(doc: &UnaDocument) {
 		} else {
 			""
 		};
-		eprintln!("[debug-material] skin[{i}]: joints.len() = {n}{warn}");
+		eprintln!(
+			"[debug-material] skin[{i}]: joints.len() = {n} skeleton_node={:?}{warn}",
+			sk.skeleton_node
+		);
+	}
+	for (i, node) in sc.nodes.iter().enumerate() {
+		if node.probe_anchor_node.is_some() || node.local_bounds.is_some() {
+			eprintln!(
+				"[debug-material] node[{i}] name={:?} probe_anchor_node={:?} local_bounds={:?}",
+				node.name, node.probe_anchor_node, node.local_bounds
+			);
+		}
 	}
 
 	let mtoon_by_mat: Vec<Option<&serde_json::Map<String, Value>>> = doc

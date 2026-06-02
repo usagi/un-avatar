@@ -363,6 +363,15 @@ pub struct UnaTextureSampler {
 pub struct UnaSkin {
 	pub joint_nodes: Vec<usize>,
 	pub inverse_bind_matrices: Vec<[f32; 16]>,
+	/// glTF `skin.skeleton` / Unity `SkinnedMeshRenderer.rootBone` に相当する root bone node。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub skeleton_node: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaBounds {
+	pub center: [f32; 3],
+	pub extents: [f32; 3],
 }
 
 /// ノード局所変換（列主序 4×4・WGSL / glTF と同趣）。
@@ -386,6 +395,12 @@ pub struct UnaSceneNode {
 	/// glTF `skin` インデックス（`UnaSceneSnapshot::skins`）。メッシュ付きノードのみ。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub skin: Option<usize>,
+	/// Unity `Renderer.probeAnchor` に相当する node。主に Modular Avatar Mesh Settings 由来。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub probe_anchor_node: Option<usize>,
+	/// Unity `SkinnedMeshRenderer.localBounds` に相当する rootBone local bounds。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub local_bounds: Option<UnaBounds>,
 }
 
 fn default_true() -> bool {

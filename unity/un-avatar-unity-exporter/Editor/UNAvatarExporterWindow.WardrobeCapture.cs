@@ -74,7 +74,7 @@ namespace UNAvatar.UnityExporter
                 return;
             }
             var current = WardrobeSnapshotCapture.Capture(avatarRoot);
-            var set = WardrobeSnapshotCapture.Diff(baseSnapshot, current, wardrobeSetName);
+            var set = WardrobeSnapshotCapture.Diff(baseSnapshot, current, wardrobeSetName, avatarRoot);
             set.capturedSnapshot = current;
             set.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             capturedWardrobeSets.Add(set);
@@ -103,8 +103,10 @@ namespace UNAvatar.UnityExporter
             var current = WardrobeSnapshotCapture.Capture(avatarRoot);
             var existing = capturedWardrobeSets[selectedWardrobeSetIndex];
             var nextName = string.IsNullOrWhiteSpace(wardrobeSetName) ? existing.displayName : wardrobeSetName.Trim();
-            var updated = WardrobeSnapshotCapture.Diff(baseSnapshot, current, nextName);
-            updated.id = string.Equals(nextName, existing.displayName, StringComparison.Ordinal) ? existing.id : WardrobeSnapshotCapture.MakeId(nextName);
+            var updated = WardrobeSnapshotCapture.Diff(baseSnapshot, current, nextName, avatarRoot);
+            updated.id = string.Equals(nextName, existing.displayName, StringComparison.Ordinal)
+                ? WardrobeSnapshotCapture.NormalizeWardrobeSetId(existing.id, nextName)
+                : WardrobeSnapshotCapture.MakeWardrobeSetId(nextName);
             updated.displayName = nextName;
             updated.source = "unity_capture_diff_update";
             updated.capturedSnapshot = current;
@@ -131,7 +133,7 @@ namespace UNAvatar.UnityExporter
             var source = capturedWardrobeSets[index];
             var copy = new WardrobeSetDraft
             {
-                id = WardrobeSnapshotCapture.MakeId(source.displayName + "-copy-" + capturedWardrobeSets.Count.ToString(CultureInfo.InvariantCulture)),
+                id = WardrobeSnapshotCapture.MakeWardrobeSetId(source.displayName + "-copy-" + capturedWardrobeSets.Count.ToString(CultureInfo.InvariantCulture)),
                 displayName = source.displayName + " Copy",
                 source = "unity_capture_diff_duplicate",
                 assetGroups = new List<string>(source.assetGroups),

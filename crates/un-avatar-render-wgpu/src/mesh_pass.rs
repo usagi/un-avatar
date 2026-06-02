@@ -5,8 +5,8 @@ use std::{borrow::Cow, collections::BTreeMap};
 use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr, UnaMeshBuffers,
-	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
+	UnaAlphaMode, UnaBounds, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr,
+	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
 	UnaTextureWrapMode,
 };
 
@@ -484,6 +484,8 @@ struct MeshDraw {
 	mtoon: UnaMtoonMaterial,
 	mesh_index: usize,
 	primitive_index: usize,
+	probe_anchor_node: Option<usize>,
+	local_bounds: Option<UnaBounds>,
 	world_origin: Vec3,
 }
 
@@ -3197,6 +3199,8 @@ impl SceneMeshes {
 					mtoon,
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
+					probe_anchor_node: node.probe_anchor_node,
+					local_bounds: node.local_bounds,
 					world_origin: Vec3::ZERO,
 				});
 			}
@@ -3448,7 +3452,12 @@ impl SceneMeshes {
 
 		for d in &mut self.draws {
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
-			d.world_origin = mesh_world.transform_point3(Vec3::ZERO);
+			d.world_origin = if let Some(bounds) = d.local_bounds {
+				let reference_world = d.probe_anchor_node.and_then(|node| world.get(node)).copied().unwrap_or(mesh_world);
+				reference_world.transform_point3(Vec3::from(bounds.center))
+			} else {
+				mesh_world.transform_point3(Vec3::ZERO)
+			};
 
 			if !d.morph_pos.is_empty() {
 				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
