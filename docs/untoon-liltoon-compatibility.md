@@ -154,7 +154,9 @@ Status legend:
   - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持する。
   - done: `_AAStrength` を shadow / specular / rim の toon ramp blur へ反映し、light min/max と monochrome lighting を main toon direct light に反映する。
   - remaining: vertex light、GSAA、MatCap/specular/rim 個別 lighting path の min/max 適用を本家に合わせる。
-- `[ ]` render queue ordering: Unity renderQueue / lilToon queue conventions
+- `[~]` render queue ordering: Unity renderQueue / lilToon queue conventions
+  - done: `UN_avatar_material.renderQueue` を lilToon-like material に保持し、Transparent / Transparent ZWrite の draw color path を source renderQueue 昇順で並べる。
+  - remaining: Opaque / Mask queue、transparent distance sorting、outline / fur / refraction subpass ordering、stencil / offset との相互作用を Unity/lilToon に合わせる。
 - `[~]` stencil / color mask / offset
   - done: Unity Exporter report に non-default stencil / color mask / offset / outline color mask / outline offset を unsupported material render state として集約出力する。
   - remaining: Runtime pipeline の stencil / color mask / depth offset 対応、material sorting との相互作用を設計する。

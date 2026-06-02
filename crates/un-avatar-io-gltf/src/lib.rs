@@ -1726,6 +1726,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		source_profile: UnaLilToonLikeSourceProfile::Liltoon,
 		..Default::default()
 	};
+	out.rendering.render_queue_number = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue")));
 	if let Some(value) = unavatar_material_float_param(extras, "_LightMinLimit") {
 		out.rendering.light_min_limit_factor = value.max(0.0);
 	}
@@ -3793,6 +3794,7 @@ mod tests {
 			r#"{
 				"family": "liltoon",
 				"sourceShader": "lilToon",
+				"renderQueue": 2461,
 				"floatParams": {
 					"_UseShadow": 1.0,
 					"_UseMatCap": 1.0,
@@ -3952,6 +3954,7 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
+		assert_eq!(liltoon_like.rendering.render_queue_number, Some(2461));
 		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
 		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);
 		assert_eq!(liltoon_like.rendering.monochrome_lighting_factor, 0.25);

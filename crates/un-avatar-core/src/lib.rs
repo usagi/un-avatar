@@ -842,6 +842,8 @@ pub struct UnaLilToonLikeBlendState {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeRendering {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub render_queue_number: Option<i32>,
 	#[serde(default = "default_liltoon_light_min_limit")]
 	pub light_min_limit_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1097,6 +1099,7 @@ impl Default for UnaLilToonLikeBlendState {
 impl Default for UnaLilToonLikeRendering {
 	fn default() -> Self {
 		Self {
+			render_queue_number: None,
 			light_min_limit_factor: default_liltoon_light_min_limit(),
 			light_max_limit_factor: 1.0,
 			monochrome_lighting_factor: 0.0,

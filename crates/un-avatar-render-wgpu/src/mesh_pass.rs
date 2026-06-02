@@ -490,6 +490,29 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	}
 }
 
+fn material_render_queue_number(material: &UnaMaterialPbr, alpha_mode: UnaAlphaMode) -> i32 {
+	if let Some(render_queue) = material
+		.liltoon_like
+		.as_ref()
+		.and_then(|liltoon_like| liltoon_like.rendering.render_queue_number)
+	{
+		return render_queue;
+	}
+	match alpha_mode {
+		UnaAlphaMode::Opaque => 2000,
+		UnaAlphaMode::Mask => 2450,
+		UnaAlphaMode::Blend => 3000,
+	}
+}
+
+fn draw_render_queue_number(draw: &MeshDraw) -> i32 {
+	material_render_queue_number(&draw.material, draw.alpha_mode)
+}
+
+fn draw_render_order_key(draws: &[MeshDraw], draw_index: usize) -> (i32, usize) {
+	(draw_render_queue_number(&draws[draw_index]), draw_index)
+}
+
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
 	let mut transparent_zwrite_draw_indices = Vec::new();
@@ -504,6 +527,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 	];
+	let mut blended_draws = Vec::new();
 	let mut blended_batches = Vec::new();
 
 	for (draw_index, draw) in draws.iter().enumerate() {
@@ -528,21 +552,20 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 				if draw.mtoon.transparent_with_z_write && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) =>
 			{
 				transparent_zwrite_draw_indices.push(draw_index);
-				append_ordered_draw_batch(&mut blended_batches, DrawPipelineKind::BlendToon, draw_index, batch_capacity);
+				blended_draws.push((DrawPipelineKind::BlendToon, draw_index));
 			}
 			UnaAlphaMode::Blend => {
-				append_ordered_draw_batch(
-					&mut blended_batches,
-					blend_pipeline_for_shading(shading),
-					draw_index,
-					batch_capacity,
-				);
+				blended_draws.push((blend_pipeline_for_shading(shading), draw_index));
 			}
 		}
 	}
+	blended_draws.sort_by_key(|&(_, draw_index)| draw_render_order_key(draws, draw_index));
+	for (pipeline, draw_index) in blended_draws {
+		append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
+	}
 
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
-	group_draw_indices_by_skin_palette(draws, &mut transparent_zwrite_draw_indices);
+	transparent_zwrite_draw_indices.sort_by_key(|&draw_index| draw_render_order_key(draws, draw_index));
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
@@ -3431,6 +3454,22 @@ mod tests {
 		assert_eq!(batches[1].draw_indices, vec![1]);
 		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[2].draw_indices, vec![2, 3]);
+	}
+
+	#[test]
+	fn material_render_queue_prefers_liltoon_source_queue() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.render_queue_number = Some(2461);
+		let mat = UnaMaterialPbr {
+			alpha_mode: UnaAlphaMode::Blend,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		assert_eq!(material_render_queue_number(&mat, mat.alpha_mode), 2461);
+		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Opaque), 2000);
+		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Mask), 2450);
+		assert_eq!(material_render_queue_number(&UnaMaterialPbr::default(), UnaAlphaMode::Blend), 3000);
 	}
 
 	#[test]
