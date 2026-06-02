@@ -435,10 +435,10 @@ Status legend:
   - done: source raw params を保持し、environment reflection approximation に main light color mix として接続した。
   - remaining: Unity/lilToon の `fd.lightColor`、cubemap HDR decode、roughness mip、forward-add 条件との一致を検証する。
 - `[~]` `_ReflectionCubeColor`
-  - done: source raw color params を保持し、environment reflection approximation の cube color factor として接続した。
+  - done: source raw color params を保持し、`_ReflectionCubeOverride` 有効時の authored cube tint として environment reflection approximation へ接続した。
   - remaining: `_ReflectionColor` / `_ReflectionColorTex` / cubemap HDR decode との本家合成順を検証する。
 - `[~]` `_ReflectionCubeOverride`
-  - done: source raw params を v2 reflection parameter として保持する。
+  - done: source raw params を v2 reflection parameter として保持し、override 有効時だけ `_ReflectionCubeColor` を reflection approximation へ掛ける。
   - remaining: reflection probe / authored cubemap の source policy を `.unavatar` metadata と renderer pipeline に分離して定義する。
 - `[~]` `_ReflectionBlendMode`
   - done: source raw params を保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。

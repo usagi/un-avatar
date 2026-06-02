@@ -723,7 +723,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 				frame.light_color.rgb * frame.light_color.w,
 				clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 			);
-			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * drawu.reflection_cube_color.rgb * reflection_lighting;
+			let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
+			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * cube_tint * reflection_lighting;
 			let one_minus_reflectivity = 0.96 - metallic * 0.96;
 			let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 			let surface_reduction = 1.0 / (roughness * roughness + 1.0);
