@@ -211,15 +211,85 @@ fn portable_mesh_shader_source() -> String {
 		"@group(1) @binding(27) var shadow_blur_mask_samp: sampler;\n",
 		"@group(1) @binding(38) var matcap2_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(39) var matcap2_blend_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(41) var main2nd_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(42) var main3rd_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(43) var main2nd_blend_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(44) var main3rd_blend_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(45) var normal2nd_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(46) var emission_gradation_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(47) var main_gradation_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(48) var emission2nd_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(49) var emission2nd_blend_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(50) var emission2nd_gradation_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(51) var anisotropy_tangent_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(52) var anisotropy_scale_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(53) var anisotropy_shift_noise_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(54) var emission_blend_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(55) var rim_shade_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(56) var backlight_color_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(57) var shadow2_color_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(58) var shadow3_color_tex: texture_2d<f32>;\n",
 	] {
 		shader = shader.replace(snippet, "");
 	}
+	shader = shader.replace(
+		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\tlet enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);\n\tif (enabled <= 0.000001) {\n\t\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n\t}\n\tlet base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));\n\tlet base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;\n\tlet tangent_uv = uv * drawu.anisotropy_tangent_uv_offset_scale.zw + drawu.anisotropy_tangent_uv_offset_scale.xy;\n\tvar tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\tif (dot(tangent_sample, tangent_sample) < 0.000001) {\n\t\ttangent_sample = vec3<f32>(1.0, 0.0, 0.0);\n\t}\n\tvar aniso_t = normalize(base_tangent * tangent_sample.x + base_bitangent * tangent_sample.y + n * tangent_sample.z);\n\taniso_t = normalize(aniso_t - n * dot(n, aniso_t));\n\tlet aniso_b = normalize(cross(n, aniso_t)) * tangent_in.w;\n\tlet scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;\n\tlet scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;\n\tlet anisotropy = drawu.anisotropy_params.y * scale_mask;\n\tlet shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);\n\tlet aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));\n\tlet noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;\n\tlet shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;\n\treturn AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);\n}\n",
+		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n}\n",
+	);
+	shader = shader.replace(
+		"\t\t\tlet emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);\n\t\t\tlet emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;\n",
+		"\t\t\tlet emission_mask = 1.0;\n",
+	);
+	shader = shader.replace(
+		"\t\t\tlet rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;\n",
+		"\t\t\tlet rim_shade_mask = 1.0;\n",
+	);
+	shader = shader.replace(
+		"\t\t\tlet backlight_color_sample = textureSample(backlight_color_tex, base_samp, uv);\n\t\t\tlet authored_backlight_color = drawu.backlight_color * backlight_color_sample;\n",
+		"\t\t\tlet authored_backlight_color = drawu.backlight_color;\n",
+	);
+	shader = shader.replace(
+		"\t\tlet shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);\n\t\tlet shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;\n",
+		"\t\tlet shadow2_color = base * drawu.shadow2_color.rgb;\n",
+	);
+	shader = shader.replace(
+		"\t\tlet shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, shade_uv);\n\t\tlet shadow3_color = mix(base, shadow3_color_texel.rgb, clamp(shadow3_color_texel.a, 0.0, 1.0)) * drawu.shadow3_color.rgb;\n",
+		"\t\tlet shadow3_color = base * drawu.shadow3_color.rgb;\n",
+	);
+	shader = shader.replace(
+		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv = uv * drawu.emission2nd_uv_offset_scale.zw + drawu.emission2nd_uv_offset_scale.xy;\n\t\t\t\tlet emission2nd_mask_uv = uv * drawu.emission2nd_blend_mask_uv_offset_scale.zw + drawu.emission2nd_blend_mask_uv_offset_scale.xy;\n\t\t\t\tvar emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color;\n\t\t\t\temission2nd_sample = emission2nd_sample * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_sample.rgb = emission2nd_sample.rgb * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_sample.rgb, emission2nd_sample.rgb * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params);\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tvar emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color;\n\t\t\t\temission2nd_sample = emission2nd_sample * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_sample.rgb = emission2nd_sample.rgb * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_sample.rgb = mix(emission2nd_sample.rgb, emission2nd_sample.rgb * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_sample.rgb, emission2nd_sample.rgb * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tlet emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tvar emission2nd_rgb_work = emission2nd_sample.rgb;\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {\n\tlet strength = clamp(drawu.main_gradation_params.x * drawu.main_gradation_params.y, 0.0, 1.0);\n\tif (strength <= 0.000001) {\n\t\treturn color;\n\t}\n\tlet c = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));\n\tlet mapped = vec3<f32>(\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.r, 0.5)).r,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.g, 0.5)).g,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.b, 0.5)).b\n\t);\n\treturn mix(color, mapped, strength);\n}\n",
+		"fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {\n\treturn color;\n}\n",
+	);
+	shader = shader.replace(
+		"\t\t\tif (drawu.emission_grad_params.x > 0.5) {\n\t\t\t\tlet grad_u = fract(drawu.emission_grad_params.y * frame.time_params.x);\n\t\t\t\temission_color = emission_color * textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_uv = uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {\n\tvar out_col = base;\n\tif (drawu.main2nd_params.x > 0.5) {\n\t\tlet layer_uv = uv * drawu.main2nd_uv_offset_scale.zw + drawu.main2nd_uv_offset_scale.xy;\n\t\tlet mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw + drawu.main2nd_blend_mask_uv_offset_scale.xy;\n\t\tlet layer = textureSample(main2nd_tex, base_samp, layer_uv) * drawu.main2nd_color;\n\t\tlet layer_alpha = layer.a * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;\n\t\tlet out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main2nd_params.z);\n\t\tlet out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main2nd_params.y, drawu.main2nd_params.w);\n\t\tout_col = vec4<f32>(out_rgb, out_alpha);\n\t}\n\tif (drawu.main3rd_params.x > 0.5) {\n\t\tlet layer_uv = uv * drawu.main3rd_uv_offset_scale.zw + drawu.main3rd_uv_offset_scale.xy;\n\t\tlet mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw + drawu.main3rd_blend_mask_uv_offset_scale.xy;\n\t\tlet layer = textureSample(main3rd_tex, base_samp, layer_uv) * drawu.main3rd_color;\n\t\tlet layer_alpha = layer.a * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;\n\t\tlet out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main3rd_params.z);\n\t\tlet out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main3rd_params.y, drawu.main3rd_params.w);\n\t\tout_col = vec4<f32>(out_rgb, out_alpha);\n\t}\n\treturn out_col;\n}\n",
+		"fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {\n\treturn base;\n}\n",
+	);
 	shader = shader.replace(
 		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).r;\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).r;",
 		"let shadow_border_mask = 1.0;\n\t\tlet shadow_blur_mask = 1.0;",
 	);
 	shader = shader.replace(
-		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;\n\t\t\tlet matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);\n\t\t\tlit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
+		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;\n\t\t\tlet matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);\n\t\t\tlit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
 		"",
 	);
 	shader
@@ -285,6 +355,10 @@ struct MeshDrawMaterialGpu {
 	reflection_params: [f32; 4],
 	reflection_ext_params: [f32; 4],
 	reflection_cube_color: [f32; 4],
+	anisotropy_params: [f32; 4],
+	anisotropy_ext_params: [f32; 4],
+	anisotropy2_params: [f32; 4],
+	anisotropy_width_params: [f32; 4],
 	gem_env_color: [f32; 4],
 	gem_params: [f32; 4],
 	gem_particle_color: [f32; 4],
@@ -301,8 +375,22 @@ struct MeshDrawMaterialGpu {
 	backlight_color: [f32; 4],
 	backlight_params: [f32; 4],
 	backlight_ext_params: [f32; 4],
+	backlight_shadow_params: [f32; 4],
 	emission_color: [f32; 4],
 	emission_params: [f32; 4],
+	emission_blink_params: [f32; 4],
+	emission_grad_params: [f32; 4],
+	emission2nd_color: [f32; 4],
+	emission2nd_params: [f32; 4],
+	emission2nd_blink_params: [f32; 4],
+	emission2nd_grad_params: [f32; 4],
+	emission2nd_ext_params: [f32; 4],
+	emission2nd_uv_offset_scale: [f32; 4],
+	emission2nd_uv_anim_params: [f32; 4],
+	emission_blend_mask_uv_offset_scale: [f32; 4],
+	emission_blend_mask_uv_anim_params: [f32; 4],
+	emission2nd_blend_mask_uv_offset_scale: [f32; 4],
+	emission2nd_blend_mask_uv_anim_params: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
 	outline_lit_color: [f32; 4],
@@ -316,12 +404,18 @@ struct MeshDrawMaterialGpu {
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
 	normal_uv_offset_scale: [f32; 4],
+	normal2nd_uv_offset_scale: [f32; 4],
+	normal2nd_params: [f32; 4],
 	shade_uv_offset_scale: [f32; 4],
 	rim_uv_offset_scale: [f32; 4],
 	emission_uv_offset_scale: [f32; 4],
+	emission_uv_anim_params: [f32; 4],
 	reflection_color_uv_offset_scale: [f32; 4],
 	smoothness_uv_offset_scale: [f32; 4],
 	metallic_uv_offset_scale: [f32; 4],
+	anisotropy_tangent_uv_offset_scale: [f32; 4],
+	anisotropy_scale_mask_uv_offset_scale: [f32; 4],
+	anisotropy_shift_noise_uv_offset_scale: [f32; 4],
 	shadow_strength_mask_uv_offset_scale: [f32; 4],
 	shadow_border_mask_uv_offset_scale: [f32; 4],
 	shadow_blur_mask_uv_offset_scale: [f32; 4],
@@ -329,6 +423,15 @@ struct MeshDrawMaterialGpu {
 	matcap2_blend_mask_uv_offset_scale: [f32; 4],
 	alpha_mask_uv_offset_scale: [f32; 4],
 	main_color_adjust_params: [f32; 4],
+	main_gradation_params: [f32; 4],
+	main2nd_color: [f32; 4],
+	main2nd_params: [f32; 4],
+	main2nd_uv_offset_scale: [f32; 4],
+	main2nd_blend_mask_uv_offset_scale: [f32; 4],
+	main3rd_color: [f32; 4],
+	main3rd_params: [f32; 4],
+	main3rd_uv_offset_scale: [f32; 4],
+	main3rd_blend_mask_uv_offset_scale: [f32; 4],
 }
 
 #[repr(C)]
@@ -341,7 +444,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1072);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1600);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1130,6 +1233,21 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			sampler_bind_group_layout_entry(27, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(38, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(39, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(41, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(42, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(43, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(44, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(45, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(46, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(47, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(48, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(49, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(50, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(51, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(52, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(53, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(54, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(55, wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -1336,6 +1454,19 @@ fn mesh_draw_material_gpu(
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let normal2nd_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Bump2ndMap", "_BumpMap2nd", "_NormalMap2nd"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let normal2nd_params = liltoon_like
+		.map(|u| {
+			[
+				u.normal.second_enabled_factor.clamp(0.0, 1.0),
+				u.normal.second_scale_factor,
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
 	let shade_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowColorTex", "_ShadeTex", "_1st_ShadeMap"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -1345,6 +1476,15 @@ fn mesh_draw_material_gpu(
 	let emission_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_EmissionMap"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let emission_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_EmissionBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let emission2nd_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Emission2ndMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let emission2nd_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Emission2ndBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let reflection_color_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ReflectionColorTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -1353,6 +1493,15 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let metallic_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MetallicGlossMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let anisotropy_tangent_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AnisotropyTangentMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let anisotropy_scale_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AnisotropyScaleMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let anisotropy_shift_noise_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AnisotropyShiftNoiseMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let shadow_strength_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowStrengthMask"]))
@@ -1375,6 +1524,54 @@ fn mesh_draw_material_gpu(
 	let main_color_adjust_params = liltoon_like
 		.map(|u| u.main_color.main_texture_hsvg_factor)
 		.unwrap_or([0.0, 1.0, 1.0, 1.0]);
+	let main_gradation_params = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.gradation_enabled_factor.clamp(0.0, 1.0),
+				u.main_color.gradation_strength_factor.clamp(0.0, 1.0),
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_color = liltoon_like
+		.map(|u| u.main_color.second_color_factor)
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let main2nd_params = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.second_enabled_factor.clamp(0.0, 1.0),
+				u.main_color.second_enable_lighting_factor.clamp(0.0, 1.0),
+				u.main_color.second_alpha_mode_factor.clamp(0.0, 4.0),
+				liltoon_blend_mode_gpu(u.main_color.second_blend_mode),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let main2nd_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main2nd_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main3rd_color = liltoon_like
+		.map(|u| u.main_color.third_color_factor)
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let main3rd_params = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.third_enabled_factor.clamp(0.0, 1.0),
+				u.main_color.third_enable_lighting_factor.clamp(0.0, 1.0),
+				u.main_color.third_alpha_mode_factor.clamp(0.0, 4.0),
+				liltoon_blend_mode_gpu(u.main_color.third_blend_mode),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let main3rd_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main3rd_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
@@ -1584,6 +1781,46 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 1.0, 1.0, 0.0]);
+	let anisotropy_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.anisotropy_enabled_factor.clamp(0.0, 1.0),
+				u.reflection.anisotropy_scale_factor,
+				u.reflection.anisotropy_to_reflection_factor.clamp(0.0, 1.0),
+				u.reflection.anisotropy_to_matcap_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let anisotropy_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.anisotropy_to_second_matcap_factor.clamp(0.0, 1.0),
+				u.reflection.anisotropy_shift_factor,
+				u.reflection.anisotropy_shift_noise_scale_factor,
+				u.reflection.anisotropy_specular_strength_factor.max(0.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let anisotropy2_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.anisotropy_second_shift_factor,
+				u.reflection.anisotropy_second_shift_noise_scale_factor,
+				u.reflection.anisotropy_second_specular_strength_factor.max(0.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let anisotropy_width_params = liltoon_like
+		.map(|u| {
+			[
+				u.reflection.anisotropy_tangent_width_factor.max(0.0001),
+				u.reflection.anisotropy_bitangent_width_factor.max(0.0001),
+				u.reflection.anisotropy_second_tangent_width_factor.max(0.0001),
+				u.reflection.anisotropy_second_bitangent_width_factor.max(0.0001),
+			]
+		})
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let gem_env_color = liltoon_like
 		.map(|u| u.reflection.gem_env_color_factor)
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
@@ -1736,6 +1973,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.35, 0.05, 1.0, 1.0]);
+	let backlight_shadow_params = liltoon_like
+		.map(|u| [u.backlight.receive_shadow_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let emission_color = liltoon_like.map(|u| u.emission.color_factor).unwrap_or([
 		mat.emissive_factor[0],
 		mat.emissive_factor[1],
@@ -1757,6 +1997,58 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 1.0, 1.0]);
+	let emission_blink_params = liltoon_like
+		.map(|u| u.emission.blink_factor)
+		.unwrap_or([0.0, 0.0, std::f32::consts::PI, 0.0]);
+	let emission_uv_anim_params = liltoon_like
+		.map(|u| u.emission.uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let emission_grad_params = liltoon_like
+		.map(|u| {
+			[
+				u.emission.gradation_enabled_factor.clamp(0.0, 1.0),
+				u.emission.gradation_speed_factor,
+				u.emission.fluorescence_factor.clamp(0.0, 1.0),
+				u.emission.parallax_depth_factor,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let emission_blend_mask_uv_anim_params = liltoon_like
+		.map(|u| u.emission.blend_mask_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let emission2nd_color = liltoon_like.map(|u| u.emission.second_color_factor).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let emission2nd_params = liltoon_like
+		.map(|u| {
+			[
+				u.emission.second_enabled_factor.clamp(0.0, 1.0),
+				u.emission.second_main_strength_factor.clamp(0.0, 1.0),
+				u.emission.second_blend_factor.clamp(0.0, 1.0),
+				liltoon_blend_mode_gpu(u.emission.second_blend_mode),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let emission2nd_blink_params = liltoon_like
+		.map(|u| u.emission.second_blink_factor)
+		.unwrap_or([0.0, 0.0, std::f32::consts::PI, 0.0]);
+	let emission2nd_grad_params = liltoon_like
+		.map(|u| {
+			[
+				u.emission.second_gradation_enabled_factor.clamp(0.0, 1.0),
+				u.emission.second_gradation_speed_factor,
+				u.emission.second_fluorescence_factor.clamp(0.0, 1.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let emission2nd_ext_params = liltoon_like
+		.map(|u| [u.emission.second_parallax_depth_factor, 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let emission2nd_uv_anim_params = liltoon_like
+		.map(|u| u.emission.second_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let emission2nd_blend_mask_uv_anim_params = liltoon_like
+		.map(|u| u.emission.second_blend_mask_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
 		params: [0.0, eff_alpha.as_shader_alpha_kind(), mat.alpha_cutoff, f32::from_bits(flags)],
@@ -1800,6 +2092,10 @@ fn mesh_draw_material_gpu(
 		reflection_params,
 		reflection_ext_params,
 		reflection_cube_color,
+		anisotropy_params,
+		anisotropy_ext_params,
+		anisotropy2_params,
+		anisotropy_width_params,
 		gem_env_color,
 		gem_params,
 		gem_particle_color,
@@ -1821,8 +2117,22 @@ fn mesh_draw_material_gpu(
 		backlight_color,
 		backlight_params,
 		backlight_ext_params,
+		backlight_shadow_params,
 		emission_color,
 		emission_params,
+		emission_blink_params,
+		emission_grad_params,
+		emission2nd_color,
+		emission2nd_params,
+		emission2nd_blink_params,
+		emission2nd_grad_params,
+		emission2nd_ext_params,
+		emission2nd_uv_offset_scale,
+		emission2nd_uv_anim_params,
+		emission_blend_mask_uv_offset_scale,
+		emission_blend_mask_uv_anim_params,
+		emission2nd_blend_mask_uv_offset_scale,
+		emission2nd_blend_mask_uv_anim_params,
 		outline_color,
 		outline_params: [
 			outline_mode_gpu(outline_mode),
@@ -1859,12 +2169,18 @@ fn mesh_draw_material_gpu(
 		],
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
+		normal2nd_uv_offset_scale,
+		normal2nd_params,
 		shade_uv_offset_scale,
 		rim_uv_offset_scale,
 		emission_uv_offset_scale,
+		emission_uv_anim_params,
 		reflection_color_uv_offset_scale,
 		smoothness_uv_offset_scale,
 		metallic_uv_offset_scale,
+		anisotropy_tangent_uv_offset_scale,
+		anisotropy_scale_mask_uv_offset_scale,
+		anisotropy_shift_noise_uv_offset_scale,
 		shadow_strength_mask_uv_offset_scale,
 		shadow_border_mask_uv_offset_scale,
 		shadow_blur_mask_uv_offset_scale,
@@ -1872,6 +2188,24 @@ fn mesh_draw_material_gpu(
 		matcap2_blend_mask_uv_offset_scale,
 		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
+		main_gradation_params,
+		main2nd_color,
+		main2nd_params,
+		main2nd_uv_offset_scale,
+		main2nd_blend_mask_uv_offset_scale,
+		main3rd_color,
+		main3rd_params,
+		main3rd_uv_offset_scale,
+		main3rd_blend_mask_uv_offset_scale,
+	}
+}
+
+fn liltoon_blend_mode_gpu(mode: un_avatar_core::UnaLilToonLikeBlendMode) -> f32 {
+	match mode {
+		un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
+		un_avatar_core::UnaLilToonLikeBlendMode::Add => 1.0,
+		un_avatar_core::UnaLilToonLikeBlendMode::Screen => 2.0,
+		un_avatar_core::UnaLilToonLikeBlendMode::Multiply => 3.0,
 	}
 }
 
@@ -2254,6 +2588,186 @@ impl SceneMeshes {
 				},
 				wgpu::BindGroupLayoutEntry {
 					binding: 39,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 41,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 42,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 43,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 44,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 45,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 46,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 47,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 48,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 49,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 50,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 51,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 52,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 53,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 54,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 55,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 56,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 57,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 58,
 					visibility: wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
@@ -2734,8 +3248,13 @@ impl SceneMeshes {
 		);
 		textures.push(neutral_normal_texture);
 		let neutral_normal_view = textures[2].create_view(&wgpu::TextureViewDescriptor::default());
-		let transparent_black_texture =
-			create_solid_texture_1x1(device, queue, "transparent_black1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 0]);
+		let transparent_black_texture = create_solid_texture_1x1(
+			device,
+			queue,
+			"transparent_black1x1",
+			wgpu::TextureFormat::Rgba8UnormSrgb,
+			[0, 0, 0, 0],
+		);
 		textures.push(transparent_black_texture);
 		let transparent_black_view = textures[3].create_view(&wgpu::TextureViewDescriptor::default());
 		report("gpu-upload", "Uploading fallback textures".to_string());
@@ -3130,6 +3649,16 @@ impl SceneMeshes {
 				};
 				let shade_view = texture_view_or(&image_views, shade_texture_index, shade_fallback_view);
 				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shade_texture_index, 0);
+				let shadow2_color_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.second_color_texture_index);
+				let shadow2_color_view = texture_view_or(&image_views, shadow2_color_texture_index, &transparent_black_view);
+				let shadow3_color_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
+				let shadow3_color_view = texture_view_or(&image_views, shadow3_color_texture_index, &transparent_black_view);
 				let liltoon_strength_mask_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -3174,6 +3703,31 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
 				let matcap2_blend_mask_view = texture_view_or(&image_views, matcap2_blend_mask_texture_index, &white_view);
+				let main2nd_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.second_texture_index);
+				let main2nd_view = texture_view_or(&image_views, main2nd_texture_index, &white_view);
+				let main2nd_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.second_blend_mask_texture_index);
+				let main2nd_blend_mask_view = texture_view_or(&image_views, main2nd_blend_mask_texture_index, &white_view);
+				let main3rd_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.third_texture_index);
+				let main3rd_view = texture_view_or(&image_views, main3rd_texture_index, &white_view);
+				let main3rd_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
+				let main3rd_blend_mask_view = texture_view_or(&image_views, main3rd_blend_mask_texture_index, &white_view);
+				let main_gradation_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
+				let main_gradation_view = texture_view_or(&image_views, main_gradation_texture_index, &white_view);
 				let alpha_mask_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -3187,6 +3741,16 @@ impl SceneMeshes {
 					.or(mtoon.rim_multiply_texture_index);
 				let rim_view = texture_view_or(&image_views, rim_texture_index, &white_view);
 				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, rim_texture_index, 0);
+				let rim_shade_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
+				let rim_shade_mask_view = texture_view_or(&image_views, rim_shade_mask_texture_index, &white_view);
+				let backlight_color_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
+				let backlight_color_view = texture_view_or(&image_views, backlight_color_texture_index, &white_view);
 				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
 					(liltoon_like.reflection.cube_override_factor > 0.5)
 						.then_some(liltoon_like.reflection.cube_texture_index)
@@ -3222,6 +3786,31 @@ impl SceneMeshes {
 				let emissive_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
 				let emissive_view = texture_view_or(&image_views, emissive_texture_index, emissive_fallback_view);
 				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, emissive_texture_index, 0);
+				let emission_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.blend_mask_texture_index);
+				let emission_blend_mask_view = texture_view_or(&image_views, emission_blend_mask_texture_index, &white_view);
+				let emission_gradation_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.gradation_texture_index);
+				let emission_gradation_view = texture_view_or(&image_views, emission_gradation_texture_index, &white_view);
+				let emission2nd_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.second_texture_index);
+				let emission2nd_view = texture_view_or(&image_views, emission2nd_texture_index, &white_view);
+				let emission2nd_blend_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.second_blend_mask_texture_index);
+				let emission2nd_blend_mask_view = texture_view_or(&image_views, emission2nd_blend_mask_texture_index, &white_view);
+				let emission2nd_gradation_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
+				let emission2nd_gradation_view = texture_view_or(&image_views, emission2nd_gradation_texture_index, &white_view);
 				let occlusion_view = texture_view_or(&image_views, mat.occlusion_texture_index, &white_view);
 				let occlusion_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.occlusion_texture_index, 0);
 				let outline_width_mask_texture_index = mat
@@ -3240,6 +3829,26 @@ impl SceneMeshes {
 				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
 				let normal_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.normal_texture_index, 0);
+				let normal2nd_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
+				let normal2nd_view = texture_view_or(&image_views, normal2nd_texture_index, &neutral_normal_view);
+				let anisotropy_tangent_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_tangent_texture_index);
+				let anisotropy_tangent_view = texture_view_or(&image_views, anisotropy_tangent_texture_index, &neutral_normal_view);
+				let anisotropy_scale_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
+				let anisotropy_scale_mask_view = texture_view_or(&image_views, anisotropy_scale_mask_texture_index, &white_view);
+				let anisotropy_shift_noise_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
+				let anisotropy_shift_noise_view = texture_view_or(&image_views, anisotropy_shift_noise_texture_index, &neutral_normal_view);
 
 				let draw_transform = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("mesh_draw_transform"),
@@ -3413,6 +4022,78 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 39,
 							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 41,
+							resource: wgpu::BindingResource::TextureView(main2nd_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 42,
+							resource: wgpu::BindingResource::TextureView(main3rd_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 43,
+							resource: wgpu::BindingResource::TextureView(main2nd_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 44,
+							resource: wgpu::BindingResource::TextureView(main3rd_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 45,
+							resource: wgpu::BindingResource::TextureView(normal2nd_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 46,
+							resource: wgpu::BindingResource::TextureView(emission_gradation_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 47,
+							resource: wgpu::BindingResource::TextureView(main_gradation_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 48,
+							resource: wgpu::BindingResource::TextureView(emission2nd_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 49,
+							resource: wgpu::BindingResource::TextureView(emission2nd_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 50,
+							resource: wgpu::BindingResource::TextureView(emission2nd_gradation_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 51,
+							resource: wgpu::BindingResource::TextureView(anisotropy_tangent_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 52,
+							resource: wgpu::BindingResource::TextureView(anisotropy_scale_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 53,
+							resource: wgpu::BindingResource::TextureView(anisotropy_shift_noise_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 54,
+							resource: wgpu::BindingResource::TextureView(emission_blend_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 55,
+							resource: wgpu::BindingResource::TextureView(rim_shade_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 56,
+							resource: wgpu::BindingResource::TextureView(backlight_color_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 57,
+							resource: wgpu::BindingResource::TextureView(shadow2_color_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 58,
+							resource: wgpu::BindingResource::TextureView(shadow3_color_view),
 						},
 					]);
 				}
@@ -3936,6 +4617,13 @@ mod tests {
 	}
 
 	#[test]
+	fn full_mesh_shader_validates() {
+		let module = naga::front::wgsl::parse_str(SHADER_MESH).expect("full mesh shader parses");
+		let mut validator = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+		validator.validate(&module).expect("full mesh shader validates");
+	}
+
+	#[test]
 	fn portable_mesh_shader_strips_high_tier_bindings_and_validates() {
 		let source = portable_mesh_shader_source();
 		for binding in [
@@ -3945,6 +4633,24 @@ mod tests {
 			"@group(1) @binding(27)",
 			"@group(1) @binding(38)",
 			"@group(1) @binding(39)",
+			"@group(1) @binding(41)",
+			"@group(1) @binding(42)",
+			"@group(1) @binding(43)",
+			"@group(1) @binding(44)",
+			"@group(1) @binding(45)",
+			"@group(1) @binding(46)",
+			"@group(1) @binding(47)",
+			"@group(1) @binding(48)",
+			"@group(1) @binding(49)",
+			"@group(1) @binding(50)",
+			"@group(1) @binding(51)",
+			"@group(1) @binding(52)",
+			"@group(1) @binding(53)",
+			"@group(1) @binding(54)",
+			"@group(1) @binding(55)",
+			"@group(1) @binding(56)",
+			"@group(1) @binding(57)",
+			"@group(1) @binding(58)",
 		] {
 			assert!(!source.contains(binding), "portable shader still contains {binding}");
 		}
@@ -4252,6 +4958,7 @@ mod tests {
 		liltoon_like.backlight.blur_factor = 0.2;
 		liltoon_like.backlight.view_strength_factor = 0.3;
 		liltoon_like.backlight.backface_mask_factor = 0.4;
+		liltoon_like.backlight.receive_shadow_factor = 0.5;
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -4262,6 +4969,7 @@ mod tests {
 		assert_eq!(draw.backlight_color, [0.2, 0.3, 0.4, 0.5]);
 		assert_eq!(draw.backlight_params, [1.0, 0.6, 0.7, 8.0]);
 		assert_eq!(draw.backlight_ext_params, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.backlight_shadow_params, [0.5, 0.0, 0.0, 0.0]);
 	}
 
 	#[test]

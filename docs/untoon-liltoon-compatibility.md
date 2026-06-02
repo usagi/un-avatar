@@ -25,7 +25,7 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 - `UnaMtoonMaterial`: legacy MToon / VRM import 用。v2 lilToon 互換機能をここへ追加しない。
 - `UnaMaterialPbr`: glTF/PBR由来の共通 material container。UNPBR の設計正本ではなく、`liltoon_like` / `mtoon` などの model-specific payload をぶら下げる既存構造。
 - Renderer は v2 開発中、`material.liltoon_like` があればこれを優先する。v1 互換性は v2 安定後に MToon-like 変換または別 pipeline として扱う。
-- Renderer は full lilToon 1-pass target として `max_sampled_textures_per_shader_stage = 32` / `max_samplers_per_shader_stage = 24` を先に要求する。Adapter が満たす場合は high-tier 1-pass material layout で追加mask/layerを復帰する。満たさない場合のみ portable tier へ落とし、UNAvatar側で警告を出す。
+- Renderer は full lilToon 1-pass target として現在の FullOnePass shader が実際に使う binding 数を要求する。現状は `max_sampled_textures_per_shader_stage = 39` / `max_samplers_per_shader_stage = 19`。機能追加で binding が増えたら丸めずに実数へ更新する。Adapter が満たす場合は high-tier 1-pass material layout を使い、満たさない場合のみ portable tier へ落とし、UNAvatar側で警告を出す。
 - Portable tier は最低限 `screen-grab + material textures <= 16 sampled textures` で動く制約にする。これは fallback であり、lilToon利用層の標準品質目標ではない。
 
 ## Development Rule
@@ -199,7 +199,9 @@ Status legend:
   - done: main texture slot を glTF baseColorTexture と lilToon-like main texture として読み込む。
   - done: field_drape の `Mat_Hair_Yellow2` で `_UseMain3rdTex = 1` が出たため、2nd / 3rd main layer の enabled / blend mode / enable lighting raw params を v2 material に保持する。
   - done: Unity Exporter が `_Main2ndTex` / `_Main3rdTex` を `main2ndTextureIndex` / `main3rdTextureIndex` として保存し、Importer が v2 material に保持する。
-  - remaining: lilToon layer blending、main texture color adjust、per-slot UV mode を renderer へ接続する。
+  - done: Importer が `_Color2nd` / `_Color3rd` と `_Main2ndTexAlphaMode` / `_Main3rdTexAlphaMode` を保持し、Renderer FullOnePass が `_Main2ndTex` / `_Main3rdTex` を `lilBlendColor` 互換 blend mode と alpha mode で base color へ順次合成する。
+  - done: Exporter / Importer / Renderer が `_Main2ndBlendMask` / `_Main3rdBlendMask` を保持し、FullOnePass で layer alpha に `mask.r` を乗算する。
+  - remaining: 2nd / 3rd main layer の dissolve、decal/audio link/distance fade/cull、per-slot UV mode を renderer へ接続する。
 - `[~]` `_Color` / `_BaseColor`
   - done: base color factor として保持し、main texture に乗算する。
   - remaining: color space、HDR color、lilToon main color adjustment との順序を本家に合わせる。
@@ -207,9 +209,12 @@ Status legend:
   - done: Unity Exporter が `_MainTexHSVG` を `mainTexHsvgFactor` として保存し、Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。Renderer は base texture RGB に hue/saturation/value/gamma 近似補正を適用する。
   - remaining: 本家の color space、gamma 係数、main texture color adjustment の適用順を照合する。
 - `[~]` gradation map
-  - done: Unity Exporter が `_GradationMap` を `gradationMapTextureIndex` として保存し、Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。
-  - remaining: gradation sampling、mask/alpha/shadow との合成順、per-slot UV mode を renderer へ接続する。
-- `[defer]` 2nd / 3rd main texture layers: after first shadow / matcap / reflection are stable
+  - done: Unity Exporter が本家 lilToon の `_MainGradationTex` / `_MainGradationStrength` を `gradationMapTextureIndex` / `gradation_strength_factor` として保存し、旧 `_GradationMap` は fallback として扱う。Importer が `UnaLilToonLikeMaterial.main_color` へ保持する。
+  - done: FullOnePass renderer が main texture RGB に対して channel 別 1D gradation lookup を行い、`_MainGradationStrength` で補間する。
+  - remaining: 本家の Linear/sRGB 変換、color adjust mask、alpha/shadow との合成順、per-slot UV mode を renderer へ接続する。Portable16 は texture budget 維持のため gradation sampling を落とす。
+- `[~]` 2nd / 3rd main texture layers
+  - done: FullOnePass renderer が color texture、color factor、blend mask、blend mode、enable lighting factor、alpha mode を反映する。Portable16 は texture binding 上限維持のため layer sampling を落とす。
+  - remaining: dissolve、decal/audio link/distance fade/cull、UV mode、shadow 中の unlit layer contribution を本家順序へ寄せる。
 
 ### Alpha / Masks
 
@@ -250,7 +255,8 @@ Status legend:
 	- done: Unity Exporter が `_ShadowColorTex` を `shadowColorTextureIndex` として明示保存する。Importer は `UnaLilToonLikeMaterial.shadow.color_texture_index` へ読み込み、Renderer は lilToon-like shadow color texture を MToon shade texture より優先して bind する。
 	- done: Renderer は `_ShadowColorTex` / fallback shade texture slot の Tiling / Offset を sampling UV に使う。
 	- done: texture 未指定時は本家の未定義 `shadowColorTex = 0` 相当として transparent black fallback を使い、1st shadow は `lerp(albedo, tex.rgb, tex.a) * _ShadowColor` で合成する。
-	- remaining: `_ShadowColorType == LUT` path、2nd/3rd shadow color texture を実装する。
+	- done: `_Shadow2ndColorTex` / `_Shadow3rdColorTex` を exporter / importer / FullOnePass renderer へ接続し、texture alpha で albedo と texture color を lerp してから authored shadow color を掛ける。Portable16 は texture budget 維持のため texture sampling を落とす。
+	- remaining: `_ShadowColorType == LUT` path を実装する。
 - `[~]` `_ShadowStrength`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、lilToon shadow branch の shade/base mix 強度に接続した。
   - remaining: lilToon 本家の direct/indirect light 影響範囲と一致するか、Base / original / noble1 / noble13 で確認する。
@@ -330,7 +336,8 @@ Status legend:
 
 - `[~]` normal texture slot
   - done: glTF normalTexture / lilToon-like normal slot として読み込み、1st normal map の slot 別 Tiling / Offset を renderer に接続した。
-  - remaining: lilToon 2nd normal、normal map UV mode、normal strength mask を保持・接続する。
+  - done: FullOnePass renderer が lilToon-like 2nd normal map を `_Bump2ndMap` 系 slot transform と `_BumpScale2nd` / `_NormalScale2nd` で 1st normal に合成する。
+  - remaining: normal map UV mode、normal strength mask、2nd normal scale mask を保持・接続する。
 - `[~]` normal scale
   - done: normalTexture scale を shader uniform に渡す。
   - remaining: Unity/lilToon tangent-space parity、green channel convention、backface normal behavior を検証する。
@@ -339,10 +346,12 @@ Status legend:
   - remaining: Unity/lilToon reference との green channel convention、bitangent sign、backface normal behavior を画像比較で検証する。
 - `[~]` 2nd normal map
   - done: Unity Exporter / glTF `UN_avatar_material.mtoon` の `normal2ndTextureIndex` / `normal2ndScaleFactor` を保持し、import 後は `UnaLilToonLikeMaterial.normal` に入れる。texture pipeline では normal map role として扱う。
-  - remaining: WGSL で 1st normal と 2nd normal の合成順、UV mode、scale/mask、green channel convention を lilToon 本家へ合わせる。
+  - done: FullOnePass WGSL が 1st normal と 2nd normal を本家 `lilBlendNormal` 相当の `xy` 加算 / `z` 乗算で合成する。Portable16 は texture budget 維持のため 2nd normal sampling を落とす。
+  - remaining: UV mode、scale mask、green channel convention を lilToon 本家へ合わせる。
 - `[~]` anisotropy normal interactions
   - done: `_UseAnisotropy` / `_Anisotropy*` 係数と tangent / scale mask / shift noise mask texture reference を `UnaLilToonLikeMaterial.reflection` に保持する。
-  - remaining: tangent map の解釈、1st/2nd anisotropy specular、MatCap/Reflection への反映、normal strength との合成順を renderer へ接続する。
+  - done: FullOnePass WGSL が anisotropy tangent / scale mask / shift noise mask を bind し、anisotropy normal を MatCap / 2nd MatCap / Reflection / specular normal へ反映する。1st/2nd anisotropy specular は tangent/bitangent width と shift noise を使う近似 highlight として接続した。Portable16 は texture budget 維持のため anisotropy sampling を落とす。
+  - remaining: 本家 `lilGetAnisotropyNormalWS` / `lilCalcSpecular` の GGX anisotropic 形状、normal strength との厳密な合成順、green channel convention を検証する。
 
 ### MatCap
 
@@ -425,7 +434,8 @@ Status legend:
 	- remaining: forward-add lighting path、shadowmix / attenuation との合成順を本家に合わせる。
 - `[~]` `_SpecularToon`
   - done: v2 reflection parameter として保持し、enabled 時は specular highlight を toon scale path へ分岐する。
-  - remaining: anisotropy path、normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。
+  - done: FullOnePass の anisotropy path では shift / shift noise / tangent width / bitangent width を使う 1st/2nd highlight を specular shape へ加算する。
+  - remaining: normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。
 - `[~]` `_SpecularBorder`
 	- done: v2 reflection parameter として保持し、toon specular border に接続する。
 	- remaining: roughness 変換を含めて本家係数域を検証する。
@@ -536,17 +546,20 @@ Status legend:
   - remaining: lilToon の `fd.shadowmix`、directional / indirect rim 分離、shadow mask texture と合わせた合成順を検証する。
 - `[~]` `_UseRimShade`
   - done: v2 rim shade parameter として保持し、有効時は本家 `lilGetRimShade` と同じく rim shade factor で `lit -> lit * color` へ補間する。
-  - remaining: `_RimShadeMask`、normal strength、AO/lighting との順序を本家へ合わせる。
+  - done: `_RimShadeMask` を v2 material に保持し、FullOnePass renderer の RimShade 係数へ乗算する。Portable16 は texture budget 維持のため mask sampling を落とす。
+  - remaining: normal strength、AO/lighting との順序を本家へ合わせる。
 - `[~]` `_RimShadeColor`
   - done: source raw color params を保持し、rim shade darkening color と alpha strength に接続する。
-  - remaining: HDR/color space と `_RimShadeMask` の合成を実装する。
+  - remaining: HDR/color space を本家へ合わせる。
 - `[~]` `_RimShadeNormalStrength`
   - done: source raw params を保持し、RimShade factor 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
-  - remaining: `_RimShadeMask`、2nd normal map、backface behavior との順序を本家へ合わせる。
+  - remaining: 2nd normal map、backface behavior との順序を本家へ合わせる。
 - `[~]` backlight raw params
   - done: `_UseBacklight`、`_BacklightColor`、`_BacklightMainStrength`、`_BacklightNormalStrength`、`_BacklightBorder`、`_BacklightBlur`、`_BacklightDirectivity`、`_BacklightViewStrength`、`_BacklightReceiveShadow`、`_BacklightBackfaceMask` を v2 material に保持する。
+  - done: `_BacklightColorTex` を exporter / importer / FullOnePass renderer へ接続した。Portable16 は texture budget 維持のため white fallback。
   - done: field_drape の `Mat_Hair_Yellow2` / `Mat_Hair_Yellow2_Base` で `_UseBacklight = 1` が出たため、Backlight を renderer に接続する。
-  - remaining: `_BacklightReceiveShadow` は Unity attenuation 相当入力が未定義のため未接続。`headV` は camera view vector 近似。
+  - done: `_BacklightReceiveShadow` を renderer に接続し、Unity attenuation の代替として UNA の toon shadow `shading` 係数を backlight LN 入力へ混ぜる。
+  - remaining: Unity attenuation / `fd.origL` 相当入力と `headV` はまだ近似。
 
 ### Emission
 
@@ -556,24 +569,34 @@ Status legend:
   - remaining: emission feature toggle を compatibility report に出し、2nd emission と gradation は分離する。
 - `[~]` `_EmissionColor`
   - done: alpha 付きの v2 emission color として保持し、shader で emission 色と blend alpha に使用する。
-  - remaining: HDR color handling、fluorescence、AudioLink、gradation との合成順を lilToon に合わせる。
+  - done: `_EmissionFluorescence` を保持し、FullOnePass renderer で inverse-lighting 近似として emission color に反映する。
+  - remaining: HDR color handling、AudioLink、gradation との合成順を lilToon に合わせる。
 - `[~]` `_EmissionMainStrength`
   - done: v2 emission parameter として保持し、shader で `lerp(emissionColor, emissionColor * albedo, value)` 相当へ接続した。
   - remaining: fluorescence、mask、gradation との順序を照合する。
 - `[~]` `_EmissionMap`
   - done: glTF emissive texture / `_EmissionMap` を v2 emission texture として扱い、lilToon-like branch では white fallback 付きで bind する。
   - done: Renderer は `_EmissionMap` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: UV mode、mask、gradation、scroll/rotation の適用を実装する。
+  - done: FullOnePass renderer が `_EmissionMap_ScrollRotate` を lilToon `lilCalcUV` 相当の scroll/rotation として emission map sampling に適用する。
+  - done: `_EmissionParallaxDepth` を保持し、tangent-space view 由来の parallax offset 近似を emission map UV へ加算する。
+  - remaining: UV mode、AudioLink との合成順を実装する。
 - `[~]` `_EmissionBlend`
   - done: v2 emission parameter として保持し、emission contribution alpha に接続した。
-  - remaining: blink、transparent application、blend mask と合わせた最終係数を本家に合わせる。
+  - done: `_EmissionBlink` と `_EmissionBlendMask` を保持し、FullOnePass renderer の emission blend 係数へ反映する。`_EmissionBlendMask_ScrollRotate` も mask sampling に適用する。
+  - remaining: transparent application、AudioLink と合わせた最終係数を本家に合わせる。Portable16 は texture budget 維持のため `_EmissionBlendMask` sampling を落とす。
 - `[~]` `_EmissionBlendMode`
   - done: v2 emission parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体と 2nd emission との合成順を実装する。
 - `[~]` emission gradation
   - done: `_EmissionUseGrad` / `_EmissionGradTex` / `_EmissionGradSpeed` を 1st emission gradation state として保持する。
-  - remaining: gradation sampling、scroll speed、HDR emission color / mask / AudioLink との合成順を renderer へ接続する。2nd emission gradation は 2nd emission 本体と合わせて扱う。
-- `[defer]` 2nd emission
+  - done: FullOnePass renderer が `_EmissionGradTex` を 1D gradation texture 相当として `x = _EmissionGradSpeed * time` / `y = 0.5` で sampling し、1st emission color に乗算する。
+  - remaining: HDR emission color / AudioLink との合成順を renderer へ接続する。Portable16 は texture budget 維持のため gradation sampling を落とす。
+- `[~]` 2nd emission
+  - done: Exporter / Importer が `_UseEmission2nd`、`_Emission2ndColor`、`_Emission2ndMap`、`_Emission2ndBlendMask`、`_Emission2ndGradTex`、`_Emission2ndBlend`、`_Emission2ndBlendMode`、`_Emission2ndMainStrength`、`_Emission2ndUseGrad`、`_Emission2ndGradSpeed` を v2 emission state として保持する。
+  - done: FullOnePass renderer が 2nd emission map / blend mask / gradation を sampling し、main strength と `lilBlendColor` 互換 blend mode で lit color へ合成する。
+  - done: `_Emission2ndBlink` / `_Emission2ndFluorescence` / `_Emission2ndMap_ScrollRotate` / `_Emission2ndBlendMask_ScrollRotate` を保持し、FullOnePass renderer の 2nd emission sampling と blend 係数へ反映する。
+  - done: `_Emission2ndParallaxDepth` を保持し、tangent-space view 由来の parallax offset 近似を 2nd emission map UV へ加算する。
+  - remaining: AudioLink、transparent application、UV mode を本家順序へ合わせる。Portable16 は texture budget 維持のため 2nd emission sampling を落とす。
 
 ### Outline
 
@@ -598,7 +621,8 @@ Status legend:
   - remaining: mask channel、UV mode、width scaling の本家互換性を照合する。
 - `[~]` `_OutlineFixWidth`
   - done: v2 material parameter として保持する。
-  - remaining: shader 側の fixed-width outline 計算へ接続する。
+  - done: outline vertex shader が camera-to-vertex distance の `saturate` を使い、近距離で outline width を細くする本家 `_OutlineFixWidth` 相当の係数を適用する。
+  - remaining: Unity/lilToon の stereo camera / object-space outline vector / `_OutlineVertexR2Width` と組み合わせた単位系を検証する。
 - `[~]` `_OutlineEnableLighting`
   - done: v2 material parameter として保持し、既存 outline lighting mix に接続する。
   - remaining: `_OutlineLitColor` / `_OutlineColor` との本家合成順を Unity reference で検証する。

@@ -42,6 +42,10 @@ struct DrawMaterial {
 	reflection_params: vec4<f32>,
 	reflection_ext_params: vec4<f32>,
 	reflection_cube_color: vec4<f32>,
+	anisotropy_params: vec4<f32>,
+	anisotropy_ext_params: vec4<f32>,
+	anisotropy2_params: vec4<f32>,
+	anisotropy_width_params: vec4<f32>,
 	gem_env_color: vec4<f32>,
 	gem_params: vec4<f32>,
 	gem_particle_color: vec4<f32>,
@@ -58,8 +62,22 @@ struct DrawMaterial {
 	backlight_color: vec4<f32>,
 	backlight_params: vec4<f32>,
 	backlight_ext_params: vec4<f32>,
+	backlight_shadow_params: vec4<f32>,
 	emission_color: vec4<f32>,
 	emission_params: vec4<f32>,
+	emission_blink_params: vec4<f32>,
+	emission_grad_params: vec4<f32>,
+	emission2nd_color: vec4<f32>,
+	emission2nd_params: vec4<f32>,
+	emission2nd_blink_params: vec4<f32>,
+	emission2nd_grad_params: vec4<f32>,
+	emission2nd_ext_params: vec4<f32>,
+	emission2nd_uv_offset_scale: vec4<f32>,
+	emission2nd_uv_anim_params: vec4<f32>,
+	emission_blend_mask_uv_offset_scale: vec4<f32>,
+	emission_blend_mask_uv_anim_params: vec4<f32>,
+	emission2nd_blend_mask_uv_offset_scale: vec4<f32>,
+	emission2nd_blend_mask_uv_anim_params: vec4<f32>,
 	outline_color: vec4<f32>,
 	outline_params: vec4<f32>,
 	outline_lit_color: vec4<f32>,
@@ -73,12 +91,18 @@ struct DrawMaterial {
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
 	normal_uv_offset_scale: vec4<f32>,
+	normal2nd_uv_offset_scale: vec4<f32>,
+	normal2nd_params: vec4<f32>,
 	shade_uv_offset_scale: vec4<f32>,
 	rim_uv_offset_scale: vec4<f32>,
 	emission_uv_offset_scale: vec4<f32>,
+	emission_uv_anim_params: vec4<f32>,
 	reflection_color_uv_offset_scale: vec4<f32>,
 	smoothness_uv_offset_scale: vec4<f32>,
 	metallic_uv_offset_scale: vec4<f32>,
+	anisotropy_tangent_uv_offset_scale: vec4<f32>,
+	anisotropy_scale_mask_uv_offset_scale: vec4<f32>,
+	anisotropy_shift_noise_uv_offset_scale: vec4<f32>,
 	shadow_strength_mask_uv_offset_scale: vec4<f32>,
 	shadow_border_mask_uv_offset_scale: vec4<f32>,
 	shadow_blur_mask_uv_offset_scale: vec4<f32>,
@@ -86,6 +110,15 @@ struct DrawMaterial {
 	matcap2_blend_mask_uv_offset_scale: vec4<f32>,
 	alpha_mask_uv_offset_scale: vec4<f32>,
 	main_color_adjust_params: vec4<f32>,
+	main_gradation_params: vec4<f32>,
+	main2nd_color: vec4<f32>,
+	main2nd_params: vec4<f32>,
+	main2nd_uv_offset_scale: vec4<f32>,
+	main2nd_blend_mask_uv_offset_scale: vec4<f32>,
+	main3rd_color: vec4<f32>,
+	main3rd_params: vec4<f32>,
+	main3rd_uv_offset_scale: vec4<f32>,
+	main3rd_blend_mask_uv_offset_scale: vec4<f32>,
 }
 
 struct MorphU {
@@ -138,6 +171,24 @@ struct MorphU {
 @group(1) @binding(38) var matcap2_tex: texture_2d<f32>;
 @group(1) @binding(39) var matcap2_blend_mask_tex: texture_2d<f32>;
 @group(1) @binding(40) var outline_tex: texture_2d<f32>;
+@group(1) @binding(41) var main2nd_tex: texture_2d<f32>;
+@group(1) @binding(42) var main3rd_tex: texture_2d<f32>;
+@group(1) @binding(43) var main2nd_blend_mask_tex: texture_2d<f32>;
+@group(1) @binding(44) var main3rd_blend_mask_tex: texture_2d<f32>;
+@group(1) @binding(45) var normal2nd_tex: texture_2d<f32>;
+@group(1) @binding(46) var emission_gradation_tex: texture_2d<f32>;
+@group(1) @binding(47) var main_gradation_tex: texture_2d<f32>;
+@group(1) @binding(48) var emission2nd_tex: texture_2d<f32>;
+@group(1) @binding(49) var emission2nd_blend_mask_tex: texture_2d<f32>;
+@group(1) @binding(50) var emission2nd_gradation_tex: texture_2d<f32>;
+@group(1) @binding(51) var anisotropy_tangent_tex: texture_2d<f32>;
+@group(1) @binding(52) var anisotropy_scale_mask_tex: texture_2d<f32>;
+@group(1) @binding(53) var anisotropy_shift_noise_tex: texture_2d<f32>;
+@group(1) @binding(54) var emission_blend_mask_tex: texture_2d<f32>;
+@group(1) @binding(55) var rim_shade_mask_tex: texture_2d<f32>;
+@group(1) @binding(56) var backlight_color_tex: texture_2d<f32>;
+@group(1) @binding(57) var shadow2_color_tex: texture_2d<f32>;
+@group(1) @binding(58) var shadow3_color_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -251,7 +302,8 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 	let n = normalize(o.wn);
 	let uv = animated_uv(o.uv);
 	let mask = textureSampleLevel(outline_width_tex, outline_width_samp, uv, 0.0).r;
-	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask;
+	let distance_fix = mix(1.0, clamp(length(frame.camera_pos.xyz - o.wp), 0.0, 1.0), clamp(drawu.outline_ext_params.x, 0.0, 1.0));
+	let width = select(drawu.outline_params.y * 0.03, drawu.outline_params.y, drawu.outline_params.x < 1.5) * mask * distance_fix;
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;
 	o.clip.z = o.clip.z + drawu.outline_ext_params.y * o.clip.w;
@@ -496,6 +548,59 @@ fn apply_main_hsvg(color: vec3<f32>) -> vec3<f32> {
 	return pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / max(p.w, 0.0001)));
 }
 
+fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {
+	let strength = clamp(drawu.main_gradation_params.x * drawu.main_gradation_params.y, 0.0, 1.0);
+	if (strength <= 0.000001) {
+		return color;
+	}
+	let c = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+	let mapped = vec3<f32>(
+		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.r, 0.5)).r,
+		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.g, 0.5)).g,
+		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.b, 0.5)).b
+	);
+	return mix(color, mapped, strength);
+}
+
+fn apply_lil_main_layer_alpha(base_a: f32, layer_a: f32, alpha_mode: f32) -> f32 {
+	if (alpha_mode < 0.5) {
+		return base_a;
+	}
+	if (alpha_mode < 1.5) {
+		return layer_a;
+	}
+	if (alpha_mode < 2.5) {
+		return base_a * layer_a;
+	}
+	if (alpha_mode < 3.5) {
+		return clamp(base_a + layer_a, 0.0, 1.0);
+	}
+	return clamp(base_a - layer_a, 0.0, 1.0);
+}
+
+fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
+	var out_col = base;
+	if (drawu.main2nd_params.x > 0.5) {
+		let layer_uv = uv * drawu.main2nd_uv_offset_scale.zw + drawu.main2nd_uv_offset_scale.xy;
+		let mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw + drawu.main2nd_blend_mask_uv_offset_scale.xy;
+		let layer = textureSample(main2nd_tex, base_samp, layer_uv) * drawu.main2nd_color;
+		let layer_alpha = layer.a * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;
+		let out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main2nd_params.z);
+		let out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main2nd_params.y, drawu.main2nd_params.w);
+		out_col = vec4<f32>(out_rgb, out_alpha);
+	}
+	if (drawu.main3rd_params.x > 0.5) {
+		let layer_uv = uv * drawu.main3rd_uv_offset_scale.zw + drawu.main3rd_uv_offset_scale.xy;
+		let mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw + drawu.main3rd_blend_mask_uv_offset_scale.xy;
+		let layer = textureSample(main3rd_tex, base_samp, layer_uv) * drawu.main3rd_color;
+		let layer_alpha = layer.a * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;
+		let out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main3rd_params.z);
+		let out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main3rd_params.y, drawu.main3rd_params.w);
+		out_col = vec4<f32>(out_rgb, out_alpha);
+	}
+	return out_col;
+}
+
 fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
 	let base_uv = uv * drawu.uv_offset_scale.zw + drawu.uv_offset_scale.xy;
 	let speed = drawu.uv_anim_params.xyz;
@@ -513,6 +618,32 @@ fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
 	return mix(base_uv, out_uv, clamp(mask, 0.0, 1.0));
 }
 
+fn lil_calc_uv_scroll_rotate(uv: vec2<f32>, offset_scale: vec4<f32>, scroll_rotate: vec4<f32>) -> vec2<f32> {
+	var out_uv = uv * offset_scale.zw + offset_scale.xy;
+	let angle = scroll_rotate.z + scroll_rotate.w * frame.time_params.x;
+	let s = sin(angle);
+	let c = cos(angle);
+	let centered = out_uv - vec2<f32>(0.5, 0.5);
+	out_uv = vec2<f32>(centered.x * c - centered.y * s, centered.x * s + centered.y * c) + vec2<f32>(0.5, 0.5);
+	return out_uv + fract(scroll_rotate.xy * frame.time_params.x);
+}
+
+fn lil_calc_blink(blink: vec4<f32>) -> f32 {
+	var out_blink = sin(frame.time_params.x * blink.z + blink.w) * 0.5 + 0.5;
+	if (blink.y > 0.5) {
+		out_blink = round(out_blink);
+	}
+	return mix(1.0, out_blink, clamp(blink.x, 0.0, 1.0));
+}
+
+fn lil_parallax_offset(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> vec2<f32> {
+	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
+	let t = normalize(tangent_ortho);
+	let b = normalize(cross(n, t)) * tangent_in.w;
+	let view_ts = vec3<f32>(dot(v, t), dot(v, b), max(dot(v, n), 0.0001));
+	return view_ts.xy / (view_ts.z + 0.5);
+}
+
 fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
 	let n = normalize(n_in);
 	if (abs(scale) < 0.000001) {
@@ -523,12 +654,65 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f
 	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
 	tn.x = tn.x * scale;
 	tn.y = tn.y * scale;
+	if (drawu.normal2nd_params.x > 0.5) {
+		let normal2nd_uv = uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
+		let packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;
+		var tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
+		tn2.x = tn2.x * drawu.normal2nd_params.y;
+		tn2.y = tn2.y * drawu.normal2nd_params.y;
+		tn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);
+	}
 	tn = normalize(tn);
 
 	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
 	let t = normalize(tangent_ortho);
 	let b = normalize(cross(n, t)) * tangent_in.w;
 	return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
+struct AnisotropyBasis {
+	normal: vec3<f32>,
+	tangent: vec3<f32>,
+	amount: f32,
+	shift_noise: f32,
+	enabled: f32,
+}
+
+fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {
+	let enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);
+	if (enabled <= 0.000001) {
+		return AnisotropyBasis(n, n, 0.0, 0.0, 0.0);
+	}
+	let base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));
+	let base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;
+	let tangent_uv = uv * drawu.anisotropy_tangent_uv_offset_scale.zw + drawu.anisotropy_tangent_uv_offset_scale.xy;
+	var tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
+	if (dot(tangent_sample, tangent_sample) < 0.000001) {
+		tangent_sample = vec3<f32>(1.0, 0.0, 0.0);
+	}
+	var aniso_t = normalize(base_tangent * tangent_sample.x + base_bitangent * tangent_sample.y + n * tangent_sample.z);
+	aniso_t = normalize(aniso_t - n * dot(n, aniso_t));
+	let aniso_b = normalize(cross(n, aniso_t)) * tangent_in.w;
+	let scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;
+	let scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;
+	let anisotropy = drawu.anisotropy_params.y * scale_mask;
+	let shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);
+	let aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));
+	let noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;
+	let shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;
+	return AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);
+}
+
+fn lil_anisotropic_specular_shape(n: vec3<f32>, t: vec3<f32>, half_vec: vec3<f32>, tangent_width: f32, bitangent_width: f32, shift: f32, roughness: f32) -> f32 {
+	let shifted_t = normalize(t + n * shift);
+	let shifted_b = normalize(cross(n, shifted_t));
+	let rough = max(roughness, 0.02);
+	let tw = max(tangent_width * rough, 0.02);
+	let bw = max(bitangent_width * rough, 0.02);
+	let t_term = dot(shifted_t, half_vec) / tw;
+	let b_term = dot(shifted_b, half_vec) / bw;
+	let nh = max(dot(n, half_vec), 0.0);
+	return exp(-clamp(t_term * t_term + b_term * b_term, 0.0, 80.0)) * nh;
 }
 
 fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
@@ -555,15 +739,15 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = apply_main_hsvg(samp_tex.rgb);
-	let tex_a = samp_tex.a;
-	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
+	let a = apply_lil_alpha_mask(main_col.a, uv);
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	mask_discard_lit_unlit(alb, a, alpha_kind, cutoff);
+	mask_discard_lit_unlit(main_col.rgb, a, alpha_kind, cutoff);
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
-	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
+	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
 	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
@@ -580,15 +764,15 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = apply_main_hsvg(samp_tex.rgb);
-	let tex_a = samp_tex.a;
-	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
+	let a = apply_lil_alpha_mask(main_col.a, uv);
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	mask_discard_lit_unlit(alb, a, alpha_kind, cutoff);
+	mask_discard_lit_unlit(main_col.rgb, a, alpha_kind, cutoff);
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
-	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
+	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	return vec4<f32>(base, out_a);
 }
 
@@ -603,19 +787,19 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	}
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let alb = apply_main_hsvg(samp_tex.rgb);
-	let tex_a = samp_tex.a;
-	let a = apply_lil_alpha_mask(tex_a * drawu.base_color.a, uv);
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
+	let a = apply_lil_alpha_mask(main_col.a, uv);
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	mask_discard_toon(alb, a, alpha_kind, cutoff);
+	mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
 	liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
 	if use_transparent_prepass {
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
-	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
+	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
@@ -629,9 +813,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
+	let parallax_offset = lil_parallax_offset(n, i.wt, v);
 	let camera_pos_len = length(frame.camera_pos.xyz);
 	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
 	let gem_view = normalize(mix(camera_dir, v, clamp(drawu.gem_params.w, 0.0, 1.0)));
+	let anisotropy_basis = lil_anisotropy_basis(n, i.wt, uv, v);
+	let anisotropy_n = anisotropy_basis.normal;
 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
 	var shading: f32;
@@ -674,6 +861,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
 		let shadow2_value = dot(shadow2_n, l) * 0.5 + 0.5;
+		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);
+		let shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;
 		let shadow2 = lil_tooning_scale_range(
 			shadow2_value,
 			clamp(drawu.shadow2_params.x, 0.0, 1.0),
@@ -681,8 +870,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
 		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
-		indirect_col = mix(indirect_col, base * drawu.shadow2_color.rgb * light_color, shadow2_strength);
+		indirect_col = mix(indirect_col, shadow2_color * light_color, shadow2_strength);
 		let shadow3_value = dot(shadow3_n, l) * 0.5 + 0.5;
+		let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, shade_uv);
+		let shadow3_color = mix(base, shadow3_color_texel.rgb, clamp(shadow3_color_texel.a, 0.0, 1.0)) * drawu.shadow3_color.rgb;
 		let shadow3 = lil_tooning_scale_range(
 			shadow3_value,
 			clamp(drawu.shadow3_params.x, 0.0, 1.0),
@@ -690,7 +881,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
 		let shadow3_strength = clamp((1.0 - shadow3) * drawu.shadow3_color.a, 0.0, 1.0);
-		indirect_col = mix(indirect_col, base * drawu.shadow3_color.rgb * light_color, shadow3_strength);
+		indirect_col = mix(indirect_col, shadow3_color * light_color, shadow3_strength);
 		indirect_col = mix(indirect_col, indirect_col * base, clamp(drawu.shadow_ext_params.y, 0.0, 1.0));
 		indirect_col = mix(
 			indirect_col,
@@ -719,7 +910,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
-	let matcap_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+	let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+	let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
 	let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x);
 	let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 	let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
@@ -738,7 +930,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 			lit = lit + matcap_raw * drawu.matcap_factor.w;
 		}
 		if (drawu.matcap2_params.x > 0.0) {
-			let matcap2_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+			let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+			let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
 			let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);
 			let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
 			let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
@@ -756,8 +949,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection = vec3<f32>(0.0, 0.0, 0.0);
 	let half_vec = normalize(l + v);
-	let specular_n = normalize(mix(geometry_n, n, clamp(drawu.specular_toon_params.w, 0.0, 1.0)));
-	let reflection_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
+	let specular_base_n = normalize(mix(geometry_n, n, clamp(drawu.specular_toon_params.w, 0.0, 1.0)));
+	let reflection_base_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
+	let specular_n = normalize(mix(specular_base_n, anisotropy_n, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0)));
+	let reflection_n = normalize(mix(reflection_base_n, anisotropy_n, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0)));
 	let reflection_uv = toon_reflection_uv(reflection_n, v);
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	var reflection_metallic = 0.0;
@@ -769,7 +964,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
 		let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
 		reflection_metallic = metallic;
-		let perceptual_roughness = max(1.0 - smoothness, 0.02);
+		let base_perceptual_roughness = max(1.0 - smoothness, 0.02);
+		let aniso_perceptual_roughness = max(1.2 - abs(anisotropy_basis.amount), 0.02);
+		let perceptual_roughness = mix(base_perceptual_roughness, aniso_perceptual_roughness, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0));
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
 		let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
@@ -783,6 +980,29 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 				clamp(drawu.specular_toon_params.y, 0.0, 1.0),
 				clamp(drawu.specular_toon_params.z, 0.0, 1.0)
 			);
+		}
+		if (anisotropy_basis.enabled > 0.5 && drawu.anisotropy_params.z > 0.5) {
+			let shift1 = anisotropy_basis.shift_noise * drawu.anisotropy_ext_params.z + drawu.anisotropy_ext_params.y;
+			let shift2 = anisotropy_basis.shift_noise * drawu.anisotropy2_params.y + drawu.anisotropy2_params.x;
+			let aniso1 = lil_anisotropic_specular_shape(
+				specular_n,
+				anisotropy_basis.tangent,
+				half_vec,
+				drawu.anisotropy_width_params.x,
+				drawu.anisotropy_width_params.y,
+				shift1,
+				roughness
+			) * drawu.anisotropy_ext_params.w;
+			let aniso2 = lil_anisotropic_specular_shape(
+				specular_n,
+				anisotropy_basis.tangent,
+				half_vec,
+				drawu.anisotropy_width_params.z,
+				drawu.anisotropy_width_params.w,
+				shift2,
+				roughness
+			) * drawu.anisotropy2_params.z;
+			specular_shape = max(specular_shape, max(aniso1, aniso2));
 		}
 		specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape;
 		let reflection_color = drawu.reflection_color * reflection_color_texel;
@@ -911,26 +1131,30 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		if (drawu.rim_shade_params.x > 0.5) {
 			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
 			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
+			let rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;
 			let rim_shade = lil_tooning_scale(
 				rim_shade_raw,
 				clamp(drawu.rim_shade_params.y, 0.0, 1.0),
 				clamp(drawu.rim_shade_params.z, 0.0, 1.0)
-			) * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
+			) * rim_shade_mask * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
 			lit = mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
 		}
 		if (drawu.backlight_params.x > 0.5) {
 			let backlight_n = normalize(mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0)));
 			let backlight_factor = pow(clamp(-dot(normalize(l + v), l) * 0.5 + 0.5, 0.0, 1.0), max(drawu.backlight_params.w, 0.00001));
 			let backlight_ln_dir = normalize(-v * clamp(drawu.backlight_ext_params.z, 0.0, 1.0) + l);
-			let backlight_ln_raw = dot(backlight_ln_dir, backlight_n) * 0.5 + 0.5;
+			let backlight_receive_shadow = mix(1.0, shading, clamp(drawu.backlight_shadow_params.x, 0.0, 1.0));
+			let backlight_ln_raw = (dot(backlight_ln_dir, backlight_n) * 0.5 + 0.5) * backlight_receive_shadow;
 			let backlight_ln = lil_tooning_scale(
 				backlight_ln_raw,
 				clamp(drawu.backlight_ext_params.x, 0.0, 1.0),
 				clamp(drawu.backlight_ext_params.y, 0.0, 1.0)
 			);
 			let backlight_backface = select(clamp(drawu.backlight_ext_params.w, 0.0, 1.0), 1.0, front_facing);
-			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(drawu.backlight_color.a, 0.0, 1.0);
-			let backlight_color = mix(drawu.backlight_color.rgb, drawu.backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
+			let backlight_color_sample = textureSample(backlight_color_tex, base_samp, uv);
+			let authored_backlight_color = drawu.backlight_color * backlight_color_sample;
+			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(authored_backlight_color.a, 0.0, 1.0);
+			let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
 			lit = lit + backlight * backlight_color * frame.light_color.rgb * frame.light_color.w;
 		}
 		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
@@ -940,14 +1164,38 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	}
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
-	let emission_uv = uv * drawu.emission_uv_offset_scale.zw + drawu.emission_uv_offset_scale.xy;
+	let emission_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
 	let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
 	if (!disable_emissive) {
 		if (is_liltoon) {
 			var emission_color = drawu.emission_color.rgb * emission_tex_color.rgb;
+			let emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);
+			let emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;
+			if (drawu.emission_grad_params.x > 0.5) {
+				let grad_u = fract(drawu.emission_grad_params.y * frame.time_params.x);
+				emission_color = emission_color * textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;
+			}
+			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
+			emission_color = mix(emission_color, emission_color * inv_lighting, clamp(drawu.emission_grad_params.z, 0.0, 1.0));
 			emission_color = mix(emission_color, emission_color * base, clamp(drawu.emission_params.y, 0.0, 1.0));
-			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * drawu.emission_color.a * emission_tex_color.a, 0.0, 1.0);
+			let emission_blink = lil_calc_blink(drawu.emission_blink_params);
+			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * emission_blink * emission_mask * drawu.emission_color.a * emission_tex_color.a, 0.0, 1.0);
 			lit = lil_blend_color(lit, emission_color, emission_blend, drawu.emission_params.w);
+			if (drawu.emission2nd_params.x > 0.5) {
+				let emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;
+				let emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);
+				let emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);
+				var emission2nd_rgb_work = emission2nd_sample.rgb;
+				if (drawu.emission2nd_grad_params.x > 0.5) {
+					let grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);
+					emission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;
+				}
+				emission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));
+				let emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));
+				let emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);
+				let emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);
+				lit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);
+			}
 		} else {
 			let emission_raw = drawu.emissive_factor.rgb * emission_tex_color.rgb;
 			lit = lit + emission_raw;

@@ -545,21 +545,35 @@ pub struct UnaLilToonLikeMainColor {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub gradation_texture_index: Option<usize>,
 	#[serde(default)]
+	pub gradation_strength_factor: f32,
+	#[serde(default)]
 	pub second_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub second_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_blend_mask_texture_index: Option<usize>,
+	#[serde(default = "one_vec4")]
+	pub second_color_factor: [f32; 4],
 	#[serde(default)]
 	pub second_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub second_enable_lighting_factor: f32,
 	#[serde(default)]
+	pub second_alpha_mode_factor: f32,
+	#[serde(default)]
 	pub third_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub third_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub third_blend_mask_texture_index: Option<usize>,
+	#[serde(default = "one_vec4")]
+	pub third_color_factor: [f32; 4],
 	#[serde(default)]
 	pub third_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub third_enable_lighting_factor: f32,
+	#[serde(default)]
+	pub third_alpha_mode_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -596,6 +610,8 @@ pub struct UnaLilToonLikeShadow {
 	pub receive_factor: f32,
 	#[serde(default)]
 	pub second_color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_color_texture_index: Option<usize>,
 	#[serde(default)]
 	pub second_border_factor: f32,
 	#[serde(default)]
@@ -606,6 +622,8 @@ pub struct UnaLilToonLikeShadow {
 	pub second_receive_factor: f32,
 	#[serde(default)]
 	pub third_color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub third_color_texture_index: Option<usize>,
 	#[serde(default)]
 	pub third_border_factor: f32,
 	#[serde(default)]
@@ -840,6 +858,8 @@ pub struct UnaLilToonLikeRim {
 	pub shade_enabled_factor: f32,
 	#[serde(default = "default_liltoon_rim_shade_color")]
 	pub shade_color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub shade_mask_texture_index: Option<usize>,
 	#[serde(default = "default_liltoon_rim_border")]
 	pub shade_border_factor: f32,
 	#[serde(default = "default_liltoon_rim_blur")]
@@ -858,18 +878,60 @@ pub struct UnaLilToonLikeEmission {
 	pub color_factor: [f32; 4],
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub blend_mask_texture_index: Option<usize>,
 	#[serde(default)]
 	pub main_strength_factor: f32,
 	#[serde(default = "one_f32")]
 	pub blend_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default = "default_liltoon_emission_blink")]
+	pub blink_factor: [f32; 4],
+	#[serde(default)]
+	pub fluorescence_factor: f32,
+	#[serde(default)]
+	pub parallax_depth_factor: f32,
+	#[serde(default)]
+	pub uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default)]
+	pub blend_mask_uv_scroll_rotate_factor: [f32; 4],
 	#[serde(default)]
 	pub gradation_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub gradation_texture_index: Option<usize>,
 	#[serde(default = "one_f32")]
 	pub gradation_speed_factor: f32,
+	#[serde(default)]
+	pub second_enabled_factor: f32,
+	#[serde(default)]
+	pub second_color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_blend_mask_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub second_blend_factor: f32,
+	#[serde(default)]
+	pub second_blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default = "default_liltoon_emission_blink")]
+	pub second_blink_factor: [f32; 4],
+	#[serde(default)]
+	pub second_fluorescence_factor: f32,
+	#[serde(default)]
+	pub second_parallax_depth_factor: f32,
+	#[serde(default)]
+	pub second_uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default)]
+	pub second_blend_mask_uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default)]
+	pub second_main_strength_factor: f32,
+	#[serde(default)]
+	pub second_gradation_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_gradation_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub second_gradation_speed_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -908,6 +970,8 @@ pub struct UnaLilToonLikeBacklight {
 	pub enabled_factor: f32,
 	#[serde(default)]
 	pub color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
 	#[serde(default)]
 	pub main_strength_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1040,11 +1104,13 @@ impl Default for UnaLilToonLikeShadow {
 			normal_strength_factor: 1.0,
 			receive_factor: 0.0,
 			second_color_factor: [0.0, 0.0, 0.0, 0.0],
+			second_color_texture_index: None,
 			second_border_factor: 0.0,
 			second_blur_factor: 0.0,
 			second_normal_strength_factor: 1.0,
 			second_receive_factor: 0.0,
 			third_color_factor: [0.0, 0.0, 0.0, 0.0],
+			third_color_texture_index: None,
 			third_border_factor: 0.0,
 			third_blur_factor: 0.0,
 			third_normal_strength_factor: 1.0,
@@ -1059,14 +1125,21 @@ impl Default for UnaLilToonLikeMainColor {
 			main_texture_hsvg_factor: default_liltoon_main_texture_hsvg(),
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
+			gradation_strength_factor: 0.0,
 			second_enabled_factor: 0.0,
 			second_texture_index: None,
+			second_blend_mask_texture_index: None,
+			second_color_factor: [1.0, 1.0, 1.0, 1.0],
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_enable_lighting_factor: 1.0,
+			second_alpha_mode_factor: 0.0,
 			third_enabled_factor: 0.0,
 			third_texture_index: None,
+			third_blend_mask_texture_index: None,
+			third_color_factor: [1.0, 1.0, 1.0, 1.0],
 			third_blend_mode: UnaLilToonLikeBlendMode::default(),
 			third_enable_lighting_factor: 1.0,
+			third_alpha_mode_factor: 0.0,
 		}
 	}
 }
@@ -1200,6 +1273,7 @@ impl Default for UnaLilToonLikeRim {
 			indirect_blur_factor: default_liltoon_rim_blur(),
 			shade_enabled_factor: 0.0,
 			shade_color_factor: default_liltoon_rim_shade_color(),
+			shade_mask_texture_index: None,
 			shade_border_factor: default_liltoon_rim_border(),
 			shade_blur_factor: default_liltoon_rim_blur(),
 			shade_fresnel_power_factor: default_liltoon_rim_fresnel_power(),
@@ -1214,12 +1288,33 @@ impl Default for UnaLilToonLikeEmission {
 			enabled_factor: 0.0,
 			color_factor: [0.0, 0.0, 0.0, 1.0],
 			texture_index: None,
+			blend_mask_texture_index: None,
 			main_strength_factor: 0.0,
 			blend_factor: 1.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
+			blink_factor: default_liltoon_emission_blink(),
+			fluorescence_factor: 0.0,
+			parallax_depth_factor: 0.0,
+			uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			blend_mask_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
 			gradation_speed_factor: 1.0,
+			second_enabled_factor: 0.0,
+			second_color_factor: [0.0, 0.0, 0.0, 0.0],
+			second_texture_index: None,
+			second_blend_mask_texture_index: None,
+			second_blend_factor: 1.0,
+			second_blend_mode: UnaLilToonLikeBlendMode::default(),
+			second_blink_factor: default_liltoon_emission_blink(),
+			second_fluorescence_factor: 0.0,
+			second_parallax_depth_factor: 0.0,
+			second_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			second_blend_mask_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			second_main_strength_factor: 0.0,
+			second_gradation_enabled_factor: 0.0,
+			second_gradation_texture_index: None,
+			second_gradation_speed_factor: 1.0,
 		}
 	}
 }
@@ -1249,6 +1344,7 @@ impl Default for UnaLilToonLikeBacklight {
 		Self {
 			enabled_factor: 0.0,
 			color_factor: [0.85, 0.8, 0.7, 1.0],
+			texture_index: None,
 			main_strength_factor: 0.0,
 			normal_strength_factor: 1.0,
 			border_factor: default_liltoon_rim_border(),
@@ -1496,6 +1592,10 @@ fn default_liltoon_gem_particle_color() -> [f32; 4] {
 
 fn default_liltoon_specular_border() -> f32 {
 	0.5
+}
+
+fn default_liltoon_emission_blink() -> [f32; 4] {
+	[0.0, 0.0, std::f32::consts::PI, 0.0]
 }
 
 fn default_liltoon_rim_border() -> f32 {

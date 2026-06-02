@@ -65,6 +65,8 @@ namespace UNAvatar.UnityExporter
                     : baseColor;
                 mtoon["shadeColorFactor"] = FloatArray(shadeColor.r, shadeColor.g, shadeColor.b);
                 AddTextureIndex(mtoon, "shadowColorTextureIndex", useShadow ? ReadTexture(material, "_ShadowColorTex") : null);
+                AddTextureIndex(mtoon, "shadow2ndColorTextureIndex", useShadow ? ReadTexture(material, "_Shadow2ndColorTex") : null);
+                AddTextureIndex(mtoon, "shadow3rdColorTextureIndex", useShadow ? ReadTexture(material, "_Shadow3rdColorTex") : null);
                 AddTextureIndex(mtoon, "shadowStrengthMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowStrengthMask") : null);
                 AddTextureIndex(mtoon, "shadowBorderMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowBorderMask") : null);
                 AddTextureIndex(mtoon, "shadowBlurMaskTextureIndex", useShadow ? ReadTexture(material, "_ShadowBlurMask") : null);
@@ -80,7 +82,9 @@ namespace UNAvatar.UnityExporter
                 var useMain2nd = IsMaterialFeatureEnabled(material, "_UseMain2ndTex", ReadTexture(material, "_Main2ndTex") != null);
                 var useMain3rd = IsMaterialFeatureEnabled(material, "_UseMain3rdTex", ReadTexture(material, "_Main3rdTex") != null);
                 AddTextureIndex(mtoon, "main2ndTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndTex") : null);
+                AddTextureIndex(mtoon, "main2ndBlendMaskTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndBlendMask") : null);
                 AddTextureIndex(mtoon, "main3rdTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdTex") : null);
+                AddTextureIndex(mtoon, "main3rdBlendMaskTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdBlendMask") : null);
 
                 var useMatCap = IsMaterialFeatureEnabled(material, "_UseMatCap", ReadTexture(material, "_MatCapTex") != null || ReadTexture(material, "_MatcapTex") != null);
                 var matcapMainStrength = ReadFloat(material, "_MatCapMainStrength", ReadFloat(material, "_MatCapBlend", 1.0f));
@@ -100,14 +104,24 @@ namespace UNAvatar.UnityExporter
                 mtoon["rimLightingMixFactor"] = useRim ? ReadFloat(material, "_RimEnableLighting", 1.0f) : 0.0f;
                 mtoon["rimBlendMode"] = ReadFloat(material, "_RimBlendMode", 1.0f);
                 AddTextureIndex(mtoon, "rimMultiplyTextureIndex", useRim ? ReadTexture(material, "_RimColorTex") : null);
+                var useRimShade = IsMaterialFeatureEnabled(material, "_UseRimShade", ReadTexture(material, "_RimShadeMask") != null);
+                AddTextureIndex(mtoon, "rimShadeMaskTextureIndex", useRimShade ? ReadTexture(material, "_RimShadeMask") : null);
+                var useBacklight = IsMaterialFeatureEnabled(material, "_UseBacklight", ReadTexture(material, "_BacklightColorTex") != null);
+                AddTextureIndex(mtoon, "backlightColorTextureIndex", useBacklight ? ReadTexture(material, "_BacklightColorTex") : null);
 
                 var useEmission = IsMaterialFeatureEnabled(
                     material,
                     "_UseEmission",
                     ReadTexture(material, "_EmissionMap") != null || ReadTexture(material, "_EmissionTex") != null || ReadColor(material, "_EmissionColor", Color.black).maxColorComponent > 0.0f);
                 AddTextureIndex(mtoon, "emissionTextureIndex", useEmission ? ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex") : null);
+                AddTextureIndex(mtoon, "emissionBlendMaskTextureIndex", useEmission ? ReadTexture(material, "_EmissionBlendMask") : null);
                 var useEmissionGradation = useEmission && IsMaterialFeatureEnabled(material, "_EmissionUseGrad", ReadTexture(material, "_EmissionGradTex") != null);
                 AddTextureIndex(mtoon, "emissionGradationTextureIndex", useEmissionGradation ? ReadTexture(material, "_EmissionGradTex") : null);
+                var useEmission2nd = IsMaterialFeatureEnabled(material, "_UseEmission2nd", ReadTexture(material, "_Emission2ndMap") != null);
+                var useEmission2ndGradation = useEmission2nd && IsMaterialFeatureEnabled(material, "_Emission2ndUseGrad", ReadTexture(material, "_Emission2ndGradTex") != null);
+                AddTextureIndex(mtoon, "emission2ndTextureIndex", useEmission2nd ? ReadTexture(material, "_Emission2ndMap") : null);
+                AddTextureIndex(mtoon, "emission2ndBlendMaskTextureIndex", useEmission2nd ? ReadTexture(material, "_Emission2ndBlendMask") : null);
+                AddTextureIndex(mtoon, "emission2ndGradationTextureIndex", useEmission2ndGradation ? ReadTexture(material, "_Emission2ndGradTex") : null);
 
                 AddTextureIndex(mtoon, "reflectionColorTextureIndex", ReadTexture(material, "_ReflectionColorTex"));
                 AddTextureIndex(mtoon, "smoothnessTextureIndex", ReadTexture(material, "_SmoothnessTex"));
@@ -130,8 +144,9 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "outlineTextureIndex", useOutline ? ReadTexture(material, "_OutlineTex") : null);
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", useOutline ? ReadTexture(material, "_OutlineWidthMask") : null);
                 AddTextureIndex(mtoon, "alphaMaskTextureIndex", ReadTexture(material, "_AlphaMask"));
-                var useGradationMap = IsMaterialFeatureEnabled(material, "_UseGradationMap", ReadTexture(material, "_GradationMap") != null);
-                AddTextureIndex(mtoon, "gradationMapTextureIndex", useGradationMap ? ReadTexture(material, "_GradationMap") : null);
+                var mainGradationStrength = ReadFloat(material, "_MainGradationStrength", 0.0f);
+                var useGradationMap = mainGradationStrength > 0.0f || IsMaterialFeatureEnabled(material, "_UseGradationMap", ReadTexture(material, "_GradationMap") != null);
+                AddTextureIndex(mtoon, "gradationMapTextureIndex", useGradationMap ? ReadTexture(material, "_MainGradationTex") ?? ReadTexture(material, "_GradationMap") : null);
                 var mainTextureHsvg = ReadVector(material, "_MainTexHSVG", new Vector4(0.0f, 1.0f, 1.0f, 1.0f));
                 mtoon["mainTexHsvgFactor"] = FloatArray(mainTextureHsvg.x, mainTextureHsvg.y, mainTextureHsvg.z, mainTextureHsvg.w);
 
@@ -173,6 +188,7 @@ namespace UNAvatar.UnityExporter
                     ["enabledKeywords"] = MaterialEnabledKeywordNames(material),
                     ["floatParams"] = BuildMaterialFloatParams(material),
                     ["colorParams"] = BuildMaterialColorParams(material),
+                    ["vectorParams"] = BuildMaterialVectorParams(material),
                     ["textureUvOffsetScales"] = BuildTextureUvOffsetScales(material),
                     ["textureUvModeFactors"] = BuildTextureUvModeFactors(material),
                     ["mtoon"] = mtoon
@@ -220,13 +236,13 @@ namespace UNAvatar.UnityExporter
             {
                 return new[]
                 {
-                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main3rdTex",
+                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main3rdTex", "_Main3rdBlendMask",
                     "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap",
-                    "_ShadowColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
+                    "_ShadowColorTex", "_Shadow2ndColorTex", "_Shadow3rdColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
                     "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCap2ndTex", "_MatCap2ndBlendMask",
-                    "_RimColorTex", "_EmissionMap", "_EmissionTex", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndGradTex",
+                    "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
                     "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
-                    "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_GradationMap",
+                    "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_MainGradationTex", "_GradationMap",
                     "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask"
                 };
             }
@@ -279,6 +295,32 @@ namespace UNAvatar.UnityExporter
                     }
                     var color = material.GetColor(name);
                     values[name] = FloatArray(color.r, color.g, color.b, color.a);
+                }
+                return values;
+            }
+
+            private Dictionary<string, object> BuildMaterialVectorParams(Material material)
+            {
+                var values = new Dictionary<string, object>();
+                var shader = material.shader;
+                if (shader == null)
+                {
+                    return values;
+                }
+                var count = shader.GetPropertyCount();
+                for (var i = 0; i < count; i++)
+                {
+                    if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Vector)
+                    {
+                        continue;
+                    }
+                    var name = shader.GetPropertyName(i);
+                    if (string.IsNullOrEmpty(name) || !HasProperty(material, name))
+                    {
+                        continue;
+                    }
+                    var value = material.GetVector(name);
+                    values[name] = FloatArray(value.x, value.y, value.z, value.w);
                 }
                 return values;
             }
