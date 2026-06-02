@@ -3859,7 +3859,7 @@ mod tests {
 
 	use super::{
 		parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode,
-		CloseHotkey, RendererControlCommand,
+		CloseHotkey, RendererControlCommand, SCENE_STATE_SPLASH,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -3892,6 +3892,14 @@ mod tests {
 		let snapshot: serde_json::Value = serde_json::from_str(&text).unwrap();
 		assert_eq!(snapshot.get("connected").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(snapshot.get("protocol").and_then(|value| value.as_str()), Some("local-tcp-json-v2"));
+		assert_eq!(
+			snapshot.get("scene_state").and_then(|value| value.as_str()),
+			Some(SCENE_STATE_SPLASH)
+		);
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("scene_state"))));
 	}
 
 	#[test]
