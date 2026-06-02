@@ -600,6 +600,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub enabled_factor: f32,
 	#[serde(default = "one_vec3")]
 	pub color_factor: [f32; 3],
+	#[serde(default = "one_f32")]
+	pub color_alpha_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1025,6 +1027,7 @@ impl Default for UnaLilToonLikeMatcap {
 		Self {
 			enabled_factor: 0.0,
 			color_factor: [1.0, 1.0, 1.0],
+			color_alpha_factor: 1.0,
 			texture_index: None,
 			blend_mask_texture_index: None,
 			blend_factor: 1.0,

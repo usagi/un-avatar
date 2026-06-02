@@ -1959,8 +1959,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 
 	out.matcap.enabled_factor = unavatar_material_float_param(extras, "_UseMatCap").unwrap_or(0.0).clamp(0.0, 1.0);
-	if let Some(value) = unavatar_material_color_param_rgb(extras, "_MatCapColor") {
-		out.matcap.color_factor = value;
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_MatCapColor") {
+		out.matcap.color_factor = [value[0], value[1], value[2]];
+		out.matcap.color_alpha_factor = value[3].clamp(0.0, 1.0);
 	}
 	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("matcapTextureIndex").or_else(|| m.get("matcap_texture_index")))) {
 		out.matcap.texture_index = Some(value);
@@ -4168,7 +4169,7 @@ mod tests {
 					"_ShadowBorderColor": [0.2, 0.3, 0.4, 1.0],
 					"_Shadow2ndColor": [0.4, 0.5, 0.6, 0.7],
 					"_Shadow3rdColor": [0.3, 0.4, 0.5, 0.6],
-					"_MatCapColor": [0.2, 0.4, 0.6, 1.0],
+					"_MatCapColor": [0.2, 0.4, 0.6, 0.7],
 					"_MatCap2ndColor": [0.3, 0.5, 0.7, 0.9],
 					"_ReflectionColor": [0.9, 0.8, 0.7, 0.6],
 					"_ReflectionCubeColor": [0.6, 0.7, 0.8, 1.0],
@@ -4261,6 +4262,7 @@ mod tests {
 		assert_eq!(liltoon_like.shadow.third_normal_strength_factor, 0.72);
 		assert_eq!(liltoon_like.shadow.third_receive_factor, 0.82);
 		assert_eq!(liltoon_like.matcap.color_factor, [0.2, 0.4, 0.6]);
+		assert_eq!(liltoon_like.matcap.color_alpha_factor, 0.7);
 		assert_eq!(liltoon_like.matcap.texture_index, Some(19));
 		assert_eq!(liltoon_like.matcap.blend_mask_texture_index, Some(20));
 		assert_eq!(liltoon_like.matcap.main_strength_factor, 0.5);

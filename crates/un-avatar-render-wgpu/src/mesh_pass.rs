@@ -1315,7 +1315,7 @@ fn mesh_draw_material_gpu(
 	let matcap_params = liltoon_like
 		.map(|u| {
 			[
-				(u.matcap.enabled_factor * u.matcap.blend_factor).clamp(0.0, 1.0),
+				(u.matcap.enabled_factor * u.matcap.blend_factor * u.matcap.color_alpha_factor).clamp(0.0, 1.0),
 				u.matcap.main_strength_factor.clamp(0.0, 1.0),
 				u.matcap.enable_lighting_factor.clamp(0.0, 1.0),
 				match u.matcap.blend_mode {
@@ -3614,6 +3614,22 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
+	}
+
+	#[test]
+	fn liltoon_matcap_color_alpha_reaches_blend_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.enabled_factor = 1.0;
+		liltoon_like.matcap.blend_factor = 0.5;
+		liltoon_like.matcap.color_alpha_factor = 0.4;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.matcap_params[0], 0.2);
 	}
 
 	#[test]

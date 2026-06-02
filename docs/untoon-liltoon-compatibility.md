@@ -341,7 +341,8 @@ Status legend:
   - remaining: VR parallax、camera roll を含む Z rotation cancel false path、UV1 blend を本家仕様へ近づける。
 - `[~]` `_MatCapColor`
   - done: `_MatCapColor` を strength と混ぜずに material color として保持する。
-  - remaining: HDR color / alpha と `_MatCapColorTex` 相当の拡張が必要か確認する。
+  - done: `_MatCapColor.a` を 1st MatCap blend weight に接続する。
+  - remaining: HDR color と `_MatCapColorTex` 相当の拡張が必要か確認する。
 - `[~]` `_MatCapMainStrength`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap color を albedo に寄せる blend 量として WGSL に接続した。
   - remaining: lilToon 本家の lighting/shadow 合成後の albedo 参照位置と一致するか確認する。
