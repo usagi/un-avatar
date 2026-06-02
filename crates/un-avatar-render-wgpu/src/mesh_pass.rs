@@ -411,6 +411,7 @@ enum DrawPipelineKind {
 	BlendLit,
 	BlendUnlit,
 	BlendToon,
+	BlendToonZWrite,
 }
 
 #[derive(Clone, Debug)]
@@ -533,9 +534,8 @@ fn draw_render_order_key(draws: &[MeshDraw], draw_index: usize) -> (i32, usize) 
 	(draw_render_queue_number(&draws[draw_index]), draw_index)
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
-	let mut transparent_zwrite_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -571,8 +571,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaAlphaMode::Blend
 				if draw.mtoon.transparent_with_z_write && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) =>
 			{
-				transparent_zwrite_draw_indices.push(draw_index);
-				blended_draws.push((DrawPipelineKind::BlendToon, draw_index));
+				blended_draws.push((DrawPipelineKind::BlendToonZWrite, draw_index));
 			}
 			UnaAlphaMode::Blend => {
 				blended_draws.push((blend_pipeline_for_shading(shading), draw_index));
@@ -585,7 +584,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	}
 
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
-	transparent_zwrite_draw_indices.sort_by_key(|&draw_index| draw_render_order_key(draws, draw_index));
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
@@ -594,7 +592,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	(
 		outline_draw_indices,
 		opaque_batches,
-		transparent_zwrite_draw_indices,
 		blended_batches,
 	)
 }
@@ -607,7 +604,7 @@ pub(crate) struct SceneMeshes {
 	pipeline_blend_lit: wgpu::RenderPipeline,
 	pipeline_blend_unlit: wgpu::RenderPipeline,
 	pipeline_blend_toon: wgpu::RenderPipeline,
-	pipeline_transparent_zprepass_toon: wgpu::RenderPipeline,
+	pipeline_blend_toon_zwrite: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_bind_group: wgpu::BindGroup,
@@ -619,7 +616,6 @@ pub(crate) struct SceneMeshes {
 	skin_palettes: Vec<SkinPalette>,
 	outline_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
-	transparent_zwrite_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
@@ -2303,17 +2299,17 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_transparent_zprepass_toon = Self::create_mesh_pipeline(
+		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
 			&vb_layout,
-			"mesh_transparent_zprepass_toon",
+			"mesh_blend_toon_zwrite",
 			"vs_main",
-			"fs_toon_zprepass",
-			None,
-			wgpu::ColorWrites::empty(),
+			"fs_toon",
+			premultiplied_blend,
+			wgpu::ColorWrites::ALL,
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
@@ -3121,7 +3117,7 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) = build_draw_order(&draws, &opts);
+		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -3131,7 +3127,7 @@ impl SceneMeshes {
 			pipeline_blend_lit,
 			pipeline_blend_unlit,
 			pipeline_blend_toon,
-			pipeline_transparent_zprepass_toon,
+			pipeline_blend_toon_zwrite,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_bind_group,
@@ -3141,7 +3137,6 @@ impl SceneMeshes {
 			skin_palettes,
 			outline_draw_indices,
 			opaque_batches,
-			transparent_zwrite_draw_indices,
 			blended_batches,
 			texture_summary,
 			expression_names,
@@ -3248,11 +3243,9 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, opaque_batches, transparent_zwrite_draw_indices, blended_batches) =
-			build_draw_order(&self.draws, &self.opts);
+		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.opaque_batches = opaque_batches;
-		self.transparent_zwrite_draw_indices = transparent_zwrite_draw_indices;
 		self.blended_batches = blended_batches;
 		self.rewrite_avatar_materials(queue);
 	}
@@ -3305,6 +3298,7 @@ impl SceneMeshes {
 			DrawPipelineKind::BlendLit => &self.pipeline_blend_lit,
 			DrawPipelineKind::BlendUnlit => &self.pipeline_blend_unlit,
 			DrawPipelineKind::BlendToon => &self.pipeline_blend_toon,
+			DrawPipelineKind::BlendToonZWrite => &self.pipeline_blend_toon_zwrite,
 		}
 	}
 
@@ -3321,19 +3315,13 @@ impl SceneMeshes {
 		}
 	}
 
-	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。transparent z-write は
-	/// color write なしの alpha-tested depth prepass 後に、通常の SrcAlpha 合成で描く。
+	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。lilToon / MToon の
+	/// transparent z-write は Forward color pass 自体で depth write する。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
 		if self.blended_batches.is_empty() {
 			return;
 		}
 		let mut state = DrawBindState::default();
-		if !self.transparent_zwrite_draw_indices.is_empty() {
-			pass.set_pipeline(&self.pipeline_transparent_zprepass_toon);
-			for &draw_index in &self.transparent_zwrite_draw_indices {
-				self.draw_inner(pass, &mut state, draw_index);
-			}
-		}
 		for batch in &self.blended_batches {
 			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
 			for &draw_index in &batch.draw_indices {
@@ -3573,17 +3561,20 @@ mod tests {
 	fn ordered_draw_batches_preserve_transparent_sequence() {
 		let mut batches = Vec::new();
 		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 1, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 2, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonZWrite, 1, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 2, 1);
 		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 3, 1);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 4, 1);
 
-		assert_eq!(batches.len(), 3);
+		assert_eq!(batches.len(), 4);
 		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[0].draw_indices, vec![0]);
-		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendLit);
+		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendToonZWrite);
 		assert_eq!(batches[1].draw_indices, vec![1]);
-		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendToon);
-		assert_eq!(batches[2].draw_indices, vec![2, 3]);
+		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendLit);
+		assert_eq!(batches[2].draw_indices, vec![2]);
+		assert_eq!(batches[3].pipeline, DrawPipelineKind::BlendToon);
+		assert_eq!(batches[3].draw_indices, vec![3, 4]);
 	}
 
 	#[test]

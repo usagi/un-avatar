@@ -142,6 +142,7 @@ Status legend:
   - remaining: shader variant ごとの feature set (`Lite`, `Cutout`, `Transparent`, `TwoPass`, `Outline`, `Fur`, `Gem`, `Refraction`) を compatibility report で分類する。
 - `[~]` alpha mode: Opaque / Cutout / Transparent / Transparent ZWrite
   - done: lilToon shader name、renderQueue、`_ZWrite` から Opaque / Mask / Blend / Transparent ZWrite の基本を推定する。
+  - done: Transparent ZWrite は color write なし prepass ではなく、lilToon Forward pass と同じく transparent color pass 自体を depth write 有効で描く。
   - remaining: `_TransparentMode`、two-pass variants、refraction/fur variants、subpass cutoff を本家仕様に沿って分類する。
 - `[~]` blend state: lilToon premultiply path for transparent materials
 	- done: Transparent 系は shader-side premultiply + premultiplied blend path へ寄せ始めている。
@@ -219,7 +220,7 @@ Status legend:
 	- done: Renderer は `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
 	- remaining: UV mode / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
 - `[~]` `_SubpassCutoff`
-	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
+	- done: source raw param を lilToon-like blend state に保持する。
 	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
 - `[~]` dither / alpha-to-mask
 	- done: `_AlphaToMask` を alpha mode 推定だけでなく lilToon-like blend state に保持する。
