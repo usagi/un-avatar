@@ -2487,9 +2487,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_AlphaBoostFA") {
 		out.blend_state.alpha_boost_factor = value.max(0.0);
 	}
-	if let Some(value) =
-		unavatar_material_float_param(extras, "_PreCutoff").or_else(|| unavatar_material_float_param(extras, "_SubpassCutoff"))
-	{
+	if let Some(value) = unavatar_material_float_param(extras, "_SubpassCutoff") {
 		out.blend_state.subpass_cutoff_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_AlphaToMask") {
@@ -4181,7 +4179,6 @@ mod tests {
 					"_DstBlendAlphaFA": 1.0,
 					"_BlendOpAlphaFA": 4.0,
 					"_AlphaBoostFA": 10.0,
-					"_PreCutoff": 0.13,
 					"_SubpassCutoff": 0.4,
 					"_AlphaToMask": 1.0,
 					"_LightMinLimit": 0.06,
@@ -4446,7 +4443,7 @@ mod tests {
 		assert_eq!(liltoon_like.blend_state.forward_add_alpha_destination_factor, 1.0);
 		assert_eq!(liltoon_like.blend_state.forward_add_alpha_operation_factor, 4.0);
 		assert_eq!(liltoon_like.blend_state.alpha_boost_factor, 10.0);
-		assert_eq!(liltoon_like.blend_state.subpass_cutoff_factor, 0.13);
+		assert_eq!(liltoon_like.blend_state.subpass_cutoff_factor, 0.4);
 		assert_eq!(liltoon_like.blend_state.alpha_to_mask_factor, 1.0);
 		assert_eq!(mtoon.parametric_rim_color_factor, [0.040000003, 0.080000006, 0.120000005]);
 		assert_eq!(mtoon.outline_color_factor, [0.01, 0.02, 0.03]);

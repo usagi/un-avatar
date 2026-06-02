@@ -212,7 +212,7 @@ Status legend:
   - remaining: Cutout shader / explicit alpha mode / renderQueue と texture alpha の診断を compatibility report に出す。
 - `[~]` `_AlphaMaskMode`
 	- done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
-	- done: `_AlphaMask` texture が無い material では black fallback を使う。mode 1 の unassigned mask は `_AlphaMaskValue` だけを使い、refraction glass の mode 2 / negative value も透明側へ落ちる。
+	- done: `_AlphaMask` texture が無い material では本家 macro と同じく alphaMask 初期値 1 相当の white fallback を使う。
 	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
@@ -220,7 +220,6 @@ Status legend:
 	- remaining: UV mode / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
 - `[~]` `_SubpassCutoff`
 	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
-	- done: two-pass transparent 系は `_PreCutoff` を `_SubpassCutoff` より優先する。field_drape の薄布は `_PreCutoff=0.001`、`_SubpassCutoff=0.5` のため、後者を使うと深度を書かず奥の肌が透ける。
 	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
 - `[~]` dither / alpha-to-mask
 	- done: `_AlphaToMask` を alpha mode 推定だけでなく lilToon-like blend state に保持する。

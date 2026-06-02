@@ -2799,7 +2799,7 @@ impl SceneMeshes {
 					.liltoon_like
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
-				let alpha_mask_view = texture_view_or(&image_views, alpha_mask_texture_index, &black_view);
+				let alpha_mask_view = texture_view_or(&image_views, alpha_mask_texture_index, &white_view);
 				let alpha_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, alpha_mask_texture_index, 0);
 				let rim_texture_index = mat
 					.liltoon_like
@@ -3795,7 +3795,7 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_alpha_mask_replace_without_texture_keeps_mode_for_black_fallback() {
+	fn liltoon_alpha_mask_replace_without_texture_uses_white_fallback() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.alpha_mask.mode_factor = 1.0;
 		liltoon_like.alpha_mask.scale_factor = 1.0;
@@ -3812,7 +3812,7 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_alpha_mask_multiply_without_texture_keeps_mode_for_black_fallback() {
+	fn liltoon_alpha_mask_multiply_without_texture_uses_white_fallback() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.alpha_mask.mode_factor = 2.0;
 		liltoon_like.alpha_mask.scale_factor = 1.0;
