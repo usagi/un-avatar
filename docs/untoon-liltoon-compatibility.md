@@ -334,6 +334,7 @@ Status legend:
 - `[~]` `_UseMatCap`
   - done: `_UseMatCap = 0` の場合は source color fallback から MatCap 寄与を落とす。
   - done: lilToon source material では `_UseMatCap = 0` を `matcapBlend = 0` として runtime に渡す。
+  - done: MatCap 描画 path は `_UseShadow` に依存せず `_UseMatCap * _MatCapBlend` で選択する。
   - remaining: texture slot があるが `_UseMatCap = 0` の material を sample wardrobe で確認し、material feature flag として明示分離する。
 - `[~]` `_MatCapTex`
   - done: 1st MatCap texture index / source asset ref を読み込む。
