@@ -400,7 +400,7 @@ Status legend:
   - done: source raw params を保持し、specular color と reflection Fresnel lerp の specular term へ接続した。
   - remaining: color space と dielectric specular の本家係数へ合わせる。
 - `[~]` `_ApplySpecular`
-	- done: source raw params を保持し、lilToon-like specular contribution の gate として接続した。
+	- done: source raw params を保持し、lilToon-like specular blend weight の gate として接続した。specular term 本体には二重乗算しない。
 	- remaining: shadowmix / attenuation との合成順を本家に合わせる。
 - `[~]` `_ApplySpecularFA`
 	- done: source raw params を forward-add specular gate として保持する。
@@ -421,7 +421,7 @@ Status legend:
   - done: source raw params を保持し、reflection UV / fresnel 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
   - remaining: lilToon の `fd.reflectionN`、roughness mip、cubemap / equirect policy、backface behavior と合わせて検証する。
 - `[~]` `_ApplyReflection`
-  - done: source raw params を保持し、reflection texture / environment approximation の gate として接続した。
+  - done: source raw params を保持し、reflection texture / environment approximation の blend weight gate として接続した。reflection term 本体には二重乗算しない。
   - remaining: PMREM / roughness mip / environment source policy を定義して本実装に置き換える。
 - `[~]` `_ReflectionColor`
   - done: source raw color params と `_ReflectionColorTex` reference を保持し、specular/reflection color と alpha strength に接続した。

@@ -716,7 +716,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 					clamp(drawu.specular_toon_params.z, 0.0, 1.0)
 				);
 			}
-			specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape * clamp(drawu.reflection_control.y, 0.0, 1.0);
+			specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape;
 			let reflection_color = drawu.reflection_color * reflection_color_texel;
 			let reflection_lighting = mix(
 				vec3<f32>(1.0, 1.0, 1.0),
@@ -728,7 +728,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let one_minus_reflectivity = 0.96 - metallic * 0.96;
 			let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 			let surface_reduction = 1.0 / (roughness * roughness + 1.0);
-			authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0)) * clamp(drawu.reflection_control.z, 0.0, 1.0);
+			authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
 		}
 	} else {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
