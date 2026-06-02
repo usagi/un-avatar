@@ -482,7 +482,7 @@ Status legend:
   - done: v2 rim parameter として保持し、rim color と main light color の mix に接続した。
   - remaining: forward add branch と blend mode 3 以上の本家条件を反映する。
 - `[~]` `_RimDirStrength`
-  - done: source raw params を保持し、rim contribution の directional factor 近似へ接続した。
+  - done: source raw params を保持し、directional rim と indirect rim の strength として接続した。
   - remaining: 本家 directional rim の view-space/light-space 入力と `_RimDirRange` の係数域を検証する。
 - `[~]` `_RimDirRange`
   - done: source raw params を保持し、directional rim factor の power 近似へ接続した。
@@ -491,8 +491,8 @@ Status legend:
   - done: source raw color params を保持し、indirect rim color contribution へ接続した。
   - remaining: `_RimIndirRange`、lighting、RimShade との本家合成順を検証する。
 - `[~]` `_RimIndirRange`
-  - done: source raw params を保持し、indirect rim strength gate へ接続した。
-  - remaining: 本家の indirect rim range と alpha/strength semantics を照合する。
+  - done: source raw params を保持し、本家 `lnIndir = saturate((1-lnRaw+range)/(1+range))` 相当の indirect rim range へ接続した。
+  - remaining: 本家の indirect rim range 係数域と alpha semantics を照合する。
 - `[~]` `_RimIndirBorder`
 	- done: source raw params を保持し、indirect rim toon border へ接続した。
 	- remaining: blur の係数域を本家へ合わせる。

@@ -754,12 +754,15 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let rim_dir = pow(clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0), mix(1.0, 8.0, clamp(drawu.rim_indirect_params.y, 0.0, 1.0)));
 			let rim_dir_factor = clamp(drawu.rim_indirect_params.x * rim_dir, 0.0, 1.0);
 			rim = mix(rim, rim * rim_dir, rim_dir_factor);
-			let indir_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
+			let ln_raw = clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0);
+			let indir_range = clamp(drawu.rim_indirect_params.z, 0.0, 1.0);
+			let ln_indir = clamp((1.0 - ln_raw + indir_range) / (1.0 + indir_range), 0.0, 1.0);
+			let indir_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001)) * ln_indir * clamp(drawu.rim_indirect_params.x, 0.0, 1.0);
 			let indir_factor = lil_tooning_scale(
 				indir_raw,
 				clamp(drawu.rim_indirect_params.w, 0.0, 1.0),
 				clamp(drawu.rim_indirect_ext_params.x, 0.0, 1.0)
-			) * clamp(drawu.rim_indirect_params.z * drawu.rim_indirect_color.a, 0.0, 1.0);
+			) * clamp(drawu.rim_indirect_color.a, 0.0, 1.0);
 			rim = rim + drawu.rim_indirect_color.rgb * indir_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency;
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
