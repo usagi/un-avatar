@@ -145,7 +145,7 @@ Status legend:
   - remaining: `_TransparentMode`、two-pass variants、refraction/fur variants、subpass cutoff を本家仕様に沿って分類する。
 - `[~]` blend state: lilToon premultiply path for transparent materials
 	- done: Transparent 系は shader-side premultiply + premultiplied blend path へ寄せ始めている。
-	- done: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_SrcBlendAlpha` / `_DstBlendAlpha` / `_BlendOpAlpha` / `_SrcBlendAlphaFA` / `_DstBlendAlphaFA` / `_BlendOpAlphaFA` / `_AlphaBoostFA` を lilToon-like material に保持し、transparent 出力 alpha へ `_AlphaBoostFA` を反映する。
+	- done: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_SrcBlendAlpha` / `_DstBlendAlpha` / `_BlendOpAlpha` / `_SrcBlendAlphaFA` / `_DstBlendAlphaFA` / `_BlendOpAlphaFA` / `_AlphaBoostFA` を lilToon-like material に保持する。`_AlphaBoostFA` は forward-add 系の値なので、通常 transparent color pass の alpha には掛けない。
 	- remaining: RGB / alpha / forward-add alpha blend state の組み合わせを wgpu pipeline blend state へより厳密に反映する。
 - `[~]` cull mode: `_Cull`, double-sided handling
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
@@ -212,7 +212,7 @@ Status legend:
   - remaining: Cutout shader / explicit alpha mode / renderQueue と texture alpha の診断を compatibility report に出す。
 - `[~]` `_AlphaMaskMode`
 	- done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
-	- done: `_AlphaMask` texture が無い material では mode を 0 扱いにし、white fallback mask で base texture alpha を潰さない。
+	- done: `_AlphaMask` texture が無い material では black fallback を使う。mode 1 の unassigned mask は `_AlphaMaskValue` だけを使い、refraction glass の mode 2 / negative value も透明側へ落ちる。
 	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
@@ -220,6 +220,7 @@ Status legend:
 	- remaining: UV mode / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
 - `[~]` `_SubpassCutoff`
 	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
+	- done: two-pass transparent 系は `_PreCutoff` を `_SubpassCutoff` より優先する。field_drape の薄布は `_PreCutoff=0.001`、`_SubpassCutoff=0.5` のため、後者を使うと深度を書かず奥の肌が透ける。
 	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
 - `[~]` dither / alpha-to-mask
 	- done: `_AlphaToMask` を alpha mode 推定だけでなく lilToon-like blend state に保持する。
