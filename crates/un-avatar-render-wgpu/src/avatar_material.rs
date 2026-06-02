@@ -163,7 +163,44 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
 		if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.gradation_texture_index,
+				TextureRole::GenericColor,
+			);
 			mark_texture_role(&mut roles, liltoon_like.normal.second_texture_index, TextureRole::Normal);
+			mark_texture_role(&mut roles, liltoon_like.shadow.color_texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.shadow.strength_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.shadow.border_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.shadow.blur_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.matcap.texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.matcap.blend_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.matcap.second_texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.matcap.second_blend_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.reflection.color_texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.reflection.smoothness_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.reflection.metallic_texture_index, TextureRole::Data);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.reflection.anisotropy_tangent_texture_index,
+				TextureRole::Normal,
+			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.reflection.anisotropy_scale_mask_texture_index,
+				TextureRole::Data,
+			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index,
+				TextureRole::Data,
+			);
+			mark_texture_role(&mut roles, liltoon_like.rim.texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.emission.texture_index, TextureRole::Emissive);
+			mark_texture_role(&mut roles, liltoon_like.emission.gradation_texture_index, TextureRole::Emissive);
+			mark_texture_role(&mut roles, liltoon_like.outline.texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.outline.width_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.alpha_mask.texture_index, TextureRole::Data);
 		}
 	}
 	for (index, source) in scene.image_sources.iter().enumerate() {
@@ -419,5 +456,22 @@ mod tests {
 			..Default::default()
 		});
 		assert_eq!(texture_roles_for_scene(&scene)[2], TextureRole::Normal);
+
+		scene.images.extend([image(), image(), image(), image()]);
+		scene.image_sources.extend([None, None, None, None]);
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.strength_mask_texture_index = Some(3);
+		liltoon_like.emission.gradation_texture_index = Some(4);
+		liltoon_like.reflection.anisotropy_tangent_texture_index = Some(5);
+		liltoon_like.alpha_mask.texture_index = Some(6);
+		scene.materials.push(UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		});
+		let roles = texture_roles_for_scene(&scene);
+		assert_eq!(roles[3], TextureRole::Data);
+		assert_eq!(roles[4], TextureRole::Emissive);
+		assert_eq!(roles[5], TextureRole::Normal);
+		assert_eq!(roles[6], TextureRole::Data);
 	}
 }
