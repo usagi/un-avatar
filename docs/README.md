@@ -20,6 +20,7 @@ v1 公開時点で残す文書の索引。
 | [`render-quality-plan.md`](render-quality-plan.md) | AA、texture cache / compression、renderer 品質方針 |
 | [`unavatar-format-v0.1.md`](unavatar-format-v0.1.md) | `.unavatar` GLB extension preview spec |
 | [`unity-exporter-v0.1.md`](unity-exporter-v0.1.md) | Unity Editor Exporter の境界、配置、MVP |
+| [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) | Modular Avatar bake 相当 resolver の対応計画 |
 | [`unity-exporter-dependency-research.md`](unity-exporter-dependency-research.md) | Unity Exporter の GLB writer / Modular Avatar bake 依存調査 |
 | [`v2-open-decisions.md`](v2-open-decisions.md) | v2 実装前に相談・決定する項目 |
 | [`profile-settings-ui-v1-design.md`](profile-settings-ui-v1-design.md) | Supervisor Console の Profiles / Renderers UI 情報設計 |

@@ -40,6 +40,7 @@ namespace UNAvatar.UnityExporter
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
+                ["modularAvatar"] = BuildModularAvatarPayload(registryRoot),
                 ["provenance"] = new Dictionary<string, object>
                 {
                     ["unityVersion"] = Application.unityVersion,
@@ -134,6 +135,7 @@ namespace UNAvatar.UnityExporter
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
+                ["modularAvatar"] = BuildModularAvatarPayload(avatarRoot),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
                     ["buildMarker"] = ExporterBuildMarker,

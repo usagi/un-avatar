@@ -2,7 +2,7 @@
 
 UN Avatar の配布物に同梱する第三者コンポーネントのライセンス表示をまとめる。リリースパッケージでは、この文書または同等内容を `LICENSES/` に含める。
 
-## Shader Reference Implementations
+## Reference Implementations
 
 U.N. Avatar の toon rendering / UNToon 実装は Rust / wgpu / WGSL で独立実装する。ただし、互換性検証、shader behavior の理解、必要な範囲での移植にあたり、次の MIT licensed project を参考実装として扱う。
 
@@ -21,6 +21,14 @@ U.N. Avatar の toon rendering / UNToon 実装は Rust / wgpu / WGSL で独立�
 - Use in UN Avatar: VRM / MToon material compatibility reference
 - License: MIT License
 - License URL: <https://github.com/Santarh/MToon/blob/master/LICENSE>
+
+### Modular Avatar
+
+- Project: Modular Avatar
+- Repository: <https://github.com/bdunderscore/modular-avatar>
+- Use in UN Avatar: `.unavatar` Wardrobe Split resolver / Modular Avatar bake behavior reference
+- License: MIT License
+- License URL: <https://github.com/bdunderscore/modular-avatar/blob/main/LICENSE.md>
 
 現時点では、これらの project 名は互換性の説明と謝辞を目的とする。将来、実質的な source code の移植または substantial portions の取り込みを行う場合は、該当 copyright notice と MIT License text を配布物の `LICENSES/` に保持する。
 

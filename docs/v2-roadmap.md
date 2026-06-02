@@ -236,9 +236,10 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 
 ### Milestone 8: Modular Avatar bake support
 
-- Modular Avatar 適用後状態を export 対象にする。
-- 複数衣装・小物の bake と variant metadata を保持する。
-- Runtime 側で outfit / accessory 切替を扱う。
+- `Wardrobe (Split)` では Unity Editor で wardrobe set ごとに bake するのではなく、Exporter が Modular Avatar source graph / component payload / reference 解決情報を `.unavatar` に保持し、Runtime resolver が bake 相当の render graph を生成する。
+- Modular Avatar 対応の機能単位 checklist は [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) を正とする。
+- 最初の regression target は `mizuki-split` / `field_drape` の `Hair_Base`。これは alpha / visibility ではなく Modular Avatar Bone Proxy 未適用による transform hierarchy 問題として扱う。
+- Runtime 側で outfit / accessory 切替を扱い、selected wardrobe set ごとの resolver cache / lazy GPU upload を実装する。
 
 ### Milestone 9: Validator and compatibility report
 
