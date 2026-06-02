@@ -1790,6 +1790,24 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	{
 		out.main_color.gradation_texture_index = Some(value);
 	}
+	out.main_color.second_enabled_factor = unavatar_material_float_param(extras, "_UseMain2ndTex")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_float_param(extras, "_Main2ndTexBlendMode").map(float_to_u32_saturating) {
+		out.main_color.second_blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Main2ndEnableLighting") {
+		out.main_color.second_enable_lighting_factor = value.clamp(0.0, 1.0);
+	}
+	out.main_color.third_enabled_factor = unavatar_material_float_param(extras, "_UseMain3rdTex")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_float_param(extras, "_Main3rdTexBlendMode").map(float_to_u32_saturating) {
+		out.main_color.third_blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Main3rdEnableLighting") {
+		out.main_color.third_enable_lighting_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_LightMinLimit") {
 		out.rendering.light_min_limit_factor = value.max(0.0);
 	}
@@ -4162,7 +4180,13 @@ mod tests {
 					"_MonochromeLighting": 0.25,
 					"_VertexLightStrength": 0.35,
 					"_AAStrength": 1.25,
-					"_GSAAStrength": 0.5
+					"_GSAAStrength": 0.5,
+					"_UseMain2ndTex": 1.0,
+					"_Main2ndTexBlendMode": 1.0,
+					"_Main2ndEnableLighting": 0.25,
+					"_UseMain3rdTex": 1.0,
+					"_Main3rdTexBlendMode": 3.0,
+					"_Main3rdEnableLighting": 0.75
 				},
 				"colorParams": {
 					"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
@@ -4217,6 +4241,12 @@ mod tests {
 		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
+		assert_eq!(liltoon_like.main_color.second_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.main_color.second_blend_mode, UnaLilToonLikeBlendMode::Add);
+		assert_eq!(liltoon_like.main_color.second_enable_lighting_factor, 0.25);
+		assert_eq!(liltoon_like.main_color.third_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.main_color.third_blend_mode, UnaLilToonLikeBlendMode::Multiply);
+		assert_eq!(liltoon_like.main_color.third_enable_lighting_factor, 0.75);
 		assert_eq!(
 			liltoon_like.texture_uv_offset_scales.get("_EmissionMap"),
 			Some(&[0.1, 0.2, 2.0, 3.0])
