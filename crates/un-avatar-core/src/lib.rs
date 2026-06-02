@@ -682,12 +682,48 @@ pub struct UnaLilToonLikeReflection {
 	pub cube_override_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default)]
+	pub anisotropy_enabled_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_scale_factor: f32,
+	#[serde(default)]
+	pub anisotropy_shift_factor: f32,
+	#[serde(default)]
+	pub anisotropy_shift_noise_scale_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_specular_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_tangent_width_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_bitangent_width_factor: f32,
+	#[serde(default)]
+	pub anisotropy_to_reflection_factor: f32,
+	#[serde(default)]
+	pub anisotropy_to_matcap_factor: f32,
+	#[serde(default)]
+	pub anisotropy_to_second_matcap_factor: f32,
+	#[serde(default)]
+	pub anisotropy_second_shift_factor: f32,
+	#[serde(default)]
+	pub anisotropy_second_shift_noise_scale_factor: f32,
+	#[serde(default)]
+	pub anisotropy_second_specular_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_second_tangent_width_factor: f32,
+	#[serde(default = "one_f32")]
+	pub anisotropy_second_bitangent_width_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cube_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub color_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub smoothness_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub anisotropy_tangent_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub anisotropy_scale_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub anisotropy_shift_noise_mask_texture_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1003,9 +1039,27 @@ impl Default for UnaLilToonLikeReflection {
 			cube_color_factor: [0.0, 0.0, 0.0, 1.0],
 			cube_override_factor: 0.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
+			anisotropy_enabled_factor: 0.0,
+			anisotropy_scale_factor: 1.0,
+			anisotropy_shift_factor: 0.0,
+			anisotropy_shift_noise_scale_factor: 0.0,
+			anisotropy_specular_strength_factor: 1.0,
+			anisotropy_tangent_width_factor: 1.0,
+			anisotropy_bitangent_width_factor: 1.0,
+			anisotropy_to_reflection_factor: 0.0,
+			anisotropy_to_matcap_factor: 0.0,
+			anisotropy_to_second_matcap_factor: 0.0,
+			anisotropy_second_shift_factor: 0.0,
+			anisotropy_second_shift_noise_scale_factor: 0.0,
+			anisotropy_second_specular_strength_factor: 0.0,
+			anisotropy_second_tangent_width_factor: 1.0,
+			anisotropy_second_bitangent_width_factor: 1.0,
 			cube_texture_index: None,
 			color_texture_index: None,
 			smoothness_texture_index: None,
+			anisotropy_tangent_texture_index: None,
+			anisotropy_scale_mask_texture_index: None,
+			anisotropy_shift_noise_mask_texture_index: None,
 		}
 	}
 }

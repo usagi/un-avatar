@@ -314,7 +314,9 @@ Status legend:
 - `[~]` 2nd normal map
   - done: Unity Exporter / glTF `UN_avatar_material.mtoon` の `normal2ndTextureIndex` / `normal2ndScaleFactor` を保持し、import 後は `UnaLilToonLikeMaterial.normal` に入れる。texture pipeline では normal map role として扱う。
   - remaining: WGSL で 1st normal と 2nd normal の合成順、UV mode、scale/mask、green channel convention を lilToon 本家へ合わせる。
-- `[ ]` anisotropy normal interactions
+- `[~]` anisotropy normal interactions
+  - done: `_UseAnisotropy` / `_Anisotropy*` 係数と tangent / scale mask / shift noise mask texture reference を `UnaLilToonLikeMaterial.reflection` に保持する。
+  - remaining: tangent map の解釈、1st/2nd anisotropy specular、MatCap/Reflection への反映、normal strength との合成順を renderer へ接続する。
 
 ### MatCap
 

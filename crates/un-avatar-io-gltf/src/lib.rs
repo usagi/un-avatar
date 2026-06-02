@@ -654,6 +654,27 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.main_color
 				.gradation_texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyTangentTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.reflection
+				.anisotropy_tangent_texture_index = Some(image_index);
+		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyScaleMaskTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.reflection
+				.anisotropy_scale_mask_texture_index = Some(image_index);
+		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyShiftNoiseMaskTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.reflection
+				.anisotropy_shift_noise_mask_texture_index = Some(image_index);
+		}
 	}
 }
 
@@ -2053,6 +2074,30 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	{
 		out.reflection.metallic_texture_index = Some(value);
 	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("anisotropyTangentTextureIndex")
+				.or_else(|| m.get("anisotropy_tangent_texture_index")),
+		)
+	}) {
+		out.reflection.anisotropy_tangent_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("anisotropyScaleMaskTextureIndex")
+				.or_else(|| m.get("anisotropy_scale_mask_texture_index")),
+		)
+	}) {
+		out.reflection.anisotropy_scale_mask_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("anisotropyShiftNoiseMaskTextureIndex")
+				.or_else(|| m.get("anisotropy_shift_noise_mask_texture_index")),
+		)
+	}) {
+		out.reflection.anisotropy_shift_noise_mask_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_Smoothness") {
 		out.reflection.smoothness_factor = value.clamp(0.0, 1.0);
 	}
@@ -2097,6 +2142,51 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ReflectionBlendMode").map(float_to_u32_saturating) {
 		out.reflection.blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_UseAnisotropy") {
+		out.reflection.anisotropy_enabled_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropyScale") {
+		out.reflection.anisotropy_scale_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropyShift") {
+		out.reflection.anisotropy_shift_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropyShiftNoiseScale") {
+		out.reflection.anisotropy_shift_noise_scale_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropySpecularStrength") {
+		out.reflection.anisotropy_specular_strength_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropyTangentWidth") {
+		out.reflection.anisotropy_tangent_width_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AnisotropyBitangentWidth") {
+		out.reflection.anisotropy_bitangent_width_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2Reflection") {
+		out.reflection.anisotropy_to_reflection_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2MatCap") {
+		out.reflection.anisotropy_to_matcap_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2MatCap2nd") {
+		out.reflection.anisotropy_to_second_matcap_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2ndShift") {
+		out.reflection.anisotropy_second_shift_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2ndShiftNoiseScale") {
+		out.reflection.anisotropy_second_shift_noise_scale_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2ndSpecularStrength") {
+		out.reflection.anisotropy_second_specular_strength_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2ndTangentWidth") {
+		out.reflection.anisotropy_second_tangent_width_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_Anisotropy2ndBitangentWidth") {
+		out.reflection.anisotropy_second_bitangent_width_factor = value.max(0.0);
 	}
 
 	out.rim.enabled_factor = unavatar_material_float_param(extras, "_UseRim").unwrap_or(0.0).clamp(0.0, 1.0);
@@ -3884,6 +3974,21 @@ mod tests {
 					"_ReflectionCubeEnableLighting": 0.69,
 					"_ReflectionCubeOverride": 1.0,
 					"_ReflectionBlendMode": 3.0,
+					"_UseAnisotropy": 1.0,
+					"_AnisotropyScale": 0.8,
+					"_AnisotropyShift": -0.2,
+					"_AnisotropyShiftNoiseScale": 0.3,
+					"_AnisotropySpecularStrength": 0.7,
+					"_AnisotropyTangentWidth": 0.4,
+					"_AnisotropyBitangentWidth": 0.5,
+					"_Anisotropy2Reflection": 0.6,
+					"_Anisotropy2MatCap": 0.7,
+					"_Anisotropy2MatCap2nd": 0.8,
+					"_Anisotropy2ndShift": 0.2,
+					"_Anisotropy2ndShiftNoiseScale": 0.35,
+					"_Anisotropy2ndSpecularStrength": 0.45,
+					"_Anisotropy2ndTangentWidth": 0.55,
+					"_Anisotropy2ndBitangentWidth": 0.65,
 					"_RimMainStrength": 0.4,
 					"_RimBorder": 0.3,
 					"_RimBlur": 0.2,
@@ -3983,6 +4088,9 @@ mod tests {
 					"normal2ndTextureIndex": 24,
 					"alphaMaskTextureIndex": 21,
 					"gradationMapTextureIndex": 25,
+					"anisotropyTangentTextureIndex": 26,
+					"anisotropyScaleMaskTextureIndex": 27,
+					"anisotropyShiftNoiseMaskTextureIndex": 28,
 					"mainTexHsvgFactor": [0.12, 0.8, 1.2, 0.9]
 				}
 			}"#,
@@ -4072,6 +4180,24 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.color_texture_index, Some(16));
 		assert_eq!(liltoon_like.reflection.smoothness_texture_index, Some(17));
 		assert_eq!(liltoon_like.reflection.metallic_texture_index, Some(18));
+		assert_eq!(liltoon_like.reflection.anisotropy_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.reflection.anisotropy_scale_factor, 0.8);
+		assert_eq!(liltoon_like.reflection.anisotropy_shift_factor, -0.2);
+		assert_eq!(liltoon_like.reflection.anisotropy_shift_noise_scale_factor, 0.3);
+		assert_eq!(liltoon_like.reflection.anisotropy_specular_strength_factor, 0.7);
+		assert_eq!(liltoon_like.reflection.anisotropy_tangent_width_factor, 0.4);
+		assert_eq!(liltoon_like.reflection.anisotropy_bitangent_width_factor, 0.5);
+		assert_eq!(liltoon_like.reflection.anisotropy_to_reflection_factor, 0.6);
+		assert_eq!(liltoon_like.reflection.anisotropy_to_matcap_factor, 0.7);
+		assert_eq!(liltoon_like.reflection.anisotropy_to_second_matcap_factor, 0.8);
+		assert_eq!(liltoon_like.reflection.anisotropy_second_shift_factor, 0.2);
+		assert_eq!(liltoon_like.reflection.anisotropy_second_shift_noise_scale_factor, 0.35);
+		assert_eq!(liltoon_like.reflection.anisotropy_second_specular_strength_factor, 0.45);
+		assert_eq!(liltoon_like.reflection.anisotropy_second_tangent_width_factor, 0.55);
+		assert_eq!(liltoon_like.reflection.anisotropy_second_bitangent_width_factor, 0.65);
+		assert_eq!(liltoon_like.reflection.anisotropy_tangent_texture_index, Some(26));
+		assert_eq!(liltoon_like.reflection.anisotropy_scale_mask_texture_index, Some(27));
+		assert_eq!(liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index, Some(28));
 		assert_eq!(liltoon_like.rim.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.rim.color_factor, [0.1, 0.2, 0.3, 1.0]);
 		assert_eq!(liltoon_like.rim.texture_index, Some(12));

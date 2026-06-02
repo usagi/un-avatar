@@ -79,6 +79,10 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "smoothnessTextureIndex", ReadTexture(material, "_SmoothnessTex"));
                 AddTextureIndex(mtoon, "metallicGlossTextureIndex", ReadTexture(material, "_MetallicGlossMap"));
                 AddTextureIndex(mtoon, "reflectionCubeTextureIndex", ReadTexture(material, "_ReflectionCubeTex"));
+                var useAnisotropy = IsMaterialFeatureEnabled(material, "_UseAnisotropy", ReadTexture(material, "_AnisotropyTangentMap") != null);
+                AddTextureIndex(mtoon, "anisotropyTangentTextureIndex", useAnisotropy ? ReadTexture(material, "_AnisotropyTangentMap") : null);
+                AddTextureIndex(mtoon, "anisotropyScaleMaskTextureIndex", useAnisotropy ? ReadTexture(material, "_AnisotropyScaleMask") : null);
+                AddTextureIndex(mtoon, "anisotropyShiftNoiseMaskTextureIndex", useAnisotropy ? ReadTexture(material, "_AnisotropyShiftNoiseMask") : null);
 
                 var useOutline = IsMaterialFeatureEnabled(material, "_UseOutline", lowerShader.Contains("outline"));
                 var outlineWidth = useOutline ? ReadFloat(material, "_OutlineWidth", 0.0f) : 0.0f;
