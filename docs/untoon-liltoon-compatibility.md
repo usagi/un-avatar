@@ -189,7 +189,8 @@ Status legend:
 - `[~]` `_MainTex` / `_BaseMap`
   - done: main texture slot を glTF baseColorTexture と lilToon-like main texture として読み込む。
   - done: field_drape の `Mat_Hair_Yellow2` で `_UseMain3rdTex = 1` が出たため、2nd / 3rd main layer の enabled / blend mode / enable lighting raw params を v2 material に保持する。
-  - remaining: exporter が `_Main3rdTex` texture index を出していないため 3rd layer の描画接続は未実装。texture index、lilToon layer blending、main texture color adjust、per-slot UV mode を実装する。
+  - done: Unity Exporter が `_Main2ndTex` / `_Main3rdTex` を `main2ndTextureIndex` / `main3rdTextureIndex` として保存し、Importer が v2 material に保持する。
+  - remaining: lilToon layer blending、main texture color adjust、per-slot UV mode を renderer へ接続する。
 - `[~]` `_Color` / `_BaseColor`
   - done: base color factor として保持し、main texture に乗算する。
   - remaining: color space、HDR color、lilToon main color adjustment との順序を本家に合わせる。

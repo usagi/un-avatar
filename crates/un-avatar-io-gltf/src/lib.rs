@@ -1793,6 +1793,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.main_color.second_enabled_factor = unavatar_material_float_param(extras, "_UseMain2ndTex")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("main2ndTextureIndex").or_else(|| m.get("main_2nd_texture_index")))) {
+		out.main_color.second_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_Main2ndTexBlendMode").map(float_to_u32_saturating) {
 		out.main_color.second_blend_mode = liltoon_like_blend_mode(value);
 	}
@@ -1802,6 +1805,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.main_color.third_enabled_factor = unavatar_material_float_param(extras, "_UseMain3rdTex")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("main3rdTextureIndex").or_else(|| m.get("main_3rd_texture_index")))) {
+		out.main_color.third_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_Main3rdTexBlendMode").map(float_to_u32_saturating) {
 		out.main_color.third_blend_mode = liltoon_like_blend_mode(value);
 	}
@@ -4218,6 +4224,8 @@ mod tests {
 					"reflectionColorTextureIndex": 16,
 					"smoothnessTextureIndex": 17,
 					"metallicGlossTextureIndex": 18,
+					"main2ndTextureIndex": 30,
+					"main3rdTextureIndex": 31,
 					"matcapTextureIndex": 19,
 					"matcapBlendMaskTextureIndex": 20,
 					"matcap2ndTextureIndex": 22,
@@ -4242,9 +4250,11 @@ mod tests {
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
 		assert_eq!(liltoon_like.main_color.second_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.main_color.second_texture_index, Some(30));
 		assert_eq!(liltoon_like.main_color.second_blend_mode, UnaLilToonLikeBlendMode::Add);
 		assert_eq!(liltoon_like.main_color.second_enable_lighting_factor, 0.25);
 		assert_eq!(liltoon_like.main_color.third_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.main_color.third_texture_index, Some(31));
 		assert_eq!(liltoon_like.main_color.third_blend_mode, UnaLilToonLikeBlendMode::Multiply);
 		assert_eq!(liltoon_like.main_color.third_enable_lighting_factor, 0.75);
 		assert_eq!(

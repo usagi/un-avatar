@@ -530,12 +530,16 @@ pub struct UnaLilToonLikeMainColor {
 	pub gradation_texture_index: Option<usize>,
 	#[serde(default)]
 	pub second_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_texture_index: Option<usize>,
 	#[serde(default)]
 	pub second_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub second_enable_lighting_factor: f32,
 	#[serde(default)]
 	pub third_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub third_texture_index: Option<usize>,
 	#[serde(default)]
 	pub third_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
@@ -1021,9 +1025,11 @@ impl Default for UnaLilToonLikeMainColor {
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
 			second_enabled_factor: 0.0,
+			second_texture_index: None,
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_enable_lighting_factor: 1.0,
 			third_enabled_factor: 0.0,
+			third_texture_index: None,
 			third_blend_mode: UnaLilToonLikeBlendMode::default(),
 			third_enable_lighting_factor: 1.0,
 		}

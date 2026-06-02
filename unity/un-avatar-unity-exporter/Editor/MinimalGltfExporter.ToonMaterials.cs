@@ -50,6 +50,11 @@ namespace UNAvatar.UnityExporter
                 mtoon["shadingShiftFactor"] = useShadow ? ReadFloat(material, "_ShadeShift", ReadFloat(material, "_ShadowBorder", 0.0f)) : 1.0f;
                 mtoon["shadingToonyFactor"] = useShadow ? 1.0f - Mathf.Clamp01(ReadFloat(material, "_ShadowBlur", 0.0f)) : 1.0f;
 
+                var useMain2nd = IsMaterialFeatureEnabled(material, "_UseMain2ndTex", ReadTexture(material, "_Main2ndTex") != null);
+                var useMain3rd = IsMaterialFeatureEnabled(material, "_UseMain3rdTex", ReadTexture(material, "_Main3rdTex") != null);
+                AddTextureIndex(mtoon, "main2ndTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndTex") : null);
+                AddTextureIndex(mtoon, "main3rdTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdTex") : null);
+
                 var useMatCap = IsMaterialFeatureEnabled(material, "_UseMatCap", ReadTexture(material, "_MatCapTex") != null || ReadTexture(material, "_MatcapTex") != null);
                 var matcapMainStrength = ReadFloat(material, "_MatCapMainStrength", ReadFloat(material, "_MatCapBlend", 1.0f));
                 var matcapColor = useMatCap ? ReadColor(material, "_MatCapColor", Color.white) * matcapMainStrength : Color.black;
