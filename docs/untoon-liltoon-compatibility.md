@@ -175,6 +175,7 @@ Status legend:
   - done: Unity Exporter が既知 texture slot ごとの non-identity Tiling / Offset を `textureUvOffsetScales`、`*_UVMode` を `textureUvModeFactors` として保存し、Importer が `UnaLilToonLikeMaterial` へ保持する。
   - done: renderer は normal map sampling で `_BumpMap` / `_NormalMap` / `_BumpTex` の slot 別 Tiling / Offset を使う。
   - done: renderer は `_ShadowStrengthMask` / `_ShadowBorderMask` / `_ShadowBlurMask` / `_MatCapBlendMask` / `_MatCap2ndBlendMask` / `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - done: renderer は `_ShadowColorTex` / `_ShadeTex` / `_1st_ShadeMap` / `_RimColorTex` / `_EmissionMap` / `_ReflectionColorTex` / `_SmoothnessTex` / `_MetallicGlossMap` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: renderer の他 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
 - `[~]` lilToon `_MainTex_ScrollRotate`
   - done: Unity Exporter が `_MainTex_ScrollRotate` を `uvAnimationScrollX/Y/RotationSpeedFactor` へ正規化し、Importer / Renderer が base UV animation として適用する。
@@ -233,6 +234,7 @@ Status legend:
   - remaining: `shadowColorTex` alpha blend と `_ShadowColorType` LUT path を実装する。
 - `[~]` `_ShadowColorTex`
   - done: Unity Exporter が `_ShadowColorTex` を `shadowColorTextureIndex` として明示保存する。Importer は `UnaLilToonLikeMaterial.shadow.color_texture_index` へ読み込み、Renderer は lilToon-like shadow color texture を MToon shade texture より優先して bind する。
+  - done: Renderer は `_ShadowColorTex` / fallback shade texture slot の Tiling / Offset を sampling UV に使う。
   - remaining: `_ShadowColorType == LUT` path、texture alpha blend の本家順序、2nd/3rd shadow color texture を実装する。
 - `[~]` `_ShadowStrength`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、lilToon shadow branch の shade/base mix 強度に接続した。
@@ -381,13 +383,15 @@ Status legend:
   - remaining: GSAA、perceptual roughness、roughness mip selection として本家 `lilReflection` に合わせる。
 - `[~]` `_SmoothnessTex`
   - done: Exporter / importer / v2 material で texture reference を保持し、smoothness factor に mask.r を掛ける。
-  - remaining: texture UV mode、GSAA、roughness mip selection との順序を本家へ合わせる。
+  - done: Renderer は `_SmoothnessTex` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: texture UV mode / UV set、GSAA、roughness mip selection との順序を本家へ合わせる。
 - `[~]` `_Metallic`
   - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当へ接続した。
   - remaining: base color energy reduction、metallic texture、environment reflection との正確な順序を実装する。
 - `[~]` `_MetallicGlossMap`
   - done: Exporter / importer / v2 material で texture reference を保持し、metallic factor に mask.r を掛ける。
-  - remaining: smoothness/metallic channel convention、energy reduction、environment reflection との順序を本家へ合わせる。
+  - done: Renderer は `_MetallicGlossMap` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: texture UV mode / UV set、smoothness/metallic channel convention、energy reduction、environment reflection との順序を本家へ合わせる。
 - `[~]` `_Reflectance`
   - done: source raw params を保持し、specular color と reflection strength の近似値へ接続した。
   - remaining: color space と dielectric specular の本家係数へ合わせる。
@@ -417,6 +421,7 @@ Status legend:
   - remaining: PMREM / roughness mip / environment source policy を定義して本実装に置き換える。
 - `[~]` `_ReflectionColor`
   - done: source raw color params と `_ReflectionColorTex` reference を保持し、specular/reflection color と alpha strength に接続した。
+  - done: Renderer は `_ReflectionColorTex` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: transparent application、color space handling、HDR range を本家に合わせる。
 - `[~]` `_ReflectionCubeTex` source asset import
   - done: EXR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
@@ -447,7 +452,8 @@ Status legend:
   - remaining: color space、`_RimIndirColor`、RimShade との合成順を本家に合わせる。
 - `[~]` `_RimColorTex`
   - done: Unity Exporter が `_RimColorTex` を `rimMultiplyTextureIndex` として保存し、Importer は `UnaLilToonLikeMaterial.rim.texture_index` へ読み込む。Renderer は lilToon-like rim texture を legacy MToon rim texture より優先して bind する。
-  - remaining: ST transform、alpha semantics、directional rim / indirect rim での共用順を本家に合わせる。
+  - done: Renderer は `_RimColorTex` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: alpha semantics、directional rim / indirect rim での共用順を本家に合わせる。
 - `[~]` `_RimMainStrength`
   - done: v2 rim parameter として保持し、shader で `lerp(rimColor, rimColor * albedo, value)` 相当へ接続した。
   - remaining: texture alpha、indirect rim、RimShade との順序を照合する。
@@ -519,6 +525,7 @@ Status legend:
   - remaining: fluorescence、mask、gradation との順序を照合する。
 - `[~]` `_EmissionMap`
   - done: glTF emissive texture / `_EmissionMap` を v2 emission texture として扱い、lilToon-like branch では white fallback 付きで bind する。
+  - done: Renderer は `_EmissionMap` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: UV mode、mask、gradation、scroll/rotation の適用を実装する。
 - `[~]` `_EmissionBlend`
   - done: v2 emission parameter として保持し、emission contribution alpha に接続した。

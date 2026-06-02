@@ -65,6 +65,12 @@ struct DrawMaterial {
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
 	normal_uv_offset_scale: vec4<f32>,
+	shade_uv_offset_scale: vec4<f32>,
+	rim_uv_offset_scale: vec4<f32>,
+	emission_uv_offset_scale: vec4<f32>,
+	reflection_color_uv_offset_scale: vec4<f32>,
+	smoothness_uv_offset_scale: vec4<f32>,
+	metallic_uv_offset_scale: vec4<f32>,
 	shadow_strength_mask_uv_offset_scale: vec4<f32>,
 	shadow_border_mask_uv_offset_scale: vec4<f32>,
 	shadow_blur_mask_uv_offset_scale: vec4<f32>,
@@ -580,7 +586,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		shading = linearstep(-toony_boundary, toony_boundary, shading);
 	}
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
-	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, uv).rgb;
+	let shade_uv = uv * drawu.shade_uv_offset_scale.zw + drawu.shade_uv_offset_scale.xy;
+	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, shade_uv).rgb;
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	var lit: vec3<f32>;
 	if (drawu.shadow_params.x > 0.5) {
@@ -673,9 +680,12 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	if (drawu.shadow_params.x > 0.5) {
 		if (drawu.reflection_control.x > 0.5) {
-			let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, uv);
-			let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, uv).r, 0.0, 1.0);
-			let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, uv).r, 0.0, 1.0);
+			let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
+			let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
+			let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
+			let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
+			let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+			let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
 			let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
 			let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
 			let specular_power = mix(8.0, 128.0, smoothness);
@@ -709,8 +719,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);
 	if (!disable_rim) {
+		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
 		if (drawu.shadow_params.x > 0.5) {
-			let rim_tex_color = textureSample(rim_tex, rim_samp, uv);
+			let rim_tex_color = textureSample(rim_tex, rim_samp, rim_uv);
 			var rim_color = drawu.rim_color.rgb * rim_tex_color.rgb;
 			rim_color = mix(rim_color, rim_color * base, clamp(drawu.rim_control.y, 0.0, 1.0));
 			let rim_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.y, 0.0, 1.0)));
@@ -734,13 +745,14 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;
-			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
+			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, rim_uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
 			let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 		}
 	}
 	if (drawu.shadow_params.x > 0.5) {
-		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, uv);
+		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
+		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 		let reflection_color_alpha = clamp(drawu.reflection_color.a * reflection_color_texel.a, 0.0, 1.0);
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
@@ -761,7 +773,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	}
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
-	let emission_tex_color = textureSample(emissive_tex, emissive_samp, uv);
+	let emission_uv = uv * drawu.emission_uv_offset_scale.zw + drawu.emission_uv_offset_scale.xy;
+	let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
 	if (!disable_emissive) {
 		if (drawu.shadow_params.x > 0.5) {
 			var emission_color = drawu.emission_color.rgb * emission_tex_color.rgb;

@@ -271,6 +271,12 @@ struct MeshDrawMaterialGpu {
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
 	normal_uv_offset_scale: [f32; 4],
+	shade_uv_offset_scale: [f32; 4],
+	rim_uv_offset_scale: [f32; 4],
+	emission_uv_offset_scale: [f32; 4],
+	reflection_color_uv_offset_scale: [f32; 4],
+	smoothness_uv_offset_scale: [f32; 4],
+	metallic_uv_offset_scale: [f32; 4],
 	shadow_strength_mask_uv_offset_scale: [f32; 4],
 	shadow_border_mask_uv_offset_scale: [f32; 4],
 	shadow_blur_mask_uv_offset_scale: [f32; 4],
@@ -290,7 +296,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 848);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 944);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1163,6 +1169,24 @@ fn mesh_draw_material_gpu(
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let shade_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowColorTex", "_ShadeTex", "_1st_ShadeMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let rim_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_RimColorTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let emission_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_EmissionMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let reflection_color_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ReflectionColorTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let smoothness_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_SmoothnessTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let metallic_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MetallicGlossMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let shadow_strength_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowStrengthMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -1596,6 +1620,12 @@ fn mesh_draw_material_gpu(
 		],
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
+		shade_uv_offset_scale,
+		rim_uv_offset_scale,
+		emission_uv_offset_scale,
+		reflection_color_uv_offset_scale,
+		smoothness_uv_offset_scale,
+		metallic_uv_offset_scale,
 		shadow_strength_mask_uv_offset_scale,
 		shadow_border_mask_uv_offset_scale,
 		shadow_blur_mask_uv_offset_scale,
@@ -3552,6 +3582,24 @@ mod tests {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like
 			.texture_uv_offset_scales
+			.insert("_ShadowColorTex".to_string(), [0.01, 0.02, 1.01, 1.02]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_RimColorTex".to_string(), [0.03, 0.04, 1.03, 1.04]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_EmissionMap".to_string(), [0.05, 0.06, 1.05, 1.06]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_ReflectionColorTex".to_string(), [0.07, 0.08, 1.07, 1.08]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_SmoothnessTex".to_string(), [0.09, 0.10, 1.09, 1.10]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MetallicGlossMap".to_string(), [0.11, 0.12, 1.11, 1.12]);
+		liltoon_like
+			.texture_uv_offset_scales
 			.insert("_ShadowStrengthMask".to_string(), [0.1, 0.2, 1.1, 1.2]);
 		liltoon_like
 			.texture_uv_offset_scales
@@ -3575,6 +3623,12 @@ mod tests {
 
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
+		assert_eq!(draw.shade_uv_offset_scale, [0.01, 0.02, 1.01, 1.02]);
+		assert_eq!(draw.rim_uv_offset_scale, [0.03, 0.04, 1.03, 1.04]);
+		assert_eq!(draw.emission_uv_offset_scale, [0.05, 0.06, 1.05, 1.06]);
+		assert_eq!(draw.reflection_color_uv_offset_scale, [0.07, 0.08, 1.07, 1.08]);
+		assert_eq!(draw.smoothness_uv_offset_scale, [0.09, 0.10, 1.09, 1.10]);
+		assert_eq!(draw.metallic_uv_offset_scale, [0.11, 0.12, 1.11, 1.12]);
 		assert_eq!(draw.shadow_strength_mask_uv_offset_scale, [0.1, 0.2, 1.1, 1.2]);
 		assert_eq!(draw.shadow_border_mask_uv_offset_scale, [0.3, 0.4, 1.3, 1.4]);
 		assert_eq!(draw.shadow_blur_mask_uv_offset_scale, [0.5, 0.6, 1.5, 1.6]);
