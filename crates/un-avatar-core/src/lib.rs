@@ -918,6 +918,10 @@ pub struct UnaLilToonLikeMaterial {
 	pub source_profile: UnaLilToonLikeSourceProfile,
 	#[serde(default)]
 	pub main_color: UnaLilToonLikeMainColor,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub texture_uv_offset_scales: BTreeMap<String, [f32; 4]>,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub texture_uv_mode_factors: BTreeMap<String, f32>,
 	#[serde(default)]
 	pub rendering: UnaLilToonLikeRendering,
 	#[serde(default)]
@@ -1203,6 +1207,8 @@ impl Default for UnaLilToonLikeMaterial {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
 			main_color: UnaLilToonLikeMainColor::default(),
+			texture_uv_offset_scales: BTreeMap::new(),
+			texture_uv_mode_factors: BTreeMap::new(),
 			rendering: UnaLilToonLikeRendering::default(),
 			normal: UnaLilToonLikeNormal::default(),
 			shadow: UnaLilToonLikeShadow::default(),

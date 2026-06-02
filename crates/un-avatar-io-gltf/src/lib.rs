@@ -1761,6 +1761,8 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		source_profile: UnaLilToonLikeSourceProfile::Liltoon,
 		..Default::default()
 	};
+	out.texture_uv_offset_scales = unavatar_material_uv_offset_scales(extras);
+	out.texture_uv_mode_factors = unavatar_material_uv_mode_factors(extras);
 	out.rendering.render_queue_number = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue")));
 	if let Some(value) = mtoon.and_then(|m| {
 		json_vec4(
@@ -2660,6 +2662,40 @@ fn unavatar_material_color_param_rgba(extras: &Value, name: &str) -> Option<[f32
 		.or_else(|| extras.get("color_params"))
 		.and_then(|params| params.get(name))
 		.and_then(|value| json_vec4(Some(value)))
+}
+
+fn unavatar_material_uv_offset_scales(extras: &Value) -> BTreeMap<String, [f32; 4]> {
+	let mut out = BTreeMap::new();
+	let Some(values) = extras
+		.get("textureUvOffsetScales")
+		.or_else(|| extras.get("texture_uv_offset_scales"))
+		.and_then(Value::as_object)
+	else {
+		return out;
+	};
+	for (key, value) in values {
+		if let Some(offset_scale) = json_vec4(Some(value)) {
+			out.insert(key.clone(), offset_scale);
+		}
+	}
+	out
+}
+
+fn unavatar_material_uv_mode_factors(extras: &Value) -> BTreeMap<String, f32> {
+	let mut out = BTreeMap::new();
+	let Some(values) = extras
+		.get("textureUvModeFactors")
+		.or_else(|| extras.get("texture_uv_mode_factors"))
+		.and_then(Value::as_object)
+	else {
+		return out;
+	};
+	for (key, value) in values {
+		if let Some(mode) = json_number_f32(value) {
+			out.insert(key.clone(), mode);
+		}
+	}
+	out
 }
 
 fn json_number_f32(value: &Value) -> Option<f32> {
@@ -3942,6 +3978,14 @@ mod tests {
 				"family": "liltoon",
 				"sourceShader": "lilToon",
 				"renderQueue": 2461,
+				"textureUvOffsetScales": {
+					"_EmissionMap": [0.1, 0.2, 2.0, 3.0],
+					"_MatCapTex": [0.0, 0.25, 1.0, 0.5]
+				},
+				"textureUvModeFactors": {
+					"_EmissionMap": 1.0,
+					"_Bump2ndMap": 2.0
+				},
 				"floatParams": {
 					"_UseShadow": 1.0,
 					"_UseMatCap": 1.0,
@@ -4128,6 +4172,16 @@ mod tests {
 		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
+		assert_eq!(
+			liltoon_like.texture_uv_offset_scales.get("_EmissionMap"),
+			Some(&[0.1, 0.2, 2.0, 3.0])
+		);
+		assert_eq!(
+			liltoon_like.texture_uv_offset_scales.get("_MatCapTex"),
+			Some(&[0.0, 0.25, 1.0, 0.5])
+		);
+		assert_eq!(liltoon_like.texture_uv_mode_factors.get("_EmissionMap"), Some(&1.0));
+		assert_eq!(liltoon_like.texture_uv_mode_factors.get("_Bump2ndMap"), Some(&2.0));
 		assert_eq!(liltoon_like.rendering.render_queue_number, Some(2461));
 		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
 		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);

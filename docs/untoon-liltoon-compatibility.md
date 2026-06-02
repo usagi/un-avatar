@@ -171,7 +171,9 @@ Status legend:
 - `[~]` `KHR_texture_transform` for glTF fallback material
   - done: glTF fallback の baseColorTexture に `KHR_texture_transform` を出す。
   - remaining: baseColor 以外の textureInfo transform と `.unavatar` extension asset 参照時の transform 表現を揃える。
-- `[ ]` per-texture UV set selection / UV mode
+- `[~]` per-texture UV set selection / UV mode
+  - done: Unity Exporter が既知 texture slot ごとの non-identity Tiling / Offset を `textureUvOffsetScales`、`*_UVMode` を `textureUvModeFactors` として保存し、Importer が `UnaLilToonLikeMaterial` へ保持する。
+  - remaining: renderer の各 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
 - `[~]` lilToon `_MainTex_ScrollRotate`
   - done: Unity Exporter が `_MainTex_ScrollRotate` を `uvAnimationScrollX/Y/RotationSpeedFactor` へ正規化し、Importer / Renderer が base UV animation として適用する。
   - remaining: main texture 以外の slot 別 UV mode / UV transform との組み合わせを本家へ合わせる。

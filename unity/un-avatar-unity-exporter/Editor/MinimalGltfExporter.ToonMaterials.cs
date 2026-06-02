@@ -140,7 +140,61 @@ namespace UNAvatar.UnityExporter
                     ["renderQueue"] = material.renderQueue,
                     ["floatParams"] = BuildMaterialFloatParams(material),
                     ["colorParams"] = BuildMaterialColorParams(material),
+                    ["textureUvOffsetScales"] = BuildTextureUvOffsetScales(material),
+                    ["textureUvModeFactors"] = BuildTextureUvModeFactors(material),
                     ["mtoon"] = mtoon
+                };
+            }
+
+            private Dictionary<string, object> BuildTextureUvOffsetScales(Material material)
+            {
+                var values = new Dictionary<string, object>();
+                foreach (var property in ToonTextureProperties())
+                {
+                    if (!HasProperty(material, property) || ReadTexture(material, property) == null)
+                    {
+                        continue;
+                    }
+                    var scale = material.GetTextureScale(property);
+                    var offset = material.GetTextureOffset(property);
+                    if (Mathf.Approximately(offset.x, 0.0f) &&
+                        Mathf.Approximately(offset.y, 0.0f) &&
+                        Mathf.Approximately(scale.x, 1.0f) &&
+                        Mathf.Approximately(scale.y, 1.0f))
+                    {
+                        continue;
+                    }
+                    values[property] = FloatArray(offset.x, GltfTextureOffsetY(offset.y, scale.y), scale.x, scale.y);
+                }
+                return values;
+            }
+
+            private Dictionary<string, object> BuildTextureUvModeFactors(Material material)
+            {
+                var values = new Dictionary<string, object>();
+                foreach (var property in ToonTextureProperties())
+                {
+                    var uvModeProperty = property + "_UVMode";
+                    if (HasProperty(material, uvModeProperty))
+                    {
+                        values[property] = ReadFloat(material, uvModeProperty, 0.0f);
+                    }
+                }
+                return values;
+            }
+
+            private static string[] ToonTextureProperties()
+            {
+                return new[]
+                {
+                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main3rdTex",
+                    "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap",
+                    "_ShadowColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
+                    "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCap2ndTex", "_MatCap2ndBlendMask",
+                    "_RimColorTex", "_EmissionMap", "_EmissionTex", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndGradTex",
+                    "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
+                    "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_GradationMap",
+                    "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask"
                 };
             }
 
