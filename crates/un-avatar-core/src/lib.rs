@@ -635,6 +635,8 @@ pub struct UnaLilToonLikeMatcap {
 	#[serde(default = "one_f32")]
 	pub second_enable_lighting_factor: f32,
 	#[serde(default)]
+	pub second_shadow_mask_factor: f32,
+	#[serde(default)]
 	pub second_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub second_normal_strength_factor: f32,
@@ -1020,6 +1022,7 @@ impl Default for UnaLilToonLikeMatcap {
 			second_main_strength_factor: 0.0,
 			second_blend_factor: 1.0,
 			second_enable_lighting_factor: 1.0,
+			second_shadow_mask_factor: 0.0,
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_normal_strength_factor: 1.0,
 			second_lod_factor: 0.0,

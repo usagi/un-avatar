@@ -1355,7 +1355,7 @@ fn mesh_draw_material_gpu(
 		.map(|u| {
 			[
 				u.matcap.second_normal_strength_factor.clamp(0.0, 1.0),
-				0.0,
+				u.matcap.second_shadow_mask_factor.clamp(0.0, 1.0),
 				u.matcap.second_lod_factor.max(0.0),
 				u.matcap.second_backface_mask_factor.clamp(0.0, 1.0),
 			]
@@ -3575,6 +3575,20 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main_color_adjust_params, [0.25, 0.8, 1.2, 0.9]);
+	}
+
+	#[test]
+	fn second_matcap_shadow_mask_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.second_shadow_mask_factor = 0.42;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.matcap2_ext_params[1], 0.42);
 	}
 
 	#[test]

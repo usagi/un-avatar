@@ -369,7 +369,7 @@ Status legend:
 	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
 	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
-	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
+	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
 	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。Renderer は `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: mask UV mode / UV set、VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
 

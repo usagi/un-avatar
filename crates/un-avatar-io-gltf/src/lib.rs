@@ -2040,6 +2040,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndEnableLighting") {
 		out.matcap.second_enable_lighting_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndShadowMask") {
+		out.matcap.second_shadow_mask_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndBlendMode").map(float_to_u32_saturating) {
 		out.matcap.second_blend_mode = liltoon_like_blend_mode(value);
 	}
@@ -4021,6 +4024,7 @@ mod tests {
 					"_MatCap2ndMainStrength": 0.58,
 					"_MatCap2ndBlend": 0.68,
 					"_MatCap2ndEnableLighting": 0.78,
+					"_MatCap2ndShadowMask": 0.48,
 					"_MatCap2ndBlendMode": 1.0,
 					"_MatCap2ndNormalStrength": 0.88,
 					"_MatCap2ndLod": 1.5,
@@ -4234,6 +4238,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.second_main_strength_factor, 0.58);
 		assert_eq!(liltoon_like.matcap.second_blend_factor, 0.68);
 		assert_eq!(liltoon_like.matcap.second_enable_lighting_factor, 0.78);
+		assert_eq!(liltoon_like.matcap.second_shadow_mask_factor, 0.48);
 		assert_eq!(liltoon_like.matcap.second_blend_mode, UnaLilToonLikeBlendMode::Add);
 		assert_eq!(liltoon_like.matcap.second_normal_strength_factor, 0.88);
 		assert_eq!(liltoon_like.matcap.second_lod_factor, 1.5);
