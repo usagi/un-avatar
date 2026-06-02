@@ -146,8 +146,9 @@ Status legend:
   - remaining: shader variant ごとの feature set (`Lite`, `Cutout`, `Transparent`, `TwoPass`, `Outline`, `Fur`, `Refraction`) を compatibility report で分類する。
 - `[~]` alpha mode: Opaque / Cutout / Transparent / Transparent ZWrite
   - done: lilToon shader name、renderQueue、`_ZWrite` から Opaque / Mask / Blend / Transparent ZWrite の基本を推定する。
-  - done: Transparent ZWrite は color write なし prepass ではなく、lilToon Forward pass と同じく transparent color pass 自体を depth write 有効で描く。
-  - remaining: `_TransparentMode`、two-pass variants、refraction/fur variants、subpass cutoff を本家仕様に沿って分類する。
+  - done: Transparent ZWrite は `_PreCull` / `_Cutoff` / `_SubpassCutoff` に従う FORWARD_BACK 相当の color+depth pass を描いた後、`_ZWrite` 有効の FORWARD color pass を描く。
+  - done: lilToon Transparent color pass でも本家同様に `clip(alpha - _Cutoff)` を適用する。
+  - remaining: `_TransparentMode`、two-pass variants、refraction/fur variants、`_PreZWrite` / `_PreColorMask` / `_PreSrcBlend` などの prepass state を本家仕様に沿って分類する。
 - `[~]` blend state: lilToon premultiply path for transparent materials
 	- done: Transparent 系は shader-side premultiply + premultiplied blend path へ寄せ始めている。
 	- done: `_SrcBlend` / `_DstBlend` / `_BlendOp` / `_SrcBlendAlpha` / `_DstBlendAlpha` / `_BlendOpAlpha` / `_SrcBlendAlphaFA` / `_DstBlendAlphaFA` / `_BlendOpAlphaFA` / `_AlphaBoostFA` を lilToon-like material に保持する。`_AlphaBoostFA` は forward-add 系の値なので、通常 transparent color pass の alpha には掛けない。
@@ -246,9 +247,10 @@ Status legend:
   - done: `_ShadowColor` / `_ShadeColor` を 1st shadow color source として保持する。
   - remaining: `shadowColorTex` alpha blend と `_ShadowColorType` LUT path を実装する。
 - `[~]` `_ShadowColorTex`
-  - done: Unity Exporter が `_ShadowColorTex` を `shadowColorTextureIndex` として明示保存する。Importer は `UnaLilToonLikeMaterial.shadow.color_texture_index` へ読み込み、Renderer は lilToon-like shadow color texture を MToon shade texture より優先して bind する。
-  - done: Renderer は `_ShadowColorTex` / fallback shade texture slot の Tiling / Offset を sampling UV に使う。
-  - remaining: `_ShadowColorType == LUT` path、texture alpha blend の本家順序、2nd/3rd shadow color texture を実装する。
+	- done: Unity Exporter が `_ShadowColorTex` を `shadowColorTextureIndex` として明示保存する。Importer は `UnaLilToonLikeMaterial.shadow.color_texture_index` へ読み込み、Renderer は lilToon-like shadow color texture を MToon shade texture より優先して bind する。
+	- done: Renderer は `_ShadowColorTex` / fallback shade texture slot の Tiling / Offset を sampling UV に使う。
+	- done: texture 未指定時は本家の未定義 `shadowColorTex = 0` 相当として transparent black fallback を使い、1st shadow は `lerp(albedo, tex.rgb, tex.a) * _ShadowColor` で合成する。
+	- remaining: `_ShadowColorType == LUT` path、2nd/3rd shadow color texture を実装する。
 - `[~]` `_ShadowStrength`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、lilToon shadow branch の shade/base mix 強度に接続した。
   - remaining: lilToon 本家の direct/indirect light 影響範囲と一致するか、Base / original / noble1 / noble13 で確認する。

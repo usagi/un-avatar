@@ -601,8 +601,15 @@ fn draw_render_order_key(draws: &[MeshDraw], draw_index: usize) -> (i32, usize) 
 	(draw_render_queue_number(&draws[draw_index]), draw_index)
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<DrawBatch>) {
+fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
+	alpha_mode == UnaAlphaMode::Blend
+		&& transparent_with_z_write
+		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+}
+
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
+	let mut transparent_backpass_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -635,9 +642,8 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		match draw.alpha_mode {
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Blend
-				if draw.mtoon.transparent_with_z_write && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) =>
-			{
+			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading) => {
+				transparent_backpass_draw_indices.push(draw_index);
 				blended_draws.push((blend_pipeline_for_draw(draw, shading, true), draw_index));
 			}
 			UnaAlphaMode::Blend => {
@@ -651,12 +657,18 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	}
 
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut transparent_backpass_draw_indices);
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
-	(outline_draw_indices, opaque_batches, blended_batches)
+	(
+		outline_draw_indices,
+		opaque_batches,
+		transparent_backpass_draw_indices,
+		blended_batches,
+	)
 }
 
 pub(crate) struct SceneMeshes {
@@ -664,6 +676,7 @@ pub(crate) struct SceneMeshes {
 	pipeline_opaque_lit: wgpu::RenderPipeline,
 	pipeline_opaque_unlit: wgpu::RenderPipeline,
 	pipeline_opaque_toon: wgpu::RenderPipeline,
+	pipeline_transparent_toon_backpass: wgpu::RenderPipeline,
 	pipeline_blend_lit: wgpu::RenderPipeline,
 	pipeline_blend_unlit: wgpu::RenderPipeline,
 	pipeline_blend_toon: wgpu::RenderPipeline,
@@ -684,6 +697,7 @@ pub(crate) struct SceneMeshes {
 	skin_palettes: Vec<SkinPalette>,
 	outline_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
+	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
@@ -1612,10 +1626,10 @@ fn mesh_draw_material_gpu(
 				u.blend_state.subpass_cutoff_factor.clamp(0.0, 1.0),
 				u.rendering.aa_strength_factor.max(0.0),
 				u.rendering.gsaa_strength_factor.max(0.0),
-				0.0,
+				u.blend_state.pre_cull_factor.clamp(0.0, 2.0),
 			]
 		})
-		.unwrap_or([0.5, 1.0, 0.0, 0.0]);
+		.unwrap_or([0.5, 1.0, 0.0, 2.0]);
 	let lighting_ext_params = liltoon_like
 		.map(|u| {
 			[
@@ -2582,6 +2596,22 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
+		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_transparent_toon_backpass",
+			"vs_main",
+			"fs_toon_backpass",
+			premultiplied_blend,
+			wgpu::ColorWrites::ALL,
+			true,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
 		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
@@ -2687,7 +2717,7 @@ impl SceneMeshes {
 			image_sampler_indices.push(sampler_index);
 		}
 
-		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 3);
+		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 4);
 
 		let white_texture = create_solid_texture_1x1(device, queue, "white1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [255, 255, 255, 255]);
 		textures.push(white_texture);
@@ -2704,6 +2734,10 @@ impl SceneMeshes {
 		);
 		textures.push(neutral_normal_texture);
 		let neutral_normal_view = textures[2].create_view(&wgpu::TextureViewDescriptor::default());
+		let transparent_black_texture =
+			create_solid_texture_1x1(device, queue, "transparent_black1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 0]);
+		textures.push(transparent_black_texture);
+		let transparent_black_view = textures[3].create_view(&wgpu::TextureViewDescriptor::default());
 		report("gpu-upload", "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
 			limit_max_dimension: texture_max_dimension,
@@ -2952,7 +2986,7 @@ impl SceneMeshes {
 
 		let image_views: Vec<wgpu::TextureView> = textures
 			.iter()
-			.skip(3)
+			.skip(4)
 			.map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
 			.collect();
 
@@ -3089,7 +3123,12 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
 					.or(mtoon.shade_multiply_texture_index);
-				let shade_view = texture_view_or(&image_views, shade_texture_index, &white_view);
+				let shade_fallback_view = if mat.liltoon_like.is_some() {
+					&transparent_black_view
+				} else {
+					&white_view
+				};
+				let shade_view = texture_view_or(&image_views, shade_texture_index, shade_fallback_view);
 				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shade_texture_index, 0);
 				let liltoon_strength_mask_texture_index = mat
 					.liltoon_like
@@ -3116,7 +3155,8 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
 					.or(mtoon.matcap_texture_index);
-				let matcap_view = texture_view_or(&image_views, matcap_texture_index, &black_view);
+				let matcap_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let matcap_view = texture_view_or(&image_views, matcap_texture_index, matcap_fallback_view);
 				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_texture_index, 0);
 				let matcap_blend_mask_texture_index = mat
 					.liltoon_like
@@ -3510,13 +3550,14 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&draws, &opts);
+		let (outline_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) = build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_toon,
 			pipeline_opaque_lit,
 			pipeline_opaque_unlit,
 			pipeline_opaque_toon,
+			pipeline_transparent_toon_backpass,
 			pipeline_blend_lit,
 			pipeline_blend_unlit,
 			pipeline_blend_toon,
@@ -3535,6 +3576,7 @@ impl SceneMeshes {
 			skin_palettes,
 			outline_draw_indices,
 			opaque_batches,
+			transparent_backpass_draw_indices,
 			blended_batches,
 			texture_summary,
 			expression_names,
@@ -3653,9 +3695,11 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, opaque_batches, blended_batches) = build_draw_order(&self.draws, &self.opts);
+		let (outline_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
+			build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.opaque_batches = opaque_batches;
+		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
 		self.blended_batches = blended_batches;
 		self.rewrite_avatar_materials(queue);
 	}
@@ -3727,13 +3771,20 @@ impl SceneMeshes {
 		}
 	}
 
-	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。lilToon / MToon の
-	/// transparent z-write は Forward color pass 自体で depth write する。
+	/// `alphaMode: BLEND`（および VRM0 MToon Transparent）。
+	/// lilToon transparent z-write は `_PreCull` / `_SubpassCutoff` による FORWARD_BACK 相当 pass を先に描き、
+	/// `_ZWrite` が有効な Forward color pass も本家同様に depth write ありで描く。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
 		if self.blended_batches.is_empty() {
 			return;
 		}
 		let mut state = DrawBindState::default();
+		if !self.transparent_backpass_draw_indices.is_empty() {
+			pass.set_pipeline(&self.pipeline_transparent_toon_backpass);
+			for &draw_index in &self.transparent_backpass_draw_indices {
+				self.draw_inner(pass, &mut state, draw_index);
+			}
+		}
 		for batch in &self.blended_batches {
 			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
 			for &draw_index in &batch.draw_indices {
@@ -4044,6 +4095,35 @@ mod tests {
 		assert_eq!(batches[2].draw_indices, vec![2]);
 		assert_eq!(batches[3].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[3].draw_indices, vec![3, 4]);
+	}
+
+	#[test]
+	fn transparent_zwrite_toon_uses_backpass_before_forward_pass() {
+		assert!(draw_uses_transparent_backpass(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::LilToonLike
+		));
+		assert!(draw_uses_transparent_backpass(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::MToonLike
+		));
+		assert!(!draw_uses_transparent_backpass(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::LitLambert
+		));
+		assert!(!draw_uses_transparent_backpass(
+			UnaAlphaMode::Opaque,
+			true,
+			UnaShadingModel::LilToonLike
+		));
+		assert!(!draw_uses_transparent_backpass(
+			UnaAlphaMode::Blend,
+			false,
+			UnaShadingModel::LilToonLike
+		));
 	}
 
 	#[test]

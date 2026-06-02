@@ -136,6 +136,7 @@ namespace UNAvatar.UnityExporter
                 ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
+                ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
                     ["buildMarker"] = ExporterBuildMarker,
@@ -163,6 +164,204 @@ namespace UNAvatar.UnityExporter
             public string Extension;
             public int Count;
             public long SourceByteLength;
+        }
+
+        private Dictionary<string, object> BuildMaterialAlphaDiagnosticsReport()
+        {
+            var items = new List<object>();
+            var totalCandidateSlots = 0;
+            if (avatarRoot == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["candidateSlotCount"] = 0,
+                    ["items"] = items
+                };
+            }
+
+            foreach (var renderer in avatarRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer == null)
+                {
+                    continue;
+                }
+                var materials = renderer.sharedMaterials;
+                for (var slot = 0; slot < materials.Length; slot++)
+                {
+                    var material = materials[slot];
+                    if (!ShouldReportMaterialAlphaDiagnostics(renderer, material))
+                    {
+                        continue;
+                    }
+                    totalCandidateSlots++;
+                    if (items.Count < 96)
+                    {
+                        items.Add(BuildMaterialAlphaDiagnosticItem(renderer, slot, material));
+                    }
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["candidateSlotCount"] = totalCandidateSlots,
+                ["itemLimit"] = 96,
+                ["items"] = items
+            };
+        }
+
+        private bool ShouldReportMaterialAlphaDiagnostics(Renderer renderer, Material material)
+        {
+            if (material == null)
+            {
+                return false;
+            }
+            var shaderName = material.shader != null ? material.shader.name : "";
+            var lilToon = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!lilToon)
+            {
+                return false;
+            }
+            if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            if (material.renderQueue >= 2450)
+            {
+                return true;
+            }
+            return ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_Mode", 0.0f) >= 0.5f;
+        }
+
+        private Dictionary<string, object> BuildMaterialAlphaDiagnosticItem(Renderer renderer, int slot, Material material)
+        {
+            var shaderName = material != null && material.shader != null ? material.shader.name : "";
+            var baseColor = ReadMaterialColor(material, "_BaseColor", ReadMaterialColor(material, "_Color", Color.white));
+            var mainTextureProperty = material != null && material.HasProperty("_BaseMap") ? "_BaseMap" : "_MainTex";
+            var mainTexture = material != null && material.HasProperty(mainTextureProperty) ? material.GetTexture(mainTextureProperty) : null;
+            return new Dictionary<string, object>
+            {
+                ["rendererPath"] = avatarRoot != null && renderer != null ? VariantExtractor.TransformPath(avatarRoot.transform, renderer.transform) : "",
+                ["rendererEnabled"] = renderer != null && renderer.enabled,
+                ["rendererActiveInHierarchy"] = renderer != null && renderer.gameObject.activeInHierarchy,
+                ["slot"] = slot,
+                ["material"] = material != null ? material.name : "",
+                ["shader"] = shaderName,
+                ["renderQueue"] = material != null ? material.renderQueue : -1,
+                ["exporterAlphaMode"] = ExporterAlphaModeDiagnostic(material, baseColor),
+                ["baseColor"] = FloatArray(baseColor.r, baseColor.g, baseColor.b, baseColor.a),
+                ["floats"] = MaterialAlphaDiagnosticFloats(material),
+                ["mainTextureProperty"] = mainTexture != null ? mainTextureProperty : "",
+                ["mainTexture"] = TextureAlphaDiagnostic(mainTexture),
+                ["textureScaleOffset"] = TextureScaleOffsetDiagnostic(material, mainTextureProperty)
+            };
+        }
+
+        private static string ExporterAlphaModeDiagnostic(Material material, Color baseColor)
+        {
+            if (material == null)
+            {
+                return "NONE";
+            }
+            var shaderName = material.shader != null ? material.shader.name : "";
+            var lilBlend = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0);
+            var lilCutout = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!lilCutout && (lilBlend || baseColor.a < 0.999f || material.renderQueue >= 3000 ||
+                ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 1.5f ||
+                ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 1.5f ||
+                ReadMaterialFloat(material, "_BlendMode", 0.0f) >= 1.5f ||
+                ReadMaterialFloat(material, "_Mode", 0.0f) >= 1.5f))
+            {
+                return "BLEND";
+            }
+            if (lilCutout || (material.renderQueue >= 2450 && material.renderQueue < 3000) ||
+                ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
+                ReadMaterialFloat(material, "_Mode", 0.0f) >= 0.5f)
+            {
+                return "MASK";
+            }
+            return "OPAQUE";
+        }
+
+        private static Dictionary<string, object> MaterialAlphaDiagnosticFloats(Material material)
+        {
+            var properties = new[]
+            {
+                "_TransparentMode", "_AlphaMode", "_BlendMode", "_Mode",
+                "_Cutoff", "_PreCutoff", "_SubpassCutoff",
+                "_SrcBlend", "_DstBlend", "_SrcBlendAlpha", "_DstBlendAlpha",
+                "_ZWrite", "_PreZWrite", "_Cull", "_PreCull",
+                "_AlphaMaskMode", "_AlphaMaskScale", "_AlphaMaskValue",
+                "_Main2ndTexAlphaMode", "_Main3rdTexAlphaMode"
+            };
+            var json = new Dictionary<string, object>();
+            if (material == null)
+            {
+                return json;
+            }
+            foreach (var property in properties)
+            {
+                if (material.HasProperty(property))
+                {
+                    json[property] = material.GetFloat(property);
+                }
+            }
+            return json;
+        }
+
+        private static Dictionary<string, object> TextureAlphaDiagnostic(Texture texture)
+        {
+            var json = new Dictionary<string, object>();
+            if (texture == null)
+            {
+                return json;
+            }
+            var path = AssetDatabase.GetAssetPath(texture);
+            var importer = !string.IsNullOrEmpty(path) ? AssetImporter.GetAtPath(path) as TextureImporter : null;
+            json["name"] = texture.name;
+            json["type"] = texture.GetType().Name;
+            json["width"] = texture.width;
+            json["height"] = texture.height;
+            json["wrapMode"] = texture.wrapMode.ToString();
+            json["filterMode"] = texture.filterMode.ToString();
+            json["assetPath"] = path ?? "";
+            if (importer != null)
+            {
+                json["textureType"] = importer.textureType.ToString();
+                json["textureShape"] = importer.textureShape.ToString();
+                json["sRGBTexture"] = importer.sRGBTexture;
+                json["alphaSource"] = importer.alphaSource.ToString();
+                json["alphaIsTransparency"] = importer.alphaIsTransparency;
+                json["doesSourceTextureHaveAlpha"] = importer.DoesSourceTextureHaveAlpha();
+            }
+            return json;
+        }
+
+        private static Dictionary<string, object> TextureScaleOffsetDiagnostic(Material material, string property)
+        {
+            if (material == null || string.IsNullOrEmpty(property) || !material.HasProperty(property))
+            {
+                return new Dictionary<string, object>();
+            }
+            var scale = material.GetTextureScale(property);
+            var offset = material.GetTextureOffset(property);
+            return new Dictionary<string, object>
+            {
+                ["scale"] = FloatArray(scale.x, scale.y),
+                ["offsetUnity"] = FloatArray(offset.x, offset.y),
+                ["offsetGltf"] = FloatArray(offset.x, 1.0f - scale.y - offset.y)
+            };
         }
 
         private static List<object> TextureSourceByteSummariesToJson(IEnumerable<TextureSourceByteSummary> summaries)
@@ -557,6 +756,25 @@ namespace UNAvatar.UnityExporter
         private static float ReadMaterialFloat(Material material, string property, float fallback)
         {
             return material != null && material.HasProperty(property) ? material.GetFloat(property) : fallback;
+        }
+
+        private static Color ReadMaterialColor(Material material, string property, Color fallback)
+        {
+            return material != null && material.HasProperty(property) ? material.GetColor(property) : fallback;
+        }
+
+        private static List<object> FloatArray(params float[] values)
+        {
+            var json = new List<object>(values != null ? values.Length : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
         }
 
         private Dictionary<string, object> BuildWardrobePayload(

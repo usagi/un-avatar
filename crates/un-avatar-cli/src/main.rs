@@ -203,6 +203,8 @@ struct DiagnoseMaterialSummary {
 	render_queue: Option<i32>,
 	source_float_param_count: usize,
 	source_color_param_count: usize,
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	source_render_float_params: BTreeMap<String, f32>,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
@@ -1070,6 +1072,42 @@ fn material_source_param_count(material: &UnaMaterialPbr, key: &str) -> usize {
 		.map_or(0, |params| params.len())
 }
 
+fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<f32> {
+	material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("floatParams").or_else(|| m.get("float_params")))
+		.and_then(|params| params.get(name))
+		.and_then(|value| value.as_f64())
+		.map(|value| value as f32)
+}
+
+fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f32> {
+	const PARAMS: &[&str] = &[
+		"_TransparentMode",
+		"_AlphaMode",
+		"_BlendMode",
+		"_Cutoff",
+		"_SubpassCutoff",
+		"_SrcBlend",
+		"_DstBlend",
+		"_SrcBlendAlpha",
+		"_DstBlendAlpha",
+		"_ZWrite",
+		"_PreZWrite",
+		"_Cull",
+		"_PreCull",
+		"_ColorMask",
+		"_PreColorMask",
+		"_AlphaToMask",
+		"_PreAlphaToMask",
+	];
+	PARAMS
+		.iter()
+		.filter_map(|name| material_source_float_param(material, name).map(|value| ((*name).to_string(), value)))
+		.collect()
+}
+
 fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
 	let source_shader = material
 		.unavatar_material
@@ -1117,6 +1155,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		render_queue,
 		source_float_param_count: material_source_param_count(material, "floatParams"),
 		source_color_param_count: material_source_param_count(material, "colorParams"),
+		source_render_float_params: material_render_float_params(material),
 		shading: material.shading,
 		alpha_mode: material.alpha_mode,
 		alpha_cutoff: material.alpha_cutoff,
@@ -2114,6 +2153,9 @@ fn run_diagnose(
 				mtoon.outline_width_factor,
 				mtoon.emissive_factor
 			);
+		}
+		if !material.source_render_float_params.is_empty() {
+			println!("  liltoon_render_state: {:?}", material.source_render_float_params);
 		}
 	}
 	for warning in &report.warnings {

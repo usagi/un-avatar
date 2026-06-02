@@ -291,6 +291,17 @@ fn mask_discard_toon(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
 	}
 }
 
+fn liltoon_blend_discard(a: f32, alpha_kind: f32, cutoff: f32, is_liltoon: bool) {
+	// lilToon's transparent fragment path still performs clip(alpha - _Cutoff)
+	// before blending. Without this, atlas edge alpha becomes unintended
+	// see-through cloth instead of discarded texels.
+	if is_liltoon && alpha_kind > 1.5 {
+		if a < cutoff {
+			discard;
+		}
+	}
+}
+
 fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {
 	if alpha_kind > 1.5 {
 		return clamp(a * max(drawu.alpha_mask_params.w, 0.0), 0.0, 1.0);
@@ -337,11 +348,10 @@ fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwr
 	}
 }
 
-fn discard_transparent_zprepass(a: f32, alpha_kind: f32, subpass_cutoff: f32, transparent_zwrite: f32) {
-	// lilToon Transparent+ZWrite materials use _SubpassCutoff for the depth prepass.
-	// Still avoid writing depth for fully transparent texels; the color pass
-	// discards them and stale depth would incorrectly hide later surfaces.
-	let z_cutoff = max(subpass_cutoff, 1.0 / 255.0);
+fn discard_transparent_zprepass(a: f32, alpha_kind: f32, cutoff: f32, subpass_cutoff: f32, transparent_zwrite: f32) {
+	// lilToon Transparent+ZWrite applies _Cutoff first, then _SubpassCutoff
+	// for the transparent subpass. Keep depth consistent with the color pass.
+	let z_cutoff = max(max(cutoff, subpass_cutoff), 1.0 / 255.0);
 	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < z_cutoff {
 		discard;
 	}
@@ -352,6 +362,21 @@ fn discard_by_cull_mode(front_facing: bool, flags: u32) {
 		discard;
 	}
 	if !front_facing && (flags & MAT_DOUBLE_SIDED) == 0u && (flags & MAT_CULL_FRONT) == 0u {
+		discard;
+	}
+}
+
+fn discard_by_liltoon_cull_factor(front_facing: bool, cull_factor: f32) {
+	if cull_factor < 0.5 {
+		return;
+	}
+	if cull_factor < 1.5 {
+		if front_facing {
+			discard;
+		}
+		return;
+	}
+	if !front_facing {
 		discard;
 	}
 }
@@ -431,6 +456,12 @@ fn lil_blend_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) 
 		out_col = mul;
 	}
 	return mix(dst, out_col, clamp(src_a, 0.0, 1.0));
+}
+
+fn lil_blend_weighted_color(dst: vec3<f32>, weighted_src: vec3<f32>, src_a: f32, blend_mode: f32) -> vec3<f32> {
+	let a = clamp(src_a, 0.0, 1.0);
+	let src = select(vec3<f32>(0.0, 0.0, 0.0), weighted_src / max(a, 0.00001), a > 0.00001);
+	return lil_blend_color(dst, src, a, blend_mode);
 }
 
 fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
@@ -561,12 +592,15 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	return vec4<f32>(base, out_a);
 }
 
-@fragment
-fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) -> vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
-	discard_by_cull_mode(front_facing, dbg);
+	if use_transparent_prepass {
+		discard_by_liltoon_cull_factor(front_facing, drawu.alpha_ext_params.w);
+	} else {
+		discard_by_cull_mode(front_facing, dbg);
+	}
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let alb = apply_main_hsvg(samp_tex.rgb);
@@ -575,6 +609,10 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
 	mask_discard_toon(alb, a, alpha_kind, cutoff);
+	liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
+	if use_transparent_prepass {
+		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
+	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
@@ -625,7 +663,10 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	}
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
 	let shade_uv = uv * drawu.shade_uv_offset_scale.zw + drawu.shade_uv_offset_scale.xy;
-	let shade_term_raw = drawu.shade_color.rgb * textureSample(shade_tex, shade_samp, shade_uv).rgb;
+	let shade_texel = textureSample(shade_tex, shade_samp, shade_uv);
+	let mtoon_shade_term_raw = drawu.shade_color.rgb * shade_texel.rgb;
+	let lil_shadow_term_raw = mix(base, shade_texel.rgb, clamp(shade_texel.a, 0.0, 1.0)) * drawu.shade_color.rgb;
+	let shade_term_raw = select(mtoon_shade_term_raw, lil_shadow_term_raw, is_liltoon);
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	var lit: vec3<f32>;
 	if (drawu.shadow_params.x > 0.5) {
@@ -797,6 +838,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		authored_reflection = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);
+	var rim_blend = 0.0;
 	if (!disable_rim) {
 		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
 		if (drawu.shadow_params.x > 0.5) {
@@ -811,7 +853,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let rim_shadow = mix(1.0, shading, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
 			let rim_backface = select(clamp(drawu.rim_ext_params.z, 0.0, 1.0), 1.0, front_facing);
 			let rim_transparency = mix(1.0, a, clamp(drawu.transparency_params.z, 0.0, 1.0));
-			rim = lit_rim_color * rim_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency;
+			let rim_direct_blend = clamp(rim_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
+			rim = lit_rim_color * rim_direct_blend;
+			rim_blend = max(rim_blend, rim_direct_blend);
 			let rim_dir = pow(clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0), mix(1.0, 8.0, clamp(drawu.rim_indirect_params.y, 0.0, 1.0)));
 			let rim_dir_factor = clamp(drawu.rim_indirect_params.x * rim_dir, 0.0, 1.0);
 			rim = mix(rim, rim * rim_dir, rim_dir_factor);
@@ -824,7 +868,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 				clamp(drawu.rim_indirect_params.w, 0.0, 1.0),
 				clamp(drawu.rim_indirect_ext_params.x, 0.0, 1.0)
 			) * clamp(drawu.rim_indirect_color.a, 0.0, 1.0);
-			rim = rim + drawu.rim_indirect_color.rgb * indir_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency;
+			let rim_indirect_blend = clamp(indir_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
+			rim = rim + drawu.rim_indirect_color.rgb * rim_indirect_blend;
+			rim_blend = max(rim_blend, rim_indirect_blend);
 		} else {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;
@@ -887,7 +933,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let backlight_color = mix(drawu.backlight_color.rgb, drawu.backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
 			lit = lit + backlight * backlight_color * frame.light_color.rgb * frame.light_color.w;
 		}
-		lit = lil_blend_color(lit, rim, 1.0, drawu.rim_control.w);
+		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
 	} else {
 		lit = lit + specular + authored_reflection;
 		lit = lit + rim;
@@ -908,6 +954,11 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		}
 	}
 	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
+}
+
+@fragment
+fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+	return toon_fragment(i, front_facing, false);
 }
 
 @fragment
@@ -934,10 +985,6 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_toon_zprepass(i: VsOut) -> @location(0) vec4<f32> {
-	let uv = animated_uv(i.uv);
-	let samp_tex = textureSample(tex, base_samp, uv);
-	let a = apply_lil_alpha_mask(samp_tex.a * drawu.base_color.a, uv);
-	discard_transparent_zprepass(a, drawu.params.y, drawu.alpha_ext_params.x, drawu.outline_params.w);
-	return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+fn fs_toon_backpass(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+	return toon_fragment(i, front_facing, true);
 }

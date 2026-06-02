@@ -349,13 +349,13 @@ pub(crate) fn normalized_rgba_base(rgba: &[u8], width: u32, height: u32) -> Vec<
 	}
 }
 
-fn has_fully_transparent_pixels(rgba: &[u8]) -> bool {
-	rgba.chunks_exact(4).any(|px| px[3] == 0)
+fn has_low_alpha_pixels(rgba: &[u8]) -> bool {
+	rgba.chunks_exact(4).any(|px| px[3] < 250)
 }
 
 fn alpha_safe_rgba_base(rgba: &[u8], width: u32, height: u32, role: TextureRole) -> Vec<u8> {
 	let mut base = normalized_rgba_base(rgba, width, height);
-	if !texture_role_uses_alpha_weighted_rgb_mips(role) || !has_fully_transparent_pixels(&base) {
+	if !texture_role_uses_alpha_weighted_rgb_mips(role) || !has_low_alpha_pixels(&base) {
 		return base;
 	}
 	bleed_transparent_rgb(&mut base, width.max(1), height.max(1));
@@ -374,7 +374,7 @@ fn bleed_transparent_rgb(rgba: &mut [u8], width: u32, height: u32) {
 		for y in 0..height {
 			for x in 0..width {
 				let i = ((y * width + x) as usize) * 4;
-				if rgba[i + 3] != 0 {
+				if rgba[i + 3] >= 250 {
 					continue;
 				}
 				let mut rgb = [0u32; 3];
@@ -389,7 +389,7 @@ fn bleed_transparent_rgb(rgba: &mut [u8], width: u32, height: u32) {
 							continue;
 						}
 						let ni = ((ny * width + nx) as usize) * 4;
-						if rgba[ni + 3] == 0 {
+						if rgba[ni + 3] < 250 {
 							continue;
 						}
 						rgb[0] += u32::from(rgba[ni]);
@@ -737,13 +737,14 @@ fn resize_rgba_to_max_dimension(rgba: &[u8], width: u32, height: u32, max_dimens
 }
 
 const PROCESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATXC1\0";
-const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 5;
+const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 6;
 // v2 (2026-05-14): 圧縮 mip の width/height を block 整列 (4 の倍数) サイズで記録するよう変更。
 // 旧 v1 では width=1023 等を保存していたが、wgpu の `write_texture` validation が block 整列値を要求するため、
 // magic を bump して旧キャッシュを使わせない（自動的に再エンコードしてキャッシュを書き直す）。
 // v3 (2026-05-22): clothing atlas textures keep only the base mip to avoid low-LOD UV island bleed.
 // v4 (2026-05-22): mipmap_filter is part of the processed texture cache key.
 // v5 (2026-06-01): transparent base-color RGB is alpha-bleed filled before upload/mips.
+// v6 (2026-06-03): low-alpha atlas padding RGB is also alpha-bleed filled for opaque/cutout clothing islands.
 const COMPRESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATBC2\0";
 const COMPRESSED_TEXTURE_CACHE_VERSION: u64 = 5;
 // v3 (2026-05-27): compressed cache keys are derived from the source texture key and processing settings.
@@ -1704,6 +1705,23 @@ mod tests {
 		}
 		assert_eq!(processed.mips[0].2[3], 255);
 		assert_eq!(processed.mips[0].2[7], 0);
+	}
+
+	#[test]
+	fn low_alpha_rgb_is_filled_for_base_upload() {
+		let rgba = vec![
+			200, 180, 160, 255, 0, 0, 0, 96, //
+			0, 0, 0, 128, 0, 0, 0, 0,
+		];
+		let processed = build_processed_texture(&rgba, 2, 2, None, TextureRole::Clothing, TextureMipmapFilter::Box2x2);
+		assert_eq!(processed.mips.len(), 1);
+		for pixel in processed.mips[0].2.chunks_exact(4) {
+			assert_eq!(&pixel[..3], &[200, 180, 160]);
+		}
+		assert_eq!(processed.mips[0].2[3], 255);
+		assert_eq!(processed.mips[0].2[7], 96);
+		assert_eq!(processed.mips[0].2[11], 128);
+		assert_eq!(processed.mips[0].2[15], 0);
 	}
 
 	#[test]
