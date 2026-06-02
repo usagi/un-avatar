@@ -2069,7 +2069,7 @@ impl SceneMeshes {
 			None,
 			wgpu::ColorWrites::ALL,
 			false,
-			wgpu::CompareFunction::LessEqual,
+			wgpu::CompareFunction::Less,
 			Some(wgpu::Face::Front),
 			sample_count,
 		);

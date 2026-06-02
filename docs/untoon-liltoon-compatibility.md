@@ -149,7 +149,8 @@ Status legend:
 	- remaining: RGB / alpha / forward-add alpha blend state の組み合わせを wgpu pipeline blend state へより厳密に反映する。
 - `[~]` cull mode: `_Cull`, double-sided handling
   - done: `_Cull` / double-sided state を Runtime cull mode へ反映する。
-  - remaining: outline pass cull、transparent/fur/refraction variant 固有の cull 差分を分離する。
+  - done: sample wardrobe の `_OutlineZTest = Less` に合わせて outline pass depth compare を Less に寄せる。
+  - remaining: outline pass cull、per-material outline ZTest、transparent/fur/refraction variant 固有の cull 差分を分離する。
 - `[~]` lighting / toon AA controls
   - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持する。
   - done: `_AAStrength` を shadow / specular / rim の toon ramp blur へ反映し、light min/max と monochrome lighting を main toon direct light に反映する。
