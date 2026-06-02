@@ -590,6 +590,13 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.emission
 				.texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "emissionGradationTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.emission
+				.gradation_texture_index = Some(image_index);
+		}
 		if let Some(image_index) = texture_asset_ref(mtoon, "reflectionCubeTextureIndexAsset", asset_map) {
 			scene_material
 				.mtoon
@@ -2301,6 +2308,14 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("emissionTextureIndex").or_else(|| m.get("emission_texture_index")))) {
 		out.emission.texture_index = Some(value);
 	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("emissionGradationTextureIndex")
+				.or_else(|| m.get("emission_gradation_texture_index")),
+		)
+	}) {
+		out.emission.gradation_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_EmissionMainStrength") {
 		out.emission.main_strength_factor = value.clamp(0.0, 1.0);
 	}
@@ -2309,6 +2324,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_EmissionBlendMode").map(float_to_u32_saturating) {
 		out.emission.blend_mode = liltoon_like_blend_mode(value);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_EmissionUseGrad") {
+		out.emission.gradation_enabled_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_EmissionGradSpeed") {
+		out.emission.gradation_speed_factor = value;
 	}
 
 	out.outline.enabled_factor = unavatar_material_float_param(extras, "_UseOutline")
@@ -4021,6 +4042,8 @@ mod tests {
 					"_EmissionMainStrength": 0.45,
 					"_EmissionBlend": 0.55,
 					"_EmissionBlendMode": 3.0,
+					"_EmissionUseGrad": 1.0,
+					"_EmissionGradSpeed": 1.5,
 					"_UseOutline": 1.0,
 					"_OutlineWidth": 0.03,
 					"_OutlineFixWidth": 0.25,
@@ -4076,6 +4099,7 @@ mod tests {
 					"shadowBlurMaskTextureIndex": 11,
 					"rimMultiplyTextureIndex": 12,
 					"emissionTextureIndex": 13,
+					"emissionGradationTextureIndex": 29,
 					"outlineWidthMultiplyTextureIndex": 14,
 					"outlineTextureIndex": 15,
 					"reflectionColorTextureIndex": 16,
@@ -4238,6 +4262,9 @@ mod tests {
 		assert_eq!(liltoon_like.emission.main_strength_factor, 0.45);
 		assert_eq!(liltoon_like.emission.blend_factor, 0.55);
 		assert_eq!(liltoon_like.emission.blend_mode, UnaLilToonLikeBlendMode::Multiply);
+		assert_eq!(liltoon_like.emission.gradation_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.emission.gradation_texture_index, Some(29));
+		assert_eq!(liltoon_like.emission.gradation_speed_factor, 1.5);
 		assert_eq!(liltoon_like.outline.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.outline.color_factor, [0.01, 0.02, 0.03, 1.0]);
 		assert_eq!(liltoon_like.outline.lit_color_factor, [1.0, 0.2, 0.0, 0.4]);

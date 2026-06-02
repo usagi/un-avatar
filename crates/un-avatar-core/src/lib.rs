@@ -792,6 +792,12 @@ pub struct UnaLilToonLikeEmission {
 	pub blend_factor: f32,
 	#[serde(default)]
 	pub blend_mode: UnaLilToonLikeBlendMode,
+	#[serde(default)]
+	pub gradation_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub gradation_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub gradation_speed_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1104,6 +1110,9 @@ impl Default for UnaLilToonLikeEmission {
 			main_strength_factor: 0.0,
 			blend_factor: 1.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
+			gradation_enabled_factor: 0.0,
+			gradation_texture_index: None,
+			gradation_speed_factor: 1.0,
 		}
 	}
 }

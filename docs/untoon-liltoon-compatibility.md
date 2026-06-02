@@ -517,7 +517,9 @@ Status legend:
 - `[~]` `_EmissionBlendMode`
   - done: v2 emission parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体と 2nd emission との合成順を実装する。
-- `[ ]` emission gradation
+- `[~]` emission gradation
+  - done: `_EmissionUseGrad` / `_EmissionGradTex` / `_EmissionGradSpeed` を 1st emission gradation state として保持する。
+  - remaining: gradation sampling、scroll speed、HDR emission color / mask / AudioLink との合成順を renderer へ接続する。2nd emission gradation は 2nd emission 本体と合わせて扱う。
 - `[defer]` 2nd emission
 
 ### Outline

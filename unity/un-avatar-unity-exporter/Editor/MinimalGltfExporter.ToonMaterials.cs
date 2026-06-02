@@ -74,6 +74,8 @@ namespace UNAvatar.UnityExporter
                     "_UseEmission",
                     ReadTexture(material, "_EmissionMap") != null || ReadTexture(material, "_EmissionTex") != null || ReadColor(material, "_EmissionColor", Color.black).maxColorComponent > 0.0f);
                 AddTextureIndex(mtoon, "emissionTextureIndex", useEmission ? ReadTexture(material, "_EmissionMap") ?? ReadTexture(material, "_EmissionTex") : null);
+                var useEmissionGradation = useEmission && IsMaterialFeatureEnabled(material, "_EmissionUseGrad", ReadTexture(material, "_EmissionGradTex") != null);
+                AddTextureIndex(mtoon, "emissionGradationTextureIndex", useEmissionGradation ? ReadTexture(material, "_EmissionGradTex") : null);
 
                 AddTextureIndex(mtoon, "reflectionColorTextureIndex", ReadTexture(material, "_ReflectionColorTex"));
                 AddTextureIndex(mtoon, "smoothnessTextureIndex", ReadTexture(material, "_SmoothnessTex"));
