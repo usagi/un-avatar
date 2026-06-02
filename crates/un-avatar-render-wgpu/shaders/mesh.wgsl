@@ -406,6 +406,11 @@ fn lil_blend_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) 
 	return mix(dst, out_col, clamp(src_a, 0.0, 1.0));
 }
 
+fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
+	let f = pow(clamp(1.0 - nv, 0.0, 1.0), 5.0);
+	return mix(specular, vec3<f32>(grazing_term), f);
+}
+
 fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
 	let k = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
 	let p = mix(vec4<f32>(c.bg, k.wz), vec4<f32>(c.gb, k.xy), select(0.0, 1.0, c.b < c.g));
@@ -682,6 +687,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let reflection_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
 	let reflection_uv = toon_reflection_uv(reflection_n, v);
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
+	var reflection_metallic = 0.0;
 	if (drawu.shadow_params.x > 0.5) {
 		if (drawu.reflection_control.x > 0.5) {
 			let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
@@ -690,15 +696,16 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 			let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
 			let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
+			reflection_metallic = metallic;
+			let perceptual_roughness = max(1.0 - smoothness, 0.02);
+			let roughness = perceptual_roughness * perceptual_roughness;
 			let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
 			let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
 			let specular_power = mix(8.0, 128.0, smoothness);
 			let nh = max(dot(specular_n, half_vec), 0.0);
 			var specular_shape = pow(nh, specular_power);
 			if (drawu.specular_toon_params.x > 0.5) {
-				let perceptual_roughness = max(1.0 - smoothness, 0.02);
-				let roughness = max(perceptual_roughness * perceptual_roughness, 0.0004);
-				let toon_specular = pow(nh, 1.0 / roughness);
+				let toon_specular = pow(nh, 1.0 / max(roughness, 0.0004));
 				specular_shape = lil_tooning_scale(
 					toon_specular,
 					clamp(drawu.specular_toon_params.y, 0.0, 1.0),
@@ -713,7 +720,10 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 				clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 			);
 			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * drawu.reflection_cube_color.rgb * reflection_lighting;
-			authored_reflection = env * (0.18 + 0.32 * reflection_fresnel) * reflectance * clamp(drawu.reflection_control.z, 0.0, 1.0);
+			let one_minus_reflectivity = 0.96 - metallic * 0.96;
+			let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
+			let surface_reduction = 1.0 / (roughness * roughness + 1.0);
+			authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0)) * clamp(drawu.reflection_control.z, 0.0, 1.0);
 		}
 	} else {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
@@ -760,6 +770,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 		let reflection_transparency = mix(1.0, a, clamp(drawu.transparency_params.w, 0.0, 1.0));
 		let reflection_color_alpha = clamp(drawu.reflection_color.a * reflection_color_texel.a * reflection_transparency, 0.0, 1.0);
+		lit = lit - reflection_metallic * lit;
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
 		if (drawu.rim_shade_params.x > 0.5) {

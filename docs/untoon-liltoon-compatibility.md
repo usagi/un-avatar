@@ -380,21 +380,21 @@ Status legend:
   - done: source raw params と reflection texture asset ref を保持し、lilToon-like shader branch の specular / reflection 有効判定へ接続した。
   - remaining: Unity の environment reflection、roughness mip、normal strength、forward add 条件を本家に合わせる。
 - `[~]` `_Smoothness`
-  - done: source raw params を保持し、lilToon-like specular power の近似値へ接続した。
-  - remaining: GSAA、perceptual roughness、roughness mip selection として本家 `lilReflection` に合わせる。
+  - done: source raw params を保持し、lilToon-like specular power と reflection の perceptual roughness / surface reduction へ接続した。
+  - remaining: GSAA、roughness mip selection として本家 `lilReflection` に合わせる。
 - `[~]` `_SmoothnessTex`
   - done: Exporter / importer / v2 material で texture reference を保持し、smoothness factor に mask.r を掛ける。
   - done: Renderer は `_SmoothnessTex` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: texture UV mode / UV set、GSAA、roughness mip selection との順序を本家へ合わせる。
 - `[~]` `_Metallic`
-  - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当へ接続した。
-  - remaining: base color energy reduction、metallic texture、environment reflection との正確な順序を実装する。
+  - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当と base color energy reduction へ接続した。
+  - remaining: MatCap / Rim / environment reflection との正確な ordering を本家へ合わせる。
 - `[~]` `_MetallicGlossMap`
   - done: Exporter / importer / v2 material で texture reference を保持し、metallic factor に mask.r を掛ける。
   - done: Renderer は `_MetallicGlossMap` の slot 別 Tiling / Offset を sampling UV に使う。
-  - remaining: texture UV mode / UV set、smoothness/metallic channel convention、energy reduction、environment reflection との順序を本家へ合わせる。
+  - remaining: texture UV mode / UV set、environment reflection との順序を本家へ合わせる。
 - `[~]` `_Reflectance`
-  - done: source raw params を保持し、specular color と reflection strength の近似値へ接続した。
+  - done: source raw params を保持し、specular color と reflection Fresnel lerp の specular term へ接続した。
   - remaining: color space と dielectric specular の本家係数へ合わせる。
 - `[~]` `_ApplySpecular`
 	- done: source raw params を保持し、lilToon-like specular contribution の gate として接続した。
