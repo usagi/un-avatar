@@ -2458,17 +2458,19 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_OutlineZBias") {
 		out.outline.z_bias_factor = value;
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskMode") {
-		out.alpha_mask.mode_factor = value.clamp(0.0, 4.0);
-	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("alphaMaskTextureIndex").or_else(|| m.get("alpha_mask_texture_index")))) {
-		out.alpha_mask.texture_index = Some(value);
-	}
-	if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskScale") {
-		out.alpha_mask.scale_factor = value;
-	}
-	if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskValue") {
-		out.alpha_mask.value_factor = value;
+	if unavatar_material_liltoon_alpha_mask_enabled(extras) {
+		if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskMode") {
+			out.alpha_mask.mode_factor = value.clamp(0.0, 4.0);
+		}
+		if let Some(value) = mtoon.and_then(|m| json_usize(m.get("alphaMaskTextureIndex").or_else(|| m.get("alpha_mask_texture_index")))) {
+			out.alpha_mask.texture_index = Some(value);
+		}
+		if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskScale") {
+			out.alpha_mask.scale_factor = value;
+		}
+		if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskValue") {
+			out.alpha_mask.value_factor = value;
+		}
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlend") {
 		out.blend_state.source_factor = value;
@@ -2717,6 +2719,37 @@ fn unavatar_material_float_param(extras: &Value, name: &str) -> Option<f32> {
 
 fn unavatar_material_feature_enabled(extras: &Value, name: &str) -> Option<bool> {
 	unavatar_material_float_param(extras, name).map(|value| value > 0.5)
+}
+
+fn unavatar_material_liltoon_alpha_mask_enabled(extras: &Value) -> bool {
+	unavatar_material_has_enabled_keyword(extras, &["_COLOROVERLAY_ON", "LIL_FEATURE_ALPHAMASK", "LIL_FEATURE_AlphaMask"])
+}
+
+fn unavatar_material_has_enabled_keyword(extras: &Value, names: &[&str]) -> bool {
+	const KEYWORD_FIELDS: &[&str] = &[
+		"enabledKeywords",
+		"enabled_keywords",
+		"shaderKeywords",
+		"shader_keywords",
+		"keywords",
+	];
+	KEYWORD_FIELDS
+		.iter()
+		.any(|field| unavatar_material_keyword_field_has_any(extras.get(*field), names))
+}
+
+fn unavatar_material_keyword_field_has_any(value: Option<&Value>, names: &[&str]) -> bool {
+	match value {
+		Some(Value::Array(values)) => values.iter().any(|value| {
+			value
+				.as_str()
+				.is_some_and(|keyword| names.iter().any(|name| keyword.eq_ignore_ascii_case(name)))
+		}),
+		Some(Value::Object(values)) => values
+			.iter()
+			.any(|(keyword, value)| value.as_bool().unwrap_or(false) && names.iter().any(|name| keyword.eq_ignore_ascii_case(name))),
+		_ => false,
+	}
 }
 
 fn unavatar_material_color_param_rgb(extras: &Value, name: &str) -> Option<[f32; 3]> {
@@ -4049,6 +4082,7 @@ mod tests {
 				"family": "liltoon",
 				"sourceShader": "lilToon",
 				"renderQueue": 2461,
+				"enabledKeywords": ["_COLOROVERLAY_ON"],
 				"textureUvOffsetScales": {
 					"_EmissionMap": [0.1, 0.2, 2.0, 3.0],
 					"_MatCapTex": [0.0, 0.25, 1.0, 0.5]
@@ -4460,6 +4494,53 @@ mod tests {
 		assert_eq!(liltoon_like.blend_state.alpha_to_mask_factor, 1.0);
 		assert_eq!(mtoon.parametric_rim_color_factor, [0.040000003, 0.080000006, 0.120000005]);
 		assert_eq!(mtoon.outline_color_factor, [0.01, 0.02, 0.03]);
+	}
+
+	#[test]
+	fn source_alpha_mask_params_require_liltoon_feature_keyword() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTransparentOutline",
+			"floatParams": {
+				"_AlphaMaskMode": 1.0,
+				"_AlphaMaskScale": 1.0,
+				"_AlphaMaskValue": 0.13
+			},
+			"mtoon": {
+				"alphaMaskTextureIndex": 21
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
+
+		assert_eq!(liltoon_like.alpha_mask.mode_factor, 0.0);
+		assert_eq!(liltoon_like.alpha_mask.texture_index, None);
+		assert_eq!(liltoon_like.alpha_mask.scale_factor, 1.0);
+		assert_eq!(liltoon_like.alpha_mask.value_factor, 0.0);
+	}
+
+	#[test]
+	fn source_alpha_mask_params_accept_liltoon_feature_keyword() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTransparentOutline",
+			"enabledKeywords": ["_COLOROVERLAY_ON"],
+			"floatParams": {
+				"_AlphaMaskMode": 1.0,
+				"_AlphaMaskScale": 1.0,
+				"_AlphaMaskValue": 0.13
+			},
+			"mtoon": {
+				"alphaMaskTextureIndex": 21
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
+
+		assert_eq!(liltoon_like.alpha_mask.mode_factor, 1.0);
+		assert_eq!(liltoon_like.alpha_mask.texture_index, Some(21));
+		assert_eq!(liltoon_like.alpha_mask.scale_factor, 1.0);
+		assert_eq!(liltoon_like.alpha_mask.value_factor, 0.13);
 	}
 
 	#[test]

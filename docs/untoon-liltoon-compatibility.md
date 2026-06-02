@@ -217,10 +217,12 @@ Status legend:
 - `[~]` `_AlphaMaskMode`
 	- done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
 	- done: `_AlphaMask` texture が無い material では本家 macro と同じく alphaMask 初期値 1 相当の white fallback を使う。
+	- done: lilToon の `_COLOROVERLAY_ON` / `LIL_FEATURE_ALPHAMASK` keyword が有効な material だけで alpha mask を適用する。raw `_AlphaMaskMode` が残っていても shader variant で無効な場合は無視する。
 	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
 	- done: Renderer は `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
+	- done: Exporter は Unity material の enabled keywords を `UN_avatar_material.enabledKeywords` として保持する。
 	- remaining: UV mode / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
 - `[~]` `_SubpassCutoff`
 	- done: source raw param を lilToon-like blend state に保持する。

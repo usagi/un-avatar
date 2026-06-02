@@ -20,6 +20,33 @@ namespace UNAvatar.UnityExporter
                 return HasProperty(material, property) ? ReadFloat(material, property, fallback ? 1.0f : 0.0f) > 0.5f : fallback;
             }
 
+            private static List<string> MaterialEnabledKeywordNames(Material material)
+            {
+                var names = new SortedSet<string>(StringComparer.Ordinal);
+                if (material == null)
+                {
+                    return new List<string>();
+                }
+
+                foreach (var keyword in material.enabledKeywords)
+                {
+                    if (!string.IsNullOrEmpty(keyword.name))
+                    {
+                        names.Add(keyword.name);
+                    }
+                }
+
+                foreach (var keyword in material.shaderKeywords)
+                {
+                    if (!string.IsNullOrEmpty(keyword))
+                    {
+                        names.Add(keyword);
+                    }
+                }
+
+                return new List<string>(names);
+            }
+
             private Dictionary<string, object> BuildUnAvatarMaterialExtras(Material material)
             {
                 var shaderName = material.shader != null ? material.shader.name : "";
@@ -143,6 +170,7 @@ namespace UNAvatar.UnityExporter
                     ["family"] = lowerShader.Contains("liltoon") ? "liltoon" : lowerShader.Contains("mtoon") ? "mtoon" : "toon",
                     ["unMaterialModel"] = "UNToon",
                     ["renderQueue"] = material.renderQueue,
+                    ["enabledKeywords"] = MaterialEnabledKeywordNames(material),
                     ["floatParams"] = BuildMaterialFloatParams(material),
                     ["colorParams"] = BuildMaterialColorParams(material),
                     ["textureUvOffsetScales"] = BuildTextureUvOffsetScales(material),
