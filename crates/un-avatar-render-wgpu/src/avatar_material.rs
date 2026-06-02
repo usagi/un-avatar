@@ -162,6 +162,9 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.outline_width_multiply_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
+		if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
+			mark_texture_role(&mut roles, liltoon_like.normal.second_texture_index, TextureRole::Normal);
+		}
 	}
 	for (index, source) in scene.image_sources.iter().enumerate() {
 		let Some(source) = source.as_ref() else { continue };
@@ -406,5 +409,15 @@ mod tests {
 			..Default::default()
 		});
 		assert_eq!(texture_roles_for_scene(&scene)[0], TextureRole::Face);
+
+		scene.images.push(image());
+		scene.image_sources.push(None);
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.normal.second_texture_index = Some(2);
+		scene.materials.push(UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		});
+		assert_eq!(texture_roles_for_scene(&scene)[2], TextureRole::Normal);
 	}
 }

@@ -575,6 +575,16 @@ pub struct UnaLilToonLikeShadow {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeNormal {
+	#[serde(default)]
+	pub second_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_texture_index: Option<usize>,
+	#[serde(default = "one_f32")]
+	pub second_scale_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeMatcap {
 	#[serde(default)]
 	pub enabled_factor: f32,
@@ -853,6 +863,8 @@ pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub rendering: UnaLilToonLikeRendering,
 	#[serde(default)]
+	pub normal: UnaLilToonLikeNormal,
+	#[serde(default)]
 	pub shadow: UnaLilToonLikeShadow,
 	#[serde(default)]
 	pub matcap: UnaLilToonLikeMatcap,
@@ -900,6 +912,16 @@ impl Default for UnaLilToonLikeShadow {
 			third_blur_factor: 0.0,
 			third_normal_strength_factor: 1.0,
 			third_receive_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeNormal {
+	fn default() -> Self {
+		Self {
+			second_enabled_factor: 0.0,
+			second_texture_index: None,
+			second_scale_factor: 1.0,
 		}
 	}
 }
@@ -1090,6 +1112,7 @@ impl Default for UnaLilToonLikeMaterial {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
 			rendering: UnaLilToonLikeRendering::default(),
+			normal: UnaLilToonLikeNormal::default(),
 			shadow: UnaLilToonLikeShadow::default(),
 			matcap: UnaLilToonLikeMatcap::default(),
 			reflection: UnaLilToonLikeReflection::default(),

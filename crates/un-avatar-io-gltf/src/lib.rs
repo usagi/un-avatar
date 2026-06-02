@@ -542,6 +542,13 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.shadow
 				.blur_mask_texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "normal2ndTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.normal
+				.second_texture_index = Some(image_index);
+		}
 		if let Some(image_index) = texture_asset_ref(mtoon, "matcapTextureIndexAsset", asset_map) {
 			scene_material.mtoon.get_or_insert_with(Default::default).matcap_texture_index = Some(image_index);
 			scene_material
@@ -1736,6 +1743,50 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_GSAAStrength") {
 		out.rendering.gsaa_strength_factor = value.max(0.0);
+	}
+	out.normal.second_enabled_factor = unavatar_material_float_param(extras, "_UseBumpMap2nd")
+		.or_else(|| unavatar_material_float_param(extras, "_UseNormalMap2nd"))
+		.unwrap_or_else(|| {
+			if mtoon
+				.and_then(|m| {
+					json_usize(
+						m.get("normal2ndTextureIndex")
+							.or_else(|| m.get("normal_2nd_texture_index"))
+							.or_else(|| m.get("normalSecondTextureIndex"))
+							.or_else(|| m.get("normal_second_texture_index")),
+					)
+				})
+				.is_some()
+			{
+				1.0
+			} else {
+				0.0
+			}
+		})
+		.clamp(0.0, 1.0);
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("normal2ndTextureIndex")
+				.or_else(|| m.get("normal_2nd_texture_index"))
+				.or_else(|| m.get("normalSecondTextureIndex"))
+				.or_else(|| m.get("normal_second_texture_index")),
+		)
+	}) {
+		out.normal.second_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon
+		.and_then(|m| {
+			json_f32(
+				m.get("normal2ndScaleFactor")
+					.or_else(|| m.get("normal_2nd_scale_factor"))
+					.or_else(|| m.get("normalSecondScaleFactor"))
+					.or_else(|| m.get("normal_second_scale_factor")),
+			)
+		})
+		.or_else(|| unavatar_material_float_param(extras, "_BumpScale2nd"))
+		.or_else(|| unavatar_material_float_param(extras, "_NormalScale2nd"))
+	{
+		out.normal.second_scale_factor = value;
 	}
 	out.shadow.enabled_factor = unavatar_material_float_param(extras, "_UseShadow").unwrap_or(1.0).clamp(0.0, 1.0);
 	if let Some(value) =
@@ -3747,6 +3798,8 @@ mod tests {
 					"_UseMatCap": 1.0,
 					"_UseReflection": 1.0,
 					"_UseRim": 1.0,
+					"_UseBumpMap2nd": 1.0,
+					"_BumpScale2nd": 0.33,
 					"_ShadowStrength": 0.75,
 					"_ShadowBorder": 0.42,
 					"_ShadowBlur": 0.18,
@@ -3888,6 +3941,7 @@ mod tests {
 					"matcapBlendMaskTextureIndex": 20,
 					"matcap2ndTextureIndex": 22,
 					"matcap2ndBlendMaskTextureIndex": 23,
+					"normal2ndTextureIndex": 24,
 					"alphaMaskTextureIndex": 21
 				}
 			}"#,
@@ -3904,6 +3958,9 @@ mod tests {
 		assert_eq!(liltoon_like.rendering.vertex_light_strength_factor, 0.35);
 		assert_eq!(liltoon_like.rendering.aa_strength_factor, 1.25);
 		assert_eq!(liltoon_like.rendering.gsaa_strength_factor, 0.5);
+		assert_eq!(liltoon_like.normal.second_enabled_factor, 1.0);
+		assert_eq!(liltoon_like.normal.second_texture_index, Some(24));
+		assert_eq!(liltoon_like.normal.second_scale_factor, 0.33);
 		assert_eq!(liltoon_like.shadow.color_factor, [0.7, 0.8, 0.9]);
 		assert_eq!(liltoon_like.shadow.color_texture_index, Some(8));
 		assert_eq!(liltoon_like.shadow.strength_mask_texture_index, Some(9));

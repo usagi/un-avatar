@@ -113,6 +113,13 @@ namespace UNAvatar.UnityExporter
                 mtoon["uvAnimationRotationSpeedFactor"] = ReadFloat(material, "_UvAnimRotation", lilMainScrollRotate.z);
                 AddTextureIndex(mtoon, "uvAnimationMaskTextureIndex", ReadTexture(material, "_UvAnimMaskTexture"));
 
+                var normal2ndTexture = ReadTexture(material, "_BumpMap2nd") ?? ReadTexture(material, "_NormalMap2nd") ?? ReadTexture(material, "_Bump2ndMap");
+                var useNormal2nd = HasProperty(material, "_UseBumpMap2nd")
+                    ? ReadFloat(material, "_UseBumpMap2nd", normal2ndTexture != null ? 1.0f : 0.0f) > 0.5f
+                    : IsMaterialFeatureEnabled(material, "_UseNormalMap2nd", normal2ndTexture != null);
+                AddTextureIndex(mtoon, "normal2ndTextureIndex", useNormal2nd ? normal2ndTexture : null);
+                mtoon["normal2ndScaleFactor"] = useNormal2nd ? ReadFloat(material, "_BumpScale2nd", ReadFloat(material, "_NormalScale2nd", 1.0f)) : 1.0f;
+
                 mtoon["transparentWithZWrite"] = ReadFloat(material, "_ZWrite", 0.0f) > 0.5f || ReadFloat(material, "_ZWriteMode", 0.0f) > 0.5f;
 
                 return new Dictionary<string, object>

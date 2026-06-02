@@ -302,7 +302,9 @@ Status legend:
 - `[~]` tangent-space parity validation against Unity
   - done: glTF TANGENT を `.unavatar` mesh buffer へ保持し、wgpu vertex layout / WGSL normal map TBN へ接続した。tangent 欠落 mesh は CPU 側で position / uv / normal から tangent を生成し、shader は常に tangent TBN を使う。
   - remaining: Unity/lilToon reference との green channel convention、bitangent sign、backface normal behavior を画像比較で検証する。
-- `[ ]` 2nd normal map
+- `[~]` 2nd normal map
+  - done: Unity Exporter / glTF `UN_avatar_material.mtoon` の `normal2ndTextureIndex` / `normal2ndScaleFactor` を保持し、import 後は `UnaLilToonLikeMaterial.normal` に入れる。texture pipeline では normal map role として扱う。
+  - remaining: WGSL で 1st normal と 2nd normal の合成順、UV mode、scale/mask、green channel convention を lilToon 本家へ合わせる。
 - `[ ]` anisotropy normal interactions
 
 ### MatCap
