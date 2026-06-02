@@ -259,6 +259,9 @@ struct MeshDrawMaterialGpu {
 	rim_indirect_ext_params: [f32; 4],
 	rim_shade_color: [f32; 4],
 	rim_shade_params: [f32; 4],
+	backlight_color: [f32; 4],
+	backlight_params: [f32; 4],
+	backlight_ext_params: [f32; 4],
 	emission_color: [f32; 4],
 	emission_params: [f32; 4],
 	outline_color: [f32; 4],
@@ -299,7 +302,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 976);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1024);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1531,6 +1534,27 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.5, 0.65, 3.5]);
+	let backlight_color = liltoon_like.map(|u| u.backlight.color_factor).unwrap_or([0.85, 0.8, 0.7, 1.0]);
+	let backlight_params = liltoon_like
+		.map(|u| {
+			[
+				u.backlight.enabled_factor.clamp(0.0, 1.0),
+				u.backlight.main_strength_factor.clamp(0.0, 1.0),
+				u.backlight.normal_strength_factor.clamp(0.0, 1.0),
+				u.backlight.directivity_factor.max(0.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 5.0]);
+	let backlight_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.backlight.border_factor.clamp(0.0, 1.0),
+				u.backlight.blur_factor.clamp(0.0, 1.0),
+				u.backlight.view_strength_factor.clamp(0.0, 1.0),
+				u.backlight.backface_mask_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.35, 0.05, 1.0, 1.0]);
 	let emission_color = liltoon_like.map(|u| u.emission.color_factor).unwrap_or([
 		mat.emissive_factor[0],
 		mat.emissive_factor[1],
@@ -1610,6 +1634,9 @@ fn mesh_draw_material_gpu(
 		rim_indirect_ext_params,
 		rim_shade_color,
 		rim_shade_params,
+		backlight_color,
+		backlight_params,
+		backlight_ext_params,
 		emission_color,
 		emission_params,
 		outline_color,
@@ -3647,6 +3674,30 @@ mod tests {
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & 4096, 0);
+	}
+
+	#[test]
+	fn liltoon_backlight_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.backlight.enabled_factor = 1.0;
+		liltoon_like.backlight.color_factor = [0.2, 0.3, 0.4, 0.5];
+		liltoon_like.backlight.main_strength_factor = 0.6;
+		liltoon_like.backlight.normal_strength_factor = 0.7;
+		liltoon_like.backlight.directivity_factor = 8.0;
+		liltoon_like.backlight.border_factor = 0.1;
+		liltoon_like.backlight.blur_factor = 0.2;
+		liltoon_like.backlight.view_strength_factor = 0.3;
+		liltoon_like.backlight.backface_mask_factor = 0.4;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.backlight_color, [0.2, 0.3, 0.4, 0.5]);
+		assert_eq!(draw.backlight_params, [1.0, 0.6, 0.7, 8.0]);
+		assert_eq!(draw.backlight_ext_params, [0.1, 0.2, 0.3, 0.4]);
 	}
 
 	#[test]

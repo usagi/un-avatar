@@ -520,7 +520,8 @@ Status legend:
   - remaining: `_RimShadeMask`、2nd normal map、backface behavior との順序を本家へ合わせる。
 - `[~]` backlight raw params
   - done: `_UseBacklight`、`_BacklightColor`、`_BacklightMainStrength`、`_BacklightNormalStrength`、`_BacklightBorder`、`_BacklightBlur`、`_BacklightDirectivity`、`_BacklightViewStrength`、`_BacklightReceiveShadow`、`_BacklightBackfaceMask` を v2 material に保持する。
-  - remaining: sample では `_UseBacklight = 0` / `_BacklightMainStrength = 0` のため描画接続は deferred。Backlight 有効 material を用意してから本家 `lilGetBacklight` 相当へ接続する。
+  - done: field_drape の `Mat_Hair_Yellow2` / `Mat_Hair_Yellow2_Base` で `_UseBacklight = 1` が出たため、Backlight を renderer に接続する。
+  - remaining: `_BacklightReceiveShadow` は Unity attenuation 相当入力が未定義のため未接続。`headV` は camera view vector 近似。
 
 ### Emission
 

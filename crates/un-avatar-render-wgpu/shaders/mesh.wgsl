@@ -52,6 +52,9 @@ struct DrawMaterial {
 	rim_indirect_ext_params: vec4<f32>,
 	rim_shade_color: vec4<f32>,
 	rim_shade_params: vec4<f32>,
+	backlight_color: vec4<f32>,
+	backlight_params: vec4<f32>,
+	backlight_ext_params: vec4<f32>,
 	emission_color: vec4<f32>,
 	emission_params: vec4<f32>,
 	outline_color: vec4<f32>,
@@ -790,6 +793,21 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 				clamp(drawu.rim_shade_params.z, 0.0, 1.0)
 			) * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
 			lit = mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
+		}
+		if (drawu.backlight_params.x > 0.5) {
+			let backlight_n = normalize(mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0)));
+			let backlight_factor = pow(clamp(-dot(normalize(l + v), l) * 0.5 + 0.5, 0.0, 1.0), max(drawu.backlight_params.w, 0.00001));
+			let backlight_ln_dir = normalize(-v * clamp(drawu.backlight_ext_params.z, 0.0, 1.0) + l);
+			let backlight_ln_raw = dot(backlight_ln_dir, backlight_n) * 0.5 + 0.5;
+			let backlight_ln = lil_tooning_scale(
+				backlight_ln_raw,
+				clamp(drawu.backlight_ext_params.x, 0.0, 1.0),
+				clamp(drawu.backlight_ext_params.y, 0.0, 1.0)
+			);
+			let backlight_backface = select(clamp(drawu.backlight_ext_params.w, 0.0, 1.0), 1.0, front_facing);
+			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(drawu.backlight_color.a, 0.0, 1.0);
+			let backlight_color = mix(drawu.backlight_color.rgb, drawu.backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
+			lit = lit + backlight * backlight_color * frame.light_color.rgb * frame.light_color.w;
 		}
 		lit = lil_blend_color(lit, rim, 1.0, drawu.rim_control.w);
 	} else {
