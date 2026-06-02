@@ -448,7 +448,7 @@ Status legend:
   - remaining: color space handling、HDR range を本家に合わせる。
 - `[~]` `_ReflectionCubeTex` source asset import
   - done: EXR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
-  - done: lilToon-like material で authored cube asset が無い場合は Unity probe reflection の暫定近似として white fallback を使い、black fallback による reflection 消失を避ける。
+  - done: lilToon-like material では `_ReflectionCubeOverride` 有効時だけ authored cube asset を使う。override 無効または cube 無しの場合は黒 fallback とし、Unity reflection probe 未実装を白環境で代用して革/布を白化させない。
   - remaining: cubemap / equirect / PMREM / roughness mip としての意味論を決め、2D approximation と区別する。
 - `[~]` `_ReflectionCubeEnableLighting`
   - done: source raw params を保持し、environment reflection approximation に main light color mix として接続した。

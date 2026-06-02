@@ -3187,13 +3187,14 @@ impl SceneMeshes {
 					.or(mtoon.rim_multiply_texture_index);
 				let rim_view = texture_view_or(&image_views, rim_texture_index, &white_view);
 				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, rim_texture_index, 0);
-				let reflection_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.cube_texture_index)
-					.or(mtoon.reflection_cube_texture_index);
-				let reflection_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
-				let reflection_view = texture_view_or(&image_views, reflection_texture_index, reflection_fallback_view);
+				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
+					(liltoon_like.reflection.cube_override_factor > 0.5)
+						.then_some(liltoon_like.reflection.cube_texture_index)
+						.flatten()
+				} else {
+					mtoon.reflection_cube_texture_index
+				};
+				let reflection_view = texture_view_or(&image_views, reflection_texture_index, &black_view);
 				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_texture_index, 0);
 				let reflection_color_texture_index = mat
 					.liltoon_like
