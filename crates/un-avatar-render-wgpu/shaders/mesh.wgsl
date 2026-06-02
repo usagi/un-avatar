@@ -670,7 +670,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let matcap_transparency = mix(1.0, a, clamp(drawu.transparency_params.x, 0.0, 1.0));
 			let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
 			lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
-		} else {
+		} else if (!is_liltoon) {
 			lit = lit + matcap_raw * drawu.matcap_factor.w;
 		}
 		if (drawu.matcap2_params.x > 0.0) {
@@ -781,7 +781,9 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 		let reflection_transparency = mix(1.0, a, clamp(drawu.transparency_params.w, 0.0, 1.0));
 		let reflection_color_alpha = clamp(drawu.reflection_color.a * reflection_color_texel.a * reflection_transparency, 0.0, 1.0);
-		lit = lit - reflection_metallic * lit;
+		if (!is_liltoon) {
+			lit = lit - reflection_metallic * lit;
+		}
 		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
 		if (drawu.rim_shade_params.x > 0.5) {

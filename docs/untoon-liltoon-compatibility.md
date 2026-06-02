@@ -212,6 +212,7 @@ Status legend:
   - remaining: Cutout shader / explicit alpha mode / renderQueue と texture alpha の診断を compatibility report に出す。
 - `[~]` `_AlphaMaskMode`
 	- done: source raw params を v2 alpha mask mode として保持し、mode 1/2/3/4 を fragment alpha に反映する。
+	- done: `_AlphaMask` texture が無い material では mode を 0 扱いにし、white fallback mask で base texture alpha を潰さない。
 	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
@@ -395,7 +396,8 @@ Status legend:
   - done: Renderer は `_SmoothnessTex` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: texture UV mode / UV set、GSAA、roughness mip selection との順序を本家へ合わせる。
 - `[~]` `_Metallic`
-  - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当と base color energy reduction へ接続した。
+  - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当へ接続した。
+  - done: lilToon branch では PBR 的な metallic base color energy reduction を適用しない。lilToon reflection は主色を消す材質モデルではなく、主色上への specular / reflection 合成として扱う。
   - remaining: MatCap / Rim / environment reflection との正確な ordering を本家へ合わせる。
 - `[~]` `_MetallicGlossMap`
   - done: Exporter / importer / v2 material で texture reference を保持し、metallic factor に mask.r を掛ける。

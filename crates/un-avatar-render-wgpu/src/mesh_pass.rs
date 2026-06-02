@@ -1431,8 +1431,13 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([0.0, 0.5, 0.0, 1.0]);
 	let alpha_mask_params = liltoon_like
 		.map(|u| {
+			let alpha_mask_mode = if u.alpha_mask.texture_index.is_some() {
+				u.alpha_mask.mode_factor.clamp(0.0, 4.0)
+			} else {
+				0.0
+			};
 			[
-				u.alpha_mask.mode_factor.clamp(0.0, 4.0),
+				alpha_mask_mode,
 				u.alpha_mask.scale_factor,
 				u.alpha_mask.value_factor,
 				u.blend_state.alpha_boost_factor.max(0.0),
@@ -3792,6 +3797,23 @@ mod tests {
 		assert_eq!(draw.matcap_blend_mask_uv_offset_scale, [0.7, 0.8, 1.7, 1.8]);
 		assert_eq!(draw.matcap2_blend_mask_uv_offset_scale, [0.9, 1.0, 1.9, 2.0]);
 		assert_eq!(draw.alpha_mask_uv_offset_scale, [1.1, 1.2, 2.1, 2.2]);
+	}
+
+	#[test]
+	fn liltoon_alpha_mask_mode_without_texture_is_ignored() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.alpha_mask.mode_factor = 1.0;
+		liltoon_like.alpha_mask.scale_factor = 1.0;
+		liltoon_like.alpha_mask.value_factor = 0.13;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			alpha_mode: UnaAlphaMode::Blend,
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.alpha_mask_params[0], 0.0);
 	}
 
 	#[test]
