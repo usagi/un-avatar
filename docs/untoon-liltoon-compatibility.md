@@ -526,6 +526,7 @@ Status legend:
 
 - `[~]` `_UseEmission`
   - done: `UnaLilToonLikeMaterial.emission.enabled_factor` として保持し、lilToon-like shader branch の emission contribution gate へ接続した。
+  - done: Emission path は `_UseShadow` に依存せず lilToon source material flag で選択する。
   - remaining: emission feature toggle を compatibility report に出し、2nd emission と gradation は分離する。
 - `[~]` `_EmissionColor`
   - done: alpha 付きの v2 emission color として保持し、shader で emission 色と blend alpha に使用する。

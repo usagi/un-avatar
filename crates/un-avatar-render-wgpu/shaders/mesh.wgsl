@@ -801,7 +801,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let emission_uv = uv * drawu.emission_uv_offset_scale.zw + drawu.emission_uv_offset_scale.xy;
 	let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
 	if (!disable_emissive) {
-		if (drawu.shadow_params.x > 0.5) {
+		if (is_liltoon) {
 			var emission_color = drawu.emission_color.rgb * emission_tex_color.rgb;
 			emission_color = mix(emission_color, emission_color * base, clamp(drawu.emission_params.y, 0.0, 1.0));
 			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * drawu.emission_color.a * emission_tex_color.a, 0.0, 1.0);
