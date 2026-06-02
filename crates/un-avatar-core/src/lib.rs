@@ -838,6 +838,8 @@ pub struct UnaLilToonLikeBlendState {
 	pub alpha_boost_factor: f32,
 	#[serde(default = "default_liltoon_subpass_cutoff")]
 	pub subpass_cutoff_factor: f32,
+	#[serde(default)]
+	pub alpha_to_mask_factor: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1092,6 +1094,7 @@ impl Default for UnaLilToonLikeBlendState {
 			forward_add_alpha_operation_factor: default_liltoon_forward_add_alpha_operation_factor(),
 			alpha_boost_factor: 1.0,
 			subpass_cutoff_factor: default_liltoon_subpass_cutoff(),
+			alpha_to_mask_factor: 0.0,
 		}
 	}
 }

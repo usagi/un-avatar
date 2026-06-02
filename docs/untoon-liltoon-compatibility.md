@@ -208,7 +208,9 @@ Status legend:
 - `[~]` `_SubpassCutoff`
 	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
 	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
-- `[ ]` dither / alpha-to-mask
+- `[~]` dither / alpha-to-mask
+	- done: `_AlphaToMask` を alpha mode 推定だけでなく lilToon-like blend state に保持する。
+	- remaining: wgpu alpha-to-coverage / dither pattern 実装、MSAA 設定、Transparent ZWrite との相互作用を検証する。
 - `[defer]` refraction alpha interactions
 
 ### Shadow
