@@ -221,7 +221,8 @@ struct MeshDrawTransformGpu {
 /// bit0=bind pose rigid, bit1=単色プリミティブ, bit2=Rim Lighting OFF (debug),
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
 /// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
-/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front。
+/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
+/// bit12=lilToon-like source material。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -1168,6 +1169,9 @@ fn mesh_draw_material_gpu(
 		1.0
 	};
 	let liltoon_like = mat.liltoon_like.as_ref();
+	if liltoon_like.is_some() {
+		flags |= 4096;
+	}
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -3630,6 +3634,19 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_params[0], 0.2);
+	}
+
+	#[test]
+	fn liltoon_source_flag_reaches_draw_uniform() {
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::default()),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let flags = draw.params[3].to_bits();
+
+		assert_ne!(flags & 4096, 0);
 	}
 
 	#[test]

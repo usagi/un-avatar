@@ -383,6 +383,7 @@ Status legend:
 
 - `[~]` `_UseReflection`
   - done: source raw params と reflection texture asset ref を保持し、lilToon-like shader branch の specular / reflection 有効判定へ接続した。
+  - done: lilToon source material flag を renderer uniform に保持し、reflection path は `_UseShadow` に依存せず `_UseReflection` で選択する。
   - remaining: Unity の environment reflection、roughness mip、normal strength、forward add 条件を本家に合わせる。
 - `[~]` `_Smoothness`
   - done: source raw params を保持し、lilToon-like specular power と reflection の perceptual roughness / surface reduction へ接続した。

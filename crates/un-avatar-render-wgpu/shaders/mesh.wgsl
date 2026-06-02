@@ -260,6 +260,7 @@ const DBG_BASE_TEXTURE_ONLY: u32 = 128u;
 const DBG_DISABLE_NORMAL_MAP: u32 = 256u;
 const MAT_DOUBLE_SIDED: u32 = 512u;
 const MAT_CULL_FRONT: u32 = 2048u;
+const SRC_LILTOON: u32 = 4096u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -541,6 +542,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 @fragment
 fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
+	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
@@ -692,45 +694,43 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let reflection_uv = toon_reflection_uv(reflection_n, v);
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	var reflection_metallic = 0.0;
-	if (drawu.shadow_params.x > 0.5) {
-		if (drawu.reflection_control.x > 0.5) {
-			let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
-			let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
-			let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
-			let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
-			let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
-			let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
-			reflection_metallic = metallic;
-			let perceptual_roughness = max(1.0 - smoothness, 0.02);
-			let roughness = perceptual_roughness * perceptual_roughness;
-			let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
-			let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
-			let specular_power = mix(8.0, 128.0, smoothness);
-			let nh = max(dot(specular_n, half_vec), 0.0);
-			var specular_shape = pow(nh, specular_power);
-			if (drawu.specular_toon_params.x > 0.5) {
-				let toon_specular = pow(nh, 1.0 / max(roughness, 0.0004));
-				specular_shape = lil_tooning_scale(
-					toon_specular,
-					clamp(drawu.specular_toon_params.y, 0.0, 1.0),
-					clamp(drawu.specular_toon_params.z, 0.0, 1.0)
-				);
-			}
-			specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape;
-			let reflection_color = drawu.reflection_color * reflection_color_texel;
-			let reflection_lighting = mix(
-				vec3<f32>(1.0, 1.0, 1.0),
-				frame.light_color.rgb * frame.light_color.w,
-				clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
+	if (drawu.reflection_control.x > 0.5) {
+		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
+		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
+		let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
+		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
+		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
+		reflection_metallic = metallic;
+		let perceptual_roughness = max(1.0 - smoothness, 0.02);
+		let roughness = perceptual_roughness * perceptual_roughness;
+		let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
+		let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
+		let specular_power = mix(8.0, 128.0, smoothness);
+		let nh = max(dot(specular_n, half_vec), 0.0);
+		var specular_shape = pow(nh, specular_power);
+		if (drawu.specular_toon_params.x > 0.5) {
+			let toon_specular = pow(nh, 1.0 / max(roughness, 0.0004));
+			specular_shape = lil_tooning_scale(
+				toon_specular,
+				clamp(drawu.specular_toon_params.y, 0.0, 1.0),
+				clamp(drawu.specular_toon_params.z, 0.0, 1.0)
 			);
-			let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-			let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * cube_tint * reflection_lighting;
-			let one_minus_reflectivity = 0.96 - metallic * 0.96;
-			let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
-			let surface_reduction = 1.0 / (roughness * roughness + 1.0);
-			authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
 		}
-	} else {
+		specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape;
+		let reflection_color = drawu.reflection_color * reflection_color_texel;
+		let reflection_lighting = mix(
+			vec3<f32>(1.0, 1.0, 1.0),
+			frame.light_color.rgb * frame.light_color.w,
+			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
+		);
+		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
+		let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * cube_tint * reflection_lighting;
+		let one_minus_reflectivity = 0.96 - metallic * 0.96;
+		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
+		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
+		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
+	} else if (!is_liltoon) {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
 		let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
 		specular = vec3<f32>(specular_shape * specular_intensity);
@@ -773,7 +773,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 		}
 	}
-	if (drawu.shadow_params.x > 0.5) {
+	if (is_liltoon) {
 		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 		let reflection_transparency = mix(1.0, a, clamp(drawu.transparency_params.w, 0.0, 1.0));
