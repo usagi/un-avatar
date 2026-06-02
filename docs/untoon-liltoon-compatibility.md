@@ -174,6 +174,7 @@ Status legend:
 - `[~]` per-texture UV set selection / UV mode
   - done: Unity Exporter が既知 texture slot ごとの non-identity Tiling / Offset を `textureUvOffsetScales`、`*_UVMode` を `textureUvModeFactors` として保存し、Importer が `UnaLilToonLikeMaterial` へ保持する。
   - done: renderer は normal map sampling で `_BumpMap` / `_NormalMap` / `_BumpTex` の slot 別 Tiling / Offset を使う。
+  - done: renderer は `_ShadowStrengthMask` / `_ShadowBorderMask` / `_ShadowBlurMask` / `_MatCapBlendMask` / `_MatCap2ndBlendMask` / `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: renderer の他 texture sampling に slot 別 transform / UV mode / UV set selection を接続し、MatCap 系の専用 UV1 parameter と AudioLink / UDIM 系を分離する。
 - `[~]` lilToon `_MainTex_ScrollRotate`
   - done: Unity Exporter が `_MainTex_ScrollRotate` を `uvAnimationScrollX/Y/RotationSpeedFactor` へ正規化し、Importer / Renderer が base UV animation として適用する。
@@ -211,7 +212,8 @@ Status legend:
 	- remaining: dither、Transparent ZWrite と Unity render queue の組み合わせを sample で検証する。
 - `[~]` `_AlphaMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、`mask.r * _AlphaMaskScale + _AlphaMaskValue` を alpha へ適用する。
-	- remaining: per-texture UV transform / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
+	- done: Renderer は `_AlphaMask` の slot 別 Tiling / Offset を sampling UV に使う。
+	- remaining: UV mode / UV set、mask LOD、alpha-to-mask との関係を本家へ合わせる。
 - `[~]` `_SubpassCutoff`
 	- done: source raw param を lilToon-like blend state に保持し、Transparent ZWrite depth prepass の discard cutoff として使う。
 	- remaining: two-pass / refraction / fur variants の subpass ordering と Unity render queue の組み合わせを検証する。
@@ -255,13 +257,16 @@ Status legend:
   - remaining: border mix の入力値と AO mask 適用順を本家 `lilGetShading` と照合する。
 - `[~]` `_ShadowStrengthMask`
   - done: Unity Exporter が `_ShadowStrengthMask` を `shadowStrengthMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.strength_mask_texture_index` へ読み込み、Renderer は 1st shadow strength に mask.r を掛ける。
-  - remaining: mask LOD、face SDF shadow mode、2nd/3rd channel 利用を本家に合わせる。
+  - done: Renderer は `_ShadowStrengthMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: UV mode / UV set、mask LOD、face SDF shadow mode、2nd/3rd channel 利用を本家に合わせる。
 - `[~]` `_ShadowBorderMask`
   - done: Unity Exporter が `_ShadowBorderMask` を `shadowBorderMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.border_mask_texture_index` へ読み込み、Renderer は 1st shadow の `NdotL` 相当値に mask.r を掛けて toon border へ渡す。
-  - remaining: `_ShadowAOShift`、`_ShadowPostAO`、mask LOD、2nd/3rd channel 利用、本家の `lilTooningNoSaturateScale` path を実装する。
+  - done: Renderer は `_ShadowBorderMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: UV mode / UV set、`_ShadowAOShift`、`_ShadowPostAO`、mask LOD、2nd/3rd channel 利用、本家の `lilTooningNoSaturateScale` path を実装する。
 - `[~]` `_ShadowBlurMask`
   - done: Unity Exporter が `_ShadowBlurMask` を `shadowBlurMaskTextureIndex` として保存する。Importer は `UnaLilToonLikeMaterial.shadow.blur_mask_texture_index` へ読み込み、Renderer は 1st shadow blur に mask.r を掛ける。
-  - remaining: mask LOD、2nd/3rd channel 利用、本家の `aastrencth` と blur scale の対応を検証する。
+  - done: Renderer は `_ShadowBlurMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: UV mode / UV set、mask LOD、2nd/3rd channel 利用、本家の `aastrencth` と blur scale の対応を検証する。
 - `[~]` `_ShadowReceive`
   - done: source raw params を v2 shadow parameter として保持する。
   - remaining: Unity/lilToon の shadow attenuation 相当入力を UNAvatar lighting に追加して、`lns *= lerp(1.0, calculatedShadow, _ShadowReceive)` へ接続する。
@@ -356,14 +361,15 @@ Status legend:
   - remaining: mip availability、texture compression 後の LOD、2nd MatCap LOD との扱いを本家へ合わせる。
 - `[~]` `_MatCapBlendMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
-	- remaining: mask UV mode、VR parallax、2nd MatCap との合成順を本家へ合わせる。
+	- done: Renderer は `_MatCapBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
+	- remaining: mask UV mode / UV set、VR parallax、2nd MatCap との合成順を本家へ合わせる。
 - `[~]` `_MatCapBackfaceMask`
 	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
 	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
 	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask` を保持し、2nd MatCap contribution へ接続した。
-	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。
-  - remaining: VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
+	- done: `_MatCap2ndBlendMask` を保存 / import し、2nd MatCap blend weight に mask.r を掛ける。Renderer は `_MatCap2ndBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
+  - remaining: mask UV mode / UV set、VR parallax、Z rotation cancel、1st MatCap との本家合成順、sampler 分離要否を検証する。
 
 ### Reflection / Specular
 

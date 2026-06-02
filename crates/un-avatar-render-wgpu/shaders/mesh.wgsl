@@ -65,6 +65,12 @@ struct DrawMaterial {
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
 	normal_uv_offset_scale: vec4<f32>,
+	shadow_strength_mask_uv_offset_scale: vec4<f32>,
+	shadow_border_mask_uv_offset_scale: vec4<f32>,
+	shadow_blur_mask_uv_offset_scale: vec4<f32>,
+	matcap_blend_mask_uv_offset_scale: vec4<f32>,
+	matcap2_blend_mask_uv_offset_scale: vec4<f32>,
+	alpha_mask_uv_offset_scale: vec4<f32>,
 	main_color_adjust_params: vec4<f32>,
 }
 
@@ -282,7 +288,8 @@ fn apply_lil_alpha_mask(a: f32, uv: vec2<f32>) -> f32 {
 	if (mode <= 0) {
 		return a;
 	}
-	let raw_mask = textureSample(alpha_mask_tex, alpha_mask_samp, uv).r;
+	let mask_uv = uv * drawu.alpha_mask_uv_offset_scale.zw + drawu.alpha_mask_uv_offset_scale.xy;
+	let raw_mask = textureSample(alpha_mask_tex, alpha_mask_samp, mask_uv).r;
 	let alpha_mask = clamp(raw_mask * drawu.alpha_mask_params.y + drawu.alpha_mask_params.z, 0.0, 1.0);
 	if (mode == 1) {
 		return alpha_mask;
@@ -547,10 +554,13 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
 	var shading: f32;
 	if (drawu.shadow_params.x > 0.5) {
-		let shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).r;
-		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).r;
+		let shadow_strength_mask_uv = uv * drawu.shadow_strength_mask_uv_offset_scale.zw + drawu.shadow_strength_mask_uv_offset_scale.xy;
+		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
+		let shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;
+		let shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).r;
+		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).r;
 		let lil_shadow_value = (dot(shadow_n, l) * 0.5 + 0.5) * shadow_border_mask;
-		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, uv).r;
+		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, shadow_strength_mask_uv).r;
 		let lil_shadow = lil_tooning_scale_range(
 			lil_shadow_value,
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
@@ -631,7 +641,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 		if (drawu.shadow_params.x > 0.5) {
 			let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
 			let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
-			let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, uv).r;
+			let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
+			let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
 			let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
 			let matcap_backface = select(clamp(drawu.matcap_ext_params.w, 0.0, 1.0), 1.0, front_facing);
 			let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface, 0.0, 1.0);
@@ -646,7 +657,8 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 			let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 			let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
-			let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, uv).r;
+			let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
+			let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
 			let matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);
 			let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_backface, 0.0, 1.0);
 			lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);

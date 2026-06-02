@@ -271,6 +271,12 @@ struct MeshDrawMaterialGpu {
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
 	normal_uv_offset_scale: [f32; 4],
+	shadow_strength_mask_uv_offset_scale: [f32; 4],
+	shadow_border_mask_uv_offset_scale: [f32; 4],
+	shadow_blur_mask_uv_offset_scale: [f32; 4],
+	matcap_blend_mask_uv_offset_scale: [f32; 4],
+	matcap2_blend_mask_uv_offset_scale: [f32; 4],
+	alpha_mask_uv_offset_scale: [f32; 4],
 	main_color_adjust_params: [f32; 4],
 }
 
@@ -284,7 +290,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 752);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 848);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1157,6 +1163,24 @@ fn mesh_draw_material_gpu(
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let shadow_strength_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowStrengthMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let shadow_border_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowBorderMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let shadow_blur_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ShadowBlurMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap2_blend_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let alpha_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AlphaMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let main_color_adjust_params = liltoon_like
 		.map(|u| u.main_color.main_texture_hsvg_factor)
 		.unwrap_or([0.0, 1.0, 1.0, 1.0]);
@@ -1572,6 +1596,12 @@ fn mesh_draw_material_gpu(
 		],
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
+		shadow_strength_mask_uv_offset_scale,
+		shadow_border_mask_uv_offset_scale,
+		shadow_blur_mask_uv_offset_scale,
+		matcap_blend_mask_uv_offset_scale,
+		matcap2_blend_mask_uv_offset_scale,
+		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
 	}
 }
@@ -3515,6 +3545,42 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main_color_adjust_params, [0.25, 0.8, 1.2, 0.9]);
+	}
+
+	#[test]
+	fn liltoon_mask_uv_transforms_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_ShadowStrengthMask".to_string(), [0.1, 0.2, 1.1, 1.2]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_ShadowBorderMask".to_string(), [0.3, 0.4, 1.3, 1.4]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_ShadowBlurMask".to_string(), [0.5, 0.6, 1.5, 1.6]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCapBlendMask".to_string(), [0.7, 0.8, 1.7, 1.8]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCap2ndBlendMask".to_string(), [0.9, 1.0, 1.9, 2.0]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_AlphaMask".to_string(), [1.1, 1.2, 2.1, 2.2]);
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.shadow_strength_mask_uv_offset_scale, [0.1, 0.2, 1.1, 1.2]);
+		assert_eq!(draw.shadow_border_mask_uv_offset_scale, [0.3, 0.4, 1.3, 1.4]);
+		assert_eq!(draw.shadow_blur_mask_uv_offset_scale, [0.5, 0.6, 1.5, 1.6]);
+		assert_eq!(draw.matcap_blend_mask_uv_offset_scale, [0.7, 0.8, 1.7, 1.8]);
+		assert_eq!(draw.matcap2_blend_mask_uv_offset_scale, [0.9, 1.0, 1.9, 2.0]);
+		assert_eq!(draw.alpha_mask_uv_offset_scale, [1.1, 1.2, 2.1, 2.2]);
 	}
 
 	#[test]
