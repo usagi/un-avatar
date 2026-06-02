@@ -290,12 +290,13 @@ const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 struct Vertex {
 	pos: [f32; 3],
 	norm: [f32; 3],
+	tangent: [f32; 4],
 	uv: [f32; 2],
 	joints: [u16; 4],
 	weights: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<Vertex>() == 56);
+const _: () = assert!(std::mem::size_of::<Vertex>() == 72);
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct TextureUploadSummary {
@@ -587,6 +588,70 @@ fn default_morph_weight_for(buf: &UnaMeshBuffers, target_index: usize) -> f32 {
 	buf.default_morph_weights.get(target_index).copied().unwrap_or(0.0).clamp(0.0, 1.0)
 }
 
+fn tangent_is_missing(tangent: [f32; 4]) -> bool {
+	let t = Vec3::new(tangent[0], tangent[1], tangent[2]);
+	t.length_squared() <= 0.0000001
+}
+
+fn fallback_tangent_for_normal(normal: Vec3) -> Vec3 {
+	let axis = if normal.y.abs() < 0.999 { Vec3::Y } else { Vec3::X };
+	axis.cross(normal).try_normalize().unwrap_or(Vec3::X)
+}
+
+fn fill_missing_tangents(verts: &mut [Vertex], indices: &[u32]) {
+	if !verts.iter().any(|v| tangent_is_missing(v.tangent)) {
+		return;
+	}
+	let mut tan1 = vec![Vec3::ZERO; verts.len()];
+	let mut tan2 = vec![Vec3::ZERO; verts.len()];
+	for tri in indices.chunks_exact(3) {
+		let i0 = tri[0] as usize;
+		let i1 = tri[1] as usize;
+		let i2 = tri[2] as usize;
+		if i0 >= verts.len() || i1 >= verts.len() || i2 >= verts.len() {
+			continue;
+		}
+		let p0 = Vec3::from_array(verts[i0].pos);
+		let p1 = Vec3::from_array(verts[i1].pos);
+		let p2 = Vec3::from_array(verts[i2].pos);
+		let uv0 = verts[i0].uv;
+		let uv1 = verts[i1].uv;
+		let uv2 = verts[i2].uv;
+		let e1 = p1 - p0;
+		let e2 = p2 - p0;
+		let duv1 = [uv1[0] - uv0[0], uv1[1] - uv0[1]];
+		let duv2 = [uv2[0] - uv0[0], uv2[1] - uv0[1]];
+		let det = duv1[0] * duv2[1] - duv1[1] * duv2[0];
+		if det.abs() <= 0.0000001 {
+			continue;
+		}
+		let inv_det = 1.0 / det;
+		let sdir = (e1 * duv2[1] - e2 * duv1[1]) * inv_det;
+		let tdir = (e2 * duv1[0] - e1 * duv2[0]) * inv_det;
+		tan1[i0] += sdir;
+		tan1[i1] += sdir;
+		tan1[i2] += sdir;
+		tan2[i0] += tdir;
+		tan2[i1] += tdir;
+		tan2[i2] += tdir;
+	}
+	for (i, vert) in verts.iter_mut().enumerate() {
+		if !tangent_is_missing(vert.tangent) {
+			continue;
+		}
+		let n = Vec3::from_array(vert.norm).try_normalize().unwrap_or(Vec3::Y);
+		let authored_tangent = tan1[i];
+		let tangent_ortho = authored_tangent - n * n.dot(authored_tangent);
+		let tangent = tangent_ortho.try_normalize().unwrap_or_else(|| fallback_tangent_for_normal(n));
+		let sign = if tan2[i].length_squared() > 0.0000001 && n.cross(tangent).dot(tan2[i]) < 0.0 {
+			-1.0
+		} else {
+			1.0
+		};
+		vert.tangent = [tangent.x, tangent.y, tangent.z, sign];
+	}
+}
+
 fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
 	let positions = &buf.positions;
@@ -594,6 +659,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 		return None;
 	}
 	let normals = buf.normals.as_deref();
+	let tangents = buf.tangents.as_deref();
 	let uvs = buf.tex_coords_0.as_deref();
 	let joints_buf = buf.joints.as_deref();
 	let weights_buf = buf.weights.as_deref();
@@ -633,6 +699,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 			}
 		}
 		let uv = uvs.and_then(|uu| uu.get(pi)).copied().unwrap_or([0.0, 0.0]);
+		let tangent = tangents.and_then(|tt| tt.get(pi)).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
 		let jo = joints_buf.and_then(|jj| jj.get(pi)).copied().unwrap_or(j_default);
 		let we = weights_buf.and_then(|ww| ww.get(pi)).copied().unwrap_or(w_default);
 		let n = Vec3::from_array(n)
@@ -642,6 +709,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 		verts.push(Vertex {
 			pos,
 			norm: n,
+			tangent,
 			uv,
 			joints: jo,
 			weights: we,
@@ -679,6 +747,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 	if verts.is_empty() || indices.is_empty() {
 		return None;
 	}
+	fill_missing_tangents(&mut verts, &indices);
 
 	Some(ExpandedPrimitive {
 		verts,
@@ -1927,7 +1996,7 @@ impl SceneMeshes {
 			source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_MESH)),
 		});
 
-		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 5] = [
+		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -1941,16 +2010,21 @@ impl SceneMeshes {
 			wgpu::VertexAttribute {
 				offset: 24,
 				shader_location: 2,
-				format: wgpu::VertexFormat::Float32x2,
-			},
-			wgpu::VertexAttribute {
-				offset: 32,
-				shader_location: 3,
-				format: wgpu::VertexFormat::Uint16x4,
+				format: wgpu::VertexFormat::Float32x4,
 			},
 			wgpu::VertexAttribute {
 				offset: 40,
+				shader_location: 3,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
 				shader_location: 4,
+				format: wgpu::VertexFormat::Uint16x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 56,
+				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
 		];
@@ -3275,6 +3349,7 @@ mod tests {
 			name: None,
 			positions: vec![[1.0, 2.0, 3.0]],
 			normals: Some(vec![[0.0, 1.0, 0.0]]),
+			tangents: None,
 			tex_coords_0: None,
 			joints: None,
 			weights: None,

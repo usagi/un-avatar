@@ -419,6 +419,8 @@ pub struct UnaMeshBuffers {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub normals: Option<Vec<[f32; 3]>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tangents: Option<Vec<[f32; 4]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tex_coords_0: Option<Vec<[f32; 2]>>,
 	/// スキン内ジョイントインデックス（頂点ごと 4 本）。未使用スロットは 0。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1638,6 +1640,7 @@ mod tests {
 			name: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
+			tangents: None,
 			tex_coords_0: None,
 			joints: None,
 			weights: None,
@@ -1674,6 +1677,7 @@ mod tests {
 			name: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
+			tangents: None,
 			tex_coords_0: None,
 			joints: None,
 			weights: None,

@@ -299,7 +299,9 @@ Status legend:
 - `[~]` normal scale
   - done: normalTexture scale を shader uniform に渡す。
   - remaining: Unity/lilToon tangent-space parity、green channel convention、backface normal behavior を検証する。
-- `[ ]` tangent-space parity validation against Unity
+- `[~]` tangent-space parity validation against Unity
+  - done: glTF TANGENT を `.unavatar` mesh buffer へ保持し、wgpu vertex layout / WGSL normal map TBN へ接続した。tangent 欠落 mesh は CPU 側で position / uv / normal から tangent を生成し、shader は常に tangent TBN を使う。
+  - remaining: Unity/lilToon reference との green channel convention、bitangent sign、backface normal behavior を画像比較で検証する。
 - `[ ]` 2nd normal map
 - `[ ]` anisotropy normal interactions
 

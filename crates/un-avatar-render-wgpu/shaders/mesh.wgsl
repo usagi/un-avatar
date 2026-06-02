@@ -122,9 +122,10 @@ struct MorphU {
 struct VsIn {
 	@location(0) pos: vec3<f32>,
 	@location(1) norm: vec3<f32>,
-	@location(2) uv: vec2<f32>,
-	@location(3) joints: vec4<u32>,
-	@location(4) weights: vec4<f32>,
+	@location(2) tangent: vec4<f32>,
+	@location(3) uv: vec2<f32>,
+	@location(4) joints: vec4<u32>,
+	@location(5) weights: vec4<f32>,
 }
 
 struct VsOut {
@@ -132,6 +133,7 @@ struct VsOut {
 	@location(0) wn: vec3<f32>,
 	@location(1) uv: vec2<f32>,
 	@location(2) wp: vec3<f32>,
+	@location(3) wt: vec4<f32>,
 }
 
 fn mat3_upper(m: mat4x4<f32>) -> mat3x3<f32> {
@@ -161,6 +163,8 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let morphed = morphed_position_normal(v.pos, v.norm, vertex_index);
 	let pos = morphed[0];
 	let norm = morphed[1];
+	let tangent = v.tangent.xyz;
+	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0);
 	let j0 = v.joints.x;
 	let j1 = v.joints.y;
 	let j2 = v.joints.z;
@@ -169,9 +173,11 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	if (dbg & DBG_BIND_POSE_RIGID) != 0u {
 		let wp = drawt.model * vec4<f32>(pos, 1.0);
 		let mn = mat3_upper(drawt.model) * norm;
+		let mt = mat3_upper(drawt.model) * tangent;
 		o.wn = normalize(mn);
 		o.uv = v.uv;
 		o.wp = wp.xyz;
+		o.wt = vec4<f32>(mt, tangent_sign);
 		o.clip = frame.view_proj * wp;
 		return o;
 	}
@@ -192,10 +198,17 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let n3 = mat3_upper(m3) * norm;
 	let local_n = normalize(v.weights.x * n0 + v.weights.y * n1 + v.weights.z * n2 + v.weights.w * n3);
 	let wn = normalize(mat3_upper(drawt.model) * local_n);
+	let t0 = mat3_upper(m0) * tangent;
+	let t1 = mat3_upper(m1) * tangent;
+	let t2 = mat3_upper(m2) * tangent;
+	let t3 = mat3_upper(m3) * tangent;
+	let local_t = v.weights.x * t0 + v.weights.y * t1 + v.weights.z * t2 + v.weights.w * t3;
+	let wt = mat3_upper(drawt.model) * local_t;
 
 	o.wn = wn;
 	o.uv = v.uv;
 	o.wp = wp.xyz;
+	o.wt = vec4<f32>(wt, tangent_sign);
 	o.clip = frame.view_proj * wp;
 	return o;
 }
@@ -394,7 +407,7 @@ fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
 	return mix(base_uv, out_uv, clamp(mask, 0.0, 1.0));
 }
 
-fn normal_mapped(n_in: vec3<f32>, wp: vec3<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
+fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
 	let n = normalize(n_in);
 	if (abs(scale) < 0.000001) {
 		return n;
@@ -405,19 +418,9 @@ fn normal_mapped(n_in: vec3<f32>, wp: vec3<f32>, uv: vec2<f32>, scale: f32) -> v
 	tn.y = tn.y * scale;
 	tn = normalize(tn);
 
-	let dp1 = dpdx(wp);
-	let dp2 = dpdy(wp);
-	let duv1 = dpdx(uv);
-	let duv2 = dpdy(uv);
-	let det = duv1.x * duv2.y - duv1.y * duv2.x;
-	if (abs(det) < 0.0000001) {
-		return n;
-	}
-	let inv_det = 1.0 / det;
-	var t = (dp1 * duv2.y - dp2 * duv1.y) * inv_det;
-	var b = (-dp1 * duv2.x + dp2 * duv1.x) * inv_det;
-	t = normalize(t - n * dot(n, t));
-	b = normalize(b - n * dot(n, b) - t * dot(t, b));
+	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
+	let t = normalize(tangent_ortho);
+	let b = normalize(cross(n, t)) * tangent_in.w;
 	return normalize(t * tn.x + b * tn.y + n * tn.z);
 }
 
@@ -456,7 +459,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let base = select(alb * drawu.base_color.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
-	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wt, uv, normal_scale), front_facing, dbg);
 	let ndl = max(dot(n, l), 0.0);
 	let ambient = frame.ambient_color.rgb * (frame.ambient_color.w * 0.57);
 	let direct = lil_direct_light_color() * (0.8 * ndl);
@@ -504,7 +507,7 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
 	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
-	let n = face_normal(normal_mapped(i.wn, i.wp, uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wt, uv, normal_scale), front_facing, dbg);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));

@@ -2578,6 +2578,7 @@ fn read_primitive(
 	};
 
 	let normals = reader.read_normals().map(|it| it.collect());
+	let tangents = reader.read_tangents().map(|it| it.collect());
 	let tex_coords_0 = reader.read_tex_coords(0).map(|tc| tc.into_f32().collect());
 	let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
 	let material_index = prim.material().index();
@@ -2637,6 +2638,7 @@ fn read_primitive(
 		name: None,
 		positions,
 		normals,
+		tangents,
 		tex_coords_0,
 		joints,
 		weights,
