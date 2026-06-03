@@ -1046,7 +1046,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
 	}
 	if (!is_fur_pass) {
-		liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
+		liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon && !is_liltoon_gem);
 	}
 	if use_transparent_prepass {
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
