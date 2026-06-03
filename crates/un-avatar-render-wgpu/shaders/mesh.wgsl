@@ -1088,9 +1088,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
 	let parallax_offset = lil_parallax_offset(n, i.wt, v);
-	let camera_pos_len = length(frame.camera_pos.xyz);
-	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
-	let gem_view = normalize(mix(camera_dir, v, clamp(drawu.gem_params.w, 0.0, 1.0)));
+	let gem_view = v;
 	let anisotropy_basis = lil_anisotropy_basis(n, i.wt, uv, v);
 	let anisotropy_n = anisotropy_basis.normal;
 
