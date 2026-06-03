@@ -1075,13 +1075,16 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u || is_fur_pass);
-	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
-	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
+	let geometry_n_faced = face_normal(normalize(i.wn), front_facing, dbg);
+	let n_faced = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
+	let l = normalize(frame.light_dir.xyz);
+	let v = normalize(frame.camera_pos.xyz - i.wp);
+	let gem_backface_normal = is_liltoon_gem && !front_facing;
+	let geometry_n = select(geometry_n_faced, normalize(geometry_n_faced - v * 0.2), gem_backface_normal);
+	let n = select(n_faced, normalize(n_faced - v * 0.2), gem_backface_normal);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
-	let l = normalize(frame.light_dir.xyz);
-	let v = normalize(frame.camera_pos.xyz - i.wp);
 	let parallax_offset = lil_parallax_offset(n, i.wt, v);
 	let camera_pos_len = length(frame.camera_pos.xyz);
 	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
@@ -1175,6 +1178,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let gi_equalization = clamp(drawu.shading_params.w, 0.0, 1.0);
 		let indirect_light = mix(shade_term, base, gi_equalization) * frame.ambient_color.rgb * frame.ambient_color.w;
 		lit = min(direct_color + indirect_light, base) * authored_occlusion(uv, dbg);
+	}
+	if (is_liltoon_gem) {
+		lit = base * clamp(abs(dot(n, v)), 0.0, 1.0) * 0.75;
 	}
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
