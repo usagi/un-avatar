@@ -734,6 +734,14 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	}
 }
 
+fn opaque_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
+	match shading {
+		UnaShadingModel::LitLambert => DrawPipelineKind::OpaqueLit,
+		UnaShadingModel::Unlit => DrawPipelineKind::OpaqueUnlit,
+		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::OpaqueToon,
+	}
+}
+
 fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
 	let Some(liltoon_like) = material.liltoon_like.as_ref() else {
 		return false;
@@ -778,6 +786,10 @@ fn draw_render_queue_number(draw: &MeshDraw) -> i32 {
 
 fn draw_render_order_key(draws: &[MeshDraw], draw_index: usize) -> (i32, usize) {
 	(draw_render_queue_number(&draws[draw_index]), draw_index)
+}
+
+fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -> bool {
+	!matches!(alpha_mode, UnaAlphaMode::Blend) && render_queue >= 3000
 }
 
 fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
@@ -825,6 +837,11 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaShadingModel::LilToonLike => 3,
 		};
 		match draw.alpha_mode {
+			UnaAlphaMode::Opaque | UnaAlphaMode::Mask
+				if draw_uses_late_non_blend_queue(draw.alpha_mode, draw_render_queue_number(draw)) =>
+			{
+				blended_draws.push((opaque_pipeline_for_shading(shading), draw_index));
+			}
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading) => {
@@ -868,6 +885,7 @@ pub(crate) struct SceneMeshes {
 	pipeline_opaque_unlit: wgpu::RenderPipeline,
 	pipeline_opaque_toon: wgpu::RenderPipeline,
 	pipeline_transparent_toon_backpass: wgpu::RenderPipeline,
+	pipeline_transparent_toon_backpass_no_zwrite: wgpu::RenderPipeline,
 	pipeline_blend_lit: wgpu::RenderPipeline,
 	pipeline_blend_unlit: wgpu::RenderPipeline,
 	pipeline_blend_toon: wgpu::RenderPipeline,
@@ -3218,7 +3236,7 @@ fn mesh_draw_material_gpu(
 			[
 				u.blend_state.subpass_cutoff_factor.clamp(0.0, 1.0),
 				u.rendering.aa_strength_factor.max(0.0),
-				u.rendering.gsaa_strength_factor.max(0.0),
+				u.blend_state.pre_cutoff_factor.clamp(0.0, 1.0),
 				u.blend_state.pre_cull_factor.clamp(0.0, 2.0),
 			]
 		})
@@ -3593,6 +3611,7 @@ impl SceneMeshes {
 		cull_mode: Option<wgpu::Face>,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
+		let alpha_to_coverage_enabled = matches!(label, "mesh_opaque_toon" | "mesh_csfc_fur_pre_toon");
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -3627,6 +3646,7 @@ impl SceneMeshes {
 			}),
 			multisample: wgpu::MultisampleState {
 				count: sample_count,
+				alpha_to_coverage_enabled,
 				..Default::default()
 			},
 			multiview_mask: None,
@@ -4616,6 +4636,22 @@ impl SceneMeshes {
 			premultiplied_blend,
 			wgpu::ColorWrites::ALL,
 			true,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
+		let pipeline_transparent_toon_backpass_no_zwrite = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_transparent_toon_backpass_no_zwrite",
+			"vs_main",
+			"fs_toon_backpass",
+			premultiplied_blend,
+			wgpu::ColorWrites::ALL,
+			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
 			sample_count,
@@ -5900,6 +5936,7 @@ impl SceneMeshes {
 			pipeline_opaque_unlit,
 			pipeline_opaque_toon,
 			pipeline_transparent_toon_backpass,
+			pipeline_transparent_toon_backpass_no_zwrite,
 			pipeline_blend_lit,
 			pipeline_blend_unlit,
 			pipeline_blend_toon,
@@ -6226,8 +6263,22 @@ impl SceneMeshes {
 			}
 		}
 		if !self.transparent_backpass_draw_indices.is_empty() {
-			pass.set_pipeline(&self.pipeline_transparent_toon_backpass);
+			let mut backpass_zwrite = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
+				let zwrite = self.draws[draw_index]
+					.material
+					.liltoon_like
+					.as_ref()
+					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				if backpass_zwrite != Some(zwrite) {
+					pass.set_pipeline(if zwrite {
+						&self.pipeline_transparent_toon_backpass
+					} else {
+						&self.pipeline_transparent_toon_backpass_no_zwrite
+					});
+					backpass_zwrite = Some(zwrite);
+					state = DrawBindState::default();
+				}
 				self.draw_inner(pass, &mut state, draw_index);
 			}
 		}
@@ -7038,6 +7089,18 @@ mod tests {
 	}
 
 	#[test]
+	fn high_render_queue_cutout_uses_late_non_blend_pass() {
+		assert!(draw_uses_late_non_blend_queue(UnaAlphaMode::Mask, 3001));
+		assert!(draw_uses_late_non_blend_queue(UnaAlphaMode::Opaque, 3000));
+		assert!(!draw_uses_late_non_blend_queue(UnaAlphaMode::Mask, 2450));
+		assert!(!draw_uses_late_non_blend_queue(UnaAlphaMode::Blend, 3000));
+		assert_eq!(
+			opaque_pipeline_for_shading(UnaShadingModel::LilToonLike),
+			DrawPipelineKind::OpaqueToon
+		);
+	}
+
+	#[test]
 	fn material_render_queue_prefers_liltoon_source_queue() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.rendering.render_queue_number = Some(2461);
@@ -7707,6 +7770,22 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
+	}
+
+	#[test]
+	fn liltoon_transparent_prepass_params_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.blend_state.subpass_cutoff_factor = 0.4;
+		liltoon_like.blend_state.pre_cutoff_factor = 0.3;
+		liltoon_like.blend_state.pre_cull_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.alpha_ext_params, [0.4, 1.0, 0.3, 1.0]);
 	}
 
 	#[test]

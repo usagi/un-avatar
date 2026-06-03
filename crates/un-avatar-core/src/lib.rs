@@ -1074,6 +1074,10 @@ pub struct UnaLilToonLikeBlendState {
 	pub alpha_boost_factor: f32,
 	#[serde(default = "default_liltoon_subpass_cutoff")]
 	pub subpass_cutoff_factor: f32,
+	#[serde(default = "default_liltoon_pre_cutoff")]
+	pub pre_cutoff_factor: f32,
+	#[serde(default = "one_f32")]
+	pub pre_zwrite_factor: f32,
 	#[serde(default)]
 	pub alpha_to_mask_factor: f32,
 	/// lilToon `_PreCull` for transparent z-write/subpass rendering: 0 Off, 1 Front, 2 Back.
@@ -1458,6 +1462,8 @@ impl Default for UnaLilToonLikeBlendState {
 			forward_add_alpha_operation_factor: default_liltoon_forward_add_alpha_operation_factor(),
 			alpha_boost_factor: 1.0,
 			subpass_cutoff_factor: default_liltoon_subpass_cutoff(),
+			pre_cutoff_factor: default_liltoon_pre_cutoff(),
+			pre_zwrite_factor: 1.0,
 			alpha_to_mask_factor: 0.0,
 			pre_cull_factor: default_liltoon_precull_factor(),
 		}
@@ -1696,6 +1702,10 @@ fn default_liltoon_outline_fix_width() -> f32 {
 }
 
 fn default_liltoon_subpass_cutoff() -> f32 {
+	0.5
+}
+
+fn default_liltoon_pre_cutoff() -> f32 {
 	0.5
 }
 

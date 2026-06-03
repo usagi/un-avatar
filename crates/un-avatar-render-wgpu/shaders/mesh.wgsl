@@ -489,6 +489,13 @@ fn mask_discard_toon(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
 	}
 }
 
+fn liltoon_cutout_alpha(a: f32, alpha_kind: f32, cutoff: f32, is_liltoon: bool) -> f32 {
+	if is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5 {
+		return clamp((a - cutoff) / max(fwidth(a), 0.0001) + 0.5, 0.0, 1.0);
+	}
+	return a;
+}
+
 fn liltoon_blend_discard(a: f32, alpha_kind: f32, cutoff: f32, is_liltoon: bool) {
 	// lilToon's transparent fragment path still performs clip(alpha - _Cutoff)
 	// before blending. Without this, atlas edge alpha becomes unintended
@@ -598,7 +605,9 @@ fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwr
 fn discard_transparent_zprepass(a: f32, alpha_kind: f32, cutoff: f32, subpass_cutoff: f32, transparent_zwrite: f32) {
 	// lilToon Transparent+ZWrite applies _Cutoff first, then _SubpassCutoff
 	// for the transparent subpass. Keep depth consistent with the color pass.
-	let z_cutoff = max(max(cutoff, subpass_cutoff), 1.0 / 255.0);
+	let pre_cutoff = drawu.alpha_ext_params.z;
+	let z_cutoff = max(max(pre_cutoff, subpass_cutoff), 1.0 / 255.0);
+	_ = cutoff;
 	if alpha_kind > 1.5 && transparent_zwrite > 0.5 && a < z_cutoff {
 		discard;
 	}
@@ -728,6 +737,11 @@ fn lil_blend_weighted_color(dst: vec3<f32>, weighted_src: vec3<f32>, src_a: f32,
 fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
 	let f = pow(clamp(1.0 - nv, 0.0, 1.0), 5.0);
 	return mix(specular, vec3<f32>(grazing_term), f);
+}
+
+fn fresnel_term(f0: vec3<f32>, cos_a: f32) -> vec3<f32> {
+	let a = 1.0 - clamp(cos_a, 0.0, 1.0);
+	return f0 + (vec3<f32>(1.0) - f0) * a * a * a * a * a;
 }
 
 fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
@@ -1009,13 +1023,22 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
+	if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
+		if (liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) <= 0.0) {
+			discard;
+		}
+	} else {
+		mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
+	}
 	liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
 	if use_transparent_prepass {
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	var out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
+	if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
+		out_a = liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) * fur_alpha;
+	}
 	let compute_fur = fur_shell > 0.0 && fur_alpha_in > 1.0;
 	if (fur_shell > 0.0) {
 		if (fur_cutout_pre || !compute_fur) {
@@ -1140,42 +1163,6 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
-	let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
-	let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
-	let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x);
-	let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
-	let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
-	if (!disable_matcap) {
-		if (drawu.matcap_params.x > 0.0) {
-			let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
-			let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
-			let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
-			let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
-			let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
-			let matcap_backface = select(clamp(drawu.matcap_ext_params.w, 0.0, 1.0), 1.0, front_facing);
-			let matcap_transparency = mix(1.0, a, clamp(drawu.transparency_params.x, 0.0, 1.0));
-			let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
-			lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
-		} else if (!is_liltoon) {
-			lit = lit + matcap_raw * drawu.matcap_factor.w;
-		}
-		if (drawu.matcap2_params.x > 0.0) {
-			let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
-			let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
-			let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);
-			let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
-			let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
-			let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
-			let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
-			let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
-			let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
-			let matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
-			let matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);
-			let matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));
-			let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
-			lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
-		}
-	}
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var specular_blend = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection = vec3<f32>(0.0, 0.0, 0.0);
@@ -1202,18 +1189,20 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);
 		let specular_color = mix(vec3<f32>(reflectance, reflectance, reflectance), base, metallic);
-		let specular_power = mix(8.0, 128.0, smoothness);
 		let nh = max(dot(specular_n, half_vec), 0.0);
-		var specular_shape = pow(nh, specular_power);
+		let nv_spec = max(dot(specular_n, v), 0.0);
+		let nl_spec = max(dot(specular_n, l), 0.0);
+		let lh = max(dot(l, half_vec), 0.0);
+		var specular_reflect = vec3<f32>(0.0);
 		if (drawu.specular_toon_params.x > 0.5) {
 			let toon_specular = pow(nh, 1.0 / max(roughness, 0.0004));
-			specular_shape = lil_tooning_scale(
+			let specular_shape = lil_tooning_scale(
 				toon_specular,
 				clamp(drawu.specular_toon_params.y, 0.0, 1.0),
 				clamp(drawu.specular_toon_params.z, 0.0, 1.0)
 			);
-		}
-		if (anisotropy_basis.enabled > 0.5 && drawu.anisotropy_params.z > 0.5) {
+			specular_reflect = vec3<f32>(specular_shape);
+		} else if (anisotropy_basis.enabled > 0.5 && drawu.anisotropy_params.z > 0.5) {
 			let shift1 = anisotropy_basis.shift_noise * drawu.anisotropy_ext_params.z + drawu.anisotropy_ext_params.y;
 			let shift2 = anisotropy_basis.shift_noise * drawu.anisotropy2_params.y + drawu.anisotropy2_params.x;
 			let aniso1 = lil_anisotropic_specular_shape(
@@ -1234,10 +1223,21 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				shift2,
 				roughness
 			) * drawu.anisotropy2_params.z;
-			specular_shape = max(specular_shape, max(aniso1, aniso2));
+			let specular_shape = max(aniso1, aniso2) * nl_spec;
+			specular_reflect = specular_shape * fresnel_term(specular_color, lh);
+		} else {
+			let roughness2 = max(roughness, 0.002);
+			let lambda_v = nl_spec * (nv_spec * (1.0 - roughness2) + roughness2);
+			let lambda_l = nv_spec * (nl_spec * (1.0 - roughness2) + roughness2);
+			let r2 = roughness2 * roughness2;
+			let d = (nh * r2 - nh) * nh + 1.0;
+			let ggx = r2 / (d * d + 0.0000001);
+			let smith_joint_ggx = 0.5 / (lambda_v + lambda_l + 0.00001);
+			let specular_term = smith_joint_ggx * ggx * nl_spec;
+			specular_reflect = specular_term * fresnel_term(specular_color, lh);
 		}
-		specular = specular_color * frame.light_color.rgb * frame.light_color.w * specular_shape;
-		specular_blend = specular_color * specular_shape;
+		specular = specular_reflect * frame.light_color.rgb * frame.light_color.w;
+		specular_blend = specular_reflect;
 		let reflection_lighting = mix(
 			vec3<f32>(1.0, 1.0, 1.0),
 			frame.light_color.rgb * frame.light_color.w,
@@ -1364,6 +1364,40 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		} else {
 			lit = lil_blend_color3(lit, reflection_tint, authored_reflection_blend * reflection_color_alpha * drawu.reflection_control.z, drawu.reflection_control.w);
 		}
+		if (!disable_matcap) {
+			if (drawu.matcap_params.x > 0.0) {
+				let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+				let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
+				let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x);
+				let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
+				let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
+				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
+				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
+				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
+				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
+				let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
+				let matcap_backface = select(clamp(drawu.matcap_ext_params.w, 0.0, 1.0), 1.0, front_facing);
+				let matcap_transparency = mix(1.0, a, clamp(drawu.transparency_params.x, 0.0, 1.0));
+				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
+				lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
+			}
+			if (drawu.matcap2_params.x > 0.0) {
+				let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
+				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);
+				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
+				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
+				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
+				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
+				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
+				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
+				let matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
+				let matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);
+				let matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));
+				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
+				lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
+			}
+		}
 		if (drawu.rim_shade_params.x > 0.5) {
 			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
 			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
@@ -1395,6 +1429,42 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		}
 		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
 	} else {
+		if (!disable_matcap) {
+			let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+			let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
+			let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x);
+			let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
+			let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
+			if (drawu.matcap_params.x > 0.0) {
+				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
+				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
+				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
+				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
+				let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
+				let matcap_backface = select(clamp(drawu.matcap_ext_params.w, 0.0, 1.0), 1.0, front_facing);
+				let matcap_transparency = mix(1.0, a, clamp(drawu.transparency_params.x, 0.0, 1.0));
+				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
+				lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
+			} else {
+				lit = lit + matcap_raw * drawu.matcap_factor.w;
+			}
+			if (drawu.matcap2_params.x > 0.0) {
+				let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
+				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z);
+				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
+				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
+				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
+				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
+				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
+				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
+				let matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
+				let matcap2_backface = select(clamp(drawu.matcap2_ext_params.w, 0.0, 1.0), 1.0, front_facing);
+				let matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));
+				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
+				lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
+			}
+		}
 		lit = lit + specular + authored_reflection;
 		lit = lit + rim;
 	}
