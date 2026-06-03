@@ -2783,6 +2783,19 @@ impl GpuState {
 				return None;
 			}
 		};
+		let frame_width = frame.texture.width();
+		let frame_height = frame.texture.height();
+		if frame_width == 0 || frame_height == 0 {
+			return None;
+		}
+		if frame_width != self.config.width || frame_height != self.config.height {
+			let s = window.inner_size();
+			let width = if s.width == 0 { frame_width } else { s.width };
+			let height = if s.height == 0 { frame_height } else { s.height };
+			drop(frame);
+			self.resize(width, height);
+			return None;
+		}
 
 		let swap_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
