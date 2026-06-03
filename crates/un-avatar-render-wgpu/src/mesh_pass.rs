@@ -827,7 +827,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		let has_fur = draw_has_fur(draw, opts);
 		if has_fur {
 			fur_draw_indices.push(draw_index);
-			continue;
 		}
 
 		let shading_index = match shading {
@@ -6240,28 +6239,6 @@ impl SceneMeshes {
 			return;
 		}
 		let mut state = DrawBindState::default();
-		if !self.fur_draw_indices.is_empty() {
-			pass.set_pipeline(&self.pipeline_csfc_fur_pre_toon);
-			for &draw_index in &self.fur_draw_indices {
-				let _ = self.draw_csfc_fur_inner(pass, &mut state, draw_index);
-			}
-			state = DrawBindState::default();
-			pass.set_pipeline(&self.pipeline_csfc_fur_toon);
-			for &draw_index in &self.fur_draw_indices {
-				if self.draw_csfc_fur_inner(pass, &mut state, draw_index) {
-					continue;
-				}
-			}
-			pass.set_pipeline(&self.pipeline_fur_toon);
-			state = DrawBindState::default();
-			for &draw_index in &self.fur_draw_indices {
-				if self.draws[draw_index]._csfc_fur.is_some() {
-					continue;
-				}
-				let layer_count = draw_fur_layer_count(&self.draws[draw_index]);
-				self.draw_inner_with_material_instances(pass, &mut state, draw_index, &self.draws[draw_index].bind_material, layer_count);
-			}
-		}
 		if !self.transparent_backpass_draw_indices.is_empty() {
 			let mut backpass_zwrite = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
@@ -6286,6 +6263,29 @@ impl SceneMeshes {
 			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
 			for &draw_index in &batch.draw_indices {
 				self.draw_inner(pass, &mut state, draw_index);
+			}
+		}
+		if !self.fur_draw_indices.is_empty() {
+			state = DrawBindState::default();
+			pass.set_pipeline(&self.pipeline_csfc_fur_pre_toon);
+			for &draw_index in &self.fur_draw_indices {
+				let _ = self.draw_csfc_fur_inner(pass, &mut state, draw_index);
+			}
+			state = DrawBindState::default();
+			pass.set_pipeline(&self.pipeline_csfc_fur_toon);
+			for &draw_index in &self.fur_draw_indices {
+				if self.draw_csfc_fur_inner(pass, &mut state, draw_index) {
+					continue;
+				}
+			}
+			pass.set_pipeline(&self.pipeline_fur_toon);
+			state = DrawBindState::default();
+			for &draw_index in &self.fur_draw_indices {
+				if self.draws[draw_index]._csfc_fur.is_some() {
+					continue;
+				}
+				let layer_count = draw_fur_layer_count(&self.draws[draw_index]);
+				self.draw_inner_with_material_instances(pass, &mut state, draw_index, &self.draws[draw_index].bind_material, layer_count);
 			}
 		}
 	}

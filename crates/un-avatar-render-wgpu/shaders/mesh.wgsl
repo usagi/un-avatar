@@ -1023,26 +1023,34 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
+	let is_fur_pass = fur_shell > 0.0;
+	if (is_fur_pass && (alpha_kind > 0.5 && alpha_kind < 1.5 || fur_cutout_pre)) {
+		if (a * fur_alpha <= 0.4) {
+			discard;
+		}
+	} else if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
 		if (liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) <= 0.0) {
 			discard;
 		}
 	} else {
 		mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
 	}
-	liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
+	if (!is_fur_pass) {
+		liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon);
+	}
 	if use_transparent_prepass {
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
 	var out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
-	if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
+	if (is_fur_pass && (alpha_kind > 0.5 && alpha_kind < 1.5 || fur_cutout_pre)) {
+		out_a = clamp(a * fur_alpha * 5.0 - 2.0, 0.0, 1.0);
+	} else if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
 		out_a = liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) * fur_alpha;
 	}
 	let compute_fur = fur_shell > 0.0 && fur_alpha_in > 1.0;
 	if (fur_shell > 0.0) {
-		if (fur_cutout_pre || !compute_fur) {
-			out_a = clamp(out_a * 5.0 - 2.0, 0.0, 1.0);
+		if (fur_cutout_pre || alpha_kind > 0.5 && alpha_kind < 1.5) {
 			if (out_a <= 0.0) {
 				discard;
 			}
@@ -1058,7 +1066,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
 		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
 	}
-	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
+	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u || is_fur_pass);
 	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
 	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
@@ -1163,6 +1171,26 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
+	if (is_fur_pass) {
+		if (is_liltoon && drawu.rim_shade_params.x > 0.5) {
+			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
+			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
+			let rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;
+			let rim_shade = lil_tooning_scale(
+				rim_shade_raw,
+				clamp(drawu.rim_shade_params.y, 0.0, 1.0),
+				clamp(drawu.rim_shade_params.z, 0.0, 1.0)
+			) * rim_shade_mask * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
+			lit = mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
+		}
+		if (!disable_rim) {
+			let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.fur_rim_params.x, 0.00001));
+			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
+			let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
+			lit = lit + clamp(fur_shell, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
+		}
+		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
+	}
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var specular_blend = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection = vec3<f32>(0.0, 0.0, 0.0);
