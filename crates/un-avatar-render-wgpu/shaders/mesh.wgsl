@@ -1220,7 +1220,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let reflection_dir = normalize(reflect(-v, reflection_n));
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	var reflection_metallic = 0.0;
-	if (drawu.reflection_control.x > 0.5) {
+	if (!is_liltoon_gem && drawu.reflection_control.x > 0.5) {
 		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
 		let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
