@@ -1588,6 +1588,13 @@ fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) 
 }
 
 @fragment
+fn fs_toon_gem_pre(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+	let dbg = bitcast<u32>(drawu.params.w);
+	discard_by_cull_mode(front_facing, dbg);
+	return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+
+@fragment
 fn fs_fur_toon(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	var base: VsOut;
 	base.clip = i.clip;

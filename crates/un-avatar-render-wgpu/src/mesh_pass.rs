@@ -806,16 +806,31 @@ fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 	material_needs_screen_refraction(&draw.material)
 }
 
+fn material_uses_liltoon_gem_prepass(material: &UnaMaterialPbr) -> bool {
+	material
+		.liltoon_like
+		.as_ref()
+		.is_some_and(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem)
+}
+
+fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
+	material_uses_liltoon_gem_prepass(&draw.material)
+}
+
 fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
 	alpha_mode == UnaAlphaMode::Blend
 		&& transparent_with_z_write
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
+fn build_draw_order(
+	draws: &[MeshDraw],
+	opts: &SceneMeshLoadOpts,
+) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
 	let mut fur_draw_indices = Vec::new();
 	let mut transparent_backpass_draw_indices = Vec::new();
+	let mut gem_prepass_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -841,6 +856,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		let has_fur = draw_has_fur(draw, opts);
 		if has_fur {
 			fur_draw_indices.push(draw_index);
+		}
+		if draw_uses_liltoon_gem_prepass(draw) {
+			gem_prepass_draw_indices.push(draw_index);
 		}
 
 		let shading_index = match shading {
@@ -875,6 +893,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut transparent_backpass_draw_indices);
+	gem_prepass_draw_indices.sort_by_key(|&draw_index| draw_render_order_key(draws, draw_index));
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
@@ -885,6 +904,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		fur_draw_indices,
 		opaque_batches,
 		transparent_backpass_draw_indices,
+		gem_prepass_draw_indices,
 		blended_batches,
 	)
 }
@@ -906,6 +926,7 @@ pub(crate) struct SceneMeshes {
 	pipeline_blend_toon_zwrite: wgpu::RenderPipeline,
 	pipeline_blend_toon_add: wgpu::RenderPipeline,
 	pipeline_blend_toon_add_zwrite: wgpu::RenderPipeline,
+	pipeline_liltoon_gem_pre_toon: wgpu::RenderPipeline,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_layout: wgpu::BindGroupLayout,
@@ -924,6 +945,7 @@ pub(crate) struct SceneMeshes {
 	fur_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
+	gem_prepass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
@@ -4742,6 +4764,22 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
+		let pipeline_liltoon_gem_pre_toon = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_liltoon_gem_pre_toon",
+			"vs_main",
+			"fs_toon_gem_pre",
+			None,
+			wgpu::ColorWrites::ALL,
+			false,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
 		report("gpu-upload", "Preparing mesh frame buffers".to_string());
 		let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_frame"),
@@ -5961,8 +5999,14 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
-			build_draw_order(&draws, &opts);
+		let (
+			outline_draw_indices,
+			fur_draw_indices,
+			opaque_batches,
+			transparent_backpass_draw_indices,
+			gem_prepass_draw_indices,
+			blended_batches,
+		) = build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -5981,6 +6025,7 @@ impl SceneMeshes {
 			pipeline_blend_toon_zwrite,
 			pipeline_blend_toon_add,
 			pipeline_blend_toon_add_zwrite,
+			pipeline_liltoon_gem_pre_toon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_layout,
@@ -5996,6 +6041,7 @@ impl SceneMeshes {
 			fur_draw_indices,
 			opaque_batches,
 			transparent_backpass_draw_indices,
+			gem_prepass_draw_indices,
 			blended_batches,
 			texture_summary,
 			expression_names,
@@ -6195,12 +6241,19 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
-			build_draw_order(&self.draws, &self.opts);
+		let (
+			outline_draw_indices,
+			fur_draw_indices,
+			opaque_batches,
+			transparent_backpass_draw_indices,
+			gem_prepass_draw_indices,
+			blended_batches,
+		) = build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.fur_draw_indices = fur_draw_indices;
 		self.opaque_batches = opaque_batches;
 		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
+		self.gem_prepass_draw_indices = gem_prepass_draw_indices;
 		self.blended_batches = blended_batches;
 		self.rewrite_avatar_materials(queue);
 	}
@@ -6276,7 +6329,11 @@ impl SceneMeshes {
 	/// lilToon transparent z-write は `_PreCull` / `_SubpassCutoff` による FORWARD_BACK 相当 pass を先に描き、
 	/// `_ZWrite` が有効な Forward color pass も本家同様に depth write ありで描く。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
-		if self.fur_draw_indices.is_empty() && self.blended_batches.is_empty() && self.transparent_backpass_draw_indices.is_empty() {
+		if self.fur_draw_indices.is_empty()
+			&& self.blended_batches.is_empty()
+			&& self.transparent_backpass_draw_indices.is_empty()
+			&& self.gem_prepass_draw_indices.is_empty()
+		{
 			return;
 		}
 		let mut state = DrawBindState::default();
@@ -6297,6 +6354,13 @@ impl SceneMeshes {
 					backpass_zwrite = Some(zwrite);
 					state = DrawBindState::default();
 				}
+				self.draw_inner(pass, &mut state, draw_index);
+			}
+		}
+		if !self.gem_prepass_draw_indices.is_empty() {
+			pass.set_pipeline(&self.pipeline_liltoon_gem_pre_toon);
+			state = DrawBindState::default();
+			for &draw_index in &self.gem_prepass_draw_indices {
 				self.draw_inner(pass, &mut state, draw_index);
 			}
 		}
@@ -7269,6 +7333,34 @@ mod tests {
 		assert_ne!(flags & 32768, 0);
 		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
 		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
+	}
+
+	#[test]
+	fn liltoon_gem_prepass_requires_gem_source() {
+		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
+			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			..Default::default()
+		};
+		let gem_material = UnaMaterialPbr {
+			liltoon_like: Some(gem.clone()),
+			..Default::default()
+		};
+		assert!(material_uses_liltoon_gem_prepass(&gem_material));
+
+		gem.blend_state.destination_factor = 1.0;
+		let additive = UnaMaterialPbr {
+			liltoon_like: Some(gem),
+			..Default::default()
+		};
+		assert!(material_uses_liltoon_gem_prepass(&additive));
+
+		let mut transparent = un_avatar_core::UnaLilToonLikeMaterial::default();
+		transparent.blend_state.destination_factor = 1.0;
+		let non_gem = UnaMaterialPbr {
+			liltoon_like: Some(transparent),
+			..Default::default()
+		};
+		assert!(!material_uses_liltoon_gem_prepass(&non_gem));
 	}
 
 	#[test]
