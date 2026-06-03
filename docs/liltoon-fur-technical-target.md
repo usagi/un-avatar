@@ -2,6 +2,8 @@
 
 Status: investigation note for UNAvatar Fur implementation.
 
+Implementation design: [`csfc-fur-design.md`](csfc-fur-design.md).
+
 ## Source baseline
 
 - Upstream local repo: `C:\Users\the\tmp\lilToon`, tag `2.3.2`, commit `56d5095`.

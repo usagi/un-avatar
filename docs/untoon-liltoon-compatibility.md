@@ -654,7 +654,7 @@ Status legend:
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_UseFur` / `_FurLayerNum` / `_FurVector` / `_FurVectorScale` / `_FurGravity` / `_FurAO` / `_FurRootOffset` / `_FurCutoutLength` / `_FurRandomize` / `_FurNoiseTiling` / `_FurNoiseOffset` と `_FurVectorTex` / `_FurLengthMask` / `_FurNoiseMask` / `_FurMask` の source slot を保持する。
   - done: Renderer は fur material を別 draw list に分類し、`vs_fur` instanced shell pass で `_FurLayerNum` 1/2/3 を本家 `AppendFur` のサンプル数 4/7/13 に対応させ、`_FurVector` / `_FurVectorTex` / `_FurLengthMask` / `_FurGravity` / `_FurRandomize` による vertex offset を描く。
   - done: FullOnePass Fur fragment は `_FurNoiseMask` / `_FurMask` / `_FurRootOffset` / `_FurAO` を shell alpha / shell AO へ接続し、Portable16 tier は高 tier Fur textures を落として shader budget を維持する。
-  - remaining: High tier は CBF (Compute Barycentric Fur) を理論互換モデルとして参照しつつ、実装本命は CSFC (Compute Surface Fur Cards) とする。面積 / UV密度 / mask / length / camera distance / quality budget で生成数と sample 配置を決め、FurTwoPass 相当の pre / transparent pass、sorting、`_FurCutoutLength`、Shadow AO Map との順序を詰める。
+  - remaining: High tier は CBF (Compute Barycentric Fur) を理論互換モデルとして参照しつつ、実装本命は CSFC (Compute Surface Fur Cards; see `docs/csfc-fur-design.md`) とする。面積 / UV密度 / mask / length / camera distance / quality budget で生成数と sample 配置を決め、FurTwoPass 相当の pre / transparent pass、sorting、`_FurCutoutLength`、Shadow AO Map との順序を詰める。
 - `[defer]` refraction variant
 - `[~]` gem variant
   - done: Gem の source profile / additive blend / environment reflection approximation / screen-grab background refraction approximation / view-space normal offset approximation / VR parallax strength / roughness LOD / backface chromatic environment sampling / Gem particle approximation まで実装した。
