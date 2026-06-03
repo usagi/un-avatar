@@ -510,6 +510,14 @@ fn lil_blend_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) 
 	return mix(dst, out_col, clamp(src_a, 0.0, 1.0));
 }
 
+fn lil_blend_light_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) -> vec3<f32> {
+	let a = clamp(src_a, 0.0, 1.0);
+	if (blend_mode < 0.5) {
+		return dst + src * a;
+	}
+	return lil_blend_color(dst, src, a, blend_mode);
+}
+
 fn lil_blend_weighted_color(dst: vec3<f32>, weighted_src: vec3<f32>, src_a: f32, blend_mode: f32) -> vec3<f32> {
 	let a = clamp(src_a, 0.0, 1.0);
 	let src = select(vec3<f32>(0.0, 0.0, 0.0), weighted_src / max(a, 0.00001), a > 0.00001);
@@ -1012,7 +1020,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-		let env = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * reflection_color.rgb * cube_tint * reflection_lighting;
+		let reflection_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
+		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_uv, reflection_lod).rgb * reflection_color.rgb * cube_tint * reflection_lighting;
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
@@ -1107,7 +1116,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		if (!is_liltoon) {
 			lit = lit - reflection_metallic * lit;
 		}
-		lit = lil_blend_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
+		lit = lil_blend_light_color(lit, specular * drawu.reflection_color.rgb * reflection_color_texel.rgb, clamp(reflection_color_alpha * drawu.reflection_control.y, 0.0, 1.0), drawu.reflection_control.w);
 		if (is_liltoon_gem) {
 			let refraction_strength = abs(drawu.gem_params.x);
 			if (refraction_strength > 0.00001) {
@@ -1126,7 +1135,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 			}
 			lit = lit + authored_reflection;
 		} else {
-			lit = lil_blend_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
+			lit = lil_blend_light_color(lit, authored_reflection, clamp(reflection_color_alpha * drawu.reflection_control.z, 0.0, 1.0), drawu.reflection_control.w);
 		}
 		if (drawu.rim_shade_params.x > 0.5) {
 			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
