@@ -1301,6 +1301,11 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let perceptual_roughness = max(1.0 - smoothness, 0.02);
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let cube_tint = drawu.reflection_cube_color.rgb;
+		let gem_reflection_lighting = mix(
+			vec3<f32>(1.0, 1.0, 1.0),
+			frame.light_color.rgb * frame.light_color.w,
+			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
+		);
 		let gem_reflection_dir = normalize(reflect(-v, n));
 		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
 		let nv_particle = clamp(abs(dot(n, gem_view)), 0.0, 1.0);
@@ -1313,7 +1318,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let env_r = env_base.r;
 		let env_g = select(env_base.g, textureSampleLevel(reflection_tex, reflection_samp, normalize(reflect(-v, gem_n_g)), gem_env_lod).g, !front_facing);
 		let env_b = select(env_base.b, textureSampleLevel(reflection_tex, reflection_samp, normalize(reflect(-v, gem_n_b)), gem_env_lod).b, !front_facing);
-		var env = vec3<f32>(env_r, env_g, env_b) * cube_tint;
+		var env = vec3<f32>(env_r, env_g, env_b) * cube_tint * gem_reflection_lighting;
 		let contrast = max(drawu.reflection_ext_params.y, 0.0001);
 		env = pow(clamp(env, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast * drawu.gem_env_color.rgb;
 		let env_luma = dot(env, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
