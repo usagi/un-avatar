@@ -80,6 +80,7 @@ const SCENE_STATE_SPLASH: &str = "splash";
 const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
 const SCENE_STATE_FAILED: &str = "failed";
 const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
+const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1182,6 +1183,8 @@ struct AvatarApp {
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
+	pending_surface_size: Option<(u32, u32)>,
+	last_resize_at: Option<Instant>,
 	right_dragging: bool,
 	middle_dragging: bool,
 	last_cursor_pos: Option<PhysicalPosition<f64>>,
@@ -1236,6 +1239,8 @@ impl AvatarApp {
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
+			pending_surface_size: None,
+			last_resize_at: None,
 			right_dragging: false,
 			middle_dragging: false,
 			last_cursor_pos: None,
@@ -1256,11 +1261,35 @@ impl AvatarApp {
 	}
 
 	fn reconfigure(&mut self, width: u32, height: u32) {
-		let Some(gpu) = self.gpu.as_mut() else {
-			return;
-		};
-		gpu.resize(width, height);
+		self.pending_surface_size = Some((width, height));
+		self.last_resize_at = Some(Instant::now());
 		self.update_runtime_surface(width, height);
+	}
+
+	fn apply_pending_reconfigure(&mut self, now: Instant, window: &Window) -> bool {
+		let Some((pending_width, pending_height)) = self.pending_surface_size else {
+			return false;
+		};
+		if self
+			.last_resize_at
+			.is_some_and(|resized_at| now.saturating_duration_since(resized_at) < SURFACE_RESIZE_SETTLE_DELAY)
+		{
+			return true;
+		}
+
+		let size = window.inner_size();
+		let width = if size.width == 0 { pending_width } else { size.width };
+		let height = if size.height == 0 { pending_height } else { size.height };
+		if width == 0 || height == 0 {
+			return true;
+		}
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.resize(width, height);
+		}
+		self.pending_surface_size = None;
+		self.last_resize_at = None;
+		self.update_runtime_surface(width, height);
+		false
 	}
 
 	fn update_runtime_surface(&self, width: u32, height: u32) {
@@ -1361,7 +1390,7 @@ impl AvatarApp {
 			self.opts.window_height = height;
 			if let Some(window) = &self.window {
 				if let Some(size) = window.request_inner_size(PhysicalSize::new(width, height)) {
-					self.update_runtime_surface(size.width, size.height);
+					self.reconfigure(size.width, size.height);
 				}
 			}
 		}
@@ -1863,6 +1892,10 @@ impl AvatarApp {
 		let Some(win) = self.window.as_ref().cloned() else {
 			return;
 		};
+		if self.apply_pending_reconfigure(now, win.as_ref()) {
+			win.request_redraw();
+			return;
+		}
 		self.advance_camera_transition(now);
 		let Some(gpu) = self.gpu.as_mut() else {
 			return;
