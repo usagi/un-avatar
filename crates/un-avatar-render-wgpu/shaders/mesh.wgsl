@@ -1320,7 +1320,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		env = pow(clamp(env, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast * drawu.gem_env_color.rgb;
 		let env_luma = dot(env, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
 		env = mix(vec3<f32>(env_luma), env, clamp(1.0 / contrast, 0.0, 1.0));
-		env = select(env * base, env, front_facing);
+		env = select(env * base * nv_view, env, front_facing);
 		let one_minus_reflectivity = 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
