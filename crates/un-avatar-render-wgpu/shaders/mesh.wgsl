@@ -1301,14 +1301,14 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let perceptual_roughness = max(1.0 - smoothness, 0.02);
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-		let gem_reflection_dir = normalize(reflect(-v, reflection_n));
+		let gem_reflection_dir = normalize(reflect(-v, n));
 		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
-		let nv_particle = clamp(abs(dot(reflection_n, gem_view)), 0.0, 1.0);
-		let nv_view = clamp(abs(dot(reflection_n, v)), 0.0, 1.0);
+		let nv_particle = clamp(abs(dot(n, gem_view)), 0.0, 1.0);
+		let nv_view = clamp(abs(dot(n, v)), 0.0, 1.0);
 		let inv_nv = 1.0 - nv_particle;
 		let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
-		let gem_n_g = normalize(reflection_n + v * inv_nv * chroma);
-		let gem_n_b = normalize(reflection_n + v * inv_nv * chroma * 2.0);
+		let gem_n_g = normalize(n + v * inv_nv * chroma);
+		let gem_n_b = normalize(n + v * inv_nv * chroma * 2.0);
 		let env_base = textureSampleLevel(reflection_tex, reflection_samp, gem_reflection_dir, gem_env_lod).rgb;
 		let env_r = env_base.r;
 		let env_g = select(env_base.g, textureSampleLevel(reflection_tex, reflection_samp, normalize(reflect(-v, gem_n_g)), gem_env_lod).g, !front_facing);
@@ -1325,8 +1325,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let reflectance = vec3<f32>(clamp(drawu.reflection_params.z, 0.0, 1.0));
 		let particle_loop = drawu.gem_params.z;
 		let particle_1 = step(0.5, fract(nv_particle * particle_loop));
-		let particle_2 = step(0.5, fract(abs(dot(reflection_n, normalize(gem_view.yzx))) * particle_loop));
-		let particle_3 = step(0.5, fract(abs(dot(reflection_n, normalize(gem_view.zxy))) * particle_loop));
+		let particle_2 = step(0.5, fract(abs(dot(n, normalize(gem_view.yzx))) * particle_loop));
+		let particle_3 = step(0.5, fract(abs(dot(n, normalize(gem_view.zxy))) * particle_loop));
 		let particle = select(particle_1 * particle_2 * particle_3, 0.0, particle_loop <= 0.0);
 		let particle_color = select(vec3<f32>(1.0) + particle * drawu.gem_particle_color.rgb, vec3<f32>(1.0), front_facing);
 		authored_reflection = (surface_reduction * fresnel_lerp(reflectance, grazing_term, nv_view) + vec3<f32>(0.5)) * 0.5 * particle_color * env;
@@ -1407,9 +1407,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		if (is_liltoon_gem) {
 			let refraction_strength = drawu.gem_params.x;
 			if (abs(refraction_strength) > 0.00001) {
-				let refraction_fresnel = pow(clamp(1.0 - abs(dot(reflection_n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
+				let refraction_fresnel = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
 				let base_screen_uv = screen_uv(i.clip);
-				let screen_offset = liltoon_refraction_offset(reflection_n) * refraction_fresnel;
+				let screen_offset = liltoon_refraction_offset(n) * refraction_fresnel;
 				let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
 				let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * refraction_strength, vec2<f32>(0.0), vec2<f32>(1.0))).r;
 				let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma), vec2<f32>(0.0), vec2<f32>(1.0))).g;
