@@ -1203,6 +1203,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	var specular_blend = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection = vec3<f32>(0.0, 0.0, 0.0);
 	var authored_reflection_blend = vec3<f32>(0.0, 0.0, 0.0);
+	var authored_reflection_env = vec3<f32>(0.0, 0.0, 0.0);
 	let half_vec = normalize(l + v);
 	let specular_base_n = normalize(mix(geometry_n, n, clamp(drawu.specular_toon_params.w, 0.0, 1.0)));
 	let reflection_base_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
@@ -1282,11 +1283,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
 		let reflection_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
 		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_dir, reflection_lod).rgb * cube_tint * reflection_lighting;
+		authored_reflection_env = env;
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
 		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
-		authored_reflection_blend = authored_reflection;
+		authored_reflection_blend = authored_reflection * select(1.0, a, is_liltoon_refraction);
 	} else if (is_liltoon_gem) {
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
 		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
@@ -1413,6 +1415,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			}
 			lit = lit + authored_reflection;
 		} else {
+			if (is_liltoon_refraction && drawu.reflection_control.x > 0.5 && drawu.reflection_control.z > 0.0) {
+				let refraction_reflection_mix = clamp(a + (1.0 - a) * pow(clamp(abs(dot(reflection_n, v)), 0.0, 1.0), abs(drawu.gem_params.x) * 0.5 + 0.25), 0.0, 1.0);
+				lit = mix(authored_reflection_env, lit, refraction_reflection_mix);
+			}
 			lit = lil_blend_color3(lit, reflection_tint, authored_reflection_blend * reflection_color_alpha * drawu.reflection_control.z, drawu.reflection_control.w);
 		}
 		if (!disable_matcap) {
