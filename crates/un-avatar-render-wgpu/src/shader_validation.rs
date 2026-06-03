@@ -22,5 +22,6 @@ mod tests {
 		validate_wgsl("fxaa.wgsl", include_str!("../shaders/fxaa.wgsl"));
 		validate_wgsl("smaa.wgsl", include_str!("../shaders/smaa.wgsl"));
 		validate_wgsl("blit.wgsl", include_str!("../shaders/blit.wgsl"));
+		validate_wgsl("csfc_fur.wgsl", include_str!("../shaders/csfc_fur.wgsl"));
 	}
 }

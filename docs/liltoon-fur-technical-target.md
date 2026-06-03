@@ -1,159 +1,117 @@
-# lilToon Fur technical target
+# lilToon Fur 技術目標
 
-Status: investigation note for UNAvatar Fur implementation.
+状態: UNAvatar Fur 実装のための調査メモ。
 
-Implementation design: [`csfc-fur-design.md`](csfc-fur-design.md).
+実装設計: [`csfc-fur-design.md`](csfc-fur-design.md)。
 
-## Source baseline
+## 参照元
 
-- Upstream local repo: `C:\Users\the\tmp\lilToon`, tag `2.3.2`, commit `56d5095`.
-- Official docs identify Fur as a dedicated high-cost rendering mode with normal/vector, length mask, gravity, randomize, noise, mask, AO, mesh type, layer count, root width, and contact controls.
-- Official shader-structure docs list `lts_fur.shader` and related Fur variants as exceptional shaders with their own passes, not just ordinary lilToon material variants.
+- upstream local repo は `C:\Users\the\tmp\lilToon`。tag `2.3.2`、commit `56d5095`。
+- 公式 docs では、Fur は normal / vector、length mask、gravity、randomize、noise、mask、AO、mesh type、layer count、root width、contact controls を持つ専用の高負荷 rendering mode として扱われている。
+- 公式 shader structure docs では、`lts_fur.shader` と関連 Fur variants は通常の lilToon material variant ではなく、独自 pass を持つ例外的 shader として扱われている。
 
-## What lilToon Fur actually is
+## lilToon Fur の実体
 
-lilToon Fur is not a classic uniform shell-only technique.
+lilToon Fur は古典的な uniform shell-only technique ではない。
 
-The core implementation is a geometry-shader fur generator:
+中核は geometry shader による fur generator。
 
-- `lil_common_vert_fur.hlsl` computes per-vertex fur vectors in object/tangent space, blends `_FurVector`, optional vertex color, optional `_FurVectorTex`, `_FurVectorScale`, `_FurVector.w`, `_FurCutoutLength` for pre-pass, world transform, gravity, optional contact deformation, and randomization.
-- `geom()` receives each triangle and emits generated line/card-like pairs through `AppendFur()`.
-- `AppendFur()` emits an inner vertex with `furLayer = 0` and an outer vertex offset by the interpolated fur vector with `furLayer = 1`.
-- `_FurLayerNum` does not mean shell instance count. It selects a fixed set of barycentric sample positions inside the triangle:
-  - 1: triangle vertices.
-  - 2: vertices plus edge midpoints.
-  - 3: above plus additional interior/biased barycentric samples.
-  - one final repeated vertex sample is appended before `RestartStrip()`.
-- This is why Unity Scene view shows many fine strands from a low-poly mesh: the shader creates additional per-triangle fur segments/cards, not merely expanded copies of the original mesh.
+- `lil_common_vert_fur.hlsl` は per-vertex fur vector を object / tangent space で計算する。`_FurVector`、任意 vertex color、任意 `_FurVectorTex`、`_FurVectorScale`、`_FurVector.w`、pre-pass 用 `_FurCutoutLength`、world transform、gravity、任意 contact deformation、randomization を合成する。
+- `geom()` は triangle を受け取り、`AppendFur()` を通して生成された line / card-like pair を出力する。
+- `AppendFur()` は `furLayer = 0` の inner vertex と、補間 fur vector で offset した `furLayer = 1` の outer vertex を出力する。
+- `_FurLayerNum` は shell instance count ではない。triangle 内の固定 barycentric sample positions を選ぶ。
+  - 1: triangle vertices。
+  - 2: vertices + edge midpoints。
+  - 3: 上記に加えて interior / biased barycentric samples。
+  - `RestartStrip()` 前に最後の vertex sample がもう一度 append される。
+- Unity Scene view で low-poly mesh から細かい毛束が出る理由はこれ。shader が source mesh の膨張コピーではなく、triangle ごとに追加 fur segment / card を生成している。
 
-There is also `lil_common_vert_fur_thirdparty.hlsl`, a FakeFur path based on UnlitWF/UnToon. It generates triangle-center/interpolated fur strips in a loop over `_FurLayerNum`, but the default lilToon path used by current Fur shaders is the `AppendFur()` geometry path.
+`lil_common_vert_fur_thirdparty.hlsl` には UnlitWF / UnToon 由来の FakeFur path もある。これは `_FurLayerNum` loop で triangle center / interpolated fur strips を生成する。ただし current Fur shaders が使う default lilToon path は `AppendFur()` geometry path。
 
-## Fragment behavior
+## Fragment 挙動
 
-`lil_pass_forward_fur.hlsl` has a Fur-specific fragment path:
+`lil_pass_forward_fur.hlsl` は Fur 専用 fragment path を持つ。
 
-- Runs normal lilToon main color and lighting setup.
-- Applies `OVERRIDE_FUR` from `lil_common_frag.hlsl`.
-- Computes:
+- 通常の lilToon main color と lighting setup を実行する。
+- `lil_common_frag.hlsl` の `OVERRIDE_FUR` を適用する。
+- 次を計算する。
   - `furLayerShift = furLayer - furLayer * _FurRootOffset + _FurRootOffset`
-  - noise from `_FurNoiseMask`
-  - alpha from noise and `furLayerShift`
-  - mask multiplication from `_FurMask`
-  - alpha multiplication into `fd.col.a`
-  - Fur AO into `fd.col.rgb`
-- Cutout / pre path uses `fd.col.a = saturate(fd.col.a * 5.0 - 2.0)` and discards zero alpha.
-- Transparent path clips by `_Cutoff`.
-- Adds Fur rim contribution using `input.furLayer`, `_FurRimColor`, `_FurRimFresnelPower`, `_FurRimAntiLight`, light color, and view angle.
+  - `_FurNoiseMask` から noise
+  - noise と `furLayerShift` から alpha
+  - `_FurMask` による mask multiplication
+  - `fd.col.a` への alpha multiplication
+  - `fd.col.rgb` への Fur AO
+- cutout / pre path は `fd.col.a = saturate(fd.col.a * 5.0 - 2.0)` を使い、alpha 0 を discard する。
+- transparent path は `_Cutoff` で clip する。
+- `input.furLayer`、`_FurRimColor`、`_FurRimFresnelPower`、`_FurRimAntiLight`、light color、view angle を使って Fur rim contribution を足す。
 
-Important distinction:
+重要な違い:
 
-- For `LIL_RENDER == 1` or `LIL_FUR_PRE`, alpha uses the cubic `furLayerShift * abs^3 + 0.25` formula and shell-style AO based on `fwidth(input.furLayer)`.
-- For transparent Fur, alpha uses the square formula and a different noise-driven AO expression.
+- `LIL_RENDER == 1` または `LIL_FUR_PRE` では、alpha は cubic の `furLayerShift * abs^3 + 0.25` formula と、`fwidth(input.furLayer)` に基づく shell-style AO を使う。
+- transparent Fur では、alpha は square formula と別の noise-driven AO expression を使う。
 
-## Pass model
+## Pass 構成
 
-lilToon has several Fur rendering modes:
+lilToon には複数の Fur rendering mode がある。
 
-- Fur: transparent-ish Fur pass, no Fur ZWrite, no AlphaToMask.
-- FurCutout: cutout Fur, Fur ZWrite on, AlphaToMask on.
-- FurTwoPass: combines:
-  - `FORWARD_FUR_PRE`: `LIL_FUR_PRE`, ZWrite On, `Blend One Zero`, AlphaToMask On, cutout-like pre coverage.
-  - `FORWARD_FUR`: transparent Fur, configurable Fur blending, typically ZWrite Off.
-  - ForwardAdd Fur pre and Fur passes for additive lights.
+- Fur: transparent-ish Fur pass。Fur ZWrite なし、AlphaToMask なし。
+- FurCutout: cutout Fur。Fur ZWrite on、AlphaToMask on。
+- FurTwoPass:
+  - `FORWARD_FUR_PRE`: `LIL_FUR_PRE`、ZWrite On、`Blend One Zero`、AlphaToMask On、cutout-like pre coverage。
+  - `FORWARD_FUR`: transparent Fur、configurable Fur blending、通常 ZWrite Off。
+  - ForwardAdd Fur pre / Fur passes も持つ。
 
-This is a quality/stability design, not just a style toggle. The pre pass gives stable coverage/depth and the transparent pass softens the result.
+これは単なる style toggle ではなく、quality / stability design。pre pass が stable coverage / depth を作り、transparent pass が結果を柔らかくする。
 
-## UNAvatar target
+## UNAvatar の目標
 
-The current UNAvatar instanced-shell path is not the correct quality target. It can remain as Low/Compatible, but it should not define Fur completion.
+現在の UNAvatar instanced-shell path は正しい quality target ではない。Low / Compatible として残す価値はあるが、Fur completion の定義にはしない。
 
-## Compute direction
+## Compute 方針
 
-UNAvatar targets wgpu, so geometry shaders and tessellation shaders are not available as implementation primitives. That constraint changes the design goal.
+UNAvatar は wgpu を対象にするため、geometry shader と tessellation shader を実装 primitive として使えない。この制約で設計目標が変わる。
 
-We do not need to stop at a compute port of lilToon's geometry shader. Such a port is useful as a reference model, but it inherits the constraints of the original shader stage.
+最初に実装するのは CBF: Compute Barycentric Fur。これは lilToon geometry shader の `AppendFur()` を Compute で透過的に実行する互換実装であり、v2-lilToon-like Fur の完了条件とする。
 
-Terminology:
+CBF で合わせるもの:
 
-- CBF: Compute Barycentric Fur.
-  - A compute translation of lilToon's geometry-shader `AppendFur()` method.
-  - Triangle-local.
-  - Uses fixed barycentric sample sets.
-  - Reproduces GS-style generation density.
-  - Strongly tied to source mesh topology.
-  - Mostly local output control.
-  - Kept as a theoretical/reference compatibility model, not the primary UNAvatar implementation target.
+- triangle-local な固定 barycentric sample sequence。
+- `_FurLayerNum` 1 / 2 / 3 に対応する 4 / 7 / 13 points。
+- 各 sample の root (`furLayer = 0`) と tip (`furLayer = 1`)。
+- 頂点単位で計算した fur vector を sample point へ barycentric 補間する構造。
+- `_FurVectorTex`, `_FurLengthMask`, `_FurGravity`, `_FurRandomize`, `_FurCutoutLength`。
+- Fur 専用 fragment alpha、AO、rim、cutout / transparent state。
 
-- CSFC: Compute Surface Fur Cards.
-  - UNAvatar's primary compute fur-card direction.
-  - Evaluates triangle area, UV density, fur mask, length mask, camera distance, and quality budget.
-  - Allocates generated fur-card count from those signals.
-  - Places samples over the surface with a stable distribution.
-  - Generates fur cards/segments from those samples.
-  - Can emulate lilToon-style density where compatibility matters, while also allowing better quality/performance tradeoffs than CBF.
+Area/UV-density based Compute Fur Cards、Area-Weighted Blue-Noise Fur、Strand/Groom は CBF 互換が成立した後の上位機能。これらは理論上 CBF を内包できるべきだが、CBF を実装せずに先へ進まない。
 
-Reasoning:
-
-- CBF is valuable for understanding lilToon's look, but it preserves geometry-shader limitations.
-- Compute has global budgeting and arbitrary generation logic, so matching a GS algorithm exactly is not automatically the best result.
-- CSFC can spend density where it matters: large triangles, high visible area, dense UV/mask detail, long fur, close camera distance.
-- CSFC can avoid spending density where it is wasted: tiny distant triangles, masked-out regions, short/zero-length fur, visually hidden regions.
-- Therefore CSFC is expected to match or exceed lilToon Scene view quality at lower or more controllable cost than a literal CBF implementation.
-
-User-facing modes should not expose CBF vs CSFC as engine internals. The modes should describe intent:
-
-- lilToon-compatible expression:
-  - Uses lilToon parameters directly.
-  - Prioritizes compatibility and predictable migration.
-  - Internally implemented with CSFC tuned toward lilToon-like placement, density, alpha, and two-pass behavior.
-
-- UNAvatar standard expression:
-  - Default recommended balance.
-  - Uses the same lilToon inputs, but allocates density by area/UV/mask/length/camera/budget.
-  - Targets better apparent quality per cost than lilToon GS.
-
-- UNAvatar high-quality expression:
-  - Heavier option after the base CSFC path is stable.
-  - Increases sample quality, card shaping, sorting/coverage quality, and lighting fidelity.
-
-- Future strand/groom expression:
-  - Persistent strand buffers.
-  - Compute simulation.
-  - Ribbon/card/strand rendering.
-  - Physics such as root fixed, tip dynamics, wind, gravity, motion inertia, and collision.
-
-Target tiers:
+## 目標 tier
 
 - Low / Compatible:
-  - Keep instanced shell for portability and old hardware.
-  - Make it materially correct enough: imported parameters, textures, alpha/noise/mask/root/AO/rim, two-pass-style pre coverage where possible.
-  - Accept that it will not match Unity Scene quality on sparse fur meshes.
+  - portability と old hardware のため instanced shell を残す。
+  - imported parameters、textures、alpha / noise / mask / root / AO / rim、可能な範囲の two-pass-style pre coverage を material correctness として整える。
+  - sparse fur meshes では Unity Scene quality に届かないことを受け入れる。
 
 - High:
-  - Implement CSFC, not literal CBF, as the primary high-tier Fur path.
-  - Compute output should be able to emulate the default `AppendFur()` look when the user selects lilToon-compatible expression, but the internal generation model is budgeted surface sampling:
-    - source triangles -> area/UV/mask/length/camera/budget weighted sample counts
-    - samples -> inner/outer generated fur-card vertices
-    - generated indices matching the selected expression mode's density and card-shape target
-    - per-generated vertex `furLayer` / root-tip coordinate
-    - interpolated UV, normal, tangent/fur vector, joints/weights or already-skinned position
-  - Run per-frame when bones/morphs/material animation affect the fur source.
-  - Render generated buffers through a Fur-specific toon fragment path.
-  - Add FurTwoPass-equivalent rendering: pre cutout/AlphaToMask-style coverage plus transparent Fur pass.
-  - Match `_FurVectorTex`, `_FurLengthMask`, `_FurNoiseMask`, `_FurMask`, `_FurRootOffset`, `_FurAO`, `_FurCutoutLength`, `_FurRimColor`, `_FurRimFresnelPower`, `_FurRimAntiLight`, blend/ZWrite/ZTest/cull controls.
+  - CBF を primary high-tier Fur path として実装する。
+  - Unity/lilToon の `AppendFur()` topology、fur vector、fragment alpha、AO、rim、render state を一致させる。
+  - bones / morphs / material animation が fur source に影響する場合は per-frame で動く。
+  - Fur-specific toon fragment path で generated buffers を描画する。
+  - FurTwoPass-equivalent rendering を追加する。pre cutout / AlphaToMask-style coverage + transparent Fur pass。
+  - `_FurVectorTex`, `_FurLengthMask`, `_FurNoiseMask`, `_FurMask`, `_FurRootOffset`, `_FurAO`, `_FurCutoutLength`, `_FurRimColor`, `_FurRimFresnelPower`, `_FurRimAntiLight`, blend / ZWrite / ZTest / cull controls を一致させる。
 
 - Future:
-  - Compute tessellation/subdivision before Fur generation where needed.
-  - Compute strand/groom mode as an UNAvatar extension beyond lilToon compatibility.
+  - CBF 互換を保った上で Area/UV-density based Compute Fur Cards や Area-Weighted Blue-Noise Fur を追加する。
+  - 必要に応じて Fur generation 前に compute tessellation / subdivision を行う。
+  - lilToon compatibility を超える UNAvatar extension として compute strand / groom mode を実装する。
 
-## Acceptance goal
+## 受け入れ基準
 
-UNAvatar Fur is not complete until the High path reaches at least Unity Editor Scene view quality for known lilToon FurTwoPass assets such as `mizuki-split`.
+UNAvatar Fur は、High path が `mizuki-split` など既知の lilToon FurTwoPass asset で Unity Editor Scene view quality 以上に到達するまで complete ではない。
 
-The first visual milestone is:
+最初の visual milestone:
 
-- Fur silhouette is made of fine generated fur segments, not a smooth inflated shell.
-- sparse source mesh still produces dense fur.
-- Fur length/mask/noise produces strand breakup comparable to Unity.
-- Two-pass Fur avoids both hard cutout-only aliasing and transparent-shell blobbing.
-- The result is equal to or better than lilToon 2.3.2 Scene view on the comparison target.
+- Fur silhouette が smooth inflated shell ではなく、fine generated fur segments で構成される。
+- sparse source mesh でも dense fur が出る。
+- Fur length / mask / noise が Unity に近い strand breakup を出す。
+- Two-pass Fur が hard cutout-only aliasing と transparent-shell blobbing の両方を避ける。
+- comparison target で lilToon 2.3.2 Scene view と同等以上。

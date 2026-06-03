@@ -1800,6 +1800,11 @@ impl GpuState {
 		let mut encoder = self
 			.device
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("screenshot") });
+		if draw_scene {
+			if let Some(sm) = &self.scene_meshes {
+				sm.encode_csfc_fur(&mut encoder);
+			}
+		}
 		if draw_scene && needs_screen_refraction {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("screenshot-main-opaque"),
@@ -2922,6 +2927,11 @@ impl GpuState {
 		let mut encoder = self
 			.device
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+		if draw_scene {
+			if let Some(sm) = &self.scene_meshes {
+				sm.encode_csfc_fur(&mut encoder);
+			}
+		}
 
 		let timestamp_pass = self.gpu_timestamps.as_ref().and_then(|ts| ts.begin_pass());
 		let (timestamp_writes, timestamp_write_idx) = match timestamp_pass {

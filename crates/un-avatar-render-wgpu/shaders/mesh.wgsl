@@ -227,6 +227,15 @@ struct FurVsOut {
 	@location(3) wt: vec4<f32>,
 	@location(4) fur_shell: f32,
 	@location(5) fur_alpha: f32,
+	@location(6) fur_card_side: f32,
+}
+
+struct CsfcFurVsIn {
+	@location(0) position_layer: vec4<f32>,
+	@location(1) normal_side: vec4<f32>,
+	@location(2) uv: vec2<f32>,
+	@location(3) fur_alpha: f32,
+	@location(4) root_position: vec4<f32>,
 }
 
 fn mat3_upper(m: mat4x4<f32>) -> mat3x3<f32> {
@@ -315,7 +324,16 @@ fn fur_vs_out_from_base(o: VsOut) -> FurVsOut {
 	out.wt = o.wt;
 	out.fur_shell = 0.0;
 	out.fur_alpha = 1.0;
+	out.fur_card_side = 0.0;
 	return out;
+}
+
+fn normalize_or(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+	let len2 = dot(v, v);
+	if len2 <= 0.0000001 {
+		return fallback;
+	}
+	return v * inverseSqrt(len2);
 }
 
 @vertex
@@ -387,8 +405,41 @@ fn vs_fur(v: VsIn, @builtin(vertex_index) vertex_index: u32, @builtin(instance_i
 	let wp = vec4<f32>(o.wp + fur_vector_ws * shell * enabled * length_mask, 1.0);
 	o.wp = wp.xyz;
 	o.fur_alpha = length_mask;
+	o.fur_card_side = 0.0;
 	o.clip = frame.view_proj * wp;
 	return o;
+}
+
+fn csfc_fur_vs(v: CsfcFurVsIn, cutout_pre: bool) -> FurVsOut {
+	var o: FurVsOut;
+	let cutout_length = clamp(drawu.fur_ext_params.w, 0.0, 1.0);
+	let local_position = select(v.position_layer.xyz, mix(v.root_position.xyz, v.position_layer.xyz, cutout_length), cutout_pre);
+	let center_wp = (drawt.model * vec4<f32>(local_position, 1.0)).xyz;
+	let wn = normalize_or(mat3_upper(drawt.model) * v.normal_side.xyz, vec3<f32>(0.0, 1.0, 0.0));
+	let view_dir = normalize_or(frame.camera_pos.xyz - center_wp, vec3<f32>(0.0, 0.0, 1.0));
+	let side_dir = normalize_or(cross(view_dir, wn), normalize_or(cross(vec3<f32>(0.0, 1.0, 0.0), wn), vec3<f32>(1.0, 0.0, 0.0)));
+	let side_width = v.normal_side.w;
+	let world_pos = center_wp + side_dir * side_width;
+	let wp = vec4<f32>(world_pos, 1.0);
+	o.clip = frame.view_proj * wp;
+	o.wn = wn;
+	o.uv = animated_uv(v.uv);
+	o.wp = world_pos;
+	o.wt = vec4<f32>(1.0, 0.0, 0.0, 1.0);
+	o.fur_shell = clamp(v.position_layer.w, 0.0, 1.0);
+	o.fur_alpha = 1.0 + clamp(v.fur_alpha, 0.0, 1.0);
+	o.fur_card_side = select(0.0, select(-1.0, 1.0, side_width >= 0.0), abs(side_width) > 0.0000001);
+	return o;
+}
+
+@vertex
+fn vs_csfc_fur(v: CsfcFurVsIn) -> FurVsOut {
+	return csfc_fur_vs(v, false);
+}
+
+@vertex
+fn vs_csfc_fur_pre(v: CsfcFurVsIn) -> FurVsOut {
+	return csfc_fur_vs(v, true);
 }
 
 const DBG_SOLID_PRIM_COLOR: u32 = 2u;
@@ -468,12 +519,25 @@ fn apply_lil_alpha_mask(a: f32, uv: vec2<f32>) -> f32 {
 	return a;
 }
 
-fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {
+fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32, card_side: f32) -> f32 {
+	if (length_mask > 1.0) {
+		let csfc_alpha = clamp(length_mask - 1.0, 0.0, 1.0);
+		let center_alpha = pow(1.0 - clamp(abs(card_side), 0.0, 1.0), 1.65);
+		let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;
+		let shell01 = clamp(shell, 0.0, 1.0);
+		let noise_uv = uv * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;
+		let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;
+		let root_offset = clamp(drawu.fur_ext_params.z, -1.0, 0.0);
+		let fur_layer_shift = shell01 - shell01 * root_offset + root_offset;
+		let fur_layer_abs = abs(fur_layer_shift);
+		let layer_alpha = clamp(fur_noise_mask - fur_layer_shift * fur_layer_abs * fur_layer_abs, 0.0, 1.0);
+		return csfc_alpha * center_alpha * layer_alpha * fur_mask;
+	}
 	if (shell <= 0.0) {
 		return 1.0;
 	}
 	let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;
-	let noise_uv = uv * max(drawu.fur_noise_params.x, 0.0001) + vec2<f32>(drawu.fur_noise_params.y);
+	let noise_uv = uv * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;
 	let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;
 	let root_offset = clamp(drawu.fur_ext_params.z, -1.0, 0.0);
 	let fur_layer_shift = shell - shell * root_offset + root_offset;
@@ -490,8 +554,8 @@ fn fur_shell_ao(shell: f32) -> f32 {
 	return shell * fur_ao * 2.0 + 1.0 - fur_ao;
 }
 
-fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32) -> vec3<f32> {
-	if alpha_kind > 1.5 {
+fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32, premultiply: bool) -> vec3<f32> {
+	if alpha_kind > 1.5 && premultiply {
 		return rgb * out_a;
 	}
 	return rgb;
@@ -893,7 +957,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	return vec4<f32>(base, out_a);
 }
 
-fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fur_shell: f32, fur_alpha_in: f32) -> vec4<f32> {
+fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fur_shell: f32, fur_alpha_in: f32, fur_card_side: f32, fur_cutout_pre: bool) -> vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
@@ -907,7 +971,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
 	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
 	let a = apply_lil_alpha_mask(main_col.a, uv);
-	let fur_alpha = fur_shell_alpha(uv, fur_shell, fur_alpha_in);
+	let fur_alpha = fur_shell_alpha(uv, fur_shell, fur_alpha_in, fur_card_side);
 	if (fur_shell > 0.0 && fur_alpha <= 0.015) {
 		discard;
 	}
@@ -919,12 +983,25 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
-	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
+	var out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
+	let compute_fur = fur_shell > 0.0 && fur_alpha_in > 1.0;
+	if (fur_shell > 0.0) {
+		if (fur_cutout_pre || !compute_fur) {
+			out_a = clamp(out_a * 5.0 - 2.0, 0.0, 1.0);
+			if (out_a <= 0.0) {
+				discard;
+			}
+		} else {
+			if (out_a <= max(cutoff, 1.0 / 255.0)) {
+				discard;
+			}
+		}
+	}
 	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u) * fur_shell_ao(fur_shell);
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
-		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
+		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
 	let geometry_n = face_normal(normalize(i.wn), front_facing, dbg);
@@ -1289,6 +1366,13 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		lit = lit + specular + authored_reflection;
 		lit = lit + rim;
 	}
+	if (fur_shell > 0.0 && !disable_rim) {
+		let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.rim_params.z, 1.5));
+		let fur_rim_mask = clamp(fur_shell, 0.0, 1.0) * smoothstep(0.08, 0.55, fur_alpha);
+		let fur_rim_strength = clamp(0.18 + drawu.rim_control.x * 0.42, 0.18, 0.6);
+		let fur_rim_color = mix(base * 1.25, frame.light_color.rgb * max(frame.light_color.w, 1.0), 0.35);
+		lit = lit + fur_rim_color * fur_rim_raw * fur_rim_mask * fur_rim_strength;
+	}
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
 	let emission_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
@@ -1328,12 +1412,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lit + emission_raw;
 		}
 	}
-	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind), out_a);
+	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
 }
 
 @fragment
 fn fs_toon(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
-	return toon_fragment(i, front_facing, false, 0.0, 1.0);
+	return toon_fragment(i, front_facing, false, 0.0, 1.0, 0.0, false);
 }
 
 @fragment
@@ -1344,7 +1428,18 @@ fn fs_fur_toon(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @locat
 	base.uv = i.uv;
 	base.wp = i.wp;
 	base.wt = i.wt;
-	return toon_fragment(base, front_facing, false, i.fur_shell, i.fur_alpha);
+	return toon_fragment(base, front_facing, false, i.fur_shell, i.fur_alpha, i.fur_card_side, false);
+}
+
+@fragment
+fn fs_fur_toon_pre(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+	var base: VsOut;
+	base.clip = i.clip;
+	base.wn = i.wn;
+	base.uv = i.uv;
+	base.wp = i.wp;
+	base.wt = i.wt;
+	return toon_fragment(base, front_facing, false, i.fur_shell, i.fur_alpha, i.fur_card_side, true);
 }
 
 @fragment
@@ -1372,5 +1467,5 @@ fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_toon_backpass(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
-	return toon_fragment(i, front_facing, true, 0.0, 1.0);
+	return toon_fragment(i, front_facing, true, 0.0, 1.0, 0.0, false);
 }
