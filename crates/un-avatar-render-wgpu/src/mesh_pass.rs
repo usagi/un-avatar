@@ -793,6 +793,18 @@ fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -
 	!matches!(alpha_mode, UnaAlphaMode::Blend) && render_queue >= 3000
 }
 
+fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
+	material.liltoon_like.as_ref().is_some_and(|u| {
+		(u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
+			|| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
+			&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
+	})
+}
+
+fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
+	material_needs_screen_refraction(&draw.material)
+}
+
 fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
 	alpha_mode == UnaAlphaMode::Blend
 		&& transparent_with_z_write
@@ -838,7 +850,8 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		};
 		match draw.alpha_mode {
 			UnaAlphaMode::Opaque | UnaAlphaMode::Mask
-				if draw_uses_late_non_blend_queue(draw.alpha_mode, draw_render_queue_number(draw)) =>
+				if draw_uses_screen_refraction_grab(draw)
+					|| draw_uses_late_non_blend_queue(draw.alpha_mode, draw_render_queue_number(draw)) =>
 			{
 				blended_draws.push((opaque_pipeline_for_shading(shading), draw_index));
 			}
@@ -6409,13 +6422,7 @@ impl SceneMeshes {
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
-		self.draws.iter().any(|draw| {
-			draw.material.liltoon_like.as_ref().is_some_and(|u| {
-				(u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
-					|| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
-					&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
-			})
-		})
+		self.draws.iter().any(|draw| material_needs_screen_refraction(&draw.material))
 	}
 
 	pub fn set_screen_grab_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
@@ -7123,6 +7130,25 @@ mod tests {
 			opaque_pipeline_for_shading(UnaShadingModel::LilToonLike),
 			DrawPipelineKind::OpaqueToon
 		);
+	}
+
+	#[test]
+	fn liltoon_refraction_material_needs_screen_refraction_grab_before_late_pass() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
+		liltoon_like.rendering.render_queue_number = Some(2900);
+		let mat = UnaMaterialPbr {
+			alpha_mode: UnaAlphaMode::Opaque,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		assert!(material_needs_screen_refraction(&mat));
+		assert!(!draw_uses_late_non_blend_queue(
+			mat.alpha_mode,
+			material_render_queue_number(&mat, mat.alpha_mode)
+		));
 	}
 
 	#[test]
