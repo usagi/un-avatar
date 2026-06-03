@@ -4585,6 +4585,18 @@ impl SceneMeshes {
 				operation: wgpu::BlendOperation::Add,
 			},
 		});
+		let gem_pre_blend = Some(wgpu::BlendState {
+			color: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::Zero,
+				operation: wgpu::BlendOperation::Add,
+			},
+			alpha: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::Zero,
+				dst_factor: wgpu::BlendFactor::One,
+				operation: wgpu::BlendOperation::Add,
+			},
+		});
 		let pipeline_blend_lit = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
@@ -4770,7 +4782,7 @@ impl SceneMeshes {
 			"mesh_liltoon_gem_pre_toon",
 			"vs_main",
 			"fs_toon_gem_pre",
-			None,
+			gem_pre_blend,
 			wgpu::ColorWrites::ALL,
 			false,
 			wgpu::CompareFunction::LessEqual,
