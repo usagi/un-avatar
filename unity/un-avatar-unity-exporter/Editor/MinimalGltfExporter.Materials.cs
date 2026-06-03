@@ -21,6 +21,10 @@ namespace UNAvatar.UnityExporter
                 {
                     return false;
                 }
+                if (IsLilToonRefractionShader(material))
+                {
+                    return false;
+                }
                 if (IsLilToonBlendShader(material))
                 {
                     return true;
@@ -37,6 +41,10 @@ namespace UNAvatar.UnityExporter
 
             private bool IsAlphaMaskMaterial(Material material)
             {
+                if (IsLilToonRefractionShader(material))
+                {
+                    return false;
+                }
                 if (IsLilToonCutoutShader(material))
                 {
                     return true;
@@ -64,8 +72,15 @@ namespace UNAvatar.UnityExporter
                 var shaderName = material.shader != null ? material.shader.name : "";
                 return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                     (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
                     shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+
+            private static bool IsLilToonRefractionShader(Material material)
+            {
+                var shaderName = material.shader != null ? material.shader.name : "";
+                return shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    (shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    shaderName.IndexOf("lilToonRef", StringComparison.OrdinalIgnoreCase) >= 0);
             }
 
             private static bool IsLilToonCutoutShader(Material material)

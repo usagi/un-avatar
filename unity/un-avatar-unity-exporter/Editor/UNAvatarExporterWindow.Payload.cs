@@ -224,6 +224,7 @@ namespace UNAvatar.UnityExporter
             if (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("lilToonRef", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
@@ -269,12 +270,18 @@ namespace UNAvatar.UnityExporter
                 return "NONE";
             }
             var shaderName = material.shader != null ? material.shader.name : "";
+            var lilRefraction = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                (shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("lilToonRef", StringComparison.OrdinalIgnoreCase) >= 0);
             var lilBlend = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                 (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0);
             var lilCutout = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                 shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (lilRefraction)
+            {
+                return "OPAQUE";
+            }
             if (!lilCutout && (lilBlend || baseColor.a < 0.999f || material.renderQueue >= 3000 ||
                 ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 1.5f ||
                 ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 1.5f ||
@@ -303,7 +310,8 @@ namespace UNAvatar.UnityExporter
                 "_SrcBlend", "_DstBlend", "_SrcBlendAlpha", "_DstBlendAlpha",
                 "_ZWrite", "_PreZWrite", "_Cull", "_PreCull",
                 "_AlphaMaskMode", "_AlphaMaskScale", "_AlphaMaskValue",
-                "_Main2ndTexAlphaMode", "_Main3rdTexAlphaMode"
+                "_Main2ndTexAlphaMode", "_Main3rdTexAlphaMode",
+                "_RefractionStrength", "_RefractionFresnelPower", "_RefractionColorFromMain"
             };
             var json = new Dictionary<string, object>();
             if (material == null)
