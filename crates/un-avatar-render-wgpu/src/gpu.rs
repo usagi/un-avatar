@@ -998,6 +998,9 @@ impl GpuState {
 			..Default::default()
 		}))
 		.map_err(|e| format!("request_device: {e}"))?;
+		device.on_uncaptured_error(Arc::new(|error| {
+			eprintln!("un-avatar-renderer: uncaptured wgpu error: {error}");
+		}));
 
 		let caps = surface.get_capabilities(&adapter);
 		let format = *caps
