@@ -616,6 +616,7 @@ enum DrawPipelineKind {
 	BlendToonZWrite,
 	BlendToonAdd,
 	BlendToonAddZWrite,
+	LilToonGemPre,
 }
 
 #[derive(Clone, Debug)]
@@ -823,14 +824,10 @@ fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_w
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
 }
 
-fn build_draw_order(
-	draws: &[MeshDraw],
-	opts: &SceneMeshLoadOpts,
-) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<usize>, Vec<DrawBatch>) {
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
 	let mut fur_draw_indices = Vec::new();
 	let mut transparent_backpass_draw_indices = Vec::new();
-	let mut gem_prepass_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -857,9 +854,6 @@ fn build_draw_order(
 		if has_fur {
 			fur_draw_indices.push(draw_index);
 		}
-		if draw_uses_liltoon_gem_prepass(draw) {
-			gem_prepass_draw_indices.push(draw_index);
-		}
 
 		let shading_index = match shading {
 			UnaShadingModel::LitLambert => 0,
@@ -878,9 +872,15 @@ fn build_draw_order(
 			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading) => {
 				transparent_backpass_draw_indices.push(draw_index);
+				if draw_uses_liltoon_gem_prepass(draw) {
+					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+				}
 				blended_draws.push((blend_pipeline_for_draw(draw, shading, true), draw_index));
 			}
 			UnaAlphaMode::Blend => {
+				if draw_uses_liltoon_gem_prepass(draw) {
+					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+				}
 				blended_draws.push((blend_pipeline_for_draw(draw, shading, false), draw_index));
 			}
 		}
@@ -893,7 +893,6 @@ fn build_draw_order(
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut transparent_backpass_draw_indices);
-	gem_prepass_draw_indices.sort_by_key(|&draw_index| draw_render_order_key(draws, draw_index));
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
@@ -904,7 +903,6 @@ fn build_draw_order(
 		fur_draw_indices,
 		opaque_batches,
 		transparent_backpass_draw_indices,
-		gem_prepass_draw_indices,
 		blended_batches,
 	)
 }
@@ -945,7 +943,6 @@ pub(crate) struct SceneMeshes {
 	fur_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
-	gem_prepass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
@@ -5999,14 +5996,8 @@ impl SceneMeshes {
 			}
 		}
 
-		let (
-			outline_draw_indices,
-			fur_draw_indices,
-			opaque_batches,
-			transparent_backpass_draw_indices,
-			gem_prepass_draw_indices,
-			blended_batches,
-		) = build_draw_order(&draws, &opts);
+		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
+			build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -6041,7 +6032,6 @@ impl SceneMeshes {
 			fur_draw_indices,
 			opaque_batches,
 			transparent_backpass_draw_indices,
-			gem_prepass_draw_indices,
 			blended_batches,
 			texture_summary,
 			expression_names,
@@ -6241,19 +6231,12 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (
-			outline_draw_indices,
-			fur_draw_indices,
-			opaque_batches,
-			transparent_backpass_draw_indices,
-			gem_prepass_draw_indices,
-			blended_batches,
-		) = build_draw_order(&self.draws, &self.opts);
+		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
+			build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
 		self.fur_draw_indices = fur_draw_indices;
 		self.opaque_batches = opaque_batches;
 		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
-		self.gem_prepass_draw_indices = gem_prepass_draw_indices;
 		self.blended_batches = blended_batches;
 		self.rewrite_avatar_materials(queue);
 	}
@@ -6309,6 +6292,7 @@ impl SceneMeshes {
 			DrawPipelineKind::BlendToonZWrite => &self.pipeline_blend_toon_zwrite,
 			DrawPipelineKind::BlendToonAdd => &self.pipeline_blend_toon_add,
 			DrawPipelineKind::BlendToonAddZWrite => &self.pipeline_blend_toon_add_zwrite,
+			DrawPipelineKind::LilToonGemPre => &self.pipeline_liltoon_gem_pre_toon,
 		}
 	}
 
@@ -6329,11 +6313,7 @@ impl SceneMeshes {
 	/// lilToon transparent z-write は `_PreCull` / `_SubpassCutoff` による FORWARD_BACK 相当 pass を先に描き、
 	/// `_ZWrite` が有効な Forward color pass も本家同様に depth write ありで描く。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
-		if self.fur_draw_indices.is_empty()
-			&& self.blended_batches.is_empty()
-			&& self.transparent_backpass_draw_indices.is_empty()
-			&& self.gem_prepass_draw_indices.is_empty()
-		{
+		if self.fur_draw_indices.is_empty() && self.blended_batches.is_empty() && self.transparent_backpass_draw_indices.is_empty() {
 			return;
 		}
 		let mut state = DrawBindState::default();
@@ -6354,13 +6334,6 @@ impl SceneMeshes {
 					backpass_zwrite = Some(zwrite);
 					state = DrawBindState::default();
 				}
-				self.draw_inner(pass, &mut state, draw_index);
-			}
-		}
-		if !self.gem_prepass_draw_indices.is_empty() {
-			pass.set_pipeline(&self.pipeline_liltoon_gem_pre_toon);
-			state = DrawBindState::default();
-			for &draw_index in &self.gem_prepass_draw_indices {
 				self.draw_inner(pass, &mut state, draw_index);
 			}
 		}
@@ -7157,6 +7130,27 @@ mod tests {
 		assert_eq!(batches[2].draw_indices, vec![2]);
 		assert_eq!(batches[3].pipeline, DrawPipelineKind::BlendToon);
 		assert_eq!(batches[3].draw_indices, vec![3, 4]);
+	}
+
+	#[test]
+	fn ordered_draw_batches_keep_gem_prepass_adjacent_to_forward() {
+		let mut batches = Vec::new();
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 4);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::LilToonGemPre, 1, 4);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonAdd, 1, 4);
+		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 2, 4);
+
+		assert_eq!(
+			batches.iter().map(|batch| batch.pipeline).collect::<Vec<_>>(),
+			vec![
+				DrawPipelineKind::BlendToon,
+				DrawPipelineKind::LilToonGemPre,
+				DrawPipelineKind::BlendToonAdd,
+				DrawPipelineKind::BlendToon
+			]
+		);
+		assert_eq!(batches[1].draw_indices, vec![1]);
+		assert_eq!(batches[2].draw_indices, vec![1]);
 	}
 
 	#[test]
