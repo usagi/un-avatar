@@ -2213,6 +2213,9 @@ fn unavatar_material_inferred_alpha_mode(
 	if shader.contains("refraction") || shader.contains("liltoonref") {
 		return Some(UnaAlphaMode::Opaque);
 	}
+	if shader.contains("liltoongem") {
+		return Some(UnaAlphaMode::Blend);
+	}
 	if let Some(render_queue) = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue"))) {
 		if render_queue >= 3000 {
 			return Some(UnaAlphaMode::Blend);
@@ -4727,6 +4730,11 @@ mod tests {
 			"sourceShader": "Hidden/lilToonRef",
 			"renderQueue": 2900
 		});
+		let queue_gem = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonGem",
+			"renderQueue": 2900
+		});
 		let source_param_blend = serde_json::json!({
 			"family": "liltoon",
 			"sourceShader": "lilToon",
@@ -4801,6 +4809,10 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&queue_refraction), UnaAlphaMode::Blend, None, true),
 			Some(UnaAlphaMode::Opaque)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&queue_gem), UnaAlphaMode::Mask, Some(0.001), true),
+			Some(UnaAlphaMode::Blend)
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&source_param_blend), UnaAlphaMode::Opaque, None, true),

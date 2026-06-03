@@ -225,6 +225,7 @@ namespace UNAvatar.UnityExporter
                 shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Refraction", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("lilToonRef", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("Gem", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
@@ -276,13 +277,15 @@ namespace UNAvatar.UnityExporter
             var lilBlend = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                 (shaderName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("Fur", StringComparison.OrdinalIgnoreCase) >= 0);
+            var lilGem = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                shaderName.IndexOf("Gem", StringComparison.OrdinalIgnoreCase) >= 0;
             var lilCutout = shaderName.IndexOf("lilToon", StringComparison.OrdinalIgnoreCase) >= 0 &&
                 shaderName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0;
             if (lilRefraction)
             {
                 return "OPAQUE";
             }
-            if (!lilCutout && (lilBlend || baseColor.a < 0.999f || material.renderQueue >= 3000 ||
+            if (!lilCutout && (lilBlend || lilGem || baseColor.a < 0.999f || material.renderQueue >= 3000 ||
                 ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 1.5f ||
                 ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 1.5f ||
                 ReadMaterialFloat(material, "_BlendMode", 0.0f) >= 1.5f ||
@@ -290,11 +293,11 @@ namespace UNAvatar.UnityExporter
             {
                 return "BLEND";
             }
-            if (lilCutout || (material.renderQueue >= 2450 && material.renderQueue < 3000) ||
+            if (!lilGem && (lilCutout || (material.renderQueue >= 2450 && material.renderQueue < 3000) ||
                 ReadMaterialFloat(material, "_TransparentMode", 0.0f) >= 0.5f ||
                 ReadMaterialFloat(material, "_AlphaMode", 0.0f) >= 0.5f ||
                 ReadMaterialFloat(material, "_BlendMode", 0.0f) >= 0.5f ||
-                ReadMaterialFloat(material, "_Mode", 0.0f) >= 0.5f)
+                ReadMaterialFloat(material, "_Mode", 0.0f) >= 0.5f))
             {
                 return "MASK";
             }
