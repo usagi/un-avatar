@@ -1784,6 +1784,8 @@ mod tests {
 			color_space: None,
 			texture_type: None,
 			texture_shape: None,
+			source_layout: None,
+			unity_generate_cubemap: None,
 			srgb: None,
 			sampler: None,
 			byte_length: 3,

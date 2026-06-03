@@ -253,13 +253,14 @@ Exporter は原則として Unity の texture asset 元ファイルをそのま�
 
 PNG / JPEG 非対応の pixel format は、PNG fallback だけで済ませない。
 
-- Asset-backed EXR / HDR / KTX2 / DDS: 元ファイル bytes を `UN_avatar` texture asset として保持し、glTF core image は必要な場合だけ fallback として別に出す。
+- Asset-backed EXR / HDR / KTX2 / DDS: 元ファイル bytes を `UN_avatar` texture asset として保持し、glTF core image は必要な場合だけ fallback として別に出す。Radiance HDR は `image/vnd.radiance` / `RGBE8` / `rgb` / `linear` として記録する。
+- Asset-backed PNG / JPEG: 元ファイル bytes を glTF core image として保持する。TextureImporter が `TextureCube` として扱う場合も、source PNG / JPEG を勝手に EXR / float / equirectangular image へ変換しない。
 - Runtime-generated / unreadable texture: GPU readback で用途に合う形式へ取り出す。HDR / half float は `RGBAHalf` readback を優先し、KTX2 raw `RGBA16F` として格納する。
 - Normal / mask / data texture: sRGB 変換を避け、`colorSpace` / `sRGB` / `textureType` / `textureShape` metadata に記録する。PNG fallback を作る場合も `sRGB=false` の texture は Linear readback を使う。
 - KTX2 encoder: v0.1 では最小 raw KTX2 writer を exporter 内蔵候補にする。BasisU / UASTC / BCn などの重い圧縮は optimizer 側の責務にする。
 - glTF compatibility: `KHR_texture_basisu` は BasisU/KTX2 圧縮互換の経路として使い、非圧縮 `RGBA16F` KTX2 は `UN_avatar` extension asset として扱う。
 
-v0.1 実装では asset-backed EXR を `UN_avatar.textureAssets` に保持する。EXR は glTF core `images` には入れず、LDR PNG fallback も自動生成しない。Exporter は EXR header の `channels` / `dataWindow` を読み、`sourcePixelFormat`、`channels`、`width`、`height`、Unity の filter / wrap sampler、TextureImporter の color / type / shape 情報を metadata として記録する。material property は `matcapTextureIndexAsset` のように asset id を参照し、Runtime importer が decode 後に通常の texture index へ解決する。
+v0.1 実装では asset-backed EXR / HDR を `UN_avatar.textureAssets` に保持する。EXR / HDR は glTF core `images` には入れず、LDR PNG fallback も自動生成しない。Exporter は source header から `sourcePixelFormat`、`channels`、`width`、`height` を読み、Unity の filter / wrap sampler、TextureImporter の color / type / shape 情報を metadata として記録する。EXR は `channels` / `dataWindow`、Radiance HDR は resolution line から metadata を読む。TextureCube では `sourceLayout` と `unityGenerateCubemap` も記録し、Unity importer がどの cubemap 生成方式で source を解釈していたかを runtime へ渡す。material property は `matcapTextureIndexAsset` のように asset id を参照し、Runtime importer が decode 後に通常の texture index へ解決する。`_ReflectionCubeTex` の source が PNG/JPEG の場合は glTF core image、EXR/HDR 等の場合は `UN_avatar.textureAssets` とし、どちらも `textureShape=TextureCube` を保持する。Exporter は cubemap source を品質劣化する形式へ再エンコードしない。
 
 `.unavatar` の後段最適化は別途 `un-avatar-optimizer` のような専用 CLI で扱う。optimizer は WebP / KTX2 / BCn / texture resize / dedup / wardrobe asset group 単位の再配置を担当し、Supervisor からは Optimize ボタンで呼び出せる形にする。optimizer は既定で入力 `.unavatar` を上書きせず、別名の optimized package を出力する。
 

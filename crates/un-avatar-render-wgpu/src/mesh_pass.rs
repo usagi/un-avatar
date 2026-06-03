@@ -3,9 +3,10 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use glam::{Mat4, Vec3, Vec4};
+use half::f16;
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaBounds, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageSourceMetadata, UnaMaterialPbr,
+	UnaAlphaMode, UnaBounds, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
 	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
 	UnaTextureWrapMode,
 };
@@ -167,10 +168,15 @@ pub struct SceneMeshLoadOpts {
 	pub debug_disable_shade_color: bool,
 	/// normalTexture の寄与を 0 にし、頂点法線のみで shading / rim を計算する診断 toggle。
 	pub debug_disable_normal_map: bool,
+	/// lilToon reflection / specular / gem reflection 寄与を 0 にする診断 toggle。
+	pub debug_disable_reflection: bool,
 	/// toon fragment path の出力を `base = alb × base_color.rgb` のみで早期 return する診断 toggle。
 	/// shading / GI / rim / matcap / emissive / shade_term を全てスキップ。
 	/// これでリングが残るならテクスチャ自身またはメッシュ重なり由来。
 	pub debug_base_texture_only: bool,
+	/// lilToon Fur shell pass を完全にスキップする診断 toggle。
+	/// Fur 実装の副作用が通常描画へ波及しているかを切り分ける。
+	pub disable_fur: bool,
 	/// アバター用途の outline override。既定は VRM / MToon authored outline を尊重する。
 	pub avatar_outline: AvatarOutlineOptions,
 	/// アバター用途の rim light override。既定は VRM / MToon authored rim を尊重する。
@@ -229,9 +235,41 @@ fn portable_mesh_shader_source() -> String {
 		"@group(1) @binding(56) var backlight_color_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(57) var shadow2_color_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(58) var shadow3_color_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(59) var fur_vector_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(60) var fur_length_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(61) var fur_noise_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(62) var fur_mask_tex: texture_2d<f32>;\n",
 	] {
 		shader = shader.replace(snippet, "");
 	}
+	shader = shader.replace(
+		"fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {\n\tif (shell <= 0.0) {\n\t\treturn 1.0;\n\t}\n\tlet fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;\n\tlet noise_uv = uv * max(drawu.fur_noise_params.x, 0.0001) + vec2<f32>(drawu.fur_noise_params.y);\n\tlet noise = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;\n\tlet root_density = clamp(fur_mask * length_mask, 0.0, 1.0);\n\tlet shell_cut = pow(clamp(shell, 0.0, 1.0), mix(0.75, 2.0, clamp(drawu.fur_params.w, 0.0, 1.0)));\n\tlet breakup = clamp(noise + (1.0 - shell) * 0.35 - shell_cut * 0.75, 0.0, 1.0);\n\treturn root_density * breakup * (1.0 - shell * 0.82);\n}\n",
+		"fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {\n\t_ = uv;\n\t_ = shell;\n\treturn length_mask;\n}\n",
+	);
+	shader = shader.replace(
+		"let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;",
+		"let fur_mask = 1.0;",
+	);
+	shader = shader.replace(
+		"let noise = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;",
+		"let noise = 1.0;",
+	);
+	shader = shader.replace(
+		"\tlet fur_mask = textureSampleLevel(fur_mask_tex, base_samp, fur_uv, 0.0).r;\n\tlet noise_uv = fur_uv * max(drawu.fur_noise_params.x, 0.0001) + vec2<f32>(drawu.fur_noise_params.y);\n\tlet noise = textureSampleLevel(fur_noise_mask_tex, base_samp, noise_uv, 0.0).r;\n",
+		"\tlet fur_mask = 1.0;\n\tlet noise = 1.0;\n",
+	);
+	shader = shader.replace(
+		"\tlet length_mask = textureSampleLevel(fur_length_mask_tex, base_samp, fur_uv, 0.0).r;\n\tlet vector_tex = textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0).xyz * 2.0 - vec3<f32>(1.0);\n\tlet fur_vector_ts = drawu.fur_vector_params.xyz + vector_tex + vec3<f32>(0.0, 0.0, 0.001);\n",
+		"\tlet length_mask = 1.0;\n\tlet fur_vector_ts = drawu.fur_vector_params.xyz + vec3<f32>(0.0, 0.0, 0.001);\n",
+	);
+	shader = shader.replace(
+		"let length_mask = textureSampleLevel(fur_length_mask_tex, base_samp, fur_uv, 0.0).r;",
+		"let length_mask = 1.0;",
+	);
+	shader = shader.replace(
+		"let vector_tex = textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0).xyz * 2.0 - vec3<f32>(1.0);",
+		"let vector_tex = vec3<f32>(0.0);",
+	);
 	shader = shader.replace(
 		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\tlet enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);\n\tif (enabled <= 0.000001) {\n\t\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n\t}\n\tlet base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));\n\tlet base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;\n\tlet tangent_uv = uv * drawu.anisotropy_tangent_uv_offset_scale.zw + drawu.anisotropy_tangent_uv_offset_scale.xy;\n\tvar tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\tif (dot(tangent_sample, tangent_sample) < 0.000001) {\n\t\ttangent_sample = vec3<f32>(1.0, 0.0, 0.0);\n\t}\n\tvar aniso_t = normalize(base_tangent * tangent_sample.x + base_bitangent * tangent_sample.y + n * tangent_sample.z);\n\taniso_t = normalize(aniso_t - n * dot(n, aniso_t));\n\tlet aniso_b = normalize(cross(n, aniso_t)) * tangent_in.w;\n\tlet scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;\n\tlet scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;\n\tlet anisotropy = drawu.anisotropy_params.y * scale_mask;\n\tlet shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);\n\tlet aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));\n\tlet noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;\n\tlet shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;\n\treturn AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);\n}\n",
 		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n}\n",
@@ -397,6 +435,9 @@ struct MeshDrawMaterialGpu {
 	outline_lit_params: [f32; 4],
 	outline_ext_params: [f32; 4],
 	alpha_mask_params: [f32; 4],
+	fur_params: [f32; 4],
+	fur_vector_params: [f32; 4],
+	fur_noise_params: [f32; 4],
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
@@ -444,7 +485,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1600);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1648);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -464,6 +505,9 @@ const _: () = assert!(std::mem::size_of::<Vertex>() == 72);
 pub(crate) struct TextureUploadSummary {
 	pub image_count: u32,
 	pub resized_count: u32,
+	pub cubemap_count: u32,
+	pub cubemap_converted_count: u32,
+	pub cubemap_fallback_count: u32,
 	pub compression_mode: TextureCompressionMode,
 	pub compression_bc_supported: bool,
 	pub compression_astc_supported: bool,
@@ -480,6 +524,7 @@ pub(crate) struct TextureUploadSummary {
 	pub compressed_cache_writes: u32,
 	pub source_bytes: u64,
 	pub uploaded_mip_bytes: u64,
+	pub cubemap_uploaded_bytes: u64,
 	pub max_source_dimension: u32,
 	pub max_uploaded_dimension: u32,
 	pub limit_max_dimension: Option<u32>,
@@ -710,8 +755,9 @@ fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_w
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
+	let mut fur_draw_indices = Vec::new();
 	let mut transparent_backpass_draw_indices = Vec::new();
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
@@ -734,6 +780,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			&& matches!(draw.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
 		{
 			outline_draw_indices.push(draw_index);
+		}
+		if draw_has_fur(draw, opts) {
+			fur_draw_indices.push(draw_index);
 		}
 
 		let shading_index = match shading {
@@ -760,6 +809,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	}
 
 	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut transparent_backpass_draw_indices);
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
@@ -768,6 +818,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
 	(
 		outline_draw_indices,
+		fur_draw_indices,
 		opaque_batches,
 		transparent_backpass_draw_indices,
 		blended_batches,
@@ -776,6 +827,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 
 pub(crate) struct SceneMeshes {
 	pipeline_outline_toon: wgpu::RenderPipeline,
+	pipeline_fur_toon: wgpu::RenderPipeline,
 	pipeline_opaque_lit: wgpu::RenderPipeline,
 	pipeline_opaque_unlit: wgpu::RenderPipeline,
 	pipeline_opaque_toon: wgpu::RenderPipeline,
@@ -796,9 +848,12 @@ pub(crate) struct SceneMeshes {
 	_samplers: Vec<wgpu::Sampler>,
 	#[allow(dead_code)]
 	_textures: Vec<wgpu::Texture>,
+	#[allow(dead_code)]
+	_cube_textures: Vec<wgpu::Texture>,
 	draws: Vec<MeshDraw>,
 	skin_palettes: Vec<SkinPalette>,
 	outline_draw_indices: Vec<usize>,
+	fur_draw_indices: Vec<usize>,
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
@@ -1165,12 +1220,20 @@ fn sampler_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages)
 }
 
 fn texture_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+	texture_bind_group_layout_entry_with_dimension(binding, visibility, wgpu::TextureViewDimension::D2)
+}
+
+fn texture_bind_group_layout_entry_with_dimension(
+	binding: u32,
+	visibility: wgpu::ShaderStages,
+	view_dimension: wgpu::TextureViewDimension,
+) -> wgpu::BindGroupLayoutEntry {
 	wgpu::BindGroupLayoutEntry {
 		binding,
 		visibility,
 		ty: wgpu::BindingType::Texture {
 			multisampled: false,
-			view_dimension: wgpu::TextureViewDimension::D2,
+			view_dimension,
 			sample_type: wgpu::TextureSampleType::Float { filterable: true },
 		},
 		count: None,
@@ -1204,7 +1267,7 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 		uniform_bind_group_layout_entry(10, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 		texture_bind_group_layout_entry(11, wgpu::ShaderStages::FRAGMENT),
 		texture_bind_group_layout_entry(12, wgpu::ShaderStages::FRAGMENT),
-		texture_bind_group_layout_entry(13, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry_with_dimension(13, wgpu::ShaderStages::FRAGMENT, wgpu::TextureViewDimension::Cube),
 		sampler_bind_group_layout_entry(14, wgpu::ShaderStages::FRAGMENT),
 		sampler_bind_group_layout_entry(15, wgpu::ShaderStages::FRAGMENT),
 		sampler_bind_group_layout_entry(16, wgpu::ShaderStages::FRAGMENT),
@@ -1248,6 +1311,13 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(53, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(54, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(55, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(56, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(57, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(58, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(59, wgpu::ShaderStages::VERTEX),
+			texture_bind_group_layout_entry(60, wgpu::ShaderStages::VERTEX),
+			texture_bind_group_layout_entry(61, wgpu::ShaderStages::VERTEX),
+			texture_bind_group_layout_entry(62, wgpu::ShaderStages::VERTEX),
 		]);
 	}
 	entries
@@ -1349,6 +1419,437 @@ fn create_solid_texture_1x1(
 	texture
 }
 
+fn create_solid_cube_texture_1x1(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	label: &'static str,
+	format: wgpu::TextureFormat,
+	rgba: [u8; 4],
+) -> wgpu::Texture {
+	let texture = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some(label),
+		size: wgpu::Extent3d {
+			width: 1,
+			height: 1,
+			depth_or_array_layers: 6,
+		},
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		view_formats: &[],
+	});
+	let mut data = Vec::with_capacity(6 * 4);
+	for _ in 0..6 {
+		data.extend_from_slice(&rgba);
+	}
+	queue.write_texture(
+		texture.as_image_copy(),
+		&data,
+		wgpu::TexelCopyBufferLayout {
+			offset: 0,
+			bytes_per_row: Some(4),
+			rows_per_image: Some(1),
+		},
+		wgpu::Extent3d {
+			width: 1,
+			height: 1,
+			depth_or_array_layers: 6,
+		},
+	);
+	texture
+}
+
+struct CubeUpload {
+	face_size: u32,
+	mips: Vec<CubeMipUpload>,
+	layout: &'static str,
+}
+
+struct CubeMipUpload {
+	face_size: u32,
+	data_rgba16f: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CubeSourceLayout {
+	Latlong,
+	SphereMap,
+	HorizontalStrip,
+	VerticalStrip,
+	HorizontalCross,
+	VerticalCross,
+}
+
+impl CubeSourceLayout {
+	fn name(self) -> &'static str {
+		match self {
+			Self::Latlong => "latlong",
+			Self::SphereMap => "sphere_map",
+			Self::HorizontalStrip => "horizontal_strip",
+			Self::VerticalStrip => "vertical_strip",
+			Self::HorizontalCross => "horizontal_cross",
+			Self::VerticalCross => "vertical_cross",
+		}
+	}
+}
+
+fn texture_source_is_cube(source: Option<&UnaImageSourceMetadata>) -> bool {
+	source
+		.and_then(|source| source.texture_shape.as_deref())
+		.is_some_and(|shape| shape.eq_ignore_ascii_case("TextureCube") || shape.eq_ignore_ascii_case("Cube"))
+}
+
+fn texture_source_is_srgb(source: Option<&UnaImageSourceMetadata>) -> bool {
+	source.is_some_and(|source| match source.color_space.as_deref() {
+		Some(color_space) => color_space.eq_ignore_ascii_case("srgb"),
+		None => source.srgb == Some(true),
+	})
+}
+
+fn cube_source_layout(image: &UnaImageRgba, source: Option<&UnaImageSourceMetadata>) -> Option<(CubeSourceLayout, u32)> {
+	if !texture_source_is_cube(source) {
+		return None;
+	}
+	let width = image.width.max(1);
+	let height = image.height.max(1);
+	let layout_hint = source
+		.and_then(|source| source.source_layout.as_deref())
+		.unwrap_or("")
+		.to_ascii_lowercase();
+	if layout_hint.contains("latlong") || layout_hint.contains("cylindrical") || width == height.saturating_mul(2) {
+		return Some((CubeSourceLayout::Latlong, (width / 4).min(height / 2).max(1)));
+	}
+	if layout_hint.contains("sphere") || width == height {
+		return Some((CubeSourceLayout::SphereMap, width.min(height).max(1)));
+	}
+	if layout_hint.contains("horizontal_strip") || width == height.saturating_mul(6) {
+		return Some((CubeSourceLayout::HorizontalStrip, height.max(1)));
+	}
+	if layout_hint.contains("vertical_strip") || height == width.saturating_mul(6) {
+		return Some((CubeSourceLayout::VerticalStrip, width.max(1)));
+	}
+	if layout_hint.contains("horizontal_cross") || width.saturating_mul(3) == height.saturating_mul(4) {
+		return Some((CubeSourceLayout::HorizontalCross, (width / 4).min(height / 3).max(1)));
+	}
+	if layout_hint.contains("vertical_cross") || width.saturating_mul(4) == height.saturating_mul(3) {
+		return Some((CubeSourceLayout::VerticalCross, (width / 3).min(height / 4).max(1)));
+	}
+	if layout_hint.contains("unity_auto") {
+		return Some((CubeSourceLayout::SphereMap, width.min(height).max(1)));
+	}
+	None
+}
+
+fn cube_upload_from_image(image: &UnaImageRgba, source: Option<&UnaImageSourceMetadata>) -> Option<CubeUpload> {
+	let (layout, face_size) = cube_source_layout(image, source)?;
+	let srgb = texture_source_is_srgb(source);
+	let mut base_rgba = Vec::with_capacity(face_size as usize * face_size as usize * 6);
+	for face in 0..6 {
+		for y in 0..face_size {
+			for x in 0..face_size {
+				let u = (((x as f32 + 0.5) / face_size as f32) * 2.0) - 1.0;
+				let v = (((y as f32 + 0.5) / face_size as f32) * 2.0) - 1.0;
+				let dir = cube_face_direction(face, u, v);
+				let rgba = match layout {
+					CubeSourceLayout::Latlong => sample_latlong(image, dir, srgb),
+					CubeSourceLayout::SphereMap => sample_sphere_map(image, dir, srgb),
+					CubeSourceLayout::HorizontalStrip
+					| CubeSourceLayout::VerticalStrip
+					| CubeSourceLayout::HorizontalCross
+					| CubeSourceLayout::VerticalCross => sample_packed_cube_face(image, layout, face, u, v, srgb),
+				};
+				base_rgba.push(rgba);
+			}
+		}
+	}
+	Some(CubeUpload {
+		face_size,
+		mips: build_cube_mips_rgba16f(face_size, base_rgba),
+		layout: layout.name(),
+	})
+}
+
+fn build_cube_mips_rgba16f(face_size: u32, base_rgba: Vec<[f32; 4]>) -> Vec<CubeMipUpload> {
+	let mut mips = Vec::new();
+	let mut current_size = face_size.max(1);
+	let mut current = base_rgba;
+	let max_mip = current_size.ilog2().max(1);
+	let mut mip_level = 0u32;
+	loop {
+		mips.push(CubeMipUpload {
+			face_size: current_size,
+			data_rgba16f: cube_rgba_f32_to_rgba16f_bytes(&current),
+		});
+		if current_size <= 1 {
+			break;
+		}
+		let next_size = (current_size / 2).max(1);
+		current = downsample_cube_faces(&current, current_size, next_size);
+		mip_level += 1;
+		current = blur_cube_faces_for_roughness_mip(&current, next_size, mip_level, max_mip);
+		current_size = next_size;
+	}
+	mips
+}
+
+fn cube_rgba_f32_to_rgba16f_bytes(pixels: &[[f32; 4]]) -> Vec<u8> {
+	let mut data = Vec::with_capacity(pixels.len() * 8);
+	for rgba in pixels {
+		for value in rgba {
+			data.extend_from_slice(&f16::from_f32(*value).to_bits().to_le_bytes());
+		}
+	}
+	data
+}
+
+fn downsample_cube_faces(source: &[[f32; 4]], source_size: u32, next_size: u32) -> Vec<[f32; 4]> {
+	let source_size = source_size.max(1) as usize;
+	let next_size = next_size.max(1) as usize;
+	let mut next = vec![[0.0; 4]; 6 * next_size * next_size];
+	for face in 0..6usize {
+		for y in 0..next_size {
+			for x in 0..next_size {
+				let sx = (x * 2).min(source_size - 1);
+				let sy = (y * 2).min(source_size - 1);
+				let mut sum = [0.0; 4];
+				let mut count = 0.0;
+				for oy in 0..2usize {
+					for ox in 0..2usize {
+						let px = (sx + ox).min(source_size - 1);
+						let py = (sy + oy).min(source_size - 1);
+						let sample = source[face * source_size * source_size + py * source_size + px];
+						for channel in 0..4 {
+							sum[channel] += sample[channel];
+						}
+						count += 1.0;
+					}
+				}
+				for channel in 0..4 {
+					sum[channel] /= count;
+				}
+				next[face * next_size * next_size + y * next_size + x] = sum;
+			}
+		}
+	}
+	next
+}
+
+fn blur_cube_faces_for_roughness_mip(source: &[[f32; 4]], face_size: u32, mip_level: u32, max_mip: u32) -> Vec<[f32; 4]> {
+	let face_size = face_size.max(1) as usize;
+	if face_size <= 1 || mip_level == 0 {
+		return source.to_vec();
+	}
+	let roughness = mip_level as f32 / max_mip.max(1) as f32;
+	let radius = ((roughness * roughness * 4.0).ceil() as i32).clamp(1, 4);
+	let sigma = (radius as f32 * 0.5).max(0.5);
+	let mut out = vec![[0.0; 4]; source.len()];
+	for face in 0..6usize {
+		for y in 0..face_size {
+			for x in 0..face_size {
+				let mut sum = [0.0; 4];
+				let mut weight_sum = 0.0;
+				for oy in -radius..=radius {
+					for ox in -radius..=radius {
+						let sx = (x as i32 + ox).clamp(0, face_size as i32 - 1) as usize;
+						let sy = (y as i32 + oy).clamp(0, face_size as i32 - 1) as usize;
+						let d2 = (ox * ox + oy * oy) as f32;
+						let weight = (-d2 / (2.0 * sigma * sigma)).exp();
+						let sample = source[face * face_size * face_size + sy * face_size + sx];
+						for channel in 0..4 {
+							sum[channel] += sample[channel] * weight;
+						}
+						weight_sum += weight;
+					}
+				}
+				for channel in 0..4 {
+					sum[channel] /= weight_sum.max(0.000001);
+				}
+				out[face * face_size * face_size + y * face_size + x] = sum;
+			}
+		}
+	}
+	out
+}
+
+fn cube_face_direction(face: u32, u: f32, v: f32) -> Vec3 {
+	let dir = match face {
+		0 => Vec3::new(1.0, -v, -u),
+		1 => Vec3::new(-1.0, -v, u),
+		2 => Vec3::new(u, 1.0, v),
+		3 => Vec3::new(u, -1.0, -v),
+		4 => Vec3::new(u, -v, 1.0),
+		_ => Vec3::new(-u, -v, -1.0),
+	};
+	dir.normalize_or_zero()
+}
+
+fn sample_latlong(image: &UnaImageRgba, dir: Vec3, srgb: bool) -> [f32; 4] {
+	let theta = dir.z.atan2(dir.x);
+	let u = theta / std::f32::consts::TAU + 0.5;
+	let v = dir.y.clamp(-1.0, 1.0).acos() / std::f32::consts::PI;
+	sample_image_bilinear(image, u, v, true, srgb)
+}
+
+fn sample_sphere_map(image: &UnaImageRgba, dir: Vec3, srgb: bool) -> [f32; 4] {
+	let denom = 2.0 * (dir.x * dir.x + dir.y * dir.y + (dir.z + 1.0) * (dir.z + 1.0)).sqrt();
+	if denom <= 0.000001 {
+		return [0.0, 0.0, 0.0, 1.0];
+	}
+	let u = dir.x / denom + 0.5;
+	let v = -dir.y / denom + 0.5;
+	sample_image_bilinear(image, u, v, false, srgb)
+}
+
+fn sample_packed_cube_face(image: &UnaImageRgba, layout: CubeSourceLayout, face: u32, u: f32, v: f32, srgb: bool) -> [f32; 4] {
+	let face_u = (u * 0.5 + 0.5).clamp(0.0, 1.0);
+	let face_v = (v * 0.5 + 0.5).clamp(0.0, 1.0);
+	let (cell_x, cell_y, columns, rows) = match layout {
+		CubeSourceLayout::HorizontalStrip => (face, 0, 6, 1),
+		CubeSourceLayout::VerticalStrip => (0, face, 1, 6),
+		CubeSourceLayout::HorizontalCross => match face {
+			0 => (2, 1, 4, 3),
+			1 => (0, 1, 4, 3),
+			2 => (1, 0, 4, 3),
+			3 => (1, 2, 4, 3),
+			4 => (1, 1, 4, 3),
+			_ => (3, 1, 4, 3),
+		},
+		CubeSourceLayout::VerticalCross => match face {
+			0 => (2, 1, 3, 4),
+			1 => (0, 1, 3, 4),
+			2 => (1, 0, 3, 4),
+			3 => (1, 2, 3, 4),
+			4 => (1, 1, 3, 4),
+			_ => (1, 3, 3, 4),
+		},
+		CubeSourceLayout::Latlong | CubeSourceLayout::SphereMap => return [0.0, 0.0, 0.0, 1.0],
+	};
+	let u = (cell_x as f32 + face_u) / columns as f32;
+	let v = (cell_y as f32 + face_v) / rows as f32;
+	sample_image_bilinear(image, u, v, false, srgb)
+}
+
+fn sample_image_bilinear(image: &UnaImageRgba, u: f32, v: f32, wrap_u: bool, srgb: bool) -> [f32; 4] {
+	let width = image.width.max(1);
+	let height = image.height.max(1);
+	let u = if wrap_u { u.rem_euclid(1.0) } else { u.clamp(0.0, 1.0) };
+	let v = v.clamp(0.0, 1.0);
+	let x = u * (width - 1) as f32;
+	let y = v * (height - 1) as f32;
+	let x0 = x.floor() as u32;
+	let y0 = y.floor() as u32;
+	let x1 = (x0 + 1).min(width - 1);
+	let y1 = (y0 + 1).min(height - 1);
+	let tx = x - x0 as f32;
+	let ty = y - y0 as f32;
+	let c00 = sample_image_pixel(image, x0, y0, srgb);
+	let c10 = sample_image_pixel(image, x1, y0, srgb);
+	let c01 = sample_image_pixel(image, x0, y1, srgb);
+	let c11 = sample_image_pixel(image, x1, y1, srgb);
+	let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+	let mut out = [0.0; 4];
+	for i in 0..4 {
+		out[i] = mix(mix(c00[i], c10[i], tx), mix(c01[i], c11[i], tx), ty);
+	}
+	out
+}
+
+fn sample_image_pixel(image: &UnaImageRgba, x: u32, y: u32, srgb: bool) -> [f32; 4] {
+	let pixel_index = y as usize * image.width.max(1) as usize + x as usize;
+	let srgb_to_linear = |value: f32| -> f32 {
+		if !srgb {
+			return value;
+		}
+		if value <= 0.04045 {
+			value / 12.92
+		} else {
+			((value + 0.055) / 1.055).powf(2.4)
+		}
+	};
+	match image.pixel_format {
+		un_avatar_core::UnaImagePixelFormat::R8 => {
+			let r = image.pixels.get(pixel_index).copied().unwrap_or(0) as f32 / 255.0;
+			let r = srgb_to_linear(r);
+			[r, r, r, 1.0]
+		}
+		un_avatar_core::UnaImagePixelFormat::R8G8 => {
+			let offset = pixel_index * 2;
+			let r = image.pixels.get(offset).copied().unwrap_or(0) as f32 / 255.0;
+			let a = image.pixels.get(offset + 1).copied().unwrap_or(255) as f32 / 255.0;
+			let r = srgb_to_linear(r);
+			[r, r, r, a]
+		}
+		un_avatar_core::UnaImagePixelFormat::R8G8B8 => {
+			let offset = pixel_index * 3;
+			[
+				srgb_to_linear(image.pixels.get(offset).copied().unwrap_or(0) as f32 / 255.0),
+				srgb_to_linear(image.pixels.get(offset + 1).copied().unwrap_or(0) as f32 / 255.0),
+				srgb_to_linear(image.pixels.get(offset + 2).copied().unwrap_or(0) as f32 / 255.0),
+				1.0,
+			]
+		}
+		un_avatar_core::UnaImagePixelFormat::R8G8B8A8 => {
+			let offset = pixel_index * 4;
+			[
+				srgb_to_linear(image.pixels.get(offset).copied().unwrap_or(0) as f32 / 255.0),
+				srgb_to_linear(image.pixels.get(offset + 1).copied().unwrap_or(0) as f32 / 255.0),
+				srgb_to_linear(image.pixels.get(offset + 2).copied().unwrap_or(0) as f32 / 255.0),
+				image.pixels.get(offset + 3).copied().unwrap_or(255) as f32 / 255.0,
+			]
+		}
+		un_avatar_core::UnaImagePixelFormat::R16G16B16Float => sample_f16_pixel(&image.pixels, pixel_index, 3),
+		un_avatar_core::UnaImagePixelFormat::R16G16B16A16Float => sample_f16_pixel(&image.pixels, pixel_index, 4),
+		un_avatar_core::UnaImagePixelFormat::R32G32B32Float => sample_f32_pixel(&image.pixels, pixel_index, 3),
+		un_avatar_core::UnaImagePixelFormat::R32G32B32A32Float => sample_f32_pixel(&image.pixels, pixel_index, 4),
+		_ => {
+			let rgba = image.rgba8_compat_pixels();
+			let offset = pixel_index * 4;
+			[
+				rgba.get(offset).copied().unwrap_or(0) as f32 / 255.0,
+				rgba.get(offset + 1).copied().unwrap_or(0) as f32 / 255.0,
+				rgba.get(offset + 2).copied().unwrap_or(0) as f32 / 255.0,
+				rgba.get(offset + 3).copied().unwrap_or(255) as f32 / 255.0,
+			]
+		}
+	}
+}
+
+fn sample_f16_pixel(pixels: &[u8], pixel_index: usize, channels: usize) -> [f32; 4] {
+	let offset = pixel_index * channels * 2;
+	let channel = |index: usize| -> f32 {
+		if index >= channels {
+			return if index == 3 { 1.0 } else { 0.0 };
+		}
+		let offset = offset + index * 2;
+		let bytes = [
+			pixels.get(offset).copied().unwrap_or(0),
+			pixels.get(offset + 1).copied().unwrap_or(0),
+		];
+		f16::from_bits(u16::from_le_bytes(bytes)).to_f32()
+	};
+	[channel(0), channel(1), channel(2), channel(3)]
+}
+
+fn sample_f32_pixel(pixels: &[u8], pixel_index: usize, channels: usize) -> [f32; 4] {
+	let offset = pixel_index * channels * 4;
+	let channel = |index: usize| -> f32 {
+		if index >= channels {
+			return if index == 3 { 1.0 } else { 0.0 };
+		}
+		let offset = offset + index * 4;
+		let bytes = [
+			pixels.get(offset).copied().unwrap_or(0),
+			pixels.get(offset + 1).copied().unwrap_or(0),
+			pixels.get(offset + 2).copied().unwrap_or(0),
+			pixels.get(offset + 3).copied().unwrap_or(0),
+		];
+		f32::from_le_bytes(bytes)
+	};
+	[channel(0), channel(1), channel(2), channel(3)]
+}
+
 fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 	match opts.avatar_outline.policy {
 		AvatarOutlinePolicy::Override => false,
@@ -1367,6 +1868,32 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 		}
 		AvatarOutlinePolicy::Off => false,
 	}
+}
+
+fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel) -> u32 {
+	let Some(liltoon_like) = material.liltoon_like.as_ref() else {
+		return 0;
+	};
+	if shading != UnaShadingModel::LilToonLike || liltoon_like.fur.enabled_factor <= 0.5 {
+		return 0;
+	}
+	liltoon_like.fur.layer_count_factor.ceil().max(0.0) as u32
+}
+
+fn draw_fur_layer_count(d: &MeshDraw) -> u32 {
+	material_fur_layer_count(&d.material, d.shading)
+}
+
+fn material_has_fur(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> bool {
+	!opts.force_simple_basecolor
+		&& !opts.debug_bind_pose
+		&& !opts.debug_primitive_colors
+		&& !opts.disable_fur
+		&& material_fur_layer_count(material, shading) > 0
+}
+
+fn draw_has_fur(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
+	material_has_fur(&d.material, d.shading, opts)
 }
 
 fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts) -> bool {
@@ -1736,7 +2263,7 @@ fn mesh_draw_material_gpu(
 		})
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
-	let reflection_control = liltoon_like
+	let mut reflection_control = liltoon_like
 		.map(|u| {
 			[
 				u.reflection.enabled_factor.clamp(0.0, 1.0),
@@ -1751,6 +2278,11 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	if opts.debug_disable_reflection {
+		reflection_control[0] = 0.0;
+		reflection_control[1] = 0.0;
+		reflection_control[2] = 0.0;
+	}
 	let reflection_params = liltoon_like
 		.map(|u| {
 			[
@@ -1857,6 +2389,29 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let fur_params = liltoon_like
+		.map(|u| {
+			[
+				u.fur.enabled_factor.clamp(0.0, 1.0),
+				u.fur.layer_count_factor.max(0.0),
+				u.fur.gravity_factor,
+				u.fur.randomize_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let fur_vector_params = liltoon_like
+		.map(|u| {
+			[
+				u.fur.vector_factor[0],
+				u.fur.vector_factor[1],
+				u.fur.vector_factor[2],
+				u.fur.vector_factor[3],
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let fur_noise_params = liltoon_like
+		.map(|u| [u.fur.noise_tiling_factor.max(0.0), u.fur.noise_offset_factor, 0.0, 0.0])
+		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let alpha_ext_params = liltoon_like
 		.map(|u| {
 			[
@@ -2144,6 +2699,9 @@ fn mesh_draw_material_gpu(
 		outline_lit_params,
 		outline_ext_params,
 		alpha_mask_params,
+		fur_params,
+		fur_vector_params,
+		fur_noise_params,
 		alpha_ext_params,
 		lighting_ext_params,
 		transparency_params,
@@ -2484,7 +3042,7 @@ impl SceneMeshes {
 					visibility: wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
+						view_dimension: wgpu::TextureViewDimension::Cube,
 						sample_type: wgpu::TextureSampleType::Float { filterable: true },
 					},
 					count: None,
@@ -2769,6 +3327,46 @@ impl SceneMeshes {
 				wgpu::BindGroupLayoutEntry {
 					binding: 58,
 					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 59,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 60,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 61,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 62,
+					visibility: wgpu::ShaderStages::VERTEX,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
 						view_dimension: wgpu::TextureViewDimension::D2,
@@ -3110,6 +3708,22 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
+		let pipeline_fur_toon = Self::create_mesh_pipeline(
+			device,
+			&pipeline_layout,
+			&shader,
+			format,
+			&vb_layout,
+			"mesh_fur_toon",
+			"vs_fur",
+			"fs_toon",
+			premultiplied_blend,
+			wgpu::ColorWrites::ALL,
+			false,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			sample_count,
+		);
 		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
@@ -3231,7 +3845,7 @@ impl SceneMeshes {
 			image_sampler_indices.push(sampler_index);
 		}
 
-		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 4);
+		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 5);
 
 		let white_texture = create_solid_texture_1x1(device, queue, "white1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [255, 255, 255, 255]);
 		textures.push(white_texture);
@@ -3239,6 +3853,15 @@ impl SceneMeshes {
 		let black_texture = create_solid_texture_1x1(device, queue, "black1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 255]);
 		textures.push(black_texture);
 		let black_view = textures[1].create_view(&wgpu::TextureViewDescriptor::default());
+		let mut cube_textures: Vec<wgpu::Texture> = Vec::new();
+		let black_cube_texture =
+			create_solid_cube_texture_1x1(device, queue, "black_cube1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 255]);
+		let black_cube_view = black_cube_texture.create_view(&wgpu::TextureViewDescriptor {
+			label: Some("black_cube1x1_view"),
+			dimension: Some(wgpu::TextureViewDimension::Cube),
+			..Default::default()
+		});
+		cube_textures.push(black_cube_texture);
 		let neutral_normal_texture = create_solid_texture_1x1(
 			device,
 			queue,
@@ -3269,12 +3892,87 @@ impl SceneMeshes {
 			..Default::default()
 		};
 
+		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
 		for (image_index, im) in scene.images.iter().enumerate() {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
+			if texture_source_is_cube(source_metadata) {
+				texture_summary.cubemap_count += 1;
+			}
+			if let Some(cube_upload) = cube_upload_from_image(im, source_metadata) {
+				report(
+					"gpu-upload",
+					format!(
+						"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
+						image_index + 1,
+						scene.images.len(),
+						cube_upload.face_size,
+						cube_upload.mips.len(),
+						cube_upload.layout
+					),
+				);
+				let tex = device.create_texture(&wgpu::TextureDescriptor {
+					label: Some("gltf_image_cube"),
+					size: wgpu::Extent3d {
+						width: cube_upload.face_size,
+						height: cube_upload.face_size,
+						depth_or_array_layers: 6,
+					},
+					mip_level_count: cube_upload.mips.len() as u32,
+					sample_count: 1,
+					dimension: wgpu::TextureDimension::D2,
+					format: wgpu::TextureFormat::Rgba16Float,
+					usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+					view_formats: &[],
+				});
+				for (mip_level, mip) in cube_upload.mips.iter().enumerate() {
+					queue.write_texture(
+						wgpu::TexelCopyTextureInfo {
+							texture: &tex,
+							mip_level: mip_level as u32,
+							origin: wgpu::Origin3d::ZERO,
+							aspect: wgpu::TextureAspect::All,
+						},
+						&mip.data_rgba16f,
+						wgpu::TexelCopyBufferLayout {
+							offset: 0,
+							bytes_per_row: Some(mip.face_size * 8),
+							rows_per_image: Some(mip.face_size),
+						},
+						wgpu::Extent3d {
+							width: mip.face_size,
+							height: mip.face_size,
+							depth_or_array_layers: 6,
+						},
+					);
+				}
+				texture_summary.cubemap_converted_count += 1;
+				texture_summary.cubemap_uploaded_bytes += cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
+				let view = tex.create_view(&wgpu::TextureViewDescriptor {
+					label: Some("gltf_image_cube_view"),
+					dimension: Some(wgpu::TextureViewDimension::Cube),
+					..Default::default()
+				});
+				cube_textures.push(tex);
+				cube_image_views.push(Some(view));
+			} else {
+				if texture_source_is_cube(source_metadata) {
+					texture_summary.cubemap_fallback_count += 1;
+					report(
+						"gpu-upload",
+						format!(
+							"Cubemap texture {}/{} has unsupported source layout {:?}; using black cube fallback",
+							image_index + 1,
+							scene.images.len(),
+							source_metadata.and_then(|source| source.source_layout.as_deref())
+						),
+					);
+				}
+				cube_image_views.push(None);
+			}
 			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
 				if let Some(source_upload) = source_texture_upload(im) {
 					report(
@@ -3508,6 +4206,23 @@ impl SceneMeshes {
 			.skip(4)
 			.map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
 			.collect();
+		assert_eq!(
+			image_views.len(),
+			scene.images.len(),
+			"internal fallback texture count changed scene image view indexing"
+		);
+		let neutral_vector_texture = create_solid_texture_1x1(
+			device,
+			queue,
+			"neutral_vector1x1",
+			wgpu::TextureFormat::Rgba8Unorm,
+			[128, 128, 128, 255],
+		);
+		textures.push(neutral_vector_texture);
+		let neutral_vector_view = textures
+			.last()
+			.expect("neutral vector texture was just pushed")
+			.create_view(&wgpu::TextureViewDescriptor::default());
 
 		let expression_names = expression_names(catalog);
 		let expression_bindings = expression_binding_index(catalog);
@@ -3758,7 +4473,9 @@ impl SceneMeshes {
 				} else {
 					mtoon.reflection_cube_texture_index
 				};
-				let reflection_view = texture_view_or(&image_views, reflection_texture_index, &black_view);
+				let reflection_view = reflection_texture_index
+					.and_then(|index| cube_image_views.get(index).and_then(Option::as_ref))
+					.unwrap_or(&black_cube_view);
 				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_texture_index, 0);
 				let reflection_color_texture_index = mat
 					.liltoon_like
@@ -3849,6 +4566,26 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
 				let anisotropy_shift_noise_view = texture_view_or(&image_views, anisotropy_shift_noise_texture_index, &neutral_normal_view);
+				let fur_vector_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
+				let fur_vector_view = texture_view_or(&image_views, fur_vector_texture_index, &neutral_vector_view);
+				let fur_length_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.fur.length_mask_texture_index);
+				let fur_length_mask_view = texture_view_or(&image_views, fur_length_mask_texture_index, &white_view);
+				let fur_noise_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.fur.noise_mask_texture_index);
+				let fur_noise_mask_view = texture_view_or(&image_views, fur_noise_mask_texture_index, &white_view);
+				let fur_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
+				let fur_mask_view = texture_view_or(&image_views, fur_mask_texture_index, &white_view);
 
 				let draw_transform = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("mesh_draw_transform"),
@@ -4095,6 +4832,22 @@ impl SceneMeshes {
 							binding: 58,
 							resource: wgpu::BindingResource::TextureView(shadow3_color_view),
 						},
+						wgpu::BindGroupEntry {
+							binding: 59,
+							resource: wgpu::BindingResource::TextureView(fur_vector_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 60,
+							resource: wgpu::BindingResource::TextureView(fur_length_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 61,
+							resource: wgpu::BindingResource::TextureView(fur_noise_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 62,
+							resource: wgpu::BindingResource::TextureView(fur_mask_view),
+						},
 					]);
 				}
 				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -4232,10 +4985,12 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) = build_draw_order(&draws, &opts);
+		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
+			build_draw_order(&draws, &opts);
 
 		Ok(Self {
 			pipeline_outline_toon,
+			pipeline_fur_toon,
 			pipeline_opaque_lit,
 			pipeline_opaque_unlit,
 			pipeline_opaque_toon,
@@ -4254,9 +5009,11 @@ impl SceneMeshes {
 			_screen_grab_fallback_texture: screen_grab_fallback_texture,
 			_samplers: samplers,
 			_textures: textures,
+			_cube_textures: cube_textures,
 			draws,
 			skin_palettes,
 			outline_draw_indices,
+			fur_draw_indices,
 			opaque_batches,
 			transparent_backpass_draw_indices,
 			blended_batches,
@@ -4334,6 +5091,20 @@ impl SceneMeshes {
 		draw_index: usize,
 		bind_material: &wgpu::BindGroup,
 	) {
+		self.draw_inner_with_material_instances(pass, state, draw_index, bind_material, 1);
+	}
+
+	fn draw_inner_with_material_instances(
+		&self,
+		pass: &mut wgpu::RenderPass<'_>,
+		state: &mut DrawBindState,
+		draw_index: usize,
+		bind_material: &wgpu::BindGroup,
+		instance_count: u32,
+	) {
+		if instance_count == 0 {
+			return;
+		}
 		let d = &self.draws[draw_index];
 		let palette = &self.skin_palettes[d.skin_palette_index];
 		if !state.frame_bound {
@@ -4348,7 +5119,7 @@ impl SceneMeshes {
 		pass.set_bind_group(3, &d.morph_bind_group, &[]);
 		pass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
 		pass.set_index_buffer(d.index_buffer.slice(..), d.index_format);
-		pass.draw_indexed(0..d.index_count, 0, 0..1);
+		pass.draw_indexed(0..d.index_count, 0, 0..instance_count);
 	}
 
 	fn draw_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) {
@@ -4377,9 +5148,10 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
-		let (outline_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
+		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
+		self.fur_draw_indices = fur_draw_indices;
 		self.opaque_batches = opaque_batches;
 		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
 		self.blended_batches = blended_batches;
@@ -4457,10 +5229,17 @@ impl SceneMeshes {
 	/// lilToon transparent z-write は `_PreCull` / `_SubpassCutoff` による FORWARD_BACK 相当 pass を先に描き、
 	/// `_ZWrite` が有効な Forward color pass も本家同様に depth write ありで描く。
 	pub fn draw_blended(&self, pass: &mut wgpu::RenderPass<'_>) {
-		if self.blended_batches.is_empty() {
+		if self.fur_draw_indices.is_empty() && self.blended_batches.is_empty() && self.transparent_backpass_draw_indices.is_empty() {
 			return;
 		}
 		let mut state = DrawBindState::default();
+		if !self.fur_draw_indices.is_empty() {
+			pass.set_pipeline(&self.pipeline_fur_toon);
+			for &draw_index in &self.fur_draw_indices {
+				let layer_count = draw_fur_layer_count(&self.draws[draw_index]);
+				self.draw_inner_with_material_instances(pass, &mut state, draw_index, &self.draws[draw_index].bind_material, layer_count);
+			}
+		}
 		if !self.transparent_backpass_draw_indices.is_empty() {
 			pass.set_pipeline(&self.pipeline_transparent_toon_backpass);
 			for &draw_index in &self.transparent_backpass_draw_indices {
@@ -4604,6 +5383,25 @@ mod tests {
 	use super::*;
 	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
 
+	fn empty_source_metadata() -> UnaImageSourceMetadata {
+		UnaImageSourceMetadata {
+			name: None,
+			mime_type: None,
+			uri: None,
+			source_pixel_format: None,
+			channels: None,
+			color_space: None,
+			texture_type: None,
+			texture_shape: None,
+			source_layout: None,
+			unity_generate_cubemap: None,
+			srgb: None,
+			sampler: None,
+			byte_length: 0,
+			source_hash: 0,
+		}
+	}
+
 	#[test]
 	fn mesh_sampler_metadata_maps_to_wgpu_modes() {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::ClampToEdge), wgpu::AddressMode::ClampToEdge);
@@ -4651,6 +5449,10 @@ mod tests {
 			"@group(1) @binding(56)",
 			"@group(1) @binding(57)",
 			"@group(1) @binding(58)",
+			"@group(1) @binding(59)",
+			"@group(1) @binding(60)",
+			"@group(1) @binding(61)",
+			"@group(1) @binding(62)",
 		] {
 			assert!(!source.contains(binding), "portable shader still contains {binding}");
 		}
@@ -4666,24 +5468,131 @@ mod tests {
 			srgb: Some(false),
 			byte_length: 1,
 			source_hash: 1,
-			..UnaImageSourceMetadata {
-				name: None,
-				mime_type: None,
-				uri: None,
-				source_pixel_format: None,
-				channels: None,
-				color_space: None,
-				texture_type: None,
-				texture_shape: None,
-				srgb: None,
-				sampler: None,
-				byte_length: 0,
-				source_hash: 0,
-			}
+			..empty_source_metadata()
 		};
 		assert!(rgba_upload_uses_linear_format(TextureRole::GenericColor, Some(&source)));
 		assert!(rgba_upload_uses_linear_format(TextureRole::Data, None));
 		assert!(!rgba_upload_uses_linear_format(TextureRole::GenericColor, None));
+	}
+
+	#[test]
+	fn cubemap_source_color_space_overrides_importer_srgb_flag() {
+		let linear_source = UnaImageSourceMetadata {
+			color_space: Some("linear".to_string()),
+			srgb: Some(true),
+			..empty_source_metadata()
+		};
+		let srgb_source = UnaImageSourceMetadata {
+			color_space: Some("srgb".to_string()),
+			srgb: Some(false),
+			..empty_source_metadata()
+		};
+		let legacy_srgb_source = UnaImageSourceMetadata {
+			srgb: Some(true),
+			..empty_source_metadata()
+		};
+		assert!(!texture_source_is_srgb(Some(&linear_source)));
+		assert!(texture_source_is_srgb(Some(&srgb_source)));
+		assert!(texture_source_is_srgb(Some(&legacy_srgb_source)));
+	}
+
+	#[test]
+	fn cubemap_source_layout_detects_common_unity_layouts() {
+		let cube_source = UnaImageSourceMetadata {
+			texture_shape: Some("TextureCube".to_string()),
+			..empty_source_metadata()
+		};
+		let mut image = UnaImageRgba {
+			width: 1024,
+			height: 512,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![0; 1024 * 512 * 4],
+		};
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::Latlong, 256))
+		);
+		image.width = 1536;
+		image.height = 256;
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::HorizontalStrip, 256))
+		);
+		image.width = 256;
+		image.height = 1536;
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::VerticalStrip, 256))
+		);
+		image.width = 1024;
+		image.height = 768;
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::HorizontalCross, 256))
+		);
+		image.width = 768;
+		image.height = 1024;
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::VerticalCross, 256))
+		);
+	}
+
+	#[test]
+	fn packed_cubemap_sampler_reads_cross_face_cells() {
+		let face_size = 4usize;
+		let width = face_size * 4;
+		let height = face_size * 3;
+		let mut pixels = vec![0u8; width * height * 4];
+		let mut put_cell = |cell_x: usize, cell_y: usize, rgba: [u8; 4]| {
+			for y in 0..face_size {
+				for x in 0..face_size {
+					let offset = ((cell_y * face_size + y) * width + cell_x * face_size + x) * 4;
+					pixels[offset..offset + 4].copy_from_slice(&rgba);
+				}
+			}
+		};
+		put_cell(2, 1, [255, 0, 0, 255]);
+		put_cell(0, 1, [0, 255, 0, 255]);
+		put_cell(1, 0, [0, 0, 255, 255]);
+		put_cell(1, 2, [255, 255, 0, 255]);
+		put_cell(1, 1, [0, 255, 255, 255]);
+		put_cell(3, 1, [255, 0, 255, 255]);
+		let image = UnaImageRgba {
+			width: width as u32,
+			height: height as u32,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels,
+		};
+		assert_eq!(
+			sample_packed_cube_face(&image, CubeSourceLayout::HorizontalCross, 0, 0.0, 0.0, false),
+			[1.0, 0.0, 0.0, 1.0]
+		);
+		assert_eq!(
+			sample_packed_cube_face(&image, CubeSourceLayout::HorizontalCross, 5, 0.0, 0.0, false),
+			[1.0, 0.0, 1.0, 1.0]
+		);
+	}
+
+	#[test]
+	fn cubemap_upload_builds_rgba16f_mip_chain() {
+		let source = vec![[1.0, 0.5, 0.25, 1.0]; 6 * 2 * 2];
+		let mips = build_cube_mips_rgba16f(2, source);
+		assert_eq!(mips.len(), 2);
+		assert_eq!(mips[0].face_size, 2);
+		assert_eq!(mips[0].data_rgba16f.len(), 6 * 2 * 2 * 8);
+		assert_eq!(mips[1].face_size, 1);
+		assert_eq!(mips[1].data_rgba16f.len(), 6 * 8);
+	}
+
+	#[test]
+	fn roughness_mip_blur_spreads_highlights_within_face() {
+		let mut source = vec![[0.0, 0.0, 0.0, 1.0]; 6 * 4 * 4];
+		source[4 * 4 + 1 * 4 + 1] = [1.0, 1.0, 1.0, 1.0];
+		let blurred = blur_cube_faces_for_roughness_mip(&source, 4, 2, 3);
+		assert!(blurred[4 * 4 + 1 * 4 + 1][0] < 1.0);
+		assert!(blurred[4 * 4 + 1 * 4 + 2][0] > 0.0);
+		assert_eq!(blurred[0][3], 1.0);
 	}
 
 	#[test]
@@ -4944,6 +5853,82 @@ mod tests {
 		assert_ne!(flags & 8192, 0);
 		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
 		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
+	}
+
+	#[test]
+	fn disable_reflection_diagnostic_zeros_liltoon_reflection_controls() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.reflection.enabled_factor = 1.0;
+		liltoon_like.reflection.apply_specular_factor = 0.8;
+		liltoon_like.reflection.apply_reflection_factor = 0.6;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let normal = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		assert_eq!(normal.reflection_control[0], 1.0);
+		assert_eq!(normal.reflection_control[1], 0.8);
+		assert_eq!(normal.reflection_control[2], 0.6);
+
+		let disabled = mesh_draw_material_gpu(
+			&mat,
+			&UnaMtoonMaterial::default(),
+			&SceneMeshLoadOpts {
+				debug_disable_reflection: true,
+				..Default::default()
+			},
+			0,
+			0,
+		);
+		assert_eq!(disabled.reflection_control[0], 0.0);
+		assert_eq!(disabled.reflection_control[1], 0.0);
+		assert_eq!(disabled.reflection_control[2], 0.0);
+		assert_eq!(disabled.reflection_control[3], normal.reflection_control[3]);
+	}
+
+	#[test]
+	fn liltoon_fur_params_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.fur.enabled_factor = 1.0;
+		liltoon_like.fur.layer_count_factor = 12.0;
+		liltoon_like.fur.vector_factor = [0.1, 0.2, 0.3, 0.4];
+		liltoon_like.fur.gravity_factor = 0.35;
+		liltoon_like.fur.randomize_factor = 0.45;
+		liltoon_like.fur.noise_tiling_factor = 2.0;
+		liltoon_like.fur.noise_offset_factor = 0.25;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.fur_params, [1.0, 12.0, 0.35, 0.45]);
+		assert_eq!(draw.fur_vector_params, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.fur_noise_params, [2.0, 0.25, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn disable_fur_diagnostic_suppresses_fur_shell_draws() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.fur.enabled_factor = 1.0;
+		liltoon_like.fur.layer_count_factor = 8.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		assert_eq!(material_fur_layer_count(&mat, UnaShadingModel::LilToonLike), 8);
+		assert!(material_has_fur(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default()));
+		assert!(!material_has_fur(
+			&mat,
+			UnaShadingModel::LilToonLike,
+			&SceneMeshLoadOpts {
+				disable_fur: true,
+				..Default::default()
+			}
+		));
 	}
 
 	#[test]

@@ -229,6 +229,10 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, liltoon_like.outline.texture_index, TextureRole::GenericColor);
 			mark_texture_role(&mut roles, liltoon_like.outline.width_mask_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, liltoon_like.alpha_mask.texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.fur.vector_texture_index, TextureRole::Normal);
+			mark_texture_role(&mut roles, liltoon_like.fur.length_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.fur.noise_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.fur.mask_texture_index, TextureRole::Data);
 		}
 	}
 	for (index, source) in scene.image_sources.iter().enumerate() {

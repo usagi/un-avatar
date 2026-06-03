@@ -142,6 +142,8 @@ namespace UNAvatar.UnityExporter
                         return "image/jpeg";
                     case ".exr":
                         return "image/exr";
+                    case ".hdr":
+                        return "image/vnd.radiance";
                     default:
                         return null;
                 }

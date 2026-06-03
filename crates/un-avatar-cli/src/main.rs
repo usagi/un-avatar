@@ -105,10 +105,12 @@ struct DiagnoseSceneSummary {
 	image_source_color_space_counts: BTreeMap<String, usize>,
 	image_source_texture_type_counts: BTreeMap<String, usize>,
 	image_source_texture_shape_counts: BTreeMap<String, usize>,
+	image_source_layout_counts: BTreeMap<String, usize>,
 	image_pixel_format_counts: BTreeMap<String, usize>,
 	non_rgba8_image_count: usize,
 	largest_image_sources: Vec<DiagnoseImageSourceSummary>,
 	material_count: usize,
+	liltoon_feature_counts: BTreeMap<String, usize>,
 	node_constraint_count: usize,
 	shading_counts: BTreeMap<String, usize>,
 	alpha_counts: BTreeMap<String, usize>,
@@ -183,6 +185,10 @@ struct DiagnoseImageSourceSummary {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	texture_shape: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	source_layout: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	unity_generate_cubemap: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	srgb: Option<bool>,
 	byte_length: u64,
 	pixel_format: UnaImagePixelFormat,
@@ -205,6 +211,8 @@ struct DiagnoseMaterialSummary {
 	source_color_param_count: usize,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	source_render_float_params: BTreeMap<String, f32>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	liltoon_features: Vec<String>,
 	shading: UnaShadingModel,
 	alpha_mode: UnaAlphaMode,
 	alpha_cutoff: f32,
@@ -1082,6 +1090,104 @@ fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<
 		.map(|value| value as f32)
 }
 
+fn material_enabled_keywords(material: &UnaMaterialPbr) -> Vec<String> {
+	const KEYWORD_FIELDS: &[&str] = &[
+		"enabledKeywords",
+		"enabled_keywords",
+		"shaderKeywords",
+		"shader_keywords",
+		"keywords",
+	];
+	let Some(extras) = material.unavatar_material.as_ref() else {
+		return Vec::new();
+	};
+	let mut out = BTreeSet::new();
+	for field in KEYWORD_FIELDS {
+		match extras.get(*field) {
+			Some(serde_json::Value::Array(values)) => {
+				for value in values {
+					if let Some(keyword) = value.as_str().filter(|keyword| !keyword.is_empty()) {
+						out.insert(keyword.to_string());
+					}
+				}
+			}
+			Some(serde_json::Value::Object(values)) => {
+				for (keyword, value) in values {
+					if value.as_bool().unwrap_or(false) && !keyword.is_empty() {
+						out.insert(keyword.to_string());
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+	out.into_iter().collect()
+}
+
+fn material_keyword_contains(material: &UnaMaterialPbr, needle: &str) -> bool {
+	let needle = needle.to_ascii_lowercase();
+	material_enabled_keywords(material)
+		.iter()
+		.any(|keyword| keyword.to_ascii_lowercase().contains(&needle))
+}
+
+fn material_source_shader_lower(material: &UnaMaterialPbr) -> String {
+	material
+		.unavatar_material
+		.as_ref()
+		.and_then(|m| m.get("sourceShader"))
+		.and_then(|v| v.as_str())
+		.unwrap_or("")
+		.to_ascii_lowercase()
+}
+
+fn material_liltoon_features(material: &UnaMaterialPbr) -> Vec<String> {
+	if !material_source_shader_is_liltoon(material) {
+		return Vec::new();
+	}
+	let shader = material_source_shader_lower(material);
+	let mut features = BTreeSet::new();
+	if shader.contains("lite") {
+		features.insert("lite".to_string());
+	}
+	if shader.contains("cutout") || matches!(material.alpha_mode, UnaAlphaMode::Mask) {
+		features.insert("cutout".to_string());
+	}
+	if shader.contains("transparent") || matches!(material.alpha_mode, UnaAlphaMode::Blend) {
+		features.insert("transparent".to_string());
+	}
+	if shader.contains("twopass") || shader.contains("two_pass") || material_source_float_param(material, "_PreZWrite").is_some() {
+		features.insert("twopass".to_string());
+	}
+	if shader.contains("outline") || material_source_float_param(material, "_UseOutline").is_some_and(|value| value > 0.5) {
+		features.insert("outline".to_string());
+	}
+	if shader.contains("fur")
+		|| material_keyword_contains(material, "fur")
+		|| material_source_float_param(material, "_UseFur").is_some_and(|value| value > 0.5)
+	{
+		features.insert("fur".to_string());
+	}
+	if shader.contains("refraction")
+		|| material_keyword_contains(material, "refraction")
+		|| material_source_float_param(material, "_UseRefraction").is_some_and(|value| value > 0.5)
+	{
+		features.insert("refraction".to_string());
+	}
+	if shader.contains("gem") {
+		features.insert("gem".to_string());
+	}
+	if material_keyword_contains(material, "alphamask")
+		|| material_source_float_param(material, "_AlphaMaskMode").is_some_and(|value| value > 0.5)
+	{
+		features.insert("alpha_mask".to_string());
+	}
+	if features.is_empty() {
+		features.insert("common".to_string());
+	}
+	features.into_iter().collect()
+}
+
 fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f32> {
 	const PARAMS: &[&str] = &[
 		"_TransparentMode",
@@ -1127,6 +1233,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		.and_then(|m| m.get("renderQueue"))
 		.and_then(|v| v.as_i64())
 		.map(|v| v as i32);
+	let liltoon_features = material_liltoon_features(material);
 	let mtoon = material.mtoon.as_ref().map(|m| DiagnoseMToonSummary {
 		transparent_with_z_write: m.transparent_with_z_write,
 		shade_color_factor: m.shade_color_factor,
@@ -1156,6 +1263,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		source_float_param_count: material_source_param_count(material, "floatParams"),
 		source_color_param_count: material_source_param_count(material, "colorParams"),
 		source_render_float_params: material_render_float_params(material),
+		liltoon_features,
 		shading: material.shading,
 		alpha_mode: material.alpha_mode,
 		alpha_cutoff: material.alpha_cutoff,
@@ -1414,6 +1522,10 @@ fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
 	value.and_then(|v| v.as_str()).map(str::to_owned)
 }
 
+fn diagnose_texture_shape_is_cube(shape: Option<&str>) -> bool {
+	shape.is_some_and(|shape| shape.eq_ignore_ascii_case("TextureCube") || shape.eq_ignore_ascii_case("Cube"))
+}
+
 fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnavatarSummary {
 	let source = &ext.source;
 	let wardrobe = source.get("wardrobe");
@@ -1515,6 +1627,7 @@ fn build_diagnose_report(
 		let mut liltoon_material_count = 0usize;
 		let mut liltoon_missing_render_queue = 0usize;
 		let mut liltoon_missing_source_params = 0usize;
+		let mut liltoon_feature_counts = BTreeMap::new();
 		let mut suspicious_liltoon_masks = Vec::new();
 		let mut fully_transparent_visible_materials = Vec::new();
 		for (i, material) in sc.materials.iter().enumerate() {
@@ -1522,6 +1635,9 @@ fn build_diagnose_report(
 			bump_count(&mut alpha_counts, format!("{:?}", material.alpha_mode));
 			if material_source_shader_is_liltoon(material) {
 				liltoon_material_count += 1;
+				for feature in material_liltoon_features(material) {
+					bump_count(&mut liltoon_feature_counts, feature);
+				}
 				if material
 					.unavatar_material
 					.as_ref()
@@ -1569,6 +1685,22 @@ fn build_diagnose_report(
 				suspicious_liltoon_masks
 			));
 		}
+		let high_risk_hits = ["fur", "refraction", "gem", "twopass"]
+			.iter()
+			.filter_map(|feature| {
+				liltoon_feature_counts
+					.get(*feature)
+					.copied()
+					.filter(|count| *count > 0)
+					.map(|count| (*feature, count))
+			})
+			.collect::<Vec<_>>();
+		if !high_risk_hits.is_empty() {
+			warnings.push(format!(
+				"lilToon high-variance shader features present: {:?}; verify these against Unity because they depend on extra passes or screen/environment inputs",
+				high_risk_hits
+			));
+		}
 		if !fully_transparent_visible_materials.is_empty() {
 			warnings.push(format!(
 				"fully transparent alpha materials are present: {:?}; renderer may skip these draws unless used as authoring helpers",
@@ -1582,6 +1714,7 @@ fn build_diagnose_report(
 		let mut image_source_color_space_counts = BTreeMap::new();
 		let mut image_source_texture_type_counts = BTreeMap::new();
 		let mut image_source_texture_shape_counts = BTreeMap::new();
+		let mut image_source_layout_counts = BTreeMap::new();
 		let mut image_pixel_format_counts = BTreeMap::new();
 		let mut image_source_count = 0usize;
 		let mut image_source_bytes = 0u64;
@@ -1589,6 +1722,7 @@ fn build_diagnose_report(
 		for (index, image) in sc.images.iter().enumerate() {
 			bump_count(&mut image_pixel_format_counts, format!("{:?}", image.pixel_format));
 			if let Some(source) = sc.image_sources.get(index).and_then(Option::as_ref) {
+				let is_cube_source = diagnose_texture_shape_is_cube(source.texture_shape.as_deref());
 				largest_image_sources.push(DiagnoseImageSourceSummary {
 					index,
 					name: source.name.clone(),
@@ -1599,6 +1733,8 @@ fn build_diagnose_report(
 					color_space: source.color_space.clone(),
 					texture_type: source.texture_type.clone(),
 					texture_shape: source.texture_shape.clone(),
+					source_layout: is_cube_source.then(|| source.source_layout.clone()).flatten(),
+					unity_generate_cubemap: is_cube_source.then(|| source.unity_generate_cubemap.clone()).flatten(),
 					srgb: source.srgb,
 					byte_length: source.byte_length,
 					pixel_format: image.pixel_format,
@@ -1627,6 +1763,10 @@ fn build_diagnose_report(
 			bump_count(
 				&mut image_source_texture_shape_counts,
 				source.texture_shape.as_deref().unwrap_or("unknown").to_string(),
+			);
+			bump_count(
+				&mut image_source_layout_counts,
+				source.source_layout.as_deref().unwrap_or("unknown").to_string(),
 			);
 		}
 		let effective_visibility = scene_effective_visibility(sc);
@@ -1681,6 +1821,7 @@ fn build_diagnose_report(
 			image_source_color_space_counts,
 			image_source_texture_type_counts,
 			image_source_texture_shape_counts,
+			image_source_layout_counts,
 			image_pixel_format_counts,
 			non_rgba8_image_count: sc
 				.images
@@ -1689,6 +1830,7 @@ fn build_diagnose_report(
 				.count(),
 			largest_image_sources,
 			material_count: sc.materials.len(),
+			liltoon_feature_counts,
 			node_constraint_count: sc.node_constraints.len(),
 			shading_counts,
 			alpha_counts,
@@ -1716,10 +1858,12 @@ fn build_diagnose_report(
 			image_source_color_space_counts: BTreeMap::new(),
 			image_source_texture_type_counts: BTreeMap::new(),
 			image_source_texture_shape_counts: BTreeMap::new(),
+			image_source_layout_counts: BTreeMap::new(),
 			image_pixel_format_counts: BTreeMap::new(),
 			non_rgba8_image_count: 0,
 			largest_image_sources: Vec::new(),
 			material_count: 0,
+			liltoon_feature_counts: BTreeMap::new(),
 			node_constraint_count: 0,
 			shading_counts: BTreeMap::new(),
 			alpha_counts: BTreeMap::new(),
@@ -2026,10 +2170,11 @@ fn run_diagnose(
 		report.scene.image_source_count, report.scene.image_count, report.scene.image_source_bytes, report.scene.image_source_mime_counts
 	);
 	println!(
-		"image_source_metadata: color_space {:?}, texture_type {:?}, texture_shape {:?}",
+		"image_source_metadata: color_space {:?}, texture_type {:?}, texture_shape {:?}, source_layout {:?}",
 		report.scene.image_source_color_space_counts,
 		report.scene.image_source_texture_type_counts,
-		report.scene.image_source_texture_shape_counts
+		report.scene.image_source_texture_shape_counts,
+		report.scene.image_source_layout_counts
 	);
 	println!(
 		"image_pixel_formats: {:?}, non_rgba8={}",
@@ -2039,7 +2184,7 @@ fn run_diagnose(
 		println!("largest_image_sources:");
 		for source in &report.scene.largest_image_sources {
 			println!(
-				"  image[{}]: {}x{} {:?} {} bytes mime={:?} source_format={:?} channels={:?} color_space={:?} texture_type={:?} texture_shape={:?} srgb={:?} name={:?} uri={:?}",
+				"  image[{}]: {}x{} {:?} {} bytes mime={:?} source_format={:?} channels={:?} color_space={:?} texture_type={:?} texture_shape={:?} source_layout={:?} unity_generate_cubemap={:?} srgb={:?} name={:?} uri={:?}",
 				source.index,
 				source.width,
 				source.height,
@@ -2051,6 +2196,8 @@ fn run_diagnose(
 				source.color_space,
 				source.texture_type,
 				source.texture_shape,
+				source.source_layout,
+				source.unity_generate_cubemap,
 				source.srgb,
 				source.name,
 				source.uri
@@ -2059,6 +2206,7 @@ fn run_diagnose(
 	}
 	println!("shading: {:?}", report.scene.shading_counts);
 	println!("alpha: {:?}", report.scene.alpha_counts);
+	println!("liltoon_features: {:?}", report.scene.liltoon_feature_counts);
 	println!("visible_shading: {:?}", report.scene.visible_shading_counts);
 	println!("visible_alpha: {:?}", report.scene.visible_alpha_counts);
 	println!("visible_materials: {:?}", report.scene.visible_material_indices);

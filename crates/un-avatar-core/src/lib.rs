@@ -325,6 +325,10 @@ pub struct UnaImageSourceMetadata {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub texture_shape: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_layout: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub unity_generate_cubemap: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub srgb: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sampler: Option<UnaTextureSampler>,
@@ -1003,6 +1007,32 @@ pub struct UnaLilToonLikeAlphaMask {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeFur {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub layer_count_factor: f32,
+	#[serde(default)]
+	pub vector_factor: [f32; 4],
+	#[serde(default)]
+	pub gravity_factor: f32,
+	#[serde(default)]
+	pub randomize_factor: f32,
+	#[serde(default = "one_f32")]
+	pub noise_tiling_factor: f32,
+	#[serde(default)]
+	pub noise_offset_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub vector_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub length_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub noise_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mask_texture_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeBlendState {
 	#[serde(default = "one_f32")]
 	pub source_factor: f32,
@@ -1081,6 +1111,8 @@ pub struct UnaLilToonLikeMaterial {
 	pub backlight: UnaLilToonLikeBacklight,
 	#[serde(default)]
 	pub alpha_mask: UnaLilToonLikeAlphaMask,
+	#[serde(default)]
+	pub fur: UnaLilToonLikeFur,
 	#[serde(default)]
 	pub blend_state: UnaLilToonLikeBlendState,
 }
@@ -1368,6 +1400,24 @@ impl Default for UnaLilToonLikeAlphaMask {
 	}
 }
 
+impl Default for UnaLilToonLikeFur {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			layer_count_factor: 0.0,
+			vector_factor: [0.0, 0.0, 0.0, 0.0],
+			gravity_factor: 0.0,
+			randomize_factor: 0.0,
+			noise_tiling_factor: 1.0,
+			noise_offset_factor: 0.0,
+			vector_texture_index: None,
+			length_mask_texture_index: None,
+			noise_mask_texture_index: None,
+			mask_texture_index: None,
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeBlendState {
 	fn default() -> Self {
 		Self {
@@ -1419,6 +1469,7 @@ impl Default for UnaLilToonLikeMaterial {
 			outline: UnaLilToonLikeOutline::default(),
 			backlight: UnaLilToonLikeBacklight::default(),
 			alpha_mask: UnaLilToonLikeAlphaMask::default(),
+			fur: UnaLilToonLikeFur::default(),
 			blend_state: UnaLilToonLikeBlendState::default(),
 		}
 	}

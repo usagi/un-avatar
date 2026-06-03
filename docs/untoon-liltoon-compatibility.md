@@ -99,7 +99,7 @@ Reference:
 
 Notes:
 - noble13 の pants / sleeves はこの差分が目立つ。
-- Cubemap / environment reflection は UNAvatar の環境実装と密接なので、最初は conservative approximation とし、過剰な銀色化を避ける。
+- Cubemap / environment reflection は source preserving true cubemap を正本にする。source PNG は PNG、source EXR は EXR のまま `.unavatar` に保持し、renderer upload / sampling boundary で cube texture として扱う。2D approximation は compatibility fallback であり、lilToon-compatible high-tier path の目標ではない。
 
 ### 6. Rim / Rim Shade
 
@@ -143,7 +143,8 @@ Status legend:
 - `[~]` lilToon material detection: `sourceShader`, `family`, shader variant names
   - done: Unity Exporter が `sourceShader` / `family` と raw material params を `UN_avatar_material` に保持し、Importer が lilToon family を検出する。
   - done: Importer は `Hidden/lilToonGem` を `LiltoonGem` source profile として分類する。
-  - remaining: shader variant ごとの feature set (`Lite`, `Cutout`, `Transparent`, `TwoPass`, `Outline`, `Fur`, `Refraction`) を compatibility report で分類する。
+  - done: CLI diagnose が shader 名、enabled keywords、raw float params から `lite` / `cutout` / `transparent` / `twopass` / `outline` / `fur` / `refraction` / `gem` / `alpha_mask` を分類し、scene-level counts と material-level features を出す。
+  - remaining: Unity/lilToon の active pass list と keyword dependency を直接反映した variant classifier へ強化する。
 - `[~]` alpha mode: Opaque / Cutout / Transparent / Transparent ZWrite
   - done: lilToon shader name、renderQueue、`_ZWrite` から Opaque / Mask / Blend / Transparent ZWrite の基本を推定する。
   - done: Transparent ZWrite は `_PreCull` / `_Cutoff` / `_SubpassCutoff` に従う FORWARD_BACK 相当の color+depth pass を描いた後、`_ZWrite` 有効の FORWARD color pass を描く。
@@ -447,34 +448,43 @@ Status legend:
   - remaining: lilToon の `fd.N` と完全一致する tangent / view-space 入力、GSAA、backface behavior を検証する。
 - `[~]` `_ReflectionNormalStrength`
   - done: source raw params を保持し、reflection UV / fresnel 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
-  - remaining: lilToon の `fd.reflectionN`、roughness mip、cubemap / equirect policy、backface behavior と合わせて検証する。
+  - done: authored cube source upload では roughness blur 付き RGBA16F mip chain を生成し、roughness LOD sampling が mip 0 固定にならないようにした。
+  - remaining: lilToon の `fd.reflectionN`、seam-aware PMREM convolution、true cubemap face rotation、backface behavior と合わせて検証する。
 - `[~]` `_ApplyReflection`
   - done: source raw params を保持し、reflection texture / environment approximation の blend weight gate として接続した。reflection term 本体には二重乗算しない。
-  - remaining: PMREM / roughness mip / environment source policy を定義して本実装に置き換える。
+  - done: `textureShape=TextureCube` source のうち latlong / sphere-map と判断できるものを runtime upload boundary で cube texture に展開し、WGSL は `texture_cube` sampling を使う。
+  - done: horizontal / vertical strip と horizontal / vertical cross の基本配置を runtime upload boundary で cube texture に展開する。
+  - done: cube upload 時に roughness blur 付き RGBA16F mip chain を生成し、roughness LOD を使える texture にした。
+  - remaining: seam-aware PMREM convolution、Unity face rotation の完全一致、six separate face asset、diagnostics 表示を詰める。
 - `[~]` `_ReflectionColor`
   - done: source raw color params と `_ReflectionColorTex` reference を保持し、specular/reflection color と alpha strength に接続した。
   - done: Renderer は `_ReflectionColorTex` の slot 別 Tiling / Offset を sampling UV に使う。
   - done: `_ReflectionApplyTransparency` を保持し、specular/reflection alpha strength へ fragment alpha を反映する。
   - remaining: color space handling、HDR range を本家に合わせる。
 - `[~]` `_ReflectionCubeTex` source asset import
-  - done: EXR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
+  - done: EXR / HDR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
+  - done: glTF core image 側の PNG/JPEG TextureCube と、`UN_avatar.textureAssets` 側の EXR/HDR TextureCube の両方で `textureShape` metadata を保持する。
   - done: lilToon-like material では `_ReflectionCubeOverride` 有効時だけ authored cube asset を使う。override 無効または cube 無しの場合は黒 fallback とし、Unity reflection probe 未実装を白環境で代用して革/布を白化させない。
-  - remaining: cubemap / equirect / PMREM / roughness mip としての意味論を決め、2D approximation と区別する。
+  - done: `sourceLayout` / `unityGenerateCubemap` を metadata として保持し、renderer で latlong / sphere-map source を cube texture view / `texture_cube` sampling に接続した。source binary は再エンコードしない。
+  - done: renderer で horizontal / vertical strip と horizontal / vertical cross source を cube texture view / `texture_cube` sampling に接続した。
+  - remaining: Unity cubemap layout enum と face rotation の網羅、six-face source の展開、unsupported layout の warning/report を整える。
 - `[~]` `_ReflectionCubeEnableLighting`
   - done: source raw params を保持し、environment reflection approximation に main light color mix として接続した。
-  - remaining: Unity/lilToon の `fd.lightColor`、cubemap HDR decode、roughness mip、forward-add 条件との一致を検証する。
+  - remaining: Unity/lilToon の `fd.lightColor`、cubemap HDR decode、PMREM / roughness mip、forward-add 条件との一致を検証する。
 - `[~]` `_ReflectionCubeColor`
   - done: source raw color params を保持し、`_ReflectionCubeOverride` 有効時の authored cube tint として environment reflection approximation へ接続した。
   - remaining: `_ReflectionColor` / `_ReflectionColorTex` / cubemap HDR decode との本家合成順を検証する。
 - `[~]` `_ReflectionCubeOverride`
   - done: source raw params を v2 reflection parameter として保持し、override 有効時だけ `_ReflectionCubeColor` を reflection approximation へ掛ける。
-  - remaining: reflection probe / authored cubemap の source policy を `.unavatar` metadata と renderer pipeline に分離して定義する。
+  - remaining: authored cubemap と将来の reflection probe fallback を、`.unavatar` source metadata と renderer environment pipeline に分離して実装する。
 - `[~]` `_ReflectionBlendMode`
   - done: source raw params を保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: reflection color texture と environment reflection の本家合成順に合わせる。
-- `[~]` environment reflection approximation policy
-  - done: 現時点では reflection texture を equirectangular 2D approximation として扱い、`_UseReflection` / `_ApplyReflection` で明示的に gate する。
-  - remaining: cubemap / equirect / PMREM / roughness mip の仕様を `.unavatar` metadata と renderer pipeline に分離して定義する。
+- `[~]` environment reflection source policy
+  - done: `.unavatar` は reflection source binary を format-preserving に保持する。PNG/JPEG は glTF core image、EXR/HDR 等は `UN_avatar.textureAssets` を使い、`textureShape` で cube source を示す。
+  - done: high-tier renderer の reflection binding を cube texture にし、latlong / sphere-map / strip / cross source を runtime で cube faces に展開する。
+  - done: authored cube source upload で roughness blur 付き RGBA16F mip chain を生成する。
+  - remaining: seam-aware PMREM convolution を追加し、unsupported cube layout や 2D fallback を diagnostics に記録する。
 - `[~]` lilToon Gem: environment reflection
   - done: `Hidden/lilToonGem` を source profile として保持し、`_GemEnvColor` / `_GemEnvContrast` / `_RefractionFresnelPower` を import する。
   - done: `_RefractionStrength` / `_GemChromaticAberration` / `_GemParticleLoop` / `_GemParticleColor` / `_GemVRParallaxStrength` を Gem source params として保持する。
@@ -482,9 +492,9 @@ Status legend:
   - done: environment reflection 側は backface の RGB 別 sampling / base color multiplication / Gem particle を conservative approximation として反映する。
   - done: `_lilBackgroundTexture` 相当として opaque/outline 後のscreen-grab textureを透明/Gem passへ渡し、`_RefractionStrength` / `_RefractionFresnelPower` / `_GemChromaticAberration` による背景屈折近似を反映する。
   - done: 背景屈折offsetは `view_proj` で world normal endpoint を投影する view-space normal offset approximation に寄せ、`_GemVRParallaxStrength` を Gem view direction selection に反映する。
-  - done: Gem environment reflection は smoothness 由来の roughness LOD で `textureSampleLevel` する。現状は入力reflection textureのmipに依存する近似。
+  - done: Gem environment reflection は smoothness 由来の roughness LOD で `textureSampleLevel` する。authored cube source は runtime upload で roughness blur 付き RGBA16F mip chain を持つ。
   - done: field_drape の懐中時計で、ガラス面の白い反射が出る最低限の改善を確認した。
-  - remaining: lilToon 本家と同じ cubemap / PMREM policy、HDR cubemap decode、VR stereo差分を実装する。
+  - remaining: lilToon 本家と同じ true cubemap / PMREM policy、HDR cubemap decode、VR stereo差分を実装する。
 
 ### Rim / Rim Shade / Backlight
 
@@ -639,7 +649,12 @@ Status legend:
 - `[defer]` Distance fade
 - `[defer]` dissolve
 - `[defer]` ID mask / UDIM discard
-- `[defer]` fur / refraction variants
+- `[~]` fur variant
+  - done: CLI diagnose が fur variant を feature として分類し、scene/material report に出す。
+  - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_UseFur` / `_FurLayerNum` / `_FurVector` / `_FurGravity` / `_FurRandomize` / `_FurNoiseTiling` / `_FurNoiseOffset` と `_FurVectorTex` / `_FurLengthMask` / `_FurNoiseMask` / `_FurMask` の source slot を保持する。
+  - done: Renderer は fur material を別 draw list に分類し、`vs_fur` instanced shell pass で `_FurLayerNum` 分だけ `_FurVector` / `_FurGravity` による vertex offset を描く。
+  - remaining: `_FurLengthMask` / `_FurNoiseMask` / `_FurVectorTex` / `_FurMask` sampling、randomize noise、shell alpha、subpass ordering、sorting、Portable tier の texture budget policy を本家 lilToon に合わせる。
+- `[defer]` refraction variant
 - `[~]` gem variant
   - done: Gem の source profile / additive blend / environment reflection approximation / screen-grab background refraction approximation / view-space normal offset approximation / VR parallax strength / roughness LOD / backface chromatic environment sampling / Gem particle approximation まで実装した。
   - remaining: cubemap / PMREM policy、HDR cubemap decode、VR stereo差分を含む full Gem pass は未実装。

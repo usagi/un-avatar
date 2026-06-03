@@ -47,7 +47,7 @@ namespace UNAvatar.UnityExporter
 
                 string fallbackReason;
                 var encoded = TryReadSourceTextureBytes(texture, out fallbackReason);
-                if (encoded == null && IsUnavatarExtensionOnlyTexture(GetTextureSourceInfo(texture).MimeType))
+                if (encoded == null && IsUnavatarTextureAssetMime(GetTextureSourceInfo(texture).MimeType))
                 {
                     return -1;
                 }
@@ -152,6 +152,14 @@ namespace UNAvatar.UnityExporter
                 if (!string.IsNullOrEmpty(metadata.Channels))
                 {
                     json["channels"] = metadata.Channels;
+                }
+                if (!string.IsNullOrEmpty(metadata.SourceLayout))
+                {
+                    json["sourceLayout"] = metadata.SourceLayout;
+                }
+                if (!string.IsNullOrEmpty(metadata.UnityGenerateCubemap))
+                {
+                    json["unityGenerateCubemap"] = metadata.UnityGenerateCubemap;
                 }
                 if (metadata.SRgb.HasValue)
                 {

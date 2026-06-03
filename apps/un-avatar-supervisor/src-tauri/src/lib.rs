@@ -373,6 +373,12 @@ struct TextureRuntimeSummary {
 	#[serde(default)]
 	resized_count: u32,
 	#[serde(default)]
+	cubemap_count: u32,
+	#[serde(default)]
+	cubemap_converted_count: u32,
+	#[serde(default)]
+	cubemap_fallback_count: u32,
+	#[serde(default)]
 	compression_mode: Option<String>,
 	#[serde(default)]
 	compression_bc_supported: bool,
@@ -404,6 +410,8 @@ struct TextureRuntimeSummary {
 	source_bytes: u64,
 	#[serde(default)]
 	uploaded_mip_bytes: u64,
+	#[serde(default)]
+	cubemap_uploaded_bytes: u64,
 	#[serde(default)]
 	max_source_dimension: u32,
 	#[serde(default)]
@@ -5484,10 +5492,16 @@ fn spout_runtime_note(telemetry: &RendererRuntimeTelemetry) -> Option<String> {
 }
 
 fn texture_runtime_note(telemetry: &RendererRuntimeTelemetry) -> Option<String> {
+	let summary = telemetry.texture_summary.as_ref()?;
+	if summary.cubemap_fallback_count > 0 {
+		return Some(format!(
+			"Cubemap upload used fallback for {}/{} cube texture(s); re-export or check sourceLayout metadata",
+			summary.cubemap_fallback_count, summary.cubemap_count
+		));
+	}
 	if telemetry.texture_compression.as_deref() == Some("source") {
 		return None;
 	}
-	let summary = telemetry.texture_summary.as_ref()?;
 	if summary.compression_fallback_count == 0 {
 		return None;
 	}
@@ -9624,6 +9638,24 @@ id = "test"
 		assert_eq!(
 			texture_runtime_note(&telemetry).as_deref(),
 			Some("Texture compression used 2 image(s), kept 1 as RGBA")
+		);
+	}
+
+	#[test]
+	fn texture_runtime_note_reports_cubemap_fallback_first() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.texture_compression = Some("source".to_string());
+		telemetry.texture_summary = Some(TextureRuntimeSummary {
+			image_count: 3,
+			cubemap_count: 2,
+			cubemap_fallback_count: 1,
+			compression_fallback_count: 1,
+			..TextureRuntimeSummary::default()
+		});
+
+		assert_eq!(
+			texture_runtime_note(&telemetry).as_deref(),
+			Some("Cubemap upload used fallback for 1/2 cube texture(s); re-export or check sourceLayout metadata")
 		);
 	}
 

@@ -79,6 +79,7 @@ type SceneStateResultSlot = Arc<Mutex<Option<String>>>;
 const SCENE_STATE_SPLASH: &str = "splash";
 const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
 const SCENE_STATE_FAILED: &str = "failed";
+const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1137,6 +1138,15 @@ fn startup_message(message: impl AsRef<str>, started_at: Instant) -> String {
 	format!("{}{}", message.as_ref(), startup_elapsed_suffix(started_at))
 }
 
+fn compact_window_title_status(status: impl AsRef<str>) -> String {
+	let mut compact = status.as_ref().split_whitespace().collect::<Vec<_>>().join(" ");
+	if compact.chars().count() > WINDOW_TITLE_STATUS_MAX_CHARS {
+		compact = compact.chars().take(WINDOW_TITLE_STATUS_MAX_CHARS.saturating_sub(1)).collect();
+		compact.push('…');
+	}
+	compact
+}
+
 #[derive(Clone, Debug)]
 struct StartupProgressState {
 	phase: StartupPhase,
@@ -1537,6 +1547,15 @@ impl AvatarApp {
 		self.update_runtime_startup();
 	}
 
+	fn set_startup_failed(&mut self, message: impl Into<String>) {
+		self.startup_pending_document = false;
+		self.startup_progress = None;
+		self.startup_failed = Some(message.into());
+		self.update_runtime_startup();
+		self.update_failed_title();
+		self.request_redraw();
+	}
+
 	fn update_loading_title(&self) {
 		let Some(window) = self.window.as_ref() else {
 			return;
@@ -1544,13 +1563,65 @@ impl AvatarApp {
 		let Some(progress) = self.startup_progress.as_ref() else {
 			return;
 		};
+		let diagnostic_suffix = self.title_diagnostic_suffix();
 		if progress.total > 0 {
 			window.set_title(&format!(
-				"{} — {} {}/{}",
-				self.title_base, progress.message, progress.current, progress.total
+				"{}{} — {} {}/{}",
+				self.title_base,
+				diagnostic_suffix,
+				compact_window_title_status(&progress.message),
+				progress.current,
+				progress.total
 			));
 		} else {
-			window.set_title(&format!("{} — {}", self.title_base, progress.message));
+			window.set_title(&format!(
+				"{}{} — {}",
+				self.title_base,
+				diagnostic_suffix,
+				compact_window_title_status(&progress.message)
+			));
+		}
+	}
+
+	fn update_failed_title(&self) {
+		let Some(window) = self.window.as_ref() else {
+			return;
+		};
+		if let Some(error) = self.startup_failed.as_ref() {
+			window.set_title(&format!(
+				"{}{} — startup failed: {}",
+				self.title_base,
+				self.title_diagnostic_suffix(),
+				compact_window_title_status(error)
+			));
+		}
+	}
+
+	fn title_diagnostic_suffix(&self) -> String {
+		let opts = self.scene_mesh_load_opts();
+		let mut active = Vec::new();
+		if opts.disable_fur {
+			active.push("fur OFF");
+		}
+		if opts.debug_disable_reflection {
+			active.push("reflection OFF");
+		}
+		if opts.debug_base_texture_only {
+			active.push("base only");
+		}
+		if opts.debug_zero_morphs {
+			active.push("zero morphs");
+		}
+		if opts.debug_bind_pose {
+			active.push("bind pose");
+		}
+		if opts.debug_skin_legacy_no_inv_mesh {
+			active.push("legacy skin");
+		}
+		if active.is_empty() {
+			String::new()
+		} else {
+			format!(" [diagnostics: {}]", active.join(", "))
 		}
 	}
 
@@ -1594,9 +1665,7 @@ impl AvatarApp {
 			let _ = proxy.send_event(RendererControlEvent::StartupReady { document, texture_summary });
 		});
 		if let Err(e) = spawn_result {
-			self.startup_pending_document = false;
-			self.startup_failed = Some(format!("spawn startup loader failed: {e}"));
-			self.update_runtime_startup();
+			self.set_startup_failed(format!("spawn startup loader failed: {e}"));
 		}
 	}
 
@@ -1834,14 +1903,18 @@ impl AvatarApp {
 		} else if self.startup_failed.is_some() {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
-				win.set_title(&format!("{} — startup failed", self.title_base));
+				self.update_failed_title();
 			}
 		} else if self.opts.show_fps_in_title {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
 				win.set_title(&format!(
-					"{} — {:.0} FPS  cpu {:.2} ms  gpu~ {:.2} ms",
-					self.title_base, self.fps_smooth, timings.cpu_record_ms, timings.gpu_ms
+					"{}{} — {:.0} FPS  cpu {:.2} ms  gpu~ {:.2} ms",
+					self.title_base,
+					self.title_diagnostic_suffix(),
+					self.fps_smooth,
+					timings.cpu_record_ms,
+					timings.gpu_ms
 				));
 			}
 		}
@@ -1863,7 +1936,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		}
 
 		let mut attrs = Window::default_attributes()
-			.with_title(self.opts.title.clone())
+			.with_title(format!("{} — initializing", self.opts.title))
 			.with_decorations(self.opts.decorations)
 			.with_transparent(true)
 			.with_visible(false)
@@ -2532,13 +2605,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 			RendererControlEvent::StartupReady { document, texture_summary } => {
 				if let Err(e) = self.start_async_scene_build(document, texture_summary) {
-					self.startup_pending_document = false;
-					self.startup_failed = Some(e.clone());
-					self.startup_progress = None;
-					self.update_runtime_startup();
-					if let Some(win) = self.window.as_ref() {
-						win.set_title(&format!("{} — startup failed", self.title_base));
-					}
+					self.set_startup_failed(e.clone());
 					eprintln!("un-avatar-renderer: {e}");
 				}
 			}
@@ -2566,27 +2633,17 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.clear_startup_progress();
 						self.update_runtime_texture_summary(actual_texture_summary);
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
-						win.set_title(&self.title_base);
+						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
 					}
 					Err(e) => {
-						self.startup_pending_document = false;
-						self.startup_failed = Some(e.clone());
-						self.startup_progress = None;
-						self.update_runtime_startup();
-						win.set_title(&format!("{} — startup failed", self.title_base));
+						self.set_startup_failed(e.clone());
 						eprintln!("un-avatar-renderer: {e}");
 					}
 				}
 			}
 			RendererControlEvent::StartupFailed { message } => {
-				self.startup_pending_document = false;
-				self.startup_progress = None;
-				self.startup_failed = Some(message.clone());
-				self.update_runtime_startup();
-				if let Some(win) = self.window.as_ref() {
-					win.set_title(&format!("{} — startup failed", self.title_base));
-				}
+				self.set_startup_failed(message.clone());
 				eprintln!("un-avatar-renderer: {message}");
 			}
 		}
@@ -3449,11 +3506,15 @@ pub fn run_cli() -> Result<(), RunError> {
 		debug_disable_shade_color: bool,
 		#[arg(long, help = "診断用: normalTexture を使わず頂点法線のみで shading / rim を計算")]
 		debug_disable_normal_map: bool,
+		#[arg(long, help = "診断用: lilToon reflection / specular / gem reflection 寄与を 0 に固定")]
+		debug_disable_reflection: bool,
 		#[arg(
 			long,
 			help = "診断用: toon path を base (alb × base_color) のみで早期 return（shading/GI/rim/matcap/emissive 全 skip）"
 		)]
 		debug_base_texture_only: bool,
+		#[arg(long, help = "診断用: lilToon Fur shell pass を完全に無効化")]
+		debug_disable_fur: bool,
 	}
 
 	let cli = Cli::parse();
@@ -3563,7 +3624,9 @@ pub fn run_cli() -> Result<(), RunError> {
 			debug_disable_emissive: cli.debug_disable_emissive,
 			debug_disable_shade_color: cli.debug_disable_shade_color,
 			debug_disable_normal_map: cli.debug_disable_normal_map,
+			debug_disable_reflection: cli.debug_disable_reflection,
 			debug_base_texture_only: cli.debug_base_texture_only,
+			disable_fur: cli.debug_disable_fur,
 			avatar_outline: Default::default(),
 			avatar_rim: Default::default(),
 			avatar_matcap: Default::default(),
@@ -3575,6 +3638,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		ssao: Default::default(),
 	};
 	merge_cli_options(&mut opts, cli_opts);
+	if opts.mesh_diagnostics.disable_fur {
+		eprintln!("un-avatar-renderer: diagnostics active: lilToon Fur shell pass disabled");
+	}
+	if opts.mesh_diagnostics.debug_disable_reflection {
+		eprintln!("un-avatar-renderer: diagnostics active: lilToon reflection disabled");
+	}
 	if cli.no_processed_texture_cache {
 		opts.processed_texture_cache = false;
 	}
@@ -3806,6 +3875,12 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.mesh_diagnostics.debug_skin_legacy_no_inv_mesh {
 		opts.mesh_diagnostics.debug_skin_legacy_no_inv_mesh = true;
+	}
+	if cli.mesh_diagnostics.debug_disable_reflection {
+		opts.mesh_diagnostics.debug_disable_reflection = true;
+	}
+	if cli.mesh_diagnostics.disable_fur {
+		opts.mesh_diagnostics.disable_fur = true;
 	}
 	if cli.debug_disable_rim_lighting {
 		opts.debug_disable_rim_lighting = true;

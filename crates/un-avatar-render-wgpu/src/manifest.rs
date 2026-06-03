@@ -402,6 +402,8 @@ pub(crate) struct MeshDiagnosticsManifest {
 	pub zero_morphs: Option<bool>,
 	pub relax_iris_alpha: Option<bool>,
 	pub skin_legacy_no_inv_mesh: Option<bool>,
+	pub disable_reflection: Option<bool>,
+	pub disable_fur: Option<bool>,
 }
 
 impl RendererManifest {
@@ -1174,6 +1176,12 @@ impl MeshDiagnosticsManifest {
 		}
 		if let Some(value) = self.skin_legacy_no_inv_mesh {
 			diagnostics.debug_skin_legacy_no_inv_mesh = value;
+		}
+		if let Some(value) = self.disable_reflection {
+			diagnostics.debug_disable_reflection = value;
+		}
+		if let Some(value) = self.disable_fur {
+			diagnostics.disable_fur = value;
 		}
 	}
 }

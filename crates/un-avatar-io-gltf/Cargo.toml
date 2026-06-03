@@ -21,6 +21,7 @@ image = { version = "0.25", default-features = false, features = [
  "jpeg",
  "webp",
  "exr",
+ "hdr",
 ] }
 exr = "1.74"
 serde = { workspace = true }

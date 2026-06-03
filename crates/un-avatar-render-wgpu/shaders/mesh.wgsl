@@ -84,6 +84,9 @@ struct DrawMaterial {
 	outline_lit_params: vec4<f32>,
 	outline_ext_params: vec4<f32>,
 	alpha_mask_params: vec4<f32>,
+	fur_params: vec4<f32>,
+	fur_vector_params: vec4<f32>,
+	fur_noise_params: vec4<f32>,
 	alpha_ext_params: vec4<f32>,
 	lighting_ext_params: vec4<f32>,
 	transparency_params: vec4<f32>,
@@ -143,7 +146,7 @@ struct MorphU {
 @group(1) @binding(10) var<uniform> drawu: DrawMaterial;
 @group(1) @binding(11) var normal_tex: texture_2d<f32>;
 @group(1) @binding(12) var occlusion_tex: texture_2d<f32>;
-@group(1) @binding(13) var reflection_tex: texture_2d<f32>;
+@group(1) @binding(13) var reflection_tex: texture_cube<f32>;
 @group(1) @binding(14) var shade_samp: sampler;
 @group(1) @binding(15) var shading_shift_samp: sampler;
 @group(1) @binding(16) var matcap_samp: sampler;
@@ -189,6 +192,10 @@ struct MorphU {
 @group(1) @binding(56) var backlight_color_tex: texture_2d<f32>;
 @group(1) @binding(57) var shadow2_color_tex: texture_2d<f32>;
 @group(1) @binding(58) var shadow3_color_tex: texture_2d<f32>;
+@group(1) @binding(59) var fur_vector_tex: texture_2d<f32>;
+@group(1) @binding(60) var fur_length_mask_tex: texture_2d<f32>;
+@group(1) @binding(61) var fur_noise_mask_tex: texture_2d<f32>;
+@group(1) @binding(62) var fur_mask_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -209,6 +216,8 @@ struct VsOut {
 	@location(1) uv: vec2<f32>,
 	@location(2) wp: vec3<f32>,
 	@location(3) wt: vec4<f32>,
+	@location(4) fur_shell: f32,
+	@location(5) fur_alpha: f32,
 }
 
 fn mat3_upper(m: mat4x4<f32>) -> mat3x3<f32> {
@@ -253,6 +262,8 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 		o.uv = v.uv;
 		o.wp = wp.xyz;
 		o.wt = vec4<f32>(mt, tangent_sign);
+		o.fur_shell = 0.0;
+		o.fur_alpha = 1.0;
 		o.clip = frame.view_proj * wp;
 		return o;
 	}
@@ -284,6 +295,8 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	o.uv = v.uv;
 	o.wp = wp.xyz;
 	o.wt = vec4<f32>(wt, tangent_sign);
+	o.fur_shell = 0.0;
+	o.fur_alpha = 1.0;
 	o.clip = frame.view_proj * wp;
 	return o;
 }
@@ -307,6 +320,39 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 	let wp = vec4<f32>(o.wp + n * width, 1.0);
 	o.clip = frame.view_proj * wp;
 	o.clip.z = o.clip.z + drawu.outline_ext_params.y * o.clip.w;
+	return o;
+}
+
+@vertex
+fn vs_fur(v: VsIn, @builtin(vertex_index) vertex_index: u32, @builtin(instance_index) instance_index: u32) -> VsOut {
+	var o = skinned_position_normal(v, vertex_index);
+	let enabled = clamp(drawu.fur_params.x, 0.0, 1.0);
+	let layer_count = max(drawu.fur_params.y, 1.0);
+	let shell = (f32(instance_index) + 1.0) / layer_count;
+	o.fur_shell = shell * enabled;
+	if (enabled <= 0.000001 || drawu.fur_params.y <= 0.0) {
+		return o;
+	}
+	let n = normalize(o.wn);
+	let t = normalize(o.wt.xyz - n * dot(n, o.wt.xyz));
+	let b = normalize(cross(n, t)) * o.wt.w;
+	let fur_uv = o.uv;
+	let length_mask = textureSampleLevel(fur_length_mask_tex, base_samp, fur_uv, 0.0).r;
+	let vector_tex = textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0).xyz * 2.0 - vec3<f32>(1.0);
+	let fur_mask = textureSampleLevel(fur_mask_tex, base_samp, fur_uv, 0.0).r;
+	let noise_uv = fur_uv * max(drawu.fur_noise_params.x, 0.0001) + vec2<f32>(drawu.fur_noise_params.y);
+	let noise = textureSampleLevel(fur_noise_mask_tex, base_samp, noise_uv, 0.0).r;
+	let fur_vector_ts = drawu.fur_vector_params.xyz + vector_tex + vec3<f32>(0.0, 0.0, 0.001);
+	var fur_vector_ws = normalize(t * fur_vector_ts.x + b * fur_vector_ts.y + n * fur_vector_ts.z) * drawu.fur_vector_params.w;
+	let fur_length = length(fur_vector_ws);
+	fur_vector_ws.y = fur_vector_ws.y - drawu.fur_params.z * fur_length;
+	let wp = vec4<f32>(o.wp + fur_vector_ws * shell * enabled * length_mask, 1.0);
+	o.wp = wp.xyz;
+	let root_density = clamp(fur_mask * length_mask, 0.0, 1.0);
+	let shell_cut = pow(clamp(shell, 0.0, 1.0), mix(0.75, 2.0, clamp(drawu.fur_params.w, 0.0, 1.0)));
+	let breakup = clamp(noise + (1.0 - shell) * 0.35 - shell_cut * 0.75, 0.0, 1.0);
+	o.fur_alpha = root_density * breakup * (1.0 - shell * 0.82);
+	o.clip = frame.view_proj * wp;
 	return o;
 }
 
@@ -385,6 +431,14 @@ fn apply_lil_alpha_mask(a: f32, uv: vec2<f32>) -> f32 {
 		return clamp(a - alpha_mask, 0.0, 1.0);
 	}
 	return a;
+}
+
+fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {
+	_ = uv;
+	if (shell <= 0.0) {
+		return 1.0;
+	}
+	return clamp(length_mask, 0.0, 1.0);
 }
 
 fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32) -> vec3<f32> {
@@ -804,6 +858,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
 	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
 	let a = apply_lil_alpha_mask(main_col.a, uv);
+	let fur_alpha = fur_shell_alpha(uv, i.fur_shell, i.fur_alpha);
+	if (i.fur_shell > 0.0 && fur_alpha <= 0.015) {
+		discard;
+	}
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
 	mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
@@ -812,7 +870,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
 	}
 	discard_invisible_transparent_zwrite(a, alpha_kind, drawu.outline_params.w);
-	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a);
+	let out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
 	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
@@ -969,7 +1027,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 	let reflection_base_n = normalize(mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0)));
 	let specular_n = normalize(mix(specular_base_n, anisotropy_n, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0)));
 	let reflection_n = normalize(mix(reflection_base_n, anisotropy_n, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0)));
-	let reflection_uv = toon_reflection_uv(reflection_n, v);
+	let reflection_dir = normalize(reflect(-v, reflection_n));
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	var reflection_metallic = 0.0;
 	if (drawu.reflection_control.x > 0.5) {
@@ -1029,7 +1087,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		);
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
 		let reflection_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
-		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_uv, reflection_lod).rgb * cube_tint * reflection_lighting;
+		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_dir, reflection_lod).rgb * cube_tint * reflection_lighting;
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
@@ -1041,17 +1099,17 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		let perceptual_roughness = max(1.0 - smoothness, 0.02);
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-		let gem_reflection_uv = toon_reflection_uv(reflection_n, gem_view);
+		let gem_reflection_dir = normalize(reflect(-gem_view, reflection_n));
 		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
 		let nv = clamp(abs(dot(reflection_n, gem_view)), 0.0, 1.0);
 		let inv_nv = 1.0 - nv;
 		let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
 		let gem_n_g = normalize(reflection_n + gem_view * inv_nv * chroma);
 		let gem_n_b = normalize(reflection_n + gem_view * inv_nv * chroma * 2.0);
-		let env_base = textureSampleLevel(reflection_tex, reflection_samp, gem_reflection_uv, gem_env_lod).rgb;
+		let env_base = textureSampleLevel(reflection_tex, reflection_samp, gem_reflection_dir, gem_env_lod).rgb;
 		let env_r = env_base.r;
-		let env_g = select(env_base.g, textureSampleLevel(reflection_tex, reflection_samp, toon_reflection_uv(gem_n_g, gem_view), gem_env_lod).g, !front_facing);
-		let env_b = select(env_base.b, textureSampleLevel(reflection_tex, reflection_samp, toon_reflection_uv(gem_n_b, gem_view), gem_env_lod).b, !front_facing);
+		let env_g = select(env_base.g, textureSampleLevel(reflection_tex, reflection_samp, normalize(reflect(-gem_view, gem_n_g)), gem_env_lod).g, !front_facing);
+		let env_b = select(env_base.b, textureSampleLevel(reflection_tex, reflection_samp, normalize(reflect(-gem_view, gem_n_b)), gem_env_lod).b, !front_facing);
 		var env = vec3<f32>(env_r, env_g, env_b) * cube_tint;
 		let contrast = max(drawu.reflection_ext_params.y, 0.0001);
 		env = pow(clamp(env, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast * drawu.gem_env_color.rgb;
@@ -1074,7 +1132,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool) ->
 		let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
 		specular = vec3<f32>(specular_shape * specular_intensity);
 		specular_blend = specular;
-		authored_reflection = textureSample(reflection_tex, reflection_samp, reflection_uv).rgb * (0.18 + 0.32 * reflection_fresnel);
+		authored_reflection = textureSample(reflection_tex, reflection_samp, reflection_dir).rgb * (0.18 + 0.32 * reflection_fresnel);
 		authored_reflection_blend = authored_reflection;
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);

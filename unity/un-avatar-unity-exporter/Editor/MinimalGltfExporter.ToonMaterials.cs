@@ -144,6 +144,10 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "outlineTextureIndex", useOutline ? ReadTexture(material, "_OutlineTex") : null);
                 AddTextureIndex(mtoon, "outlineWidthMultiplyTextureIndex", useOutline ? ReadTexture(material, "_OutlineWidthMask") : null);
                 AddTextureIndex(mtoon, "alphaMaskTextureIndex", ReadTexture(material, "_AlphaMask"));
+                AddTextureIndex(mtoon, "furVectorTextureIndex", ReadTexture(material, "_FurVectorTex"));
+                AddTextureIndex(mtoon, "furLengthMaskTextureIndex", ReadTexture(material, "_FurLengthMask"));
+                AddTextureIndex(mtoon, "furNoiseMaskTextureIndex", ReadTexture(material, "_FurNoiseMask"));
+                AddTextureIndex(mtoon, "furMaskTextureIndex", ReadTexture(material, "_FurMask"));
                 var mainGradationStrength = ReadFloat(material, "_MainGradationStrength", 0.0f);
                 var useGradationMap = mainGradationStrength > 0.0f || IsMaterialFeatureEnabled(material, "_UseGradationMap", ReadTexture(material, "_GradationMap") != null);
                 AddTextureIndex(mtoon, "gradationMapTextureIndex", useGradationMap ? ReadTexture(material, "_MainGradationTex") ?? ReadTexture(material, "_GradationMap") : null);
@@ -243,7 +247,8 @@ namespace UNAvatar.UnityExporter
                     "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
                     "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
                     "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_MainGradationTex", "_GradationMap",
-                    "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask"
+                    "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask",
+                    "_FurVectorTex", "_FurLengthMask", "_FurNoiseMask", "_FurMask"
                 };
             }
 

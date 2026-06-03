@@ -26,7 +26,7 @@ namespace UNAvatar.UnityExporter
                 {
                     return null;
                 }
-                if (!IsUnavatarExtensionOnlyTexture(source.MimeType))
+                if (!IsUnavatarTextureAssetMime(source.MimeType))
                 {
                     return null;
                 }
@@ -55,6 +55,8 @@ namespace UNAvatar.UnityExporter
                         Channels = metadata.Channels,
                         TextureType = metadata.TextureType,
                         TextureShape = metadata.TextureShape,
+                        SourceLayout = metadata.SourceLayout,
+                        UnityGenerateCubemap = metadata.UnityGenerateCubemap,
                         SRgb = metadata.SRgb,
                         Sampler = BuildSamplerJson(texture),
                         Width = metadata.Width,

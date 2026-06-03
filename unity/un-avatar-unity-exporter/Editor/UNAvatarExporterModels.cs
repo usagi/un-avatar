@@ -362,6 +362,8 @@ namespace UNAvatar.UnityExporter
         public string Channels;
         public string TextureType;
         public string TextureShape;
+        public string SourceLayout;
+        public string UnityGenerateCubemap;
         public bool? SRgb;
         public Dictionary<string, object> Sampler;
         public int Width;
@@ -390,6 +392,14 @@ namespace UNAvatar.UnityExporter
             if (!string.IsNullOrEmpty(TextureShape))
             {
                 json["textureShape"] = TextureShape;
+            }
+            if (!string.IsNullOrEmpty(SourceLayout))
+            {
+                json["sourceLayout"] = SourceLayout;
+            }
+            if (!string.IsNullOrEmpty(UnityGenerateCubemap))
+            {
+                json["unityGenerateCubemap"] = UnityGenerateCubemap;
             }
             if (SRgb.HasValue)
             {

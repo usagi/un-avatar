@@ -246,11 +246,15 @@ PNG / JPEG で表現できない HDR / float / half float texture は、glTF cor
 
 `KHR_texture_basisu` は Basis Universal / KTX2 圧縮済み texture との互換経路として使う。非圧縮 `RGBA16F` KTX2 や EXR source を無理に `KHR_texture_basisu` として扱わない。これらは `UN_avatar.textures` の source asset として表現し、runtime が直接 decode / upload する。
 
-`UN_avatar.textureAssets` は glTF core `images` では扱えない texture source の入口にする。`bufferView` は GLB BIN chunk 内の source bytes を指す。`sourcePixelFormat` は正本の実形式を記録し、GPU upload 形式ではない。例えば `RGB16F` EXR は source として `RGB16F` のまま記録し、wgpu backend が必要な場合だけ upload 時に `RGBA16Float` へ拡張する。
+`UN_avatar.textureAssets` は glTF core `images` では扱えない texture source の入口にする。汎用 blob ではなく texture source 専用 container であり、`bufferView` は GLB BIN chunk 内の source bytes を指す。`mimeType` は source format の正本、`sourcePixelFormat` は source file/header 由来の実形式を記録し、どちらも GPU upload 形式ではない。例えば `RGB16F` EXR は source として `RGB16F` のまま記録し、wgpu backend が必要な場合だけ upload 時に `RGBA16Float` へ拡張する。Radiance HDR は `mimeType = "image/vnd.radiance"` / `sourcePixelFormat = "RGBE8"` として保持する。source が PNG / JPEG の texture は glTF core `images` にそのまま保持してよい。source が EXR / HDR / KTX2 / DDS の texture は `UN_avatar.textureAssets` に source bytes のまま保持する。どちらの場合も `textureShape = "TextureCube"` / `"Cube"` は、source binary を変換する指示ではなく、runtime が texture を cube として解釈するための metadata である。
 
 `sampler` は glTF sampler と同じ数値定数 (`magFilter`, `minFilter`, `wrapS`, `wrapT`) を inline object として持てる。これは EXR など glTF core `textures` を経由しない source asset でも Unity の Filter / Wrap 設定を落とさないためである。glTF core image 経由の texture は通常の `textures[].sampler` を正とする。
 
 glTF core `images[].extras.UN_avatar_image` と `UN_avatar.textureAssets[]` は `colorSpace` (`srgb` / `linear` / `data`), `textureType`, `textureShape`, `sRGB` を保持できる。Renderer は material slot 由来の role を第一に使い、source metadata が `linear` / `data` または `sRGB=false` の場合は RGBA fallback upload でも sRGB texture format にしない。これは Normal / mask / data texture を色テクスチャとして劣化扱いしないための境界である。
+
+`sourceLayout` は source image が texture shape へ変換される前の配置 hint である。Unity `TextureImporter.generateCubemap` が取得できる場合は `unity_auto_cubemap` など `unity_*` 値を保持し、併せて `unityGenerateCubemap` に Unity enum 名をそのまま残す。取得できない場合だけ寸法から `latlong`, `horizontal_strip`, `vertical_strip`, `horizontal_cross`, `vertical_cross`, `unknown_cube_source` などを推定する。これは source binary を変換する指示ではなく、runtime upload / PMREM cache 生成時の解釈 hint である。
+
+`textureShape = "TextureCube"` / `"Cube"` の reflection source は、UNToon v2 / lilToon-compatible path では true cubemap として扱う。Renderer は source bytes を decode したあと、layout metadata と source image dimensions に基づき cube faces へ展開し、`texture_cube` / cube texture view で sample する。2D equirectangular approximation は diagnostic / compatibility fallback であり、lilToon-compatible high-tier path の正本ではない。PMREM / roughness mip chain は source package を書き換えず、runtime cache または explicit optimizer output として生成する。
 
 `RGB16F` source を wgpu upload で `RGBA16Float` に拡張するのは、wgpu の portable `TextureFormat` に `RGB16Float` が無く、一般的な GPU API でも 3ch half float texture は 4ch half float より互換性が低いためである。`.unavatar` と CPU decoded representation は `RGB16F` を維持し、alpha=1 の追加は renderer upload boundary の明示的 fallback とする。
 
@@ -266,7 +270,9 @@ glTF core `images[].extras.UN_avatar_image` と `UN_avatar.textureAssets[]` は 
       "colorSpace": "linear",
       "channels": "rgb",
       "textureType": "Default",
-      "textureShape": "2D",
+      "textureShape": "TextureCube",
+      "sourceLayout": "unity_auto_cubemap",
+      "unityGenerateCubemap": "AutoCubemap",
       "sRGB": false,
       "sampler": {
         "magFilter": 9729,
@@ -298,7 +304,7 @@ Material 側は glTF texture index で表せない場合に asset id を参照�
 }
 ```
 
-Renderer v0.1 は `reflectionCubeTextureIndexAsset` を decode 後の 2D texture として扱い、equirectangular reflection map 近似で UNToon に加算する。true cubemap / PMREM / roughness mip chain は後段課題とし、source asset metadata は将来の cube / array / KTX2 経路へ拡張できる形に保つ。
+UNToon v2 / lilToon-compatible renderer は `reflectionCubeTextureIndex` / `reflectionCubeTextureIndexAsset` を authored reflection cube source として扱う。source binary は PNG なら PNG、EXR なら EXR のまま `.unavatar` に保持し、runtime decode 後に cube texture として upload / sample する。`textureShape` が cube であるにもかかわらず 2D reflection map として扱うのは compatibility fallback であり、diagnostics に記録する。roughness mip / PMREM は `.unavatar` 本体の source bytes を置換せず、runtime cache または optimizer の派生データとして扱う。
 
 `.unavatar` は通常処理では immutable source package として扱う。Runtime load、profile 変更、wardrobe 切替、cache 生成は `.unavatar` 本体を書き換えない。`.unavatar` は Unity project / `.unitypackage` から生成された派生物ではあるが、ユーザーにとっては配布・保存・再利用するアバターファイルでもあるため、source 忠実性とポータビリティーを優先する。
 

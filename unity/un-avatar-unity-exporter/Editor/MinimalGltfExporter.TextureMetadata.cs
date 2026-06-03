@@ -15,9 +15,9 @@ namespace UNAvatar.UnityExporter
     {
         private sealed partial class Writer
         {
-            private static bool IsUnavatarExtensionOnlyTexture(string mimeType)
+            private static bool IsUnavatarTextureAssetMime(string mimeType)
             {
-                return mimeType == "image/exr";
+                return mimeType == "image/exr" || mimeType == "image/vnd.radiance";
             }
 
             private sealed class TextureAssetMetadata
@@ -27,6 +27,8 @@ namespace UNAvatar.UnityExporter
                 public string Channels = "";
                 public string TextureType = "";
                 public string TextureShape = "";
+                public string SourceLayout = "";
+                public string UnityGenerateCubemap = "";
                 public bool? SRgb;
                 public int Width;
                 public int Height;
@@ -37,6 +39,7 @@ namespace UNAvatar.UnityExporter
                     var colorSpace = TextureColorSpace(texture, importer);
                     var textureType = importer != null ? importer.textureType.ToString() : "";
                     var textureShape = importer != null ? importer.textureShape.ToString() : TextureShapeFromTexture(texture);
+                    var unityGenerateCubemap = IsCubeTextureShape(textureShape) ? UnityGenerateCubemap(importer) : "";
                     var srgb = TextureSrgb(texture, importer);
                     if (extension == ".exr")
                     {
@@ -45,6 +48,8 @@ namespace UNAvatar.UnityExporter
                         {
                             exr.TextureType = textureType;
                             exr.TextureShape = textureShape;
+                            exr.SourceLayout = TextureSourceLayout(texture, importer, exr.Width, exr.Height);
+                            exr.UnityGenerateCubemap = unityGenerateCubemap;
                             exr.SRgb = srgb;
                             return exr;
                         }
@@ -55,7 +60,35 @@ namespace UNAvatar.UnityExporter
                             Channels = "",
                             TextureType = textureType,
                             TextureShape = textureShape,
+                            SourceLayout = TextureSourceLayout(texture, importer, texture != null ? texture.width : 0, texture != null ? texture.height : 0),
+                            UnityGenerateCubemap = unityGenerateCubemap,
                             SRgb = srgb
+                        };
+                    }
+                    if (extension == ".hdr")
+                    {
+                        var hdr = TryReadRadianceHdrMetadata(bytes);
+                        if (hdr != null)
+                        {
+                            hdr.TextureType = textureType;
+                            hdr.TextureShape = textureShape;
+                            hdr.SourceLayout = TextureSourceLayout(texture, importer, hdr.Width, hdr.Height);
+                            hdr.UnityGenerateCubemap = unityGenerateCubemap;
+                            hdr.SRgb = srgb;
+                            return hdr;
+                        }
+                        return new TextureAssetMetadata
+                        {
+                            SourcePixelFormat = "RGBE8",
+                            ColorSpace = "linear",
+                            Channels = "rgb",
+                            TextureType = textureType,
+                            TextureShape = textureShape,
+                            SourceLayout = TextureSourceLayout(texture, importer, texture != null ? texture.width : 0, texture != null ? texture.height : 0),
+                            UnityGenerateCubemap = unityGenerateCubemap,
+                            SRgb = srgb,
+                            Width = texture != null ? texture.width : 0,
+                            Height = texture != null ? texture.height : 0
                         };
                     }
 
@@ -67,6 +100,8 @@ namespace UNAvatar.UnityExporter
                         Channels = ChannelsHintFromPixelFormat(pixelFormat),
                         TextureType = textureType,
                         TextureShape = textureShape,
+                        SourceLayout = TextureSourceLayout(texture, importer, texture != null ? texture.width : 0, texture != null ? texture.height : 0),
+                        UnityGenerateCubemap = unityGenerateCubemap,
                         SRgb = srgb,
                         Width = texture != null ? texture.width : 0,
                         Height = texture != null ? texture.height : 0
@@ -138,6 +173,52 @@ namespace UNAvatar.UnityExporter
                             Width = width,
                             Height = height
                         };
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                private static TextureAssetMetadata TryReadRadianceHdrMetadata(byte[] bytes)
+                {
+                    try
+                    {
+                        if (bytes == null || bytes.Length < 12)
+                        {
+                            return null;
+                        }
+                        var text = Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 16 * 1024));
+                        if (!text.StartsWith("#?RADIANCE", StringComparison.Ordinal) && !text.StartsWith("#?RGBE", StringComparison.Ordinal))
+                        {
+                            return null;
+                        }
+                        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+                        foreach (var rawLine in lines)
+                        {
+                            var line = rawLine.Trim();
+                            if (line.Length == 0)
+                            {
+                                continue;
+                            }
+                            var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length == 4 &&
+                                (parts[0] == "-Y" || parts[0] == "+Y") &&
+                                (parts[2] == "+X" || parts[2] == "-X") &&
+                                int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var height) &&
+                                int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var width))
+                            {
+                                return new TextureAssetMetadata
+                                {
+                                    SourcePixelFormat = "RGBE8",
+                                    ColorSpace = "linear",
+                                    Channels = "rgb",
+                                    Width = Math.Max(0, width),
+                                    Height = Math.Max(0, height)
+                                };
+                            }
+                        }
+                        return null;
                     }
                     catch
                     {
@@ -255,6 +336,10 @@ namespace UNAvatar.UnityExporter
                 {
                     return "unknown_float";
                 }
+                if (extension == ".hdr")
+                {
+                    return "RGBE8";
+                }
                 if (texture != null && texture.graphicsFormat.ToString().IndexOf("16", StringComparison.Ordinal) >= 0)
                 {
                     return texture.graphicsFormat.ToString();
@@ -283,6 +368,81 @@ namespace UNAvatar.UnityExporter
                     return null;
                 }
                 return texture.graphicsFormat.ToString().IndexOf("SRGB", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            private static string TextureSourceLayout(Texture texture, TextureImporter importer, int width, int height)
+            {
+                var shape = importer != null ? importer.textureShape.ToString() : TextureShapeFromTexture(texture);
+                if (!IsCubeTextureShape(shape))
+                {
+                    return "";
+                }
+                var generateCubemap = UnityGenerateCubemap(importer);
+                if (!string.IsNullOrEmpty(generateCubemap))
+                {
+                    return "unity_" + ToSnakeCase(generateCubemap);
+                }
+                if (width > 0 && height > 0)
+                {
+                    if (width == height * 2)
+                    {
+                        return "latlong";
+                    }
+                    if (width == height * 6)
+                    {
+                        return "horizontal_strip";
+                    }
+                    if (height == width * 6)
+                    {
+                        return "vertical_strip";
+                    }
+                    if (width * 4 == height * 3)
+                    {
+                        return "vertical_cross";
+                    }
+                    if (width * 3 == height * 4)
+                    {
+                        return "horizontal_cross";
+                    }
+                }
+                return "unknown_cube_source";
+            }
+
+            private static bool IsCubeTextureShape(string shape)
+            {
+                return shape != null &&
+                       (shape.Equals("TextureCube", StringComparison.OrdinalIgnoreCase) ||
+                        shape.Equals("Cube", StringComparison.OrdinalIgnoreCase));
+            }
+
+            private static string UnityGenerateCubemap(TextureImporter importer)
+            {
+                if (importer == null)
+                {
+                    return "";
+                }
+                var property = typeof(TextureImporter).GetProperty("generateCubemap", BindingFlags.Instance | BindingFlags.Public);
+                var value = property != null ? property.GetValue(importer, null) : null;
+                return value != null ? value.ToString() : "";
+            }
+
+            private static string ToSnakeCase(string value)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    return "";
+                }
+                var builder = new StringBuilder(value.Length + 8);
+                for (var i = 0; i < value.Length; i++)
+                {
+                    var c = value[i];
+                    if (char.IsUpper(c) && i > 0)
+                    {
+                        builder.Append('_');
+                    }
+                    builder.Append(char.ToLowerInvariant(c));
+                }
+                return builder.ToString();
             }
 
             private static string TextureShapeFromTexture(Texture texture)

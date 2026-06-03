@@ -122,6 +122,16 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						texture_shape: image_metadata
 							.as_ref()
 							.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+						source_layout: image_metadata
+							.as_ref()
+							.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+						unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+							json_string(
+								metadata
+									.get("unityGenerateCubemap")
+									.or_else(|| metadata.get("unity_generate_cubemap")),
+							)
+						}),
 						srgb: image_metadata
 							.as_ref()
 							.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
@@ -147,6 +157,16 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					texture_shape: image_metadata
 						.as_ref()
 						.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+					source_layout: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+					unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+						json_string(
+							metadata
+								.get("unityGenerateCubemap")
+								.or_else(|| metadata.get("unity_generate_cubemap")),
+						)
+					}),
 					srgb: image_metadata
 						.as_ref()
 						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
@@ -191,6 +211,16 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 					texture_shape: image_metadata
 						.as_ref()
 						.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+					source_layout: image_metadata
+						.as_ref()
+						.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+					unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+						json_string(
+							metadata
+								.get("unityGenerateCubemap")
+								.or_else(|| metadata.get("unity_generate_cubemap")),
+						)
+					}),
 					srgb: image_metadata
 						.as_ref()
 						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
@@ -221,6 +251,16 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 				texture_shape: image_metadata
 					.as_ref()
 					.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+				source_layout: image_metadata
+					.as_ref()
+					.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+				unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+					json_string(
+						metadata
+							.get("unityGenerateCubemap")
+							.or_else(|| metadata.get("unity_generate_cubemap")),
+					)
+				}),
 				srgb: image_metadata
 					.as_ref()
 					.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
@@ -398,6 +438,8 @@ fn append_unavatar_texture_assets(
 			color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
 			texture_type: asset.get("textureType").and_then(Value::as_str).map(str::to_string),
 			texture_shape: asset.get("textureShape").and_then(Value::as_str).map(str::to_string),
+			source_layout: asset.get("sourceLayout").and_then(Value::as_str).map(str::to_string),
+			unity_generate_cubemap: asset.get("unityGenerateCubemap").and_then(Value::as_str).map(str::to_string),
 			srgb: asset.get("sRGB").or_else(|| asset.get("srgb")).and_then(Value::as_bool),
 			sampler: asset.get("sampler").map(sampler_from_root_json),
 			byte_length: bytes.len() as u64,
@@ -452,6 +494,19 @@ fn decode_unavatar_texture_asset(
 					pixels,
 				})
 			}
+		}
+		"image/vnd.radiance" => {
+			let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Hdr).map_err(|e| format!("HDR decode: {e}"))?;
+			let rgb = decoded.to_rgb32f();
+			let width = rgb.width();
+			let height = rgb.height();
+			let pixels = rgb.into_raw().into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+			Ok(UnaImageRgba {
+				width,
+				height,
+				pixel_format: UnaImagePixelFormat::R32G32B32Float,
+				pixels,
+			})
 		}
 		other => Err(format!("unsupported UN_avatar texture asset MIME: {other}")),
 	}
@@ -3201,6 +3256,46 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 			out.alpha_mask.value_factor = value;
 		}
 	}
+	let source_shader_lower = source_shader.to_ascii_lowercase();
+	out.fur.enabled_factor = unavatar_material_float_param(extras, "_UseFur")
+		.unwrap_or_else(|| if source_shader_lower.contains("fur") { 1.0 } else { 0.0 })
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_float_param(extras, "_FurLayerNum") {
+		out.fur.layer_count_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_FurVector") {
+		out.fur.vector_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurGravity") {
+		out.fur.gravity_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurRandomize") {
+		out.fur.randomize_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurNoiseTiling") {
+		out.fur.noise_tiling_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurNoiseOffset") {
+		out.fur.noise_offset_factor = value;
+	}
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furVectorTextureIndex").or_else(|| m.get("fur_vector_texture_index")))) {
+		out.fur.vector_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("furLengthMaskTextureIndex")
+				.or_else(|| m.get("fur_length_mask_texture_index")),
+		)
+	}) {
+		out.fur.length_mask_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furNoiseMaskTextureIndex").or_else(|| m.get("fur_noise_mask_texture_index"))))
+	{
+		out.fur.noise_mask_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furMaskTextureIndex").or_else(|| m.get("fur_mask_texture_index")))) {
+		out.fur.mask_texture_index = Some(value);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlend") {
 		out.blend_state.source_factor = value;
 	}
@@ -4144,6 +4239,19 @@ mod tests {
 	}
 
 	#[test]
+	fn decodes_unavatar_hdr_texture_asset() {
+		let mut hdr = Vec::new();
+		image::codecs::hdr::HdrEncoder::new(Cursor::new(&mut hdr))
+			.encode(&[image::Rgb([0.25, 0.5, 1.0])], 1, 1)
+			.unwrap();
+		let decoded = decode_unavatar_texture_asset(&hdr, "image/vnd.radiance", Some("RGBE8"), Some("rgb")).unwrap();
+		assert_eq!(decoded.width, 1);
+		assert_eq!(decoded.height, 1);
+		assert_eq!(decoded.pixel_format, UnaImagePixelFormat::R32G32B32Float);
+		assert_eq!(decoded.pixels.len(), 12);
+	}
+
+	#[test]
 	fn imports_unavatar_exr_texture_asset_and_material_ref() {
 		let exr_image = image::Rgba32FImage::from_raw(1, 1, vec![0.25, 0.5, 1.0, 1.0]).unwrap();
 		let mut exr = Vec::new();
@@ -4965,6 +5073,12 @@ mod tests {
 					"_AlphaMaskMode": 2.0,
 					"_AlphaMaskScale": 0.8,
 					"_AlphaMaskValue": 0.1,
+					"_UseFur": 1.0,
+					"_FurLayerNum": 12.0,
+					"_FurGravity": 0.35,
+					"_FurRandomize": 0.45,
+					"_FurNoiseTiling": 2.0,
+					"_FurNoiseOffset": 0.25,
 					"_SrcBlend": 1.0,
 					"_DstBlend": 10.0,
 					"_BlendOp": 0.0,
@@ -5014,6 +5128,9 @@ mod tests {
 					"_OutlineColor": [0.01, 0.02, 0.03, 1.0],
 					"_OutlineLitColor": [1.0, 0.2, 0.0, 0.4]
 				},
+				"vectorParams": {
+					"_FurVector": [0.1, 0.2, 0.3, 0.4]
+				},
 				"mtoon": {
 					"shadowColorTextureIndex": 8,
 					"shadow2ndColorTextureIndex": 38,
@@ -5047,6 +5164,10 @@ mod tests {
 					"anisotropyTangentTextureIndex": 26,
 					"anisotropyScaleMaskTextureIndex": 27,
 					"anisotropyShiftNoiseMaskTextureIndex": 28,
+					"furVectorTextureIndex": 61,
+					"furLengthMaskTextureIndex": 62,
+					"furNoiseMaskTextureIndex": 63,
+					"furMaskTextureIndex": 64,
 					"mainTexHsvgFactor": [0.12, 0.8, 1.2, 0.9]
 				}
 			}"#,
@@ -5264,6 +5385,17 @@ mod tests {
 		assert_eq!(liltoon_like.alpha_mask.texture_index, Some(21));
 		assert_eq!(liltoon_like.alpha_mask.scale_factor, 0.8);
 		assert_eq!(liltoon_like.alpha_mask.value_factor, 0.1);
+		assert_eq!(liltoon_like.fur.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.fur.layer_count_factor, 12.0);
+		assert_eq!(liltoon_like.fur.vector_factor, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.fur.gravity_factor, 0.35);
+		assert_eq!(liltoon_like.fur.randomize_factor, 0.45);
+		assert_eq!(liltoon_like.fur.noise_tiling_factor, 2.0);
+		assert_eq!(liltoon_like.fur.noise_offset_factor, 0.25);
+		assert_eq!(liltoon_like.fur.vector_texture_index, Some(61));
+		assert_eq!(liltoon_like.fur.length_mask_texture_index, Some(62));
+		assert_eq!(liltoon_like.fur.noise_mask_texture_index, Some(63));
+		assert_eq!(liltoon_like.fur.mask_texture_index, Some(64));
 		assert_eq!(liltoon_like.blend_state.source_factor, 1.0);
 		assert_eq!(liltoon_like.blend_state.destination_factor, 10.0);
 		assert_eq!(liltoon_like.blend_state.operation_factor, 0.0);
