@@ -3261,13 +3261,25 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		.unwrap_or_else(|| if source_shader_lower.contains("fur") { 1.0 } else { 0.0 })
 		.clamp(0.0, 1.0);
 	if let Some(value) = unavatar_material_float_param(extras, "_FurLayerNum") {
-		out.fur.layer_count_factor = value.max(0.0);
+		out.fur.layer_count_factor = value.clamp(1.0, 3.0);
 	}
 	if let Some(value) = unavatar_material_vector_param(extras, "_FurVector") {
 		out.fur.vector_factor = value;
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurVectorScale") {
+		out.fur.vector_scale_factor = value;
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_FurGravity") {
 		out.fur.gravity_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurAO") {
+		out.fur.shell_ao_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurRootOffset") {
+		out.fur.root_offset_factor = value.clamp(-1.0, 0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurCutoutLength") {
+		out.fur.cutout_length_factor = value.max(0.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_FurRandomize") {
 		out.fur.randomize_factor = value.clamp(0.0, 1.0);
@@ -5074,8 +5086,12 @@ mod tests {
 					"_AlphaMaskScale": 0.8,
 					"_AlphaMaskValue": 0.1,
 					"_UseFur": 1.0,
-					"_FurLayerNum": 12.0,
+					"_FurLayerNum": 3.0,
+					"_FurVectorScale": 1.75,
 					"_FurGravity": 0.35,
+					"_FurAO": 0.6,
+					"_FurRootOffset": -0.35,
+					"_FurCutoutLength": 0.9,
 					"_FurRandomize": 0.45,
 					"_FurNoiseTiling": 2.0,
 					"_FurNoiseOffset": 0.25,
@@ -5386,9 +5402,13 @@ mod tests {
 		assert_eq!(liltoon_like.alpha_mask.scale_factor, 0.8);
 		assert_eq!(liltoon_like.alpha_mask.value_factor, 0.1);
 		assert_eq!(liltoon_like.fur.enabled_factor, 1.0);
-		assert_eq!(liltoon_like.fur.layer_count_factor, 12.0);
+		assert_eq!(liltoon_like.fur.layer_count_factor, 3.0);
 		assert_eq!(liltoon_like.fur.vector_factor, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.fur.vector_scale_factor, 1.75);
 		assert_eq!(liltoon_like.fur.gravity_factor, 0.35);
+		assert_eq!(liltoon_like.fur.shell_ao_factor, 0.6);
+		assert_eq!(liltoon_like.fur.root_offset_factor, -0.35);
+		assert_eq!(liltoon_like.fur.cutout_length_factor, 0.9);
 		assert_eq!(liltoon_like.fur.randomize_factor, 0.45);
 		assert_eq!(liltoon_like.fur.noise_tiling_factor, 2.0);
 		assert_eq!(liltoon_like.fur.noise_offset_factor, 0.25);

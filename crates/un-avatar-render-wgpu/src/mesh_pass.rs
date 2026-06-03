@@ -255,6 +255,10 @@ fn portable_mesh_shader_source() -> String {
 		"let noise = 1.0;",
 	);
 	shader = shader.replace(
+		"let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;",
+		"let fur_noise_mask = 1.0;",
+	);
+	shader = shader.replace(
 		"\tlet fur_mask = textureSampleLevel(fur_mask_tex, base_samp, fur_uv, 0.0).r;\n\tlet noise_uv = fur_uv * max(drawu.fur_noise_params.x, 0.0001) + vec2<f32>(drawu.fur_noise_params.y);\n\tlet noise = textureSampleLevel(fur_noise_mask_tex, base_samp, noise_uv, 0.0).r;\n",
 		"\tlet fur_mask = 1.0;\n\tlet noise = 1.0;\n",
 	);
@@ -269,6 +273,10 @@ fn portable_mesh_shader_source() -> String {
 	shader = shader.replace(
 		"let vector_tex = textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0).xyz * 2.0 - vec3<f32>(1.0);",
 		"let vector_tex = vec3<f32>(0.0);",
+	);
+	shader = shader.replace(
+		"let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0), drawu.fur_ext_params.x);",
+		"let vector_tex = vec3<f32>(0.0, 0.0, 1.0);",
 	);
 	shader = shader.replace(
 		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\tlet enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);\n\tif (enabled <= 0.000001) {\n\t\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n\t}\n\tlet base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));\n\tlet base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;\n\tlet tangent_uv = uv * drawu.anisotropy_tangent_uv_offset_scale.zw + drawu.anisotropy_tangent_uv_offset_scale.xy;\n\tvar tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\tif (dot(tangent_sample, tangent_sample) < 0.000001) {\n\t\ttangent_sample = vec3<f32>(1.0, 0.0, 0.0);\n\t}\n\tvar aniso_t = normalize(base_tangent * tangent_sample.x + base_bitangent * tangent_sample.y + n * tangent_sample.z);\n\taniso_t = normalize(aniso_t - n * dot(n, aniso_t));\n\tlet aniso_b = normalize(cross(n, aniso_t)) * tangent_in.w;\n\tlet scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;\n\tlet scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;\n\tlet anisotropy = drawu.anisotropy_params.y * scale_mask;\n\tlet shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);\n\tlet aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));\n\tlet noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;\n\tlet shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;\n\treturn AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);\n}\n",
@@ -438,6 +446,7 @@ struct MeshDrawMaterialGpu {
 	fur_params: [f32; 4],
 	fur_vector_params: [f32; 4],
 	fur_noise_params: [f32; 4],
+	fur_ext_params: [f32; 4],
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
@@ -485,7 +494,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1648);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1664);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1316,8 +1325,8 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(58, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(59, wgpu::ShaderStages::VERTEX),
 			texture_bind_group_layout_entry(60, wgpu::ShaderStages::VERTEX),
-			texture_bind_group_layout_entry(61, wgpu::ShaderStages::VERTEX),
-			texture_bind_group_layout_entry(62, wgpu::ShaderStages::VERTEX),
+			texture_bind_group_layout_entry(61, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(62, wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -1877,7 +1886,25 @@ fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel)
 	if shading != UnaShadingModel::LilToonLike || liltoon_like.fur.enabled_factor <= 0.5 {
 		return 0;
 	}
-	liltoon_like.fur.layer_count_factor.ceil().max(0.0) as u32
+	liltoon_fur_shell_sample_count(liltoon_like.fur.layer_count_factor)
+}
+
+fn liltoon_fur_layer_num(layer_num: f32) -> u32 {
+	if layer_num <= 1.5 {
+		1
+	} else if layer_num < 2.5 {
+		2
+	} else {
+		3
+	}
+}
+
+fn liltoon_fur_shell_sample_count(layer_num: f32) -> u32 {
+	match liltoon_fur_layer_num(layer_num) {
+		1 => 4,
+		2 => 7,
+		_ => 13,
+	}
 }
 
 fn draw_fur_layer_count(d: &MeshDraw) -> u32 {
@@ -2393,7 +2420,7 @@ fn mesh_draw_material_gpu(
 		.map(|u| {
 			[
 				u.fur.enabled_factor.clamp(0.0, 1.0),
-				u.fur.layer_count_factor.max(0.0),
+				liltoon_fur_shell_sample_count(u.fur.layer_count_factor) as f32,
 				u.fur.gravity_factor,
 				u.fur.randomize_factor.clamp(0.0, 1.0),
 			]
@@ -2412,6 +2439,16 @@ fn mesh_draw_material_gpu(
 	let fur_noise_params = liltoon_like
 		.map(|u| [u.fur.noise_tiling_factor.max(0.0), u.fur.noise_offset_factor, 0.0, 0.0])
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let fur_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.fur.vector_scale_factor,
+				u.fur.shell_ao_factor.clamp(0.0, 1.0),
+				u.fur.root_offset_factor.clamp(-1.0, 0.0),
+				u.fur.cutout_length_factor.max(0.0),
+			]
+		})
+		.unwrap_or([1.0, 0.0, 0.0, 0.8]);
 	let alpha_ext_params = liltoon_like
 		.map(|u| {
 			[
@@ -2702,6 +2739,7 @@ fn mesh_draw_material_gpu(
 		fur_params,
 		fur_vector_params,
 		fur_noise_params,
+		fur_ext_params,
 		alpha_ext_params,
 		lighting_ext_params,
 		transparency_params,
@@ -3356,7 +3394,7 @@ impl SceneMeshes {
 				},
 				wgpu::BindGroupLayoutEntry {
 					binding: 61,
-					visibility: wgpu::ShaderStages::VERTEX,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
 						view_dimension: wgpu::TextureViewDimension::D2,
@@ -3366,7 +3404,7 @@ impl SceneMeshes {
 				},
 				wgpu::BindGroupLayoutEntry {
 					binding: 62,
-					visibility: wgpu::ShaderStages::VERTEX,
+					visibility: wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Texture {
 						multisampled: false,
 						view_dimension: wgpu::TextureViewDimension::D2,
@@ -3716,7 +3754,7 @@ impl SceneMeshes {
 			&vb_layout,
 			"mesh_fur_toon",
 			"vs_fur",
-			"fs_toon",
+			"fs_fur_toon",
 			premultiplied_blend,
 			wgpu::ColorWrites::ALL,
 			false,
@@ -4216,7 +4254,7 @@ impl SceneMeshes {
 			queue,
 			"neutral_vector1x1",
 			wgpu::TextureFormat::Rgba8Unorm,
-			[128, 128, 128, 255],
+			[128, 128, 255, 255],
 		);
 		textures.push(neutral_vector_texture);
 		let neutral_vector_view = textures
@@ -5462,6 +5500,196 @@ mod tests {
 	}
 
 	#[test]
+	fn mesh_toon_pipeline_interfaces_match() {
+		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
+		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 40;
+		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
+
+		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+		let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+			power_preference: wgpu::PowerPreference::LowPower,
+			compatible_surface: None,
+			force_fallback_adapter: false,
+		})) else {
+			eprintln!("skipping mesh pipeline interface test: no wgpu adapter");
+			return;
+		};
+
+		let adapter_limits = adapter.limits();
+		let full_supported = adapter_limits.max_sampled_textures_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST
+			&& adapter_limits.max_samplers_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST;
+		let material_tier = if full_supported {
+			MaterialTier::FullOnePass
+		} else {
+			MaterialTier::Portable16
+		};
+		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+		if full_supported {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+		} else {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(PORTABLE_SAMPLERS_PER_STAGE_TEST)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+		}
+
+		let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+			label: Some("mesh-pipeline-interface-test"),
+			required_features: wgpu::Features::empty(),
+			required_limits: limits,
+			memory_hints: Default::default(),
+			..Default::default()
+		})) else {
+			eprintln!("skipping mesh pipeline interface test: request_device failed");
+			return;
+		};
+
+		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_frame_test"),
+			entries: &[
+				uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+			],
+		});
+		let material_entries = mesh_material_layout_entries(material_tier);
+		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_material_test"),
+			entries: &material_entries,
+		});
+		let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_bones_test"),
+			entries: &[wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::VERTEX,
+				ty: wgpu::BindingType::Buffer {
+					ty: wgpu::BufferBindingType::Storage { read_only: true },
+					has_dynamic_offset: false,
+					min_binding_size: None,
+				},
+				count: None,
+			}],
+		});
+		let morph_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_morph_test"),
+			entries: &[
+				uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage { read_only: true },
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage { read_only: true },
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+			],
+		});
+		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("mesh_pipeline_test"),
+			bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&bone_layout), Some(&morph_layout)],
+			immediate_size: 0,
+		});
+		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+			label: Some("mesh_shader_test"),
+			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
+		});
+		let attrs = [
+			wgpu::VertexAttribute {
+				offset: 0,
+				shader_location: 0,
+				format: wgpu::VertexFormat::Float32x3,
+			},
+			wgpu::VertexAttribute {
+				offset: 12,
+				shader_location: 1,
+				format: wgpu::VertexFormat::Float32x3,
+			},
+			wgpu::VertexAttribute {
+				offset: 24,
+				shader_location: 2,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 40,
+				shader_location: 3,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
+				shader_location: 4,
+				format: wgpu::VertexFormat::Uint16x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 56,
+				shader_location: 5,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+		];
+		let vb_layout = wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<Vertex>() as u64,
+			step_mode: wgpu::VertexStepMode::Vertex,
+			attributes: &attrs,
+		};
+
+		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
+			&device,
+			&pipeline_layout,
+			&shader,
+			wgpu::TextureFormat::Rgba8Unorm,
+			&vb_layout,
+			"mesh_opaque_toon",
+			"vs_main",
+			"fs_toon",
+			None,
+			wgpu::ColorWrites::ALL,
+			true,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			1,
+		);
+		let _fur_toon = SceneMeshes::create_mesh_pipeline(
+			&device,
+			&pipeline_layout,
+			&shader,
+			wgpu::TextureFormat::Rgba8Unorm,
+			&vb_layout,
+			"mesh_fur_toon",
+			"vs_fur",
+			"fs_fur_toon",
+			Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+			wgpu::ColorWrites::ALL,
+			false,
+			wgpu::CompareFunction::LessEqual,
+			None,
+			1,
+		);
+	}
+
+	#[test]
 	fn linear_source_metadata_uses_linear_rgba_upload_format() {
 		let source = UnaImageSourceMetadata {
 			color_space: Some("linear".to_string()),
@@ -5888,12 +6116,24 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_fur_layer_num_maps_to_geometry_sample_count() {
+		assert_eq!(liltoon_fur_shell_sample_count(1.0), 4);
+		assert_eq!(liltoon_fur_shell_sample_count(2.0), 7);
+		assert_eq!(liltoon_fur_shell_sample_count(3.0), 13);
+		assert_eq!(liltoon_fur_shell_sample_count(12.0), 13);
+	}
+
+	#[test]
 	fn liltoon_fur_params_reach_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.enabled_factor = 1.0;
-		liltoon_like.fur.layer_count_factor = 12.0;
+		liltoon_like.fur.layer_count_factor = 3.0;
 		liltoon_like.fur.vector_factor = [0.1, 0.2, 0.3, 0.4];
+		liltoon_like.fur.vector_scale_factor = 1.75;
 		liltoon_like.fur.gravity_factor = 0.35;
+		liltoon_like.fur.shell_ao_factor = 0.6;
+		liltoon_like.fur.root_offset_factor = -0.35;
+		liltoon_like.fur.cutout_length_factor = 0.9;
 		liltoon_like.fur.randomize_factor = 0.45;
 		liltoon_like.fur.noise_tiling_factor = 2.0;
 		liltoon_like.fur.noise_offset_factor = 0.25;
@@ -5904,22 +6144,23 @@ mod tests {
 
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
-		assert_eq!(draw.fur_params, [1.0, 12.0, 0.35, 0.45]);
+		assert_eq!(draw.fur_params, [1.0, 13.0, 0.35, 0.45]);
 		assert_eq!(draw.fur_vector_params, [0.1, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.fur_noise_params, [2.0, 0.25, 0.0, 0.0]);
+		assert_eq!(draw.fur_ext_params, [1.75, 0.6, -0.35, 0.9]);
 	}
 
 	#[test]
 	fn disable_fur_diagnostic_suppresses_fur_shell_draws() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.enabled_factor = 1.0;
-		liltoon_like.fur.layer_count_factor = 8.0;
+		liltoon_like.fur.layer_count_factor = 2.0;
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
-		assert_eq!(material_fur_layer_count(&mat, UnaShadingModel::LilToonLike), 8);
+		assert_eq!(material_fur_layer_count(&mat, UnaShadingModel::LilToonLike), 7);
 		assert!(material_has_fur(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default()));
 		assert!(!material_has_fur(
 			&mat,

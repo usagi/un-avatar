@@ -1014,8 +1014,16 @@ pub struct UnaLilToonLikeFur {
 	pub layer_count_factor: f32,
 	#[serde(default)]
 	pub vector_factor: [f32; 4],
+	#[serde(default = "one_f32")]
+	pub vector_scale_factor: f32,
 	#[serde(default)]
 	pub gravity_factor: f32,
+	#[serde(default)]
+	pub shell_ao_factor: f32,
+	#[serde(default)]
+	pub root_offset_factor: f32,
+	#[serde(default = "default_liltoon_fur_cutout_length")]
+	pub cutout_length_factor: f32,
 	#[serde(default)]
 	pub randomize_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1406,7 +1414,11 @@ impl Default for UnaLilToonLikeFur {
 			enabled_factor: 0.0,
 			layer_count_factor: 0.0,
 			vector_factor: [0.0, 0.0, 0.0, 0.0],
+			vector_scale_factor: 1.0,
 			gravity_factor: 0.0,
+			shell_ao_factor: 0.0,
+			root_offset_factor: 0.0,
+			cutout_length_factor: default_liltoon_fur_cutout_length(),
 			randomize_factor: 0.0,
 			noise_tiling_factor: 1.0,
 			noise_offset_factor: 0.0,
@@ -1683,6 +1695,10 @@ fn default_liltoon_alpha_destination_factor() -> f32 {
 
 fn default_liltoon_forward_add_alpha_operation_factor() -> f32 {
 	4.0
+}
+
+fn default_liltoon_fur_cutout_length() -> f32 {
+	0.8
 }
 
 fn default_liltoon_main_texture_hsvg() -> [f32; 4] {
