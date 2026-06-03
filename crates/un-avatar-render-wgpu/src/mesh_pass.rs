@@ -375,7 +375,7 @@ struct MeshDrawTransformGpu {
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
 /// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
 /// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
-/// bit12=lilToon-like source material, bit13=lilToon Gem source material。
+/// bit12=lilToon-like source material, bit13=lilToon Gem source material, bit14=lilToon Refraction source material。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -2764,6 +2764,12 @@ fn mesh_draw_material_gpu(
 	{
 		flags |= 8192;
 	}
+	if liltoon_like
+		.map(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
+		.unwrap_or(false)
+	{
+		flags |= 16384;
+	}
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -3144,16 +3150,31 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let gem_params = liltoon_like
 		.map(|u| {
-			[
-				u.reflection.gem_refraction_strength_factor,
-				u.reflection.gem_chromatic_aberration_factor.max(0.0),
-				u.reflection.gem_particle_loop_factor.max(0.0),
-				u.reflection.gem_vr_parallax_strength_factor,
-			]
+			if u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction {
+				[
+					u.reflection.gem_refraction_strength_factor,
+					u.reflection.refraction_color_from_main_factor.clamp(0.0, 1.0),
+					0.0,
+					1.0,
+				]
+			} else {
+				[
+					u.reflection.gem_refraction_strength_factor,
+					u.reflection.gem_chromatic_aberration_factor.max(0.0),
+					u.reflection.gem_particle_loop_factor.max(0.0),
+					u.reflection.gem_vr_parallax_strength_factor,
+				]
+			}
 		})
 		.unwrap_or([0.5, 0.02, 8.0, 1.0]);
 	let gem_particle_color = liltoon_like
-		.map(|u| u.reflection.gem_particle_color_factor)
+		.map(|u| {
+			if u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction {
+				u.reflection.refraction_color_factor
+			} else {
+				u.reflection.gem_particle_color_factor
+			}
+		})
 		.unwrap_or([4.0, 4.0, 4.0, 1.0]);
 	let specular_toon_params = liltoon_like
 		.map(|u| {
@@ -6387,7 +6408,8 @@ impl SceneMeshes {
 	pub fn needs_screen_refraction(&self) -> bool {
 		self.draws.iter().any(|draw| {
 			draw.material.liltoon_like.as_ref().is_some_and(|u| {
-				u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
+				(u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
+					|| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
 					&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
 			})
 		})
@@ -7211,6 +7233,27 @@ mod tests {
 		assert_ne!(flags & 8192, 0);
 		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
 		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
+	}
+
+	#[test]
+	fn liltoon_refraction_source_flag_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.reflection.gem_refraction_strength_factor = -0.25;
+		liltoon_like.reflection.refraction_color_from_main_factor = 1.0;
+		liltoon_like.reflection.refraction_color_factor = [0.8, 0.9, 1.0, 0.6];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let flags = draw.params[3].to_bits();
+
+		assert_ne!(flags & 4096, 0);
+		assert_ne!(flags & 16384, 0);
+		assert_eq!(draw.gem_params, [-0.25, 1.0, 0.0, 1.0]);
+		assert_eq!(draw.gem_particle_color, [0.8, 0.9, 1.0, 0.6]);
 	}
 
 	#[test]

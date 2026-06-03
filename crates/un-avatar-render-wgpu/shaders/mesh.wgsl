@@ -468,6 +468,7 @@ const MAT_DOUBLE_SIDED: u32 = 512u;
 const MAT_CULL_FRONT: u32 = 2048u;
 const SRC_LILTOON: u32 = 4096u;
 const SRC_LILTOON_GEM: u32 = 8192u;
+const SRC_LILTOON_REFRACTION: u32 = 16384u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -1007,6 +1008,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let dbg = bitcast<u32>(drawu.params.w);
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
+	let is_liltoon_refraction = (dbg & SRC_LILTOON_REFRACTION) != 0u;
 	if use_transparent_prepass {
 		discard_by_liltoon_cull_factor(front_facing, drawu.alpha_ext_params.w);
 	} else {
@@ -1361,6 +1363,21 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, rim_uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
 			let lighting_scalar = clamp(0.35 + 0.65 * max(dot(n, l), 0.0), 0.0, 1.0);
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
+		}
+	}
+	if (is_liltoon_refraction) {
+		let refraction_strength = drawu.gem_params.x;
+		if (abs(refraction_strength) > 0.00001) {
+			let refraction_fresnel = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
+			let base_screen_uv = screen_uv(i.clip);
+			let screen_offset = screen_normal_offset(i.wp, n, base_screen_uv) * refraction_strength * refraction_fresnel * 4.0;
+			var refract_color = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset, vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
+			refract_color = refract_color * drawu.gem_particle_color.rgb;
+			if (drawu.gem_params.y > 0.5) {
+				refract_color = refract_color * base;
+			}
+			lit = mix(refract_color, lit, clamp(out_a, 0.0, 1.0));
+			out_a = 1.0;
 		}
 	}
 	if (is_liltoon) {

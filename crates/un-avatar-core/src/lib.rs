@@ -529,6 +529,7 @@ pub enum UnaLilToonLikeSourceProfile {
 	Unknown,
 	Liltoon,
 	LiltoonGem,
+	LiltoonRefraction,
 	MtoonConverted,
 }
 
@@ -798,6 +799,10 @@ pub struct UnaLilToonLikeReflection {
 	pub gem_refraction_fresnel_power_factor: f32,
 	#[serde(default = "default_liltoon_gem_refraction_strength")]
 	pub gem_refraction_strength_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub refraction_color_factor: [f32; 4],
+	#[serde(default)]
+	pub refraction_color_from_main_factor: f32,
 	#[serde(default = "default_liltoon_gem_chromatic_aberration")]
 	pub gem_chromatic_aberration_factor: f32,
 	#[serde(default = "default_liltoon_gem_particle_loop")]
@@ -1289,6 +1294,8 @@ impl Default for UnaLilToonLikeReflection {
 			gem_env_contrast_factor: 1.0,
 			gem_refraction_fresnel_power_factor: default_liltoon_refraction_fresnel_power(),
 			gem_refraction_strength_factor: default_liltoon_gem_refraction_strength(),
+			refraction_color_factor: [1.0, 1.0, 1.0, 1.0],
+			refraction_color_from_main_factor: 0.0,
 			gem_chromatic_aberration_factor: default_liltoon_gem_chromatic_aberration(),
 			gem_particle_loop_factor: default_liltoon_gem_particle_loop(),
 			gem_particle_color_factor: default_liltoon_gem_particle_color(),

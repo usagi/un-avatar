@@ -2210,6 +2210,9 @@ fn unavatar_material_inferred_alpha_mode(
 	}
 
 	let shader = source_shader.to_ascii_lowercase();
+	if shader.contains("refraction") || shader.contains("liltoonref") {
+		return Some(UnaAlphaMode::Opaque);
+	}
 	if let Some(render_queue) = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue"))) {
 		if render_queue >= 3000 {
 			return Some(UnaAlphaMode::Blend);
@@ -2220,7 +2223,7 @@ fn unavatar_material_inferred_alpha_mode(
 	}
 	if shader.contains("cutout") {
 		Some(UnaAlphaMode::Mask)
-	} else if shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur") {
+	} else if shader.contains("transparent") || shader.contains("fur") {
 		Some(UnaAlphaMode::Blend)
 	} else if shader == "hidden/liltoonoutline" || shader == "hidden/liltoon" {
 		Some(UnaAlphaMode::Opaque)
@@ -2380,9 +2383,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	} else {
 		0.01
 	};
+	let source_shader_lower = source_shader.to_ascii_lowercase();
 	let mut out = UnaLilToonLikeMaterial {
-		source_profile: if source_shader.to_ascii_lowercase().contains("liltoongem") {
+		source_profile: if source_shader_lower.contains("liltoongem") {
 			UnaLilToonLikeSourceProfile::LiltoonGem
+		} else if source_shader_lower.contains("liltoonref") || source_shader_lower.contains("liltoonmultirefraction") {
+			UnaLilToonLikeSourceProfile::LiltoonRefraction
 		} else {
 			UnaLilToonLikeSourceProfile::Liltoon
 		},
@@ -2892,6 +2898,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RefractionStrength") {
 		out.reflection.gem_refraction_strength_factor = value;
+	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_RefractionColor") {
+		out.reflection.refraction_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_RefractionColorFromMain") {
+		out.reflection.refraction_color_from_main_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_GemChromaticAberration") {
 		out.reflection.gem_chromatic_aberration_factor = value.max(0.0);
@@ -4710,6 +4722,11 @@ mod tests {
 			"sourceShader": "lilToon",
 			"renderQueue": 3000
 		});
+		let queue_refraction = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonRef",
+			"renderQueue": 2900
+		});
 		let source_param_blend = serde_json::json!({
 			"family": "liltoon",
 			"sourceShader": "lilToon",
@@ -4780,6 +4797,10 @@ mod tests {
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&queue_transparent), UnaAlphaMode::Opaque, None, true),
 			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&queue_refraction), UnaAlphaMode::Blend, None, true),
+			Some(UnaAlphaMode::Opaque)
 		);
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&source_param_blend), UnaAlphaMode::Opaque, None, true),
@@ -5580,6 +5601,31 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.gem_particle_loop_factor, 6.0);
 		assert_eq!(liltoon_like.reflection.gem_particle_color_factor, [2.0, 3.0, 4.0, 0.5]);
 		assert_eq!(liltoon_like.reflection.gem_vr_parallax_strength_factor, 0.8);
+	}
+
+	#[test]
+	fn imports_liltoon_refraction_source_profile_and_params() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonRef",
+			"floatParams": {
+				"_RefractionFresnelPower": 0.75,
+				"_RefractionStrength": -0.25,
+				"_RefractionColorFromMain": 1.0
+			},
+			"colorParams": {
+				"_RefractionColor": [0.8, 0.9, 1.0, 0.6]
+			},
+			"mtoon": {}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon refraction material");
+
+		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::LiltoonRefraction);
+		assert_eq!(liltoon_like.reflection.gem_refraction_fresnel_power_factor, 0.75);
+		assert_eq!(liltoon_like.reflection.gem_refraction_strength_factor, -0.25);
+		assert_eq!(liltoon_like.reflection.refraction_color_factor, [0.8, 0.9, 1.0, 0.6]);
+		assert_eq!(liltoon_like.reflection.refraction_color_from_main_factor, 1.0);
 	}
 
 	#[test]
