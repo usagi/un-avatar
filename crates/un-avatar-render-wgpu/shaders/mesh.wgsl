@@ -1300,7 +1300,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
 		let perceptual_roughness = max(1.0 - smoothness, 0.02);
 		let roughness = perceptual_roughness * perceptual_roughness;
-		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
+		let cube_tint = drawu.reflection_cube_color.rgb;
 		let gem_reflection_dir = normalize(reflect(-v, n));
 		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
 		let nv_particle = clamp(abs(dot(n, gem_view)), 0.0, 1.0);
