@@ -353,12 +353,13 @@ const MORPH_DELTA_BUFFER_MIN_SIZE: u64 = 16;
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshFrameGpu {
 	view_proj: [[f32; 4]; 4],
+	view: [[f32; 4]; 4],
 	light_dir: [f32; 4],
 	camera_pos: [f32; 4],
 	light_color: [f32; 4],
 	ambient_color: [f32; 4],
 	time_params: [f32; 4],
-	_pad: [[f32; 4]; 7],
+	_pad: [[f32; 4]; 3],
 }
 
 #[repr(C)]
@@ -6025,6 +6026,7 @@ impl SceneMeshes {
 		&mut self,
 		queue: &wgpu::Queue,
 		view_proj: Mat4,
+		view: Mat4,
 		light_dir: Vec4,
 		camera_pos: Vec4,
 		light_color: Vec4,
@@ -6033,12 +6035,13 @@ impl SceneMeshes {
 	) {
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
+			view: view.to_cols_array_2d(),
 			light_dir: light_dir.to_array(),
 			camera_pos: camera_pos.to_array(),
 			light_color: light_color.to_array(),
 			ambient_color: ambient_color.to_array(),
 			time_params: [time_secs, 0.0, 0.0, 0.0],
-			_pad: [[0.0; 4]; 7],
+			_pad: [[0.0; 4]; 3],
 		};
 		if self.frame_uploaded != Some(f) {
 			queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&f));

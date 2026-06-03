@@ -2621,6 +2621,7 @@ impl GpuState {
 			sm.prepare_frame(
 				&self.queue,
 				view_proj,
+				view,
 				light,
 				Vec4::from((cam_pos, 1.0)),
 				directional_light_color,

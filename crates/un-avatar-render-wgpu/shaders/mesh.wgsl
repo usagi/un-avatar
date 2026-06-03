@@ -7,6 +7,7 @@
 
 struct Frame {
 	view_proj: mat4x4<f32>,
+	view: mat4x4<f32>,
 	light_dir: vec4<f32>,
 	camera_pos: vec4<f32>,
 	light_color: vec4<f32>,
@@ -675,6 +676,11 @@ fn screen_normal_offset(world_pos: vec3<f32>, normal: vec3<f32>, base_uv: vec2<f
 	let fallback = vec2<f32>(normal.x, -normal.y) * 0.02;
 	let use_fallback = length(projected) < 0.000001 || !all(projected == projected);
 	return clamp(select(projected, fallback, use_fallback), vec2<f32>(-0.08), vec2<f32>(0.08));
+}
+
+fn liltoon_refraction_offset(normal: vec3<f32>) -> vec2<f32> {
+	let view_normal = normalize((frame.view * vec4<f32>(normalize(normal), 0.0)).xyz);
+	return vec2<f32>(view_normal.x, -view_normal.y);
 }
 
 fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -1368,9 +1374,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	if (is_liltoon_refraction) {
 		let refraction_strength = drawu.gem_params.x;
 		if (abs(refraction_strength) > 0.00001) {
-			let refraction_fresnel = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
+			let refraction_fresnel = pow(clamp(1.0 - max(dot(n, v), 0.0), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
 			let base_screen_uv = screen_uv(i.clip);
-			let screen_offset = screen_normal_offset(i.wp, n, base_screen_uv) * refraction_strength * refraction_fresnel * 4.0;
+			let screen_offset = liltoon_refraction_offset(n) * refraction_strength * refraction_fresnel;
 			var refract_color = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset, vec2<f32>(0.0), vec2<f32>(1.0))).rgb;
 			refract_color = refract_color * drawu.gem_particle_color.rgb;
 			if (drawu.gem_params.y > 0.5) {
