@@ -818,6 +818,12 @@ fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
 	material_uses_liltoon_gem_prepass(&draw.material)
 }
 
+fn liltoon_reflection_texture_index(liltoon_like: &un_avatar_core::UnaLilToonLikeMaterial) -> Option<usize> {
+	let use_source_cube = liltoon_like.reflection.cube_override_factor > 0.5
+		|| liltoon_like.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
+	use_source_cube.then_some(liltoon_like.reflection.cube_texture_index).flatten()
+}
+
 fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
 	alpha_mode == UnaAlphaMode::Blend
 		&& transparent_with_z_write
@@ -5468,9 +5474,7 @@ impl SceneMeshes {
 					.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
 				let backlight_color_view = texture_view_or(&image_views, backlight_color_texture_index, &white_view);
 				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
-					(liltoon_like.reflection.cube_override_factor > 0.5)
-						.then_some(liltoon_like.reflection.cube_texture_index)
-						.flatten()
+					liltoon_reflection_texture_index(liltoon_like)
 				} else {
 					mtoon.reflection_cube_texture_index
 				};
@@ -7367,6 +7371,24 @@ mod tests {
 			..Default::default()
 		};
 		assert!(!material_uses_liltoon_gem_prepass(&non_gem));
+	}
+
+	#[test]
+	fn liltoon_gem_uses_exported_cube_without_override() {
+		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
+			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			..Default::default()
+		};
+		gem.reflection.cube_texture_index = Some(42);
+		gem.reflection.cube_override_factor = 0.0;
+		assert_eq!(liltoon_reflection_texture_index(&gem), Some(42));
+
+		let mut normal = gem.clone();
+		normal.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::Liltoon;
+		assert_eq!(liltoon_reflection_texture_index(&normal), None);
+
+		normal.reflection.cube_override_factor = 1.0;
+		assert_eq!(liltoon_reflection_texture_index(&normal), Some(42));
 	}
 
 	#[test]
