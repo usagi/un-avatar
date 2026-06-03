@@ -376,7 +376,8 @@ struct MeshDrawTransformGpu {
 /// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
 /// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
 /// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
-/// bit12=lilToon-like source material, bit13=lilToon Gem source material, bit14=lilToon Refraction source material。
+/// bit12=lilToon-like source material, bit13=lilToon Gem source material, bit14=lilToon Refraction source material,
+/// bit15=lilToon color blend is additive (`SrcBlend=One`, `DstBlend=One`)。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -2783,6 +2784,9 @@ fn mesh_draw_material_gpu(
 		.unwrap_or(false)
 	{
 		flags |= 16384;
+	}
+	if liltoon_uses_additive_color_blend(mat) {
+		flags |= 32768;
 	}
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
@@ -7239,6 +7243,7 @@ mod tests {
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & 4096, 0);
+		assert_eq!(flags & 32768, 0);
 	}
 
 	#[test]
@@ -7250,6 +7255,7 @@ mod tests {
 		liltoon_like.reflection.gem_particle_loop_factor = 6.0;
 		liltoon_like.reflection.gem_vr_parallax_strength_factor = 0.8;
 		liltoon_like.reflection.gem_particle_color_factor = [2.0, 3.0, 4.0, 0.5];
+		liltoon_like.blend_state.destination_factor = 1.0;
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -7260,6 +7266,7 @@ mod tests {
 
 		assert_ne!(flags & 4096, 0);
 		assert_ne!(flags & 8192, 0);
+		assert_ne!(flags & 32768, 0);
 		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
 		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
 	}

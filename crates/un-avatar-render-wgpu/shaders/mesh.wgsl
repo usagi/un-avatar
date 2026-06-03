@@ -470,6 +470,7 @@ const MAT_CULL_FRONT: u32 = 2048u;
 const SRC_LILTOON: u32 = 4096u;
 const SRC_LILTOON_GEM: u32 = 8192u;
 const SRC_LILTOON_REFRACTION: u32 = 16384u;
+const SRC_LILTOON_ADDITIVE_BLEND: u32 = 32768u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -1015,6 +1016,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
 	let is_liltoon_refraction = (dbg & SRC_LILTOON_REFRACTION) != 0u;
+	let is_liltoon_additive_blend = (dbg & SRC_LILTOON_ADDITIVE_BLEND) != 0u;
 	if use_transparent_prepass {
 		discard_by_liltoon_cull_factor(front_facing, drawu.alpha_ext_params.w);
 	} else {
@@ -1072,7 +1074,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
-		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
+		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u || is_fur_pass);
 	let geometry_n_faced = face_normal(normalize(i.wn), front_facing, dbg);
@@ -1203,7 +1205,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
 			lit = lit + clamp(fur_shell, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
 		}
-		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
+		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
 	}
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var specular_blend = vec3<f32>(0.0, 0.0, 0.0);
@@ -1577,7 +1579,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lit + emission_raw;
 		}
 	}
-	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre), out_a);
+	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
 }
 
 @fragment
