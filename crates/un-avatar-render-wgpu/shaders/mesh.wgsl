@@ -1409,7 +1409,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		if (is_liltoon_gem) {
 			let refraction_strength = drawu.gem_params.x;
 			if (abs(refraction_strength) > 0.00001) {
-				let refraction_fresnel = pow(clamp(1.0 - abs(dot(reflection_n, gem_view)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
+				let refraction_fresnel = pow(clamp(1.0 - abs(dot(reflection_n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
 				let base_screen_uv = screen_uv(i.clip);
 				let screen_offset = liltoon_refraction_offset(reflection_n) * refraction_fresnel;
 				let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
