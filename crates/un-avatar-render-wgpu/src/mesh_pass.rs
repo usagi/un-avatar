@@ -6333,6 +6333,12 @@ impl SceneMeshes {
 			return;
 		}
 		let mut state = DrawBindState::default();
+		self.draw_transparent_backpass(pass, &mut state);
+		self.draw_blended_batches_from(pass, &mut state, None);
+		self.draw_fur_blended(pass, &mut state);
+	}
+
+	fn draw_transparent_backpass(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.transparent_backpass_draw_indices.is_empty() {
 			let mut backpass_zwrite = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
@@ -6348,40 +6354,92 @@ impl SceneMeshes {
 						&self.pipeline_transparent_toon_backpass_no_zwrite
 					});
 					backpass_zwrite = Some(zwrite);
-					state = DrawBindState::default();
+					*state = DrawBindState::default();
 				}
-				self.draw_inner(pass, &mut state, draw_index);
+				self.draw_inner(pass, state, draw_index);
 			}
 		}
-		for batch in &self.blended_batches {
+	}
+
+	fn first_screen_refraction_blended_draw(&self) -> Option<(usize, usize)> {
+		for (batch_index, batch) in self.blended_batches.iter().enumerate() {
+			for (draw_pos, &draw_index) in batch.draw_indices.iter().enumerate() {
+				if draw_uses_screen_refraction_grab(&self.draws[draw_index]) {
+					return Some((batch_index, draw_pos));
+				}
+			}
+		}
+		None
+	}
+
+	fn draw_blended_batches_until(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, end: Option<(usize, usize)>) {
+		let Some((end_batch, end_pos)) = end else {
+			self.draw_blended_batches_from(pass, state, None);
+			return;
+		};
+		for (batch_index, batch) in self.blended_batches.iter().enumerate() {
+			if batch_index > end_batch {
+				break;
+			}
 			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
-			for &draw_index in &batch.draw_indices {
-				self.draw_inner(pass, &mut state, draw_index);
+			let len = if batch_index == end_batch {
+				end_pos
+			} else {
+				batch.draw_indices.len()
+			};
+			for &draw_index in batch.draw_indices.iter().take(len) {
+				self.draw_inner(pass, state, draw_index);
 			}
 		}
+	}
+
+	fn draw_blended_batches_from(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, start: Option<(usize, usize)>) {
+		let (start_batch, start_pos) = start.unwrap_or((0, 0));
+		for (batch_index, batch) in self.blended_batches.iter().enumerate().skip(start_batch) {
+			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			let skip = if batch_index == start_batch { start_pos } else { 0 };
+			for &draw_index in batch.draw_indices.iter().skip(skip) {
+				self.draw_inner(pass, state, draw_index);
+			}
+		}
+	}
+
+	fn draw_fur_blended(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.fur_draw_indices.is_empty() {
-			state = DrawBindState::default();
+			*state = DrawBindState::default();
 			pass.set_pipeline(&self.pipeline_csfc_fur_pre_toon);
 			for &draw_index in &self.fur_draw_indices {
-				let _ = self.draw_csfc_fur_inner(pass, &mut state, draw_index);
+				let _ = self.draw_csfc_fur_inner(pass, state, draw_index);
 			}
-			state = DrawBindState::default();
+			*state = DrawBindState::default();
 			pass.set_pipeline(&self.pipeline_csfc_fur_toon);
 			for &draw_index in &self.fur_draw_indices {
-				if self.draw_csfc_fur_inner(pass, &mut state, draw_index) {
+				if self.draw_csfc_fur_inner(pass, state, draw_index) {
 					continue;
 				}
 			}
 			pass.set_pipeline(&self.pipeline_fur_toon);
-			state = DrawBindState::default();
+			*state = DrawBindState::default();
 			for &draw_index in &self.fur_draw_indices {
 				if self.draws[draw_index]._csfc_fur.is_some() {
 					continue;
 				}
 				let layer_count = draw_fur_layer_count(&self.draws[draw_index]);
-				self.draw_inner_with_material_instances(pass, &mut state, draw_index, &self.draws[draw_index].bind_material, layer_count);
+				self.draw_inner_with_material_instances(pass, state, draw_index, &self.draws[draw_index].bind_material, layer_count);
 			}
 		}
+	}
+
+	pub fn draw_blended_before_screen_refraction(&self, pass: &mut wgpu::RenderPass<'_>) {
+		let mut state = DrawBindState::default();
+		self.draw_transparent_backpass(pass, &mut state);
+		self.draw_blended_batches_until(pass, &mut state, self.first_screen_refraction_blended_draw());
+	}
+
+	pub fn draw_blended_after_screen_refraction(&self, pass: &mut wgpu::RenderPass<'_>) {
+		let mut state = DrawBindState::default();
+		self.draw_blended_batches_from(pass, &mut state, self.first_screen_refraction_blended_draw());
+		self.draw_fur_blended(pass, &mut state);
 	}
 
 	pub fn update_draw_transforms(

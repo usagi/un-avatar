@@ -1839,6 +1839,7 @@ impl GpuState {
 					self.draw_contact_shadow(&mut pass);
 				}
 				sm.draw_toon_outlines(&mut pass);
+				sm.draw_blended_before_screen_refraction(&mut pass);
 			}
 			drop(pass);
 
@@ -1889,7 +1890,7 @@ impl GpuState {
 				multiview_mask: None,
 			});
 			if let Some(sm) = &self.scene_meshes {
-				sm.draw_blended(&mut pass);
+				sm.draw_blended_after_screen_refraction(&mut pass);
 			}
 			if self.show_axes {
 				pass.set_pipeline(&self.axes_pipeline);
@@ -2997,6 +2998,7 @@ impl GpuState {
 					self.draw_contact_shadow(&mut pass);
 				}
 				sm.draw_toon_outlines(&mut pass);
+				sm.draw_blended_before_screen_refraction(&mut pass);
 			}
 			drop(pass);
 
@@ -3047,7 +3049,7 @@ impl GpuState {
 				multiview_mask: None,
 			});
 			if let Some(sm) = &self.scene_meshes {
-				sm.draw_blended(&mut pass);
+				sm.draw_blended_after_screen_refraction(&mut pass);
 			}
 			if self.show_axes {
 				pass.set_pipeline(&self.axes_pipeline);
