@@ -760,6 +760,11 @@ fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
 	return mix(specular, vec3<f32>(grazing_term), f);
 }
 
+fn lil_reflection_mip(perceptual_roughness: f32) -> f32 {
+	let p = clamp(perceptual_roughness, 0.0, 1.0);
+	return p * (10.2 - 4.2 * p);
+}
+
 fn fresnel_term(f0: vec3<f32>, cos_a: f32) -> vec3<f32> {
 	let a = 1.0 - clamp(cos_a, 0.0, 1.0);
 	return f0 + (vec3<f32>(1.0) - f0) * a * a * a * a * a;
@@ -1300,7 +1305,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
-		let reflection_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
+		let reflection_lod = lil_reflection_mip(perceptual_roughness);
 		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_dir, reflection_lod).rgb * cube_tint * reflection_lighting;
 		authored_reflection_env = env;
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
@@ -1320,7 +1325,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
 		let gem_reflection_dir = normalize(reflect(-v, n));
-		let gem_env_lod = clamp(perceptual_roughness * 5.0, 0.0, 8.0);
+		let gem_env_lod = lil_reflection_mip(perceptual_roughness);
 		let nv_particle = clamp(abs(dot(n, gem_view)), 0.0, 1.0);
 		let nv_view = clamp(abs(dot(n, v)), 0.0, 1.0);
 		let inv_nv = 1.0 - nv_particle;
@@ -1358,6 +1363,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);
 	var rim_blend = 0.0;
+	let lil_effect_shadowmix = select(shading, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);
 	if (!disable_rim) {
 		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
 		if (is_liltoon && drawu.rim_control.x > 0.0) {
@@ -1369,7 +1375,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let rim_factor = lil_tooning_scale(rim_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
 			let lit_rim_color = mix(rim_color, rim_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
-			let rim_shadow = mix(1.0, shading, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
+			let rim_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
 			let rim_backface = lil_backface_visibility(drawu.rim_ext_params.z, front_facing);
 			let rim_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.z, 0.0, 1.0), 0.0, is_liltoon_refraction));
 			let rim_direct_blend = clamp(rim_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
@@ -1457,7 +1463,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
 				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
-				let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
+				let matcap_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
 				let matcap_backface = lil_backface_visibility(drawu.matcap_ext_params.w, front_facing);
 				let matcap_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.x, 0.0, 1.0), 0.0, is_liltoon_refraction));
 				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
@@ -1473,7 +1479,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
 				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
 				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
-				let matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
+				let matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
 				let matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);
 				let matcap2_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.y, 0.0, 1.0), 0.0, is_liltoon_refraction));
 				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
