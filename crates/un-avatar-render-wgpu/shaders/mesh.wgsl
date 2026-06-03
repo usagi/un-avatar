@@ -1404,15 +1404,15 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let reflection_light_tint = reflection_tint * frame.light_color.rgb * frame.light_color.w;
 		lit = lil_blend_color3(lit, reflection_light_tint, specular_blend * reflection_color_alpha * drawu.reflection_control.y, drawu.reflection_control.w);
 		if (is_liltoon_gem) {
-			let refraction_strength = abs(drawu.gem_params.x);
-			if (refraction_strength > 0.00001) {
+			let refraction_strength = drawu.gem_params.x;
+			if (abs(refraction_strength) > 0.00001) {
 				let refraction_fresnel = pow(clamp(1.0 - abs(dot(reflection_n, gem_view)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
 				let base_screen_uv = screen_uv(i.clip);
-				let screen_offset = screen_normal_offset(i.wp, reflection_n, base_screen_uv) * refraction_strength * refraction_fresnel * 4.0;
-				let chroma_offset = screen_offset * clamp(drawu.gem_params.y, 0.0, 1.0);
-				let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset - chroma_offset, vec2<f32>(0.0), vec2<f32>(1.0))).r;
-				let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset, vec2<f32>(0.0), vec2<f32>(1.0))).g;
-				let refract_b = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset + chroma_offset, vec2<f32>(0.0), vec2<f32>(1.0))).b;
+				let screen_offset = liltoon_refraction_offset(reflection_n) * refraction_fresnel;
+				let chroma = clamp(drawu.gem_params.y, 0.0, 1.0);
+				let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * refraction_strength, vec2<f32>(0.0), vec2<f32>(1.0))).r;
+				let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma), vec2<f32>(0.0), vec2<f32>(1.0))).g;
+				let refract_b = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma * 2.0), vec2<f32>(0.0), vec2<f32>(1.0))).b;
 				let contrast = max(drawu.reflection_ext_params.y, 0.0001);
 				var refract_color = pow(clamp(vec3<f32>(refract_r, refract_g, refract_b), vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(contrast)) * contrast;
 				let refract_luma = dot(refract_color, vec3<f32>(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0));
