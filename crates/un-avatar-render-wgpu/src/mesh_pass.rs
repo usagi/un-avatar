@@ -448,6 +448,8 @@ struct MeshDrawMaterialGpu {
 	fur_vector_params: [f32; 4],
 	fur_noise_params: [f32; 4],
 	fur_ext_params: [f32; 4],
+	fur_rim_color: [f32; 4],
+	fur_rim_params: [f32; 4],
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
@@ -495,7 +497,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1664);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1696);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -507,9 +509,10 @@ struct Vertex {
 	uv: [f32; 2],
 	joints: [u16; 4],
 	weights: [f32; 4],
+	color: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<Vertex>() == 72);
+const _: () = assert!(std::mem::size_of::<Vertex>() == 88);
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct TextureUploadSummary {
@@ -689,6 +692,7 @@ struct MeshDraw {
 
 #[allow(dead_code)]
 struct CsfcDrawResources {
+	params: CsfcGenerateParamsGpu,
 	params_buffer: wgpu::Buffer,
 	source_vertex_buffer: wgpu::Buffer,
 	card_source_buffer: wgpu::Buffer,
@@ -972,6 +976,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 	let normals = buf.normals.as_deref();
 	let tangents = buf.tangents.as_deref();
 	let uvs = buf.tex_coords_0.as_deref();
+	let colors = buf.colors_0.as_deref();
 	let joints_buf = buf.joints.as_deref();
 	let weights_buf = buf.weights.as_deref();
 	let j_default = [0u16; 4];
@@ -1011,6 +1016,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 		}
 		let uv = uvs.and_then(|uu| uu.get(pi)).copied().unwrap_or([0.0, 0.0]);
 		let tangent = tangents.and_then(|tt| tt.get(pi)).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
+		let color = colors.and_then(|cc| cc.get(pi)).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
 		let jo = joints_buf.and_then(|jj| jj.get(pi)).copied().unwrap_or(j_default);
 		let we = weights_buf.and_then(|ww| ww.get(pi)).copied().unwrap_or(w_default);
 		let n = Vec3::from_array(n)
@@ -1024,6 +1030,7 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 			uv,
 			joints: jo,
 			weights: we,
+			color,
 		});
 		for (target, bucket) in buf.morph_targets.iter().zip(morph_push.iter_mut()) {
 			let d = target.position_deltas.get(pi).copied().unwrap_or([0.0, 0.0, 0.0]);
@@ -2023,6 +2030,7 @@ struct CsfcSourceVertexGpu {
 	normal: [f32; 4],
 	tangent: [f32; 4],
 	uv: [f32; 4],
+	color: [f32; 4],
 	joints: [u32; 4],
 	weights: [f32; 4],
 }
@@ -2058,12 +2066,17 @@ struct CsfcGenerateParamsGpu {
 	cards_per_triangle: u32,
 	_seed: u32,
 	randomize: f32,
-	_pad1: u32,
+	feature_flags: u32,
 	fur_length: f32,
 	card_width: f32,
 	root_offset: f32,
 	gravity: f32,
+	cutout_length: f32,
+	_pad2: [u32; 3],
 	direction: [f32; 4],
+	main_uv: [f32; 4],
+	model: [[f32; 4]; 4],
+	inv_model: [[f32; 4]; 4],
 }
 
 #[repr(C)]
@@ -2077,13 +2090,17 @@ struct CsfcGeneratedVertexGpu {
 	fur_alpha: f32,
 	_seed: u32,
 	root_position: [f32; 4],
+	pre_position: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CsfcSourceVertexGpu>() == 96);
+const _: () = assert!(std::mem::size_of::<CsfcSourceVertexGpu>() == 112);
 const _: () = assert!(std::mem::size_of::<CsfcSourceTriangleGpu>() == 16);
 const _: () = assert!(std::mem::size_of::<CsfcCardSourceGpu>() == 32);
-const _: () = assert!(std::mem::size_of::<CsfcGenerateParamsGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<CsfcGeneratedVertexGpu>() == 64);
+const _: () = assert!(std::mem::size_of::<CsfcGenerateParamsGpu>() == 224);
+const _: () = assert!(std::mem::size_of::<CsfcGeneratedVertexGpu>() == 80);
+
+const CSFC_FEATURE_FUR_VECTOR_TEX: u32 = 1;
+const CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2;
 
 #[allow(dead_code)]
 fn csfc_mode_density(layer_num: f32, mode: CsfcExpressionMode) -> f32 {
@@ -2194,6 +2211,7 @@ fn csfc_source_vertex_from_vertex(vertex: Vertex) -> CsfcSourceVertexGpu {
 		normal: [vertex.norm[0], vertex.norm[1], vertex.norm[2], 0.0],
 		tangent: vertex.tangent,
 		uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
+		color: vertex.color,
 		joints: [
 			vertex.joints[0] as u32,
 			vertex.joints[1] as u32,
@@ -2257,6 +2275,7 @@ fn csfc_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -
 			vertex.tangent[3],
 		],
 		uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
+		color: vertex.color,
 		joints: [
 			vertex.joints[0] as u32,
 			vertex.joints[1] as u32,
@@ -2480,14 +2499,35 @@ fn csfc_generate_params_from_material(
 		cards_per_triangle,
 		_seed: 0,
 		randomize: fur.map(|f| f.randomize_factor.clamp(0.0, 1.0)).unwrap_or(0.0),
-		_pad1: 0,
+		feature_flags: fur
+			.map(|f| {
+				let mut flags = 0;
+				if f.vector_texture_index.is_some() {
+					flags |= CSFC_FEATURE_FUR_VECTOR_TEX;
+				}
+				if f.vertex_color_to_vector_factor > 0.5 {
+					flags |= CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR;
+				}
+				flags
+			})
+			.unwrap_or(0),
 		fur_length,
 		card_width: (fur_length * 0.14).max(0.0012),
 		root_offset: fur
 			.map(|f| (-f.root_offset_factor.clamp(-1.0, 0.0) * fur_length).max(fur_length * 0.05))
 			.unwrap_or(fur_length * 0.05),
 		gravity: fur.map(|f| f.gravity_factor).unwrap_or(0.0),
+		cutout_length: fur.map(|f| f.cutout_length_factor.max(0.0)).unwrap_or(0.8),
+		_pad2: [0; 3],
 		direction: [vector[0], vector[1], vector[2], fur.map(|f| f.vector_scale_factor).unwrap_or(1.0)],
+		main_uv: [
+			material.uv_offset_scale[2],
+			material.uv_offset_scale[3],
+			material.uv_offset_scale[0],
+			material.uv_offset_scale[1],
+		],
+		model: Mat4::IDENTITY.to_cols_array_2d(),
+		inv_model: Mat4::IDENTITY.to_cols_array_2d(),
 	}
 }
 
@@ -2593,6 +2633,7 @@ fn create_csfc_draw_resources(
 	});
 
 	Some(CsfcDrawResources {
+		params,
 		params_buffer,
 		source_vertex_buffer,
 		card_source_buffer,
@@ -3161,6 +3202,17 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.8]);
+	let fur_rim_color = liltoon_like.map(|u| u.fur.rim_color_factor).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let fur_rim_params = liltoon_like
+		.map(|u| {
+			[
+				u.fur.rim_fresnel_power_factor.clamp(0.01, 50.0),
+				u.fur.rim_anti_light_factor.clamp(0.0, 1.0),
+				if u.fur.vector_texture_index.is_some() { 1.0 } else { 0.0 },
+				u.fur.vertex_color_to_vector_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([3.0, 0.5, 0.0, 0.0]);
 	let alpha_ext_params = liltoon_like
 		.map(|u| {
 			[
@@ -3452,6 +3504,8 @@ fn mesh_draw_material_gpu(
 		fur_vector_params,
 		fur_noise_params,
 		fur_ext_params,
+		fur_rim_color,
+		fur_rim_params,
 		alpha_ext_params,
 		lighting_ext_params,
 		transparency_params,
@@ -4293,7 +4347,7 @@ impl SceneMeshes {
 			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
 		});
 
-		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
+		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 7] = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -4324,13 +4378,18 @@ impl SceneMeshes {
 				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
+			wgpu::VertexAttribute {
+				offset: 72,
+				shader_location: 6,
+				format: wgpu::VertexFormat::Float32x4,
+			},
 		];
 		let vb_layout = wgpu::VertexBufferLayout {
 			array_stride: std::mem::size_of::<Vertex>() as u64,
 			step_mode: wgpu::VertexStepMode::Vertex,
 			attributes: &MESH_VTX_ATTRS,
 		};
-		const CSFC_FUR_VTX_ATTRS: [wgpu::VertexAttribute; 5] = [
+		const CSFC_FUR_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -4354,6 +4413,11 @@ impl SceneMeshes {
 			wgpu::VertexAttribute {
 				offset: 48,
 				shader_location: 4,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
 		];
@@ -6253,6 +6317,15 @@ impl SceneMeshes {
 				queue.write_buffer(&d.draw_transform, 0, bytemuck::bytes_of(&transform));
 				d.draw_transform_uploaded = Some(transform);
 			}
+			if let Some(csfc) = d._csfc_fur.as_mut() {
+				let model = mesh_world.to_cols_array_2d();
+				let inv_model = mesh_world.inverse().to_cols_array_2d();
+				if csfc.params.model != model || csfc.params.inv_model != inv_model {
+					csfc.params.model = model;
+					csfc.params.inv_model = inv_model;
+					queue.write_buffer(&csfc.params_buffer, 0, bytemuck::bytes_of(&csfc.params));
+				}
+			}
 		}
 	}
 
@@ -6567,6 +6640,11 @@ mod tests {
 				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
+			wgpu::VertexAttribute {
+				offset: 72,
+				shader_location: 6,
+				format: wgpu::VertexFormat::Float32x4,
+			},
 		];
 		let vb_layout = wgpu::VertexBufferLayout {
 			array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -6597,6 +6675,11 @@ mod tests {
 			wgpu::VertexAttribute {
 				offset: 48,
 				shader_location: 4,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
 		];
@@ -6835,6 +6918,7 @@ mod tests {
 			normals: Some(vec![[0.0, 1.0, 0.0]]),
 			tangents: None,
 			tex_coords_0: None,
+			colors_0: None,
 			joints: None,
 			weights: None,
 			indices: None,
@@ -7228,6 +7312,7 @@ mod tests {
 				uv: [0.25, 0.5],
 				joints: [1, 2, 3, 4],
 				weights: [0.1, 0.2, 0.3, 0.4],
+				color: [0.2, 0.4, 0.6, 1.0],
 			},
 			Vertex {
 				pos: [4.0, 5.0, 6.0],
@@ -7236,6 +7321,7 @@ mod tests {
 				uv: [0.75, 0.125],
 				joints: [5, 6, 7, 8],
 				weights: [0.4, 0.3, 0.2, 0.1],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [7.0, 8.0, 9.0],
@@ -7244,6 +7330,7 @@ mod tests {
 				uv: [1.0, 0.0],
 				joints: [9, 10, 11, 12],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
 
@@ -7251,6 +7338,7 @@ mod tests {
 		assert_eq!(source_vertices.len(), 3);
 		assert_eq!(source_vertices[0].position, [1.0, 2.0, 3.0, 1.0]);
 		assert_eq!(source_vertices[0].uv, [0.25, 0.5, 0.0, 0.0]);
+		assert_eq!(source_vertices[0].color, [0.2, 0.4, 0.6, 1.0]);
 		assert_eq!(source_vertices[0].joints, [1, 2, 3, 4]);
 
 		let source_triangles = csfc_source_triangles_from_indices(&[0, 1, 2, 0, 2, 9, 2, 1, 0], verts.len());
@@ -7277,6 +7365,7 @@ mod tests {
 			uv: [0.25, 0.5],
 			joints: [0, 1, 0, 0],
 			weights: [0.25, 0.75, 0.0, 0.0],
+			color: [0.25, 0.5, 0.75, 1.0],
 		}];
 		let mut palette = Vec::new();
 		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
@@ -7290,6 +7379,7 @@ mod tests {
 		assert!((source_vertices[0].position[2] - 3.0).abs() < 0.00001);
 		assert_eq!(source_vertices[0].normal, [0.0, 1.0, 0.0, 0.0]);
 		assert_eq!(source_vertices[0].tangent, [1.0, 0.0, 0.0, -1.0]);
+		assert_eq!(source_vertices[0].color, [0.25, 0.5, 0.75, 1.0]);
 	}
 
 	#[test]
@@ -7302,6 +7392,7 @@ mod tests {
 				uv: [0.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.05, 0.0, 0.0],
@@ -7310,6 +7401,7 @@ mod tests {
 				uv: [1.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.0, 0.05, 0.0],
@@ -7318,6 +7410,7 @@ mod tests {
 				uv: [0.0, 1.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.2, 0.0, 0.0],
@@ -7326,6 +7419,7 @@ mod tests {
 				uv: [4.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.0, 0.2, 0.0],
@@ -7334,6 +7428,7 @@ mod tests {
 				uv: [0.0, 4.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
 		let triangles = csfc_source_triangles_from_indices(&[0, 1, 2, 0, 3, 4], verts.len());
@@ -7374,6 +7469,7 @@ mod tests {
 				uv: [0.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.1, 0.0, 0.0],
@@ -7382,6 +7478,7 @@ mod tests {
 				uv: [1.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 			Vertex {
 				pos: [0.0, 0.1, 0.0],
@@ -7390,6 +7487,7 @@ mod tests {
 				uv: [0.0, 1.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
+				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
 		let triangles = csfc_source_triangles_from_indices(&[0, 1, 2], verts.len());
@@ -7443,7 +7541,11 @@ mod tests {
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.1];
 		liltoon_like.fur.root_offset_factor = -0.4;
 		liltoon_like.fur.vector_scale_factor = 1.5;
+		liltoon_like.fur.vector_texture_index = Some(17);
+		liltoon_like.fur.vertex_color_to_vector_factor = 1.0;
+		liltoon_like.fur.cutout_length_factor = 0.4;
 		let mat = UnaMaterialPbr {
+			uv_offset_scale: [0.25, -0.5, 2.0, 3.0],
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -7454,6 +7556,15 @@ mod tests {
 		assert!((params.root_offset - 0.04).abs() < 0.00001);
 		assert!((params.card_width - 0.014).abs() < 0.00001);
 		assert_eq!(params.direction[3], 1.5);
+		assert_eq!(params.feature_flags & CSFC_FEATURE_FUR_VECTOR_TEX, CSFC_FEATURE_FUR_VECTOR_TEX);
+		assert_eq!(
+			params.feature_flags & CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR,
+			CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR
+		);
+		assert_eq!(params.main_uv, [2.0, 3.0, 0.25, -0.5]);
+		assert_eq!(params.model, Mat4::IDENTITY.to_cols_array_2d());
+		assert_eq!(params.inv_model, Mat4::IDENTITY.to_cols_array_2d());
+		assert_eq!(params.cutout_length, 0.4);
 	}
 
 	#[test]
@@ -7478,6 +7589,11 @@ mod tests {
 		liltoon_like.fur.randomize_factor = 0.45;
 		liltoon_like.fur.noise_tiling_factor = 2.0;
 		liltoon_like.fur.noise_offset_factor = 0.25;
+		liltoon_like.fur.rim_color_factor = [0.2, 0.3, 0.4, 0.5];
+		liltoon_like.fur.rim_fresnel_power_factor = 4.5;
+		liltoon_like.fur.rim_anti_light_factor = 0.75;
+		liltoon_like.fur.vector_texture_index = Some(9);
+		liltoon_like.fur.vertex_color_to_vector_factor = 1.0;
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -7489,6 +7605,8 @@ mod tests {
 		assert_eq!(draw.fur_vector_params, [0.1, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.fur_noise_params, [2.0, 2.0, 0.25, 0.25]);
 		assert_eq!(draw.fur_ext_params, [1.75, 0.6, -0.35, 0.9]);
+		assert_eq!(draw.fur_rim_color, [0.2, 0.3, 0.4, 0.5]);
+		assert_eq!(draw.fur_rim_params, [4.5, 0.75, 1.0, 1.0]);
 	}
 
 	#[test]

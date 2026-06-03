@@ -3266,6 +3266,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_vector_param(extras, "_FurVector") {
 		out.fur.vector_factor = value;
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_VertexColor2FurVector") {
+		out.fur.vertex_color_to_vector_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_FurVectorScale") {
 		out.fur.vector_scale_factor = value;
 	}
@@ -3289,6 +3292,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_FurNoiseOffset") {
 		out.fur.noise_offset_factor = value;
+	}
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_FurRimColor") {
+		out.fur.rim_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurRimFresnelPower") {
+		out.fur.rim_fresnel_power_factor = value.clamp(0.01, 50.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_FurRimAntiLight") {
+		out.fur.rim_anti_light_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furVectorTextureIndex").or_else(|| m.get("fur_vector_texture_index")))) {
 		out.fur.vector_texture_index = Some(value);
@@ -3766,6 +3778,7 @@ fn read_primitive(
 	let normals = reader.read_normals().map(|it| it.collect());
 	let tangents = reader.read_tangents().map(|it| it.collect());
 	let tex_coords_0 = reader.read_tex_coords(0).map(|tc| tc.into_f32().collect());
+	let colors_0 = reader.read_colors(0).map(|colors| colors.into_rgba_f32().collect());
 	let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
 	let material_index = prim.material().index();
 	let (joints, weights) = joints_weights;
@@ -3826,6 +3839,7 @@ fn read_primitive(
 		normals,
 		tangents,
 		tex_coords_0,
+		colors_0,
 		joints,
 		weights,
 		indices,
@@ -5087,6 +5101,7 @@ mod tests {
 					"_AlphaMaskValue": 0.1,
 					"_UseFur": 1.0,
 					"_FurLayerNum": 3.0,
+					"_VertexColor2FurVector": 1.0,
 					"_FurVectorScale": 1.75,
 					"_FurGravity": 0.35,
 					"_FurAO": 0.6,
@@ -5095,6 +5110,8 @@ mod tests {
 					"_FurRandomize": 0.45,
 					"_FurNoiseTiling": 2.0,
 					"_FurNoiseOffset": 0.25,
+					"_FurRimFresnelPower": 4.5,
+					"_FurRimAntiLight": 0.75,
 					"_SrcBlend": 1.0,
 					"_DstBlend": 10.0,
 					"_BlendOp": 0.0,
@@ -5138,6 +5155,7 @@ mod tests {
 					"_RimColor": [0.1, 0.2, 0.3, 1.0],
 					"_RimIndirColor": [0.4, 0.5, 0.6, 0.7],
 					"_RimShadeColor": [0.6, 0.5, 0.4, 0.7],
+					"_FurRimColor": [0.21, 0.31, 0.41, 0.51],
 					"_BacklightColor": [1.1, 1.2, 1.3, 0.8],
 					"_EmissionColor": [0.5, 0.4, 0.3, 0.8],
 					"_Emission2ndColor": [0.15, 0.25, 0.35, 0.45],
@@ -5404,6 +5422,7 @@ mod tests {
 		assert_eq!(liltoon_like.fur.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.fur.layer_count_factor, 3.0);
 		assert_eq!(liltoon_like.fur.vector_factor, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.fur.vertex_color_to_vector_factor, 1.0);
 		assert_eq!(liltoon_like.fur.vector_scale_factor, 1.75);
 		assert_eq!(liltoon_like.fur.gravity_factor, 0.35);
 		assert_eq!(liltoon_like.fur.shell_ao_factor, 0.6);
@@ -5412,6 +5431,9 @@ mod tests {
 		assert_eq!(liltoon_like.fur.randomize_factor, 0.45);
 		assert_eq!(liltoon_like.fur.noise_tiling_factor, 2.0);
 		assert_eq!(liltoon_like.fur.noise_offset_factor, 0.25);
+		assert_eq!(liltoon_like.fur.rim_color_factor, [0.21, 0.31, 0.41, 0.51]);
+		assert_eq!(liltoon_like.fur.rim_fresnel_power_factor, 4.5);
+		assert_eq!(liltoon_like.fur.rim_anti_light_factor, 0.75);
 		assert_eq!(liltoon_like.fur.vector_texture_index, Some(61));
 		assert_eq!(liltoon_like.fur.length_mask_texture_index, Some(62));
 		assert_eq!(liltoon_like.fur.noise_mask_texture_index, Some(63));

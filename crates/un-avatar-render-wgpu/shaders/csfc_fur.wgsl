@@ -12,19 +12,30 @@ struct CsfcParams {
 	cards_per_triangle: u32,
 	_seed: u32,
 	randomize: f32,
-	_pad1: u32,
+	feature_flags: u32,
 	fur_length: f32,
 	card_width: f32,
 	root_offset: f32,
 	gravity: f32,
+	cutout_length: f32,
+	_pad2: u32,
+	_pad3: u32,
+	_pad4: u32,
 	direction: vec4<f32>,
+	main_uv: vec4<f32>,
+	model: mat4x4<f32>,
+	inv_model: mat4x4<f32>,
 }
+
+const CSFC_FEATURE_FUR_VECTOR_TEX: u32 = 1u;
+const CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2u;
 
 struct CsfcSourceVertex {
 	position: vec4<f32>,
 	normal: vec4<f32>,
 	tangent: vec4<f32>,
 	uv: vec4<f32>,
+	color: vec4<f32>,
 	joints: vec4<u32>,
 	weights: vec4<f32>,
 }
@@ -44,6 +55,7 @@ struct CsfcGeneratedVertex {
 	alpha: f32,
 	seed: u32,
 	root_position: vec4<f32>,
+	pre_position: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: CsfcParams;
@@ -75,13 +87,30 @@ fn make_card_side(normal: vec3<f32>, tangent: vec3<f32>) -> vec3<f32> {
 }
 
 fn unpack_fur_vector_map(texel: vec4<f32>, scale: f32) -> vec3<f32> {
-	var n = texel.xyz * 2.0 - vec3<f32>(1.0);
+	var n = vec3<f32>(texel.a * texel.r, texel.g, 1.0) * 2.0 - vec3<f32>(1.0);
 	n.x = n.x * scale;
 	n.y = n.y * scale;
 	if dot(n, n) < 0.000001 {
 		return vec3<f32>(0.0, 0.0, 1.0);
 	}
-	return safe_normalize(n, vec3<f32>(0.0, 0.0, 1.0));
+	n.z = sqrt(max(1.0 - min(dot(n.xy, n.xy), 1.0), 0.0));
+	return n;
+}
+
+fn lil_blend_normal(dst_normal: vec3<f32>, src_normal: vec3<f32>) -> vec3<f32> {
+	return vec3<f32>(dst_normal.xy + src_normal.xy, dst_normal.z * src_normal.z);
+}
+
+fn main_uv(uv0: vec2<f32>) -> vec2<f32> {
+	return uv0 * params.main_uv.xy + params.main_uv.zw;
+}
+
+fn transform_dir_os_to_ws(v: vec3<f32>) -> vec3<f32> {
+	return (params.model * vec4<f32>(v, 0.0)).xyz;
+}
+
+fn transform_position_ws_to_os(v: vec3<f32>) -> vec3<f32> {
+	return (params.inv_model * vec4<f32>(v, 1.0)).xyz;
 }
 
 fn interpolate3(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
@@ -191,23 +220,29 @@ fn liltoon_vertex_noise(vertex_ids: vec3<u32>, weight: vec3<u32>) -> vec3<f32> {
 	return safe_normalize(vec3<f32>(n) * (2.0 / 4294967295.0) - vec3<f32>(1.0), vec3<f32>(0.0, 1.0, 0.0));
 }
 
-fn fur_vector_for_vertex(v: CsfcSourceVertex, random_dir: vec3<f32>) -> vec3<f32> {
+fn fur_vector_for_vertex(v: CsfcSourceVertex, random_dir: vec3<f32>, cutout_scale: f32) -> vec3<f32> {
 	let normal = safe_normalize(v.normal.xyz, vec3<f32>(0.0, 1.0, 0.0));
 	let tangent = v.tangent.xyz;
 	let side_dir = make_card_side(normal, tangent);
-	let bitangent = safe_normalize(cross(normal, side_dir), vec3<f32>(0.0, 0.0, 1.0));
-	let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, fur_samp, v.uv.xy, 0.0), params.direction.w);
-	let authored_vector = vec3<f32>(
-		params.direction.x + vector_tex.x,
-		params.direction.y + vector_tex.y,
-		(params.direction.z + 0.001) * vector_tex.z,
-	);
+	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0);
+	let bitangent = safe_normalize(cross(normal, side_dir), vec3<f32>(0.0, 0.0, 1.0)) * tangent_sign;
+	var authored_vector = params.direction.xyz + vec3<f32>(0.0, 0.0, 0.001);
+	if (params.feature_flags & CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR) != 0u {
+		authored_vector = lil_blend_normal(authored_vector, v.color.xyz);
+	}
+	if (params.feature_flags & CSFC_FEATURE_FUR_VECTOR_TEX) != 0u {
+		let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, fur_samp, main_uv(v.uv.xy), 0.0), params.direction.w);
+		authored_vector = lil_blend_normal(authored_vector, vector_tex);
+	}
 	var fur_vector = side_dir * authored_vector.x + bitangent * authored_vector.y + normal * authored_vector.z;
-	fur_vector = fur_vector + random_dir * max(params.fur_length, 0.0) * clamp(params.randomize, 0.0, 1.0);
 	fur_vector = safe_normalize(fur_vector, normal) * max(params.fur_length, 0.0);
-	let length_mask = clamp(textureSampleLevel(fur_length_mask_tex, fur_samp, v.uv.xy, 0.0).r, 0.0, 1.0);
+	fur_vector = fur_vector * cutout_scale;
+	fur_vector = transform_dir_os_to_ws(fur_vector);
+	let fur_length = length(fur_vector);
+	fur_vector.y = fur_vector.y - params.gravity * fur_length;
+	fur_vector = fur_vector + random_dir * max(params.fur_length, 0.0) * clamp(params.randomize, 0.0, 1.0);
+	let length_mask = clamp(textureSampleLevel(fur_length_mask_tex, fur_samp, main_uv(v.uv.xy), 0.0).r, 0.0, 1.0);
 	fur_vector = fur_vector * length_mask;
-	fur_vector.y = fur_vector.y - params.gravity * length(fur_vector);
 	return fur_vector;
 }
 
@@ -221,18 +256,28 @@ fn fur_tip_for_sample(
 ) -> CsfcGeneratedVertex {
 	let normal = safe_normalize(interpolate3b(v0.normal.xyz, v1.normal.xyz, v2.normal.xyz, bary), vec3<f32>(0.0, 1.0, 0.0));
 	let root = interpolate3b(v0.position.xyz, v1.position.xyz, v2.position.xyz, bary);
+	let root_ws = (params.model * vec4<f32>(root, 1.0)).xyz;
 	let uv = interpolate2b(v0.uv.xy, v1.uv.xy, v2.uv.xy, bary);
-	let fv0 = fur_vector_for_vertex(v0, liltoon_vertex_noise(vertex_ids, vec3<u32>(3u, 1u, 1u)));
-	let fv1 = fur_vector_for_vertex(v1, liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 3u, 1u)));
-	let fv2 = fur_vector_for_vertex(v2, liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 1u, 3u)));
+	let random0 = liltoon_vertex_noise(vertex_ids, vec3<u32>(3u, 1u, 1u));
+	let random1 = liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 3u, 1u));
+	let random2 = liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 1u, 3u));
+	let fv0 = fur_vector_for_vertex(v0, random0, 1.0);
+	let fv1 = fur_vector_for_vertex(v1, random1, 1.0);
+	let fv2 = fur_vector_for_vertex(v2, random2, 1.0);
 	let fur_vector = interpolate3b(fv0, fv1, fv2, bary);
+	let cutout_scale = max(params.cutout_length, 0.0);
+	let pre_fv0 = fur_vector_for_vertex(v0, random0, cutout_scale);
+	let pre_fv1 = fur_vector_for_vertex(v1, random1, cutout_scale);
+	let pre_fv2 = fur_vector_for_vertex(v2, random2, cutout_scale);
+	let pre_fur_vector = interpolate3b(pre_fv0, pre_fv1, pre_fv2, bary);
 	return CsfcGeneratedVertex(
-		vec4<f32>(root + fur_vector, 1.0),
+		vec4<f32>(transform_position_ws_to_os(root_ws + fur_vector), 1.0),
 		vec4<f32>(normal, 0.0),
 		uv,
 		1.0,
 		seed,
 		vec4<f32>(root, 1.0),
+		vec4<f32>(transform_position_ws_to_os(root_ws + pre_fur_vector), 1.0),
 	);
 }
 
@@ -246,6 +291,7 @@ fn fur_root_for_tip(tip: CsfcGeneratedVertex, v0: CsfcSourceVertex, v1: CsfcSour
 		tip.alpha,
 		seed,
 		vec4<f32>(root, 1.0),
+		vec4<f32>(root, 1.0),
 	);
 }
 
@@ -256,6 +302,7 @@ fn write_vertex(vertex_index: u32, center_position: vec3<f32>, layer: f32, norma
 		uv,
 		alpha,
 		seed,
+		vec4<f32>(center_position, 1.0),
 		vec4<f32>(center_position, 1.0),
 	);
 }

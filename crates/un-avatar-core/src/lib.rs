@@ -441,6 +441,8 @@ pub struct UnaMeshBuffers {
 	pub tangents: Option<Vec<[f32; 4]>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tex_coords_0: Option<Vec<[f32; 2]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub colors_0: Option<Vec<[f32; 4]>>,
 	/// スキン内ジョイントインデックス（頂点ごと 4 本）。未使用スロットは 0。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub joints: Option<Vec<[u16; 4]>>,
@@ -1014,6 +1016,8 @@ pub struct UnaLilToonLikeFur {
 	pub layer_count_factor: f32,
 	#[serde(default)]
 	pub vector_factor: [f32; 4],
+	#[serde(default)]
+	pub vertex_color_to_vector_factor: f32,
 	#[serde(default = "one_f32")]
 	pub vector_scale_factor: f32,
 	#[serde(default)]
@@ -1030,6 +1034,12 @@ pub struct UnaLilToonLikeFur {
 	pub noise_tiling_factor: f32,
 	#[serde(default)]
 	pub noise_offset_factor: f32,
+	#[serde(default = "default_liltoon_fur_rim_color")]
+	pub rim_color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_fur_rim_fresnel_power")]
+	pub rim_fresnel_power_factor: f32,
+	#[serde(default = "default_liltoon_fur_rim_anti_light")]
+	pub rim_anti_light_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub vector_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1414,6 +1424,7 @@ impl Default for UnaLilToonLikeFur {
 			enabled_factor: 0.0,
 			layer_count_factor: 0.0,
 			vector_factor: [0.0, 0.0, 0.0, 0.0],
+			vertex_color_to_vector_factor: 0.0,
 			vector_scale_factor: 1.0,
 			gravity_factor: 0.0,
 			shell_ao_factor: 0.0,
@@ -1422,6 +1433,9 @@ impl Default for UnaLilToonLikeFur {
 			randomize_factor: 0.0,
 			noise_tiling_factor: 1.0,
 			noise_offset_factor: 0.0,
+			rim_color_factor: default_liltoon_fur_rim_color(),
+			rim_fresnel_power_factor: default_liltoon_fur_rim_fresnel_power(),
+			rim_anti_light_factor: default_liltoon_fur_rim_anti_light(),
 			vector_texture_index: None,
 			length_mask_texture_index: None,
 			noise_mask_texture_index: None,
@@ -1699,6 +1713,18 @@ fn default_liltoon_forward_add_alpha_operation_factor() -> f32 {
 
 fn default_liltoon_fur_cutout_length() -> f32 {
 	0.8
+}
+
+fn default_liltoon_fur_rim_color() -> [f32; 4] {
+	[0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_liltoon_fur_rim_fresnel_power() -> f32 {
+	3.0
+}
+
+fn default_liltoon_fur_rim_anti_light() -> f32 {
+	0.5
 }
 
 fn default_liltoon_main_texture_hsvg() -> [f32; 4] {
@@ -2062,6 +2088,7 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			colors_0: None,
 			joints: None,
 			weights: None,
 			indices: None,
@@ -2099,6 +2126,7 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			colors_0: None,
 			joints: None,
 			weights: None,
 			indices: None,
