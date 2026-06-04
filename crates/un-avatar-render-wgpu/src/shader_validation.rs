@@ -419,6 +419,18 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_light_color_clamps_before_monochrome() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let limited = mesh.find("let limited = clamp(raw").unwrap();
+		let luminance = mesh.find("let luminance = dot(limited").unwrap();
+		let monochrome = mesh.find("return mix(limited").unwrap();
+		assert!(
+			limited < luminance && luminance < monochrome,
+			"lilToon _LightMinLimit/_LightMaxLimit should apply before _MonochromeLighting"
+		);
+	}
+
+	#[test]
 	fn liltoon_effects_and_specular_use_raw_shadowmix() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

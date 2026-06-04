@@ -162,6 +162,7 @@ Status legend:
 - `[~]` lighting / toon AA controls
   - done: `_LightMinLimit` / `_LightMaxLimit` / `_MonochromeLighting` / `_VertexLightStrength` / `_AAStrength` / `_GSAAStrength` を lilToon-like material に保持する。
   - done: `_AAStrength` を shadow / specular / rim の toon ramp blur へ反映し、light min/max と monochrome lighting を main toon direct light に反映する。
+  - done: light color correction は本家 `LIL_CORRECT_LIGHTCOLOR_*` と同じく `_LightMinLimit` / `_LightMaxLimit` clamp 後に `_MonochromeLighting` を適用する。
   - remaining: vertex light、GSAA、MatCap/specular/rim 個別 lighting path の min/max 適用を本家に合わせる。
 - `[~]` render queue ordering: Unity renderQueue / lilToon queue conventions
   - done: `UN_avatar_material.renderQueue` を lilToon-like material に保持し、Transparent / Transparent ZWrite の draw color path を source renderQueue 昇順で並べる。

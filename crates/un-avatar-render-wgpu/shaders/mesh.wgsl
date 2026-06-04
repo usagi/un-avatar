@@ -1604,11 +1604,11 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 }
 
 fn lil_correct_light_color(raw: vec3<f32>) -> vec3<f32> {
-	let luminance = dot(raw, vec3<f32>(0.2126, 0.7152, 0.0722));
-	let monochrome = mix(raw, vec3<f32>(luminance, luminance, luminance), clamp(drawu.lighting_ext_params.z, 0.0, 1.0));
 	let min_limit = max(drawu.lighting_ext_params.x, 0.0);
 	let max_limit = max(drawu.lighting_ext_params.y, min_limit);
-	return clamp(monochrome, vec3<f32>(min_limit, min_limit, min_limit), vec3<f32>(max_limit, max_limit, max_limit));
+	let limited = clamp(raw, vec3<f32>(min_limit, min_limit, min_limit), vec3<f32>(max_limit, max_limit, max_limit));
+	let luminance = dot(limited, vec3<f32>(0.2126, 0.7152, 0.0722));
+	return mix(limited, vec3<f32>(luminance, luminance, luminance), clamp(drawu.lighting_ext_params.z, 0.0, 1.0));
 }
 
 fn lil_direct_light_color() -> vec3<f32> {
