@@ -2485,6 +2485,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		},
 		..Default::default()
 	};
+	if source_shader_lower.contains("transparent") && !source_shader_lower.contains("twopass") {
+		out.blend_state.pre_zwrite_factor = 0.0;
+	}
 	out.texture_uv_offset_scales = unavatar_material_uv_offset_scales(extras);
 	out.texture_uv_mode_factors = unavatar_material_uv_mode_factors(extras);
 	out.flip_backface_normal_factor = unavatar_material_float_param(extras, "_FlipNormal").unwrap_or(0.0).clamp(0.0, 1.0);
@@ -5413,6 +5416,22 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
 		assert!(mtoon.transparent_with_z_write);
+	}
+
+	#[test]
+	fn liltoon_onepass_transparent_disables_backpass_pre_zwrite_by_default() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonTransparent",
+			"floatParams": { "_ZWrite": 1.0 },
+			"mtoon": {}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
+		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+
+		assert!(mtoon.transparent_with_z_write);
+		assert_eq!(liltoon_like.blend_state.pre_zwrite_factor, 0.0);
 	}
 
 	#[test]

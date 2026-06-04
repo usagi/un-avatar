@@ -982,10 +982,30 @@ fn liltoon_reflection_texture_index(liltoon_like: &un_avatar_core::UnaLilToonLik
 	use_source_cube.then_some(liltoon_like.reflection.cube_texture_index).flatten()
 }
 
-fn draw_uses_transparent_backpass(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
+fn transparent_backpass_enabled(
+	alpha_mode: UnaAlphaMode,
+	transparent_with_z_write: bool,
+	shading: UnaShadingModel,
+	liltoon_backpass_enabled: bool,
+) -> bool {
 	alpha_mode == UnaAlphaMode::Blend
 		&& transparent_with_z_write
+		&& liltoon_backpass_enabled
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+}
+
+fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> bool {
+	let liltoon_backpass_enabled = draw
+		.material
+		.liltoon_like
+		.as_ref()
+		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	transparent_backpass_enabled(
+		draw.alpha_mode,
+		draw.mtoon.transparent_with_z_write,
+		shading,
+		liltoon_backpass_enabled,
+	)
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
@@ -1034,7 +1054,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			}
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading) => {
+			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw, shading) => {
 				blended_draws.push((transparent_backpass_pipeline_for_draw(draw), draw_index));
 				if draw_uses_liltoon_gem_prepass(draw) {
 					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
@@ -8117,30 +8137,41 @@ mod tests {
 
 	#[test]
 	fn transparent_zwrite_toon_uses_backpass_before_forward_pass() {
-		assert!(draw_uses_transparent_backpass(
+		assert!(transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			true,
-			UnaShadingModel::LilToonLike
+			UnaShadingModel::LilToonLike,
+			true
 		));
-		assert!(draw_uses_transparent_backpass(
+		assert!(transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			true,
-			UnaShadingModel::MToonLike
+			UnaShadingModel::MToonLike,
+			true
 		));
-		assert!(!draw_uses_transparent_backpass(
+		assert!(!transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			true,
-			UnaShadingModel::LitLambert
+			UnaShadingModel::LitLambert,
+			true
 		));
-		assert!(!draw_uses_transparent_backpass(
+		assert!(!transparent_backpass_enabled(
 			UnaAlphaMode::Opaque,
 			true,
-			UnaShadingModel::LilToonLike
+			UnaShadingModel::LilToonLike,
+			true
 		));
-		assert!(!draw_uses_transparent_backpass(
+		assert!(!transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			false,
-			UnaShadingModel::LilToonLike
+			UnaShadingModel::LilToonLike,
+			true
+		));
+		assert!(!transparent_backpass_enabled(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::LilToonLike,
+			false
 		));
 	}
 
