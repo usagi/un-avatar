@@ -260,12 +260,12 @@ fn portable_mesh_shader_source() -> String {
 		"let glitter_color_texel = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(
-		"textureSample(matcap_bump_tex, normal_samp, map_uv).xyz",
-		"vec3<f32>(0.5, 0.5, 1.0)",
+		"textureSample(matcap_bump_tex, normal_samp, map_uv)",
+		"vec4<f32>(0.5, 0.5, 1.0, 1.0)",
 	);
 	shader = shader.replace(
-		"textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz",
-		"vec3<f32>(0.5, 0.5, 1.0)",
+		"textureSample(matcap2_bump_tex, normal_samp, map_uv)",
+		"vec4<f32>(0.5, 0.5, 1.0, 1.0)",
 	);
 	shader = shader.replace(
 		"let shape_tex = textureSampleGrad(glitter_shape_tex, base_samp, mask_uv, abs(dpdx(pos)) * mipfactor.x, abs(dpdy(pos)) * mipfactor.y);",
@@ -386,7 +386,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y * scale_mask;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
 	);
 	shader = shader.replace(

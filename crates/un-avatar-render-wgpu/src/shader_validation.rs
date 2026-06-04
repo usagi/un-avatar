@@ -107,8 +107,9 @@ mod tests {
 		);
 		assert!(
 			mesh.contains("let map_uv = uv * uv_offset_scale.zw + uv_offset_scale.xy;")
-				&& mesh.contains("textureSample(matcap_bump_tex, normal_samp, map_uv).xyz")
-				&& mesh.contains("textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz"),
+				&& mesh.contains("lil_unpack_normal_scale(packed, scale)")
+				&& mesh.contains("textureSample(matcap_bump_tex, normal_samp, map_uv)")
+				&& mesh.contains("textureSample(matcap2_bump_tex, normal_samp, map_uv)"),
 			"MatCap custom normal maps must use their texture slot transform"
 		);
 		assert!(
@@ -370,8 +371,23 @@ mod tests {
 		);
 		assert!(
 			mesh.contains("let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;")
-				&& mesh.contains("tn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;"),
+				&& mesh.contains(
+					"lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask)"
+				),
 			"_Bump2ndScaleMask must multiply _BumpScale2nd using fd.uvMain"
+		);
+	}
+
+	#[test]
+	fn liltoon_normal_unpack_reconstructs_z() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_unpack_normal_scale"),
+			"normal maps should share the lilToon normal unpack path"
+		);
+		assert!(
+			mesh.contains("packed.a * packed.r") && mesh.contains("sqrt(1.0 - clamp(dot(tn.xy, tn.xy), 0.0, 1.0))"),
+			"lilToon reconstructs normal z from unpacked xy"
 		);
 	}
 

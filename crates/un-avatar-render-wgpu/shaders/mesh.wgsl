@@ -1468,24 +1468,26 @@ fn lil_apply_parallax(uv: vec2<f32>, n: vec3<f32>, tangent_in: vec4<f32>, v: vec
 	return uv + (pom_uv - parallax_map_uv);
 }
 
+fn lil_unpack_normal_scale(packed: vec4<f32>, scale: f32) -> vec3<f32> {
+	var tn = vec3<f32>(packed.a * packed.r, packed.g, 0.0) * 2.0 - vec3<f32>(1.0, 1.0, 0.0);
+	tn.x = tn.x * scale;
+	tn.y = tn.y * scale;
+	tn.z = sqrt(1.0 - clamp(dot(tn.xy, tn.xy), 0.0, 1.0));
+	return tn;
+}
+
 fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, scale: f32) -> vec3<f32> {
 	let n = normalize(n_in);
 	if (abs(scale) < 0.000001) {
 		return n;
 	}
 	let normal_uv = uv * drawu.normal_uv_offset_scale.zw + drawu.normal_uv_offset_scale.xy;
-	let packed = textureSample(normal_tex, normal_samp, normal_uv).xyz;
-	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
-	tn.x = tn.x * scale;
-	tn.y = tn.y * scale;
+	var tn = lil_unpack_normal_scale(textureSample(normal_tex, normal_samp, normal_uv), scale);
 	if (drawu.normal2nd_params.x > 0.5) {
 		let normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);
 		let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
-		let packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;
 		let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;
-		var tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
-		tn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;
-		tn2.y = tn2.y * drawu.normal2nd_params.y * scale_mask;
+		let tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);
 		tn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);
 	}
 	tn = normalize(tn);
@@ -1507,13 +1509,11 @@ fn custom_normal_mapped(
 	let n = normalize(n_in);
 	let map_uv = uv * uv_offset_scale.zw + uv_offset_scale.xy;
 	let packed = select(
-		textureSample(matcap_bump_tex, normal_samp, map_uv).xyz,
-		textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz,
+		textureSample(matcap_bump_tex, normal_samp, map_uv),
+		textureSample(matcap2_bump_tex, normal_samp, map_uv),
 		which > 0.5,
 	);
-	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
-	tn.x = tn.x * scale;
-	tn.y = tn.y * scale;
+	var tn = lil_unpack_normal_scale(packed, scale);
 	tn = normalize(tn);
 	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
 	let t = normalize(tangent_ortho);
