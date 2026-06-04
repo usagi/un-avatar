@@ -346,6 +346,10 @@ fn mat3_upper(m: mat4x4<f32>) -> mat3x3<f32> {
 	return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
 }
 
+fn object_negative_scale_sign() -> f32 {
+	return select(1.0, -1.0, determinant(mat3_upper(drawt.model)) < 0.0);
+}
+
 const DBG_BIND_POSE_RIGID: u32 = 1u;
 
 fn morphed_position_normal(pos_in: vec3<f32>, norm_in: vec3<f32>, vertex_index: u32) -> array<vec3<f32>, 2> {
@@ -370,7 +374,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let pos = morphed[0];
 	let norm = morphed[1];
 	let tangent = v.tangent.xyz;
-	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0);
+	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0) * object_negative_scale_sign();
 	let j0 = v.joints.x;
 	let j1 = v.joints.y;
 	let j2 = v.joints.z;

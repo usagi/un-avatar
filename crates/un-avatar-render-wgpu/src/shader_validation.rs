@@ -138,6 +138,17 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_tbn_applies_object_negative_scale() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn object_negative_scale_sign() -> f32")
+				&& mesh.contains("determinant(mat3_upper(drawt.model)) < 0.0")
+				&& mesh.contains("let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0) * object_negative_scale_sign();"),
+			"lilToon TBN bitangent must include LIL_NEGATIVE_SCALE semantics"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_masks_preserve_rgb_channels() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
