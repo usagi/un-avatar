@@ -98,6 +98,29 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_matcap_custom_normal_uses_bump_maps() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("@group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;")
+				&& mesh.contains("@group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;"),
+			"MatCap custom normal maps must be bound in FullOnePass"
+		);
+		assert!(
+			mesh.contains("let map_uv = uv * uv_offset_scale.zw + uv_offset_scale.xy;")
+				&& mesh.contains("textureSample(matcap_bump_tex, normal_samp, map_uv).xyz")
+				&& mesh.contains("textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz"),
+			"MatCap custom normal maps must use their texture slot transform"
+		);
+		assert!(
+			mesh.contains("if (drawu.matcap_bump_params.x > 0.5)")
+				&& mesh.contains("if (drawu.matcap2_bump_params.x > 0.5)")
+				&& mesh.contains("drawu.matcap_bump_params.y")
+				&& mesh.contains("drawu.matcap2_bump_params.y"),
+			"MatCap custom normal flags and bump scales must reach the MatCap normal path"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_masks_preserve_rgb_channels() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
@@ -331,6 +354,22 @@ mod tests {
 				"let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;"
 			),
 			"_Bump2ndMap_ST must be applied after the authored UV mode selection"
+		);
+		assert!(
+			mesh.contains("let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;")
+				&& mesh.contains("tn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;"),
+			"_Bump2ndScaleMask must multiply _BumpScale2nd using fd.uvMain"
+		);
+	}
+
+	#[test]
+	fn liltoon_backlight_color_texture_uses_slot_transform() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains(
+				"let backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;"
+			) && mesh.contains("textureSample(backlight_color_tex, base_samp, backlight_color_uv)"),
+			"_BacklightColorTex must use its authored _ST on fd.uvMain"
 		);
 	}
 }

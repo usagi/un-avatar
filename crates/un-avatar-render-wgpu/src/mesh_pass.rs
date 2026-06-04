@@ -249,12 +249,23 @@ fn portable_mesh_shader_source() -> String {
 		"@group(1) @binding(69) var main2nd_dissolve_noise_mask_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(70) var main3rd_dissolve_mask_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(71) var main3rd_dissolve_noise_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(72) var normal2nd_scale_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;\n",
 	] {
 		shader = shader.replace(snippet, "");
 	}
 	shader = shader.replace(
 		"let glitter_color_texel = textureSample(glitter_color_tex, base_samp, glitter_color_uv);",
 		"let glitter_color_texel = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
+	);
+	shader = shader.replace(
+		"textureSample(matcap_bump_tex, normal_samp, map_uv).xyz",
+		"vec3<f32>(0.5, 0.5, 1.0)",
+	);
+	shader = shader.replace(
+		"textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz",
+		"vec3<f32>(0.5, 0.5, 1.0)",
 	);
 	shader = shader.replace(
 		"let shape_tex = textureSampleGrad(glitter_shape_tex, base_samp, mask_uv, abs(dpdx(pos)) * mipfactor.x, abs(dpdy(pos)) * mipfactor.y);",
@@ -339,7 +350,7 @@ fn portable_mesh_shader_source() -> String {
 		"\t\t\tlet rim_shade_mask = 1.0;\n",
 	);
 	shader = shader.replace(
-		"\t\t\tlet backlight_color_sample = textureSample(backlight_color_tex, base_samp, uv);\n\t\t\tlet authored_backlight_color = drawu.backlight_color * backlight_color_sample;\n",
+		"\t\t\tlet backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;\n\t\t\tlet backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);\n\t\t\tlet authored_backlight_color = drawu.backlight_color * backlight_color_sample;\n",
 		"\t\t\tlet authored_backlight_color = drawu.backlight_color;\n",
 	);
 	shader = shader.replace(
@@ -371,7 +382,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y * scale_mask;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
 	);
 	shader = shader.replace(
@@ -449,9 +460,11 @@ struct MeshDrawMaterialGpu {
 	matcap_factor: [f32; 4],
 	matcap_params: [f32; 4],
 	matcap_ext_params: [f32; 4],
+	matcap_bump_params: [f32; 4],
 	matcap2_factor: [f32; 4],
 	matcap2_params: [f32; 4],
 	matcap2_ext_params: [f32; 4],
+	matcap2_bump_params: [f32; 4],
 	matcap_uv_params: [f32; 4],
 	reflection_color: [f32; 4],
 	reflection_control: [f32; 4],
@@ -479,6 +492,7 @@ struct MeshDrawMaterialGpu {
 	backlight_params: [f32; 4],
 	backlight_ext_params: [f32; 4],
 	backlight_shadow_params: [f32; 4],
+	backlight_color_uv_offset_scale: [f32; 4],
 	glitter_color: [f32; 4],
 	glitter_params1: [f32; 4],
 	glitter_params2: [f32; 4],
@@ -565,7 +579,9 @@ struct MeshDrawMaterialGpu {
 	shadow_border_mask_uv_offset_scale: [f32; 4],
 	shadow_blur_mask_uv_offset_scale: [f32; 4],
 	matcap_blend_mask_uv_offset_scale: [f32; 4],
+	matcap_bump_uv_offset_scale: [f32; 4],
 	matcap2_blend_mask_uv_offset_scale: [f32; 4],
+	matcap2_bump_uv_offset_scale: [f32; 4],
 	alpha_mask_uv_offset_scale: [f32; 4],
 	main_color_adjust_params: [f32; 4],
 	main_gradation_params: [f32; 4],
@@ -615,7 +631,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2736);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2816);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1554,6 +1570,7 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 		entries.extend([
 			texture_bind_group_layout_entry(24, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(25, wgpu::ShaderStages::FRAGMENT),
+			sampler_bind_group_layout_entry(19, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			sampler_bind_group_layout_entry(26, wgpu::ShaderStages::FRAGMENT),
 			sampler_bind_group_layout_entry(27, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(38, wgpu::ShaderStages::FRAGMENT),
@@ -1589,6 +1606,9 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(69, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(70, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(71, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(72, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -3038,8 +3058,14 @@ fn mesh_draw_material_gpu(
 	let matcap_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapBlendMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap_bump_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapBumpMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let matcap2_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap2_bump_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndBumpMap"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let alpha_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AlphaMask"]))
@@ -3349,6 +3375,20 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let matcap_bump_params = liltoon_like
+		.map(|u| {
+			[
+				if u.matcap.bump_texture_index.is_some() {
+					u.matcap.custom_normal_factor.clamp(0.0, 1.0)
+				} else {
+					0.0
+				},
+				u.matcap.bump_scale_factor,
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
 	let matcap2_factor = liltoon_like.map(|u| u.matcap.second_color_factor).unwrap_or([1.0, 1.0, 1.0, 0.0]);
 	let matcap2_params = liltoon_like
 		.map(|u| {
@@ -3375,6 +3415,20 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let matcap2_bump_params = liltoon_like
+		.map(|u| {
+			[
+				if u.matcap.second_bump_texture_index.is_some() {
+					u.matcap.second_custom_normal_factor.clamp(0.0, 1.0)
+				} else {
+					0.0
+				},
+				u.matcap.second_bump_scale_factor,
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
 	let matcap_uv_params = liltoon_like
 		.map(|u| {
 			[
@@ -3704,6 +3758,9 @@ fn mesh_draw_material_gpu(
 	let backlight_shadow_params = liltoon_like
 		.map(|u| [u.backlight.receive_shadow_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let backlight_color_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BacklightColorTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let glitter_color = liltoon_like.map(|u| u.glitter.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let glitter_params1 = liltoon_like.map(|u| u.glitter.params1_factor).unwrap_or([256.0, 256.0, 0.16, 50.0]);
 	let glitter_params2 = liltoon_like.map(|u| u.glitter.params2_factor).unwrap_or([0.25, 0.0, 0.0, 0.0]);
@@ -4036,9 +4093,11 @@ fn mesh_draw_material_gpu(
 		],
 		matcap_params,
 		matcap_ext_params,
+		matcap_bump_params,
 		matcap2_factor,
 		matcap2_params,
 		matcap2_ext_params,
+		matcap2_bump_params,
 		matcap_uv_params,
 		reflection_color,
 		reflection_control,
@@ -4071,6 +4130,7 @@ fn mesh_draw_material_gpu(
 		backlight_params,
 		backlight_ext_params,
 		backlight_shadow_params,
+		backlight_color_uv_offset_scale,
 		glitter_color,
 		glitter_params1,
 		glitter_params2,
@@ -4180,7 +4240,9 @@ fn mesh_draw_material_gpu(
 		shadow_border_mask_uv_offset_scale,
 		shadow_blur_mask_uv_offset_scale,
 		matcap_blend_mask_uv_offset_scale,
+		matcap_bump_uv_offset_scale,
 		matcap2_blend_mask_uv_offset_scale,
+		matcap2_bump_uv_offset_scale,
 		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
 		main_gradation_params,
@@ -4879,6 +4941,14 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+				texture_bind_group_layout_entry(67, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(68, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(69, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(70, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(71, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(72, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
@@ -6034,6 +6104,11 @@ impl SceneMeshes {
 					.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
 				let matcap_blend_mask_view = texture_view_or(&image_views, matcap_blend_mask_texture_index, &white_view);
 				let matcap_blend_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_blend_mask_texture_index, 0);
+				let matcap_bump_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.bump_texture_index);
+				let matcap_bump_view = texture_view_or(&image_views, matcap_bump_texture_index, &neutral_normal_view);
 				let matcap2_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -6044,6 +6119,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
 				let matcap2_blend_mask_view = texture_view_or(&image_views, matcap2_blend_mask_texture_index, &white_view);
+				let matcap2_bump_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.matcap.second_bump_texture_index);
+				let matcap2_bump_view = texture_view_or(&image_views, matcap2_bump_texture_index, &neutral_normal_view);
 				let main2nd_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -6222,6 +6302,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
 				let normal2nd_view = texture_view_or(&image_views, normal2nd_texture_index, &neutral_normal_view);
+				let normal2nd_scale_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.normal.second_scale_mask_texture_index);
+				let normal2nd_scale_mask_view = texture_view_or(&image_views, normal2nd_scale_mask_texture_index, &white_view);
 				let anisotropy_tangent_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -6558,6 +6643,18 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 71,
 							resource: wgpu::BindingResource::TextureView(main3rd_dissolve_noise_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 72,
+							resource: wgpu::BindingResource::TextureView(normal2nd_scale_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 73,
+							resource: wgpu::BindingResource::TextureView(matcap_bump_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 74,
+							resource: wgpu::BindingResource::TextureView(matcap2_bump_view),
 						},
 					]);
 				}
@@ -7404,6 +7501,9 @@ mod tests {
 			"@group(1) @binding(69)",
 			"@group(1) @binding(70)",
 			"@group(1) @binding(71)",
+			"@group(1) @binding(72)",
+			"@group(1) @binding(73)",
+			"@group(1) @binding(74)",
 		] {
 			assert!(!source.contains(binding), "portable shader still contains {binding}");
 		}
@@ -7416,7 +7516,7 @@ mod tests {
 	fn mesh_toon_pipeline_interfaces_match() {
 		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
 		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 49;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 52;
 		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -8859,6 +8959,9 @@ mod tests {
 		liltoon_like.backlight.view_strength_factor = 0.3;
 		liltoon_like.backlight.backface_mask_factor = 0.4;
 		liltoon_like.backlight.receive_shadow_factor = 0.5;
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_BacklightColorTex".to_string(), [0.6, 0.7, 1.6, 1.7]);
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -8870,6 +8973,7 @@ mod tests {
 		assert_eq!(draw.backlight_params, [1.0, 0.6, 0.7, 8.0]);
 		assert_eq!(draw.backlight_ext_params, [0.1, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.backlight_shadow_params, [0.5, 0.0, 0.0, 0.0]);
+		assert_eq!(draw.backlight_color_uv_offset_scale, [0.6, 0.7, 1.6, 1.7]);
 	}
 
 	#[test]
@@ -9121,6 +9225,50 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_uv_params, [0.1, 0.2, 0.3, 0.4]);
+	}
+
+	#[test]
+	fn liltoon_matcap_custom_normal_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.bump_texture_index = Some(3);
+		liltoon_like.matcap.custom_normal_factor = 1.0;
+		liltoon_like.matcap.bump_scale_factor = 0.7;
+		liltoon_like.matcap.second_bump_texture_index = Some(4);
+		liltoon_like.matcap.second_custom_normal_factor = 1.0;
+		liltoon_like.matcap.second_bump_scale_factor = 0.8;
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCapBumpMap".to_string(), [0.1, 0.2, 1.1, 1.2]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCap2ndBumpMap".to_string(), [0.3, 0.4, 1.3, 1.4]);
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.matcap_bump_params, [1.0, 0.7, 0.0, 0.0]);
+		assert_eq!(draw.matcap2_bump_params, [1.0, 0.8, 0.0, 0.0]);
+		assert_eq!(draw.matcap_bump_uv_offset_scale, [0.1, 0.2, 1.1, 1.2]);
+		assert_eq!(draw.matcap2_bump_uv_offset_scale, [0.3, 0.4, 1.3, 1.4]);
+	}
+
+	#[test]
+	fn liltoon_matcap_custom_normal_requires_texture() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.matcap.custom_normal_factor = 1.0;
+		liltoon_like.matcap.second_custom_normal_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.matcap_bump_params[0], 0.0);
+		assert_eq!(draw.matcap2_bump_params[0], 0.0);
 	}
 
 	#[test]

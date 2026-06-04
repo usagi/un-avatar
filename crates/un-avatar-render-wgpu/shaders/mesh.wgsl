@@ -37,9 +37,11 @@ struct DrawMaterial {
 	matcap_factor: vec4<f32>,
 	matcap_params: vec4<f32>,
 	matcap_ext_params: vec4<f32>,
+	matcap_bump_params: vec4<f32>,
 	matcap2_factor: vec4<f32>,
 	matcap2_params: vec4<f32>,
 	matcap2_ext_params: vec4<f32>,
+	matcap2_bump_params: vec4<f32>,
 	matcap_uv_params: vec4<f32>,
 	reflection_color: vec4<f32>,
 	reflection_control: vec4<f32>,
@@ -67,6 +69,7 @@ struct DrawMaterial {
 	backlight_params: vec4<f32>,
 	backlight_ext_params: vec4<f32>,
 	backlight_shadow_params: vec4<f32>,
+	backlight_color_uv_offset_scale: vec4<f32>,
 	glitter_color: vec4<f32>,
 	glitter_params1: vec4<f32>,
 	glitter_params2: vec4<f32>,
@@ -153,7 +156,9 @@ struct DrawMaterial {
 	shadow_border_mask_uv_offset_scale: vec4<f32>,
 	shadow_blur_mask_uv_offset_scale: vec4<f32>,
 	matcap_blend_mask_uv_offset_scale: vec4<f32>,
+	matcap_bump_uv_offset_scale: vec4<f32>,
 	matcap2_blend_mask_uv_offset_scale: vec4<f32>,
+	matcap2_bump_uv_offset_scale: vec4<f32>,
 	alpha_mask_uv_offset_scale: vec4<f32>,
 	main_color_adjust_params: vec4<f32>,
 	main_gradation_params: vec4<f32>,
@@ -274,6 +279,9 @@ struct MorphU {
 @group(1) @binding(69) var main2nd_dissolve_noise_mask_tex: texture_2d<f32>;
 @group(1) @binding(70) var main3rd_dissolve_mask_tex: texture_2d<f32>;
 @group(1) @binding(71) var main3rd_dissolve_noise_mask_tex: texture_2d<f32>;
+@group(1) @binding(72) var normal2nd_scale_mask_tex: texture_2d<f32>;
+@group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;
+@group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -1461,9 +1469,10 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, uv1: vec
 		let normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);
 		let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
 		let packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;
+		let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;
 		var tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
-		tn2.x = tn2.x * drawu.normal2nd_params.y;
-		tn2.y = tn2.y * drawu.normal2nd_params.y;
+		tn2.x = tn2.x * drawu.normal2nd_params.y * scale_mask;
+		tn2.y = tn2.y * drawu.normal2nd_params.y * scale_mask;
 		tn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);
 	}
 	tn = normalize(tn);
@@ -1472,6 +1481,49 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, uv1: vec
 	let t = normalize(tangent_ortho);
 	let b = normalize(cross(n, t)) * tangent_in.w;
 	return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
+fn custom_normal_mapped(
+	n_in: vec3<f32>,
+	tangent_in: vec4<f32>,
+	uv: vec2<f32>,
+	uv_offset_scale: vec4<f32>,
+	scale: f32,
+	which: f32,
+) -> vec3<f32> {
+	let n = normalize(n_in);
+	let map_uv = uv * uv_offset_scale.zw + uv_offset_scale.xy;
+	let packed = select(
+		textureSample(matcap_bump_tex, normal_samp, map_uv).xyz,
+		textureSample(matcap2_bump_tex, normal_samp, map_uv).xyz,
+		which > 0.5,
+	);
+	var tn = packed * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
+	tn.x = tn.x * scale;
+	tn.y = tn.y * scale;
+	tn = normalize(tn);
+	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
+	let t = normalize(tangent_ortho);
+	let b = normalize(cross(n, t)) * tangent_in.w;
+	return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
+fn liltoon_custom_matcap_normal(
+	n_in: vec3<f32>,
+	tangent_in: vec4<f32>,
+	uv: vec2<f32>,
+	uv_offset_scale: vec4<f32>,
+	scale: f32,
+	which: f32,
+	front_facing: bool,
+	flags: u32,
+	flip_backface_normal: f32,
+	gem_backface_normal: bool,
+	v: vec3<f32>,
+) -> vec3<f32> {
+	let mapped = face_normal(custom_normal_mapped(n_in, tangent_in, uv, uv_offset_scale, scale, which), front_facing, flags);
+	let flipped = lil_flip_backface_normal(mapped, front_facing, flip_backface_normal);
+	return select(flipped, normalize(flipped - v * 0.2), gem_backface_normal);
 }
 
 struct AnisotropyBasis {
@@ -2042,7 +2094,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		}
 		if (!disable_matcap) {
 			if (drawu.matcap_params.x > 0.0) {
-				let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+				var matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+				if (drawu.matcap_bump_params.x > 0.5) {
+					matcap_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap_bump_uv_offset_scale, drawu.matcap_bump_params.y, 0.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
+				}
 				let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
 				let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
 				let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
@@ -2058,7 +2113,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				lit = lil_blend_color3(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
 			}
 			if (drawu.matcap2_params.x > 0.0) {
-				let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				var matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				if (drawu.matcap2_bump_params.x > 0.5) {
+					matcap2_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap2_bump_uv_offset_scale, drawu.matcap2_bump_params.y, 1.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
+				}
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
 				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
@@ -2097,7 +2155,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				clamp(drawu.backlight_ext_params.y, 0.0, 1.0)
 			);
 			let backlight_backface = lil_backface_visibility(drawu.backlight_ext_params.w, front_facing);
-			let backlight_color_sample = textureSample(backlight_color_tex, base_samp, uv);
+			let backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;
+			let backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);
 			let authored_backlight_color = drawu.backlight_color * backlight_color_sample;
 			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(authored_backlight_color.a, 0.0, 1.0);
 			let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
@@ -2106,7 +2165,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
 	} else {
 		if (!disable_matcap) {
-			let matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+			var matcap_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap_ext_params.x, 0.0, 1.0)));
+			if (drawu.matcap_bump_params.x > 0.5) {
+				matcap_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap_bump_uv_offset_scale, drawu.matcap_bump_params.y, 0.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
+			}
 			let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
 			let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
 			let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
@@ -2125,7 +2187,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				lit = lit + matcap_raw * drawu.matcap_factor.w;
 			}
 			if (drawu.matcap2_params.x > 0.0) {
-				let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				var matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
+				if (drawu.matcap2_bump_params.x > 0.5) {
+					matcap2_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap2_bump_uv_offset_scale, drawu.matcap2_bump_params.y, 1.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
+				}
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
 				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));

@@ -687,6 +687,8 @@ pub struct UnaLilToonLikeNormal {
 	pub second_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub second_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_scale_mask_texture_index: Option<usize>,
 	#[serde(default = "one_f32")]
 	pub second_scale_factor: f32,
 }
@@ -703,6 +705,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub blend_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub bump_texture_index: Option<usize>,
 	#[serde(default = "one_f32")]
 	pub blend_factor: f32,
 	#[serde(default)]
@@ -713,6 +717,10 @@ pub struct UnaLilToonLikeMatcap {
 	pub blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub normal_strength_factor: f32,
+	#[serde(default)]
+	pub custom_normal_factor: f32,
+	#[serde(default = "one_f32")]
+	pub bump_scale_factor: f32,
 	#[serde(default)]
 	pub shadow_mask_factor: f32,
 	#[serde(default = "one_f32")]
@@ -733,6 +741,8 @@ pub struct UnaLilToonLikeMatcap {
 	pub second_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub second_blend_mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub second_bump_texture_index: Option<usize>,
 	#[serde(default = "one_vec4")]
 	pub second_color_factor: [f32; 4],
 	#[serde(default)]
@@ -749,6 +759,10 @@ pub struct UnaLilToonLikeMatcap {
 	pub second_blend_mode: UnaLilToonLikeBlendMode,
 	#[serde(default = "one_f32")]
 	pub second_normal_strength_factor: f32,
+	#[serde(default)]
+	pub second_custom_normal_factor: f32,
+	#[serde(default = "one_f32")]
+	pub second_bump_scale_factor: f32,
 	#[serde(default)]
 	pub second_lod_factor: f32,
 	#[serde(default)]
@@ -1401,6 +1415,7 @@ impl Default for UnaLilToonLikeNormal {
 		Self {
 			second_enabled_factor: 0.0,
 			second_texture_index: None,
+			second_scale_mask_texture_index: None,
 			second_scale_factor: 1.0,
 		}
 	}
@@ -1414,11 +1429,14 @@ impl Default for UnaLilToonLikeMatcap {
 			color_alpha_factor: 1.0,
 			texture_index: None,
 			blend_mask_texture_index: None,
+			bump_texture_index: None,
 			blend_factor: 1.0,
 			main_strength_factor: 0.0,
 			enable_lighting_factor: 0.0,
 			blend_mode: UnaLilToonLikeBlendMode::default(),
 			normal_strength_factor: 1.0,
+			custom_normal_factor: 0.0,
+			bump_scale_factor: 1.0,
 			shadow_mask_factor: 0.0,
 			apply_transparency_factor: 1.0,
 			lod_factor: 0.0,
@@ -1429,6 +1447,7 @@ impl Default for UnaLilToonLikeMatcap {
 			second_enabled_factor: 0.0,
 			second_texture_index: None,
 			second_blend_mask_texture_index: None,
+			second_bump_texture_index: None,
 			second_color_factor: [1.0, 1.0, 1.0, 1.0],
 			second_main_strength_factor: 0.0,
 			second_blend_factor: 1.0,
@@ -1437,6 +1456,8 @@ impl Default for UnaLilToonLikeMatcap {
 			second_apply_transparency_factor: 1.0,
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_normal_strength_factor: 1.0,
+			second_custom_normal_factor: 0.0,
+			second_bump_scale_factor: 1.0,
 			second_lod_factor: 0.0,
 			second_backface_mask_factor: 0.0,
 			second_perspective_factor: 1.0,

@@ -96,9 +96,11 @@ namespace UNAvatar.UnityExporter
                 mtoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
                 AddTextureIndex(mtoon, "matcapTextureIndex", useMatCap ? ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex") : null);
                 AddTextureIndex(mtoon, "matcapBlendMaskTextureIndex", useMatCap ? ReadTexture(material, "_MatCapBlendMask") : null);
+                AddTextureIndex(mtoon, "matcapBumpTextureIndex", useMatCap ? ReadTexture(material, "_MatCapBumpMap") : null);
                 var useMatCap2nd = IsMaterialFeatureEnabled(material, "_UseMatCap2nd", ReadTexture(material, "_MatCap2ndTex") != null);
                 AddTextureIndex(mtoon, "matcap2ndTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndTex") : null);
                 AddTextureIndex(mtoon, "matcap2ndBlendMaskTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndBlendMask") : null);
+                AddTextureIndex(mtoon, "matcap2ndBumpTextureIndex", useMatCap2nd ? ReadTexture(material, "_MatCap2ndBumpMap") : null);
 
                 var useRim = IsMaterialFeatureEnabled(material, "_UseRim", HasProperty(material, "_RimColor") || ReadTexture(material, "_RimColorTex") != null);
                 var rimMainStrength = ReadFloat(material, "_RimMainStrength", 1.0f);
@@ -192,6 +194,7 @@ namespace UNAvatar.UnityExporter
                     ? ReadFloat(material, "_UseBumpMap2nd", normal2ndTexture != null ? 1.0f : 0.0f) > 0.5f
                     : IsMaterialFeatureEnabled(material, "_UseNormalMap2nd", normal2ndTexture != null);
                 AddTextureIndex(mtoon, "normal2ndTextureIndex", useNormal2nd ? normal2ndTexture : null);
+                AddTextureIndex(mtoon, "normal2ndScaleMaskTextureIndex", useNormal2nd ? ReadTexture(material, "_Bump2ndScaleMask") : null);
                 mtoon["normal2ndScaleFactor"] = useNormal2nd ? ReadFloat(material, "_BumpScale2nd", ReadFloat(material, "_NormalScale2nd", 1.0f)) : 1.0f;
 
                 mtoon["transparentWithZWrite"] = ReadFloat(material, "_ZWrite", 0.0f) > 0.5f || ReadFloat(material, "_ZWriteMode", 0.0f) > 0.5f;
@@ -254,9 +257,9 @@ namespace UNAvatar.UnityExporter
                 return new[]
                 {
                     "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main2ndDissolveMask", "_Main2ndDissolveNoiseMask", "_Main3rdTex", "_Main3rdBlendMask", "_Main3rdDissolveMask", "_Main3rdDissolveNoiseMask",
-                    "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap",
+                    "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap", "_Bump2ndScaleMask",
                     "_ShadowColorTex", "_Shadow2ndColorTex", "_Shadow3rdColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
-                    "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCap2ndTex", "_MatCap2ndBlendMask",
+                    "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCapBumpMap", "_MatCap2ndTex", "_MatCap2ndBlendMask", "_MatCap2ndBumpMap",
                     "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
                     "_GlitterColorTex", "_GlitterShapeTex", "_DissolveMask", "_DissolveNoiseMask", "_ParallaxMap",
                     "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",

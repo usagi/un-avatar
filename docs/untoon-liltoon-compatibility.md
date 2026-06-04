@@ -343,7 +343,8 @@ Status legend:
   - done: glTF normalTexture / lilToon-like normal slot として読み込み、1st normal map の slot 別 Tiling / Offset を renderer に接続した。
   - done: FullOnePass renderer が lilToon-like 2nd normal map を `_Bump2ndMap` 系 slot transform と `_BumpScale2nd` / `_NormalScale2nd` で 1st normal に合成する。
   - done: `_Bump2ndMap_UVMode` の 0..3 を renderer に接続し、選択した UV に `_Bump2ndMap_ST` を適用する。
-  - remaining: normal strength mask、2nd normal scale mask を保持・接続する。
+  - done: `_Bump2ndScaleMask` を保持し、本家同様に `fd.uvMain` で sampling して `_BumpScale2nd` へ乗算する。
+  - remaining: 1st normal map の green channel convention と Unity/lilToon tangent-space parity を検証する。
 - `[~]` normal scale
   - done: normalTexture scale を shader uniform に渡す。
   - remaining: Unity/lilToon tangent-space parity、green channel convention、backface normal behavior を検証する。
@@ -354,7 +355,8 @@ Status legend:
   - done: Unity Exporter / glTF `UN_avatar_material.mtoon` の `normal2ndTextureIndex` / `normal2ndScaleFactor` を保持し、import 後は `UnaLilToonLikeMaterial.normal` に入れる。texture pipeline では normal map role として扱う。
   - done: FullOnePass WGSL が 1st normal と 2nd normal を本家 `lilBlendNormal` 相当の `xy` 加算 / `z` 乗算で合成する。Portable16 は texture budget 維持のため 2nd normal sampling を落とす。
   - done: `_Bump2ndMap_UVMode` の 0..3 を renderer に接続する。
-  - remaining: scale mask、green channel convention を lilToon 本家へ合わせる。
+  - done: `_Bump2ndScaleMask` を renderer に接続する。
+  - remaining: green channel convention を lilToon 本家へ合わせる。
 - `[~]` anisotropy normal interactions
   - done: `_UseAnisotropy` / `_Anisotropy*` 係数と tangent / scale mask / shift noise mask texture reference を `UnaLilToonLikeMaterial.reflection` に保持する。
   - done: FullOnePass WGSL が anisotropy tangent / scale mask / shift noise mask を bind し、anisotropy normal を MatCap / 2nd MatCap / Reflection / specular normal へ反映する。1st/2nd anisotropy specular は tangent/bitangent width と shift noise を使う近似 highlight として接続した。Portable16 は texture budget 維持のため anisotropy sampling を落とす。
@@ -390,7 +392,8 @@ Status legend:
   - remaining: Unity の forward base light color / shadowmix との対応を確認し、必要なら環境光側も含める。
 - `[~]` `_MatCapNormalStrength`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap UV 計算用 normal を geometry normal と normal-mapped normal の補間へ接続した。
-  - remaining: lilToon の `fd.matcapN` と完全一致する tangent / view-space 入力、VR parallax、backface behavior を検証する。
+  - done: `_MatCapCustomNormal` / `_MatCapBumpMap` / `_MatCapBumpScale` を保持し、custom normal 有効時は本家同様 `_MatCapBumpMap` を `_ST` 付き `fd.uvMain` で sample して MatCap UV 計算用 normal に使う。Portable16 は texture budget 維持のため neutral normal に落とす。
+  - remaining: lilToon の `fd.matcapN` と完全一致する view-space 入力、VR parallax、backface behavior を検証する。
 - `[~]` `_MatCapShadowMask`
   - done: glTF `UN_avatar` extras / Unity property から読み取り、MatCap blend weight を current shadowmix approximation (`shading`) で抑制する係数へ接続した。
   - remaining: lilToon の `fd.shadowmix`、MatCap mask texture、2nd MatCap との合成順を本家へ合わせる。
@@ -400,14 +403,14 @@ Status legend:
 - `[~]` `_MatCapBlendMask`
 	- done: Exporter / importer / v2 material で texture reference を保持し、MatCap blend factor に mask.r を掛ける。
 	- done: Renderer は `_MatCapBlendMask` の slot 別 Tiling / Offset を sampling UV に使う。
-	- remaining: mask UV mode / UV set、VR parallax、2nd MatCap との合成順を本家へ合わせる。
+	- remaining: VR parallax、2nd MatCap との合成順を本家へ合わせる。mask UV は本家同様 `fd.uvMain` 固定。
 - `[~]` `_MatCapBackfaceMask`
 	- done: source raw params を保持し、backface の 1st MatCap blend weight に掛ける。
 	- remaining: transparent / outline / cull mode との本家条件を照合する。
 - `[~]` 2nd MatCap
-	- done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask`、`_MatCap2ndBlendMask`、`_MatCap2ndPerspective` / `_MatCap2ndZRotCancel` / `_MatCap2ndVRParallaxStrength` を source params として保持する。
-  - done: high-tier 1-pass material では `_MatCap2ndTex` / `_MatCap2ndBlendMask` を runtime sampling し、2nd MatCap contribution を合成する。
-  - remaining: Portable16 tier では16 texture budgetのため runtime contribution を抑制する。mask UV mode / UV set、VR parallax、camera roll を含む Z rotation cancel false path、1st MatCap との本家合成順を詰める。
+  - done: `_UseMatCap2nd`、`_MatCap2ndTex`、`_MatCap2ndColor`、`_MatCap2ndMainStrength`、`_MatCap2ndBlend`、`_MatCap2ndBlendMode`、`_MatCap2ndEnableLighting`、`_MatCap2ndShadowMask`、`_MatCap2ndApplyTransparency`、`_MatCap2ndNormalStrength`、`_MatCap2ndCustomNormal`、`_MatCap2ndBumpMap`、`_MatCap2ndBumpScale`、`_MatCap2ndLod`、`_MatCap2ndBackfaceMask`、`_MatCap2ndBlendMask`、`_MatCap2ndPerspective` / `_MatCap2ndZRotCancel` / `_MatCap2ndVRParallaxStrength` を source params として保持する。
+  - done: high-tier 1-pass material では `_MatCap2ndTex` / `_MatCap2ndBlendMask` / `_MatCap2ndBumpMap` を runtime sampling し、2nd MatCap contribution を合成する。
+  - remaining: Portable16 tier では16 texture budgetのため runtime contribution を抑制する。VR parallax、camera roll を含む Z rotation cancel false path、1st MatCap との本家合成順を詰める。mask UV は本家同様 `fd.uvMain` 固定。
 
 ### Reflection / Specular
 
@@ -573,6 +576,7 @@ Status legend:
 - `[~]` backlight raw params
   - done: `_UseBacklight`、`_BacklightColor`、`_BacklightMainStrength`、`_BacklightNormalStrength`、`_BacklightBorder`、`_BacklightBlur`、`_BacklightDirectivity`、`_BacklightViewStrength`、`_BacklightReceiveShadow`、`_BacklightBackfaceMask` を v2 material に保持する。
   - done: `_BacklightColorTex` を exporter / importer / FullOnePass renderer へ接続した。Portable16 は texture budget 維持のため white fallback。
+  - done: Renderer は `_BacklightColorTex` の slot 別 Tiling / Offset を、本家 `LIL_SAMPLE_2D_ST(..., fd.uvMain)` 相当で sampling UV に使う。
   - done: field_drape の `Mat_Hair_Yellow2` / `Mat_Hair_Yellow2_Base` で `_UseBacklight = 1` が出たため、Backlight を renderer に接続する。
   - done: `_BacklightReceiveShadow` を renderer に接続し、Unity attenuation の代替として UNA の toon shadow `shading` 係数を backlight LN 入力へ混ぜる。
   - remaining: Unity attenuation / `fd.origL` 相当入力と `headV` はまだ近似。
