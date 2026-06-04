@@ -358,6 +358,10 @@ fn portable_mesh_shader_source() -> String {
 		"\t\t\tlet authored_backlight_color = drawu.backlight_color;\n",
 	);
 	shader = shader.replace(
+		"\t\tlet backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;\n\t\tlet backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);\n\t\tlet authored_backlight_color = drawu.backlight_color * backlight_color_sample;\n",
+		"\t\tlet authored_backlight_color = drawu.backlight_color;\n",
+	);
+	shader = shader.replace(
 		"\t\tlet shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);\n\t\tlet shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;\n",
 		"\t\tlet shadow2_color = base * drawu.shadow2_color.rgb;\n",
 	);

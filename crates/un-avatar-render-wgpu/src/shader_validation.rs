@@ -470,13 +470,20 @@ mod tests {
 		let rim_shade = mesh
 			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && !is_liltoon_gem && !is_fur_pass")
 			.expect("lilToon rim shade application");
-		let reflection = mesh
-			.find("if (!is_liltoon_gem && drawu.reflection_control.x > 0.5)")
-			.expect("lilToon reflection block");
-		let matcap = mesh.find("if (drawu.matcap_params.x > 0.0)").expect("lilToon matcap block");
+		let backlight = mesh
+			.find("if (is_liltoon && !is_liltoon_gem && drawu.backlight_params.x > 0.5)")
+			.expect("lilToon backlight block");
+		let reflection = backlight
+			+ mesh[backlight..]
+				.find("let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;")
+				.expect("lilToon reflection blend block");
+		let matcap = reflection
+			+ mesh[reflection..]
+				.find("if (drawu.matcap_params.x > 0.0)")
+				.expect("lilToon matcap block");
 		assert!(
-			rim_shade < reflection && reflection < matcap,
-			"lilToon pass order is RimShade -> Reflection -> MatCap -> RimLight"
+			rim_shade < backlight && backlight < reflection && reflection < matcap,
+			"lilToon pass order is RimShade -> Backlight -> Reflection -> MatCap -> RimLight"
 		);
 	}
 }

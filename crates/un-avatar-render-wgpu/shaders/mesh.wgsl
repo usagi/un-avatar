@@ -2086,6 +2086,25 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 		}
 	}
+	if (is_liltoon && !is_liltoon_gem && drawu.backlight_params.x > 0.5) {
+		let backlight_n = normalize(mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0)));
+		let backlight_factor = pow(clamp(-dot(normalize(l + v), l) * 0.5 + 0.5, 0.0, 1.0), max(drawu.backlight_params.w, 0.00001));
+		let backlight_ln_dir = normalize(-v * clamp(drawu.backlight_ext_params.z, 0.0, 1.0) + l);
+		let backlight_receive_shadow = mix(1.0, shading, clamp(drawu.backlight_shadow_params.x, 0.0, 1.0));
+		let backlight_ln_raw = (dot(backlight_ln_dir, backlight_n) * 0.5 + 0.5) * backlight_receive_shadow;
+		let backlight_ln = lil_tooning_scale(
+			backlight_ln_raw,
+			clamp(drawu.backlight_ext_params.x, 0.0, 1.0),
+			clamp(drawu.backlight_ext_params.y, 0.0, 1.0)
+		);
+		let backlight_backface = lil_backface_visibility(drawu.backlight_ext_params.w, front_facing);
+		let backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;
+		let backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);
+		let authored_backlight_color = drawu.backlight_color * backlight_color_sample;
+		let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(authored_backlight_color.a, 0.0, 1.0);
+		let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
+		lit = lit + backlight * backlight_color * effect_light_color;
+	}
 	if (is_liltoon_refraction) {
 		let refraction_strength = drawu.gem_params.x;
 		if (abs(refraction_strength) > 0.00001) {
@@ -2173,25 +2192,6 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
 				lit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 			}
-		}
-		if (!is_liltoon_gem && drawu.backlight_params.x > 0.5) {
-			let backlight_n = normalize(mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0)));
-			let backlight_factor = pow(clamp(-dot(normalize(l + v), l) * 0.5 + 0.5, 0.0, 1.0), max(drawu.backlight_params.w, 0.00001));
-			let backlight_ln_dir = normalize(-v * clamp(drawu.backlight_ext_params.z, 0.0, 1.0) + l);
-			let backlight_receive_shadow = mix(1.0, shading, clamp(drawu.backlight_shadow_params.x, 0.0, 1.0));
-			let backlight_ln_raw = (dot(backlight_ln_dir, backlight_n) * 0.5 + 0.5) * backlight_receive_shadow;
-			let backlight_ln = lil_tooning_scale(
-				backlight_ln_raw,
-				clamp(drawu.backlight_ext_params.x, 0.0, 1.0),
-				clamp(drawu.backlight_ext_params.y, 0.0, 1.0)
-			);
-			let backlight_backface = lil_backface_visibility(drawu.backlight_ext_params.w, front_facing);
-			let backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;
-			let backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);
-			let authored_backlight_color = drawu.backlight_color * backlight_color_sample;
-			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(authored_backlight_color.a, 0.0, 1.0);
-			let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
-			lit = lit + backlight * backlight_color * effect_light_color;
 		}
 		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
 	} else {
