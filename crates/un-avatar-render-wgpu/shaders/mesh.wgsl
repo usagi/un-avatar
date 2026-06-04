@@ -2294,7 +2294,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
 			emission_color = mix(emission_color, emission_color * inv_lighting, clamp(drawu.emission_grad_params.z, 0.0, 1.0));
 			emission_color = mix(emission_color, emission_color * base, clamp(drawu.emission_params.y, 0.0, 1.0));
-			let emission_transparency = select(1.0, out_a, alpha_kind > 1.5);
+			let emission_transparency = select(1.0, out_a, liltoon_apply_effect_transparency);
 			let emission_blink = lil_calc_blink(drawu.emission_blink_params);
 			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * emission_blink * emission_mask * drawu.emission_color.a * emission_tex_color.a * emission_transparency, 0.0, 1.0);
 			lit = lil_blend_color(lit, emission_color, emission_blend, drawu.emission_params.w);

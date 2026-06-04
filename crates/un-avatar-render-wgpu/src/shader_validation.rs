@@ -576,8 +576,8 @@ mod tests {
 	fn liltoon_transparent_emission_blend_uses_alpha() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("let emission_transparency = select(1.0, out_a, alpha_kind > 1.5);"),
-			"lilToon transparent emission blend must use fd.col.a"
+			mesh.contains("let emission_transparency = select(1.0, out_a, liltoon_apply_effect_transparency);"),
+			"lilToon transparent non-refraction emission blend must use fd.col.a"
 		);
 		assert!(
 			mesh.contains("drawu.emission_color.a * emission_tex_color.a * emission_transparency")
