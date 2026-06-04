@@ -70,6 +70,13 @@ mod tests {
 			mesh.contains("(1.0 - ln_raw + indir_range) / max(1.0 + indir_range, 0.00001)"),
 			"lilToon computes lnIndir as saturate((1.0-lnRaw + _RimIndirRange) / (1.0 + _RimIndirRange))"
 		);
+		assert!(
+			mesh.contains("let rim_indirect_color = drawu.rim_indirect_color.rgb * rim_tex_color.rgb;")
+				&& mesh.contains(
+					"let rim_light_mul = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.rim_control.z, 0.0, 1.0));"
+				) && mesh.contains("drawu.rim_params.w * drawu.rim_indirect_color.a * rim_tex_color.a"),
+			"lilToon direction rim must apply RimColorTex, RimEnableLighting, and RimIndirColor alpha to the indirect rim"
+		);
 	}
 
 	#[test]

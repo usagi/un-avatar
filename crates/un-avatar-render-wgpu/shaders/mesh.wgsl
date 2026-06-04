@@ -2112,10 +2112,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);
 	if (!disable_rim) {
 		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
-		if (is_liltoon && drawu.rim_control.x > 0.0) {
+		if (is_liltoon && drawu.rim_params.w > 0.0) {
 			let rim_tex_color = textureSample(rim_tex, rim_samp, rim_uv);
 			var rim_color = drawu.rim_color.rgb * rim_tex_color.rgb;
+			let rim_indirect_color = drawu.rim_indirect_color.rgb * rim_tex_color.rgb;
 			rim_color = mix(rim_color, rim_color * base, clamp(drawu.rim_control.y, 0.0, 1.0));
+			let rim_light_mul = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.y, 0.0, 1.0)));
 			let rim_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
 			let ln_raw = clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0);
@@ -2124,7 +2126,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let ln_dir = clamp((ln_raw + dir_range) / max(1.0 + dir_range, 0.00001), 0.0, 1.0);
 			let rim_dir_raw = mix(rim_raw, rim_raw * ln_dir, rim_dir_strength);
 			let rim_factor = lil_tooning_scale(rim_dir_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
-			let lit_rim_color = mix(rim_color, rim_color * effect_light_color, clamp(drawu.rim_control.z, 0.0, 1.0));
+			let lit_rim_color = rim_color * rim_light_mul;
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
 			let rim_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
 			let rim_backface = lil_backface_visibility(drawu.rim_ext_params.z, front_facing);
@@ -2139,9 +2141,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				indir_raw,
 				clamp(drawu.rim_indirect_params.w, 0.0, 1.0),
 				clamp(drawu.rim_indirect_ext_params.x, 0.0, 1.0)
-			) * clamp(drawu.rim_indirect_color.a, 0.0, 1.0);
-			let rim_indirect_blend = clamp(indir_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
-			rim = rim + drawu.rim_indirect_color.rgb * rim_indirect_blend;
+			);
+			let rim_indirect_alpha = clamp(drawu.rim_params.w * drawu.rim_indirect_color.a * rim_tex_color.a, 0.0, 1.0);
+			let rim_indirect_blend = clamp(indir_factor * rim_indirect_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
+			rim = rim + rim_indirect_color * rim_light_mul * rim_indirect_blend;
 			rim_blend = max(rim_blend, rim_indirect_blend);
 		} else if (!is_liltoon) {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));

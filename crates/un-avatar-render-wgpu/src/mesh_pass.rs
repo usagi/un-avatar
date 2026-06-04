@@ -3781,7 +3781,7 @@ fn mesh_draw_material_gpu(
 				u.rim.border_factor.clamp(0.0, 1.0),
 				u.rim.blur_factor.clamp(0.0, 1.0),
 				u.rim.fresnel_power_factor.clamp(0.01, 50.0),
-				0.0,
+				u.rim.enabled_factor.clamp(0.0, 1.0),
 			]
 		})
 		.unwrap_or([rim_lighting_mix, rim_power, rim_lift, rim_texture_mix]);
@@ -8416,6 +8416,7 @@ mod tests {
 	#[test]
 	fn liltoon_rim_signed_direction_ranges_reach_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rim.enabled_factor = 0.75;
 		liltoon_like.rim.directional_strength_factor = 0.5;
 		liltoon_like.rim.directional_range_factor = -0.75;
 		liltoon_like.rim.indirect_range_factor = -0.25;
@@ -8429,6 +8430,7 @@ mod tests {
 		assert_eq!(draw.rim_indirect_params[0], 0.5);
 		assert_eq!(draw.rim_indirect_params[1], -0.75);
 		assert_eq!(draw.rim_indirect_params[2], -0.25);
+		assert_eq!(draw.rim_params[3], 0.75);
 	}
 
 	#[test]
