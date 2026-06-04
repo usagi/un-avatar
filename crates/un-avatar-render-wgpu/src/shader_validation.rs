@@ -372,4 +372,20 @@ mod tests {
 			"_BacklightColorTex must use its authored _ST on fd.uvMain"
 		);
 	}
+
+	#[test]
+	fn liltoon_light_color_includes_environment_proxy() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn liltoon_light_color() -> vec3<f32>")
+				&& mesh.contains("let main_light = frame.light_color.rgb * frame.light_color.w;")
+				&& mesh.contains("let sh_proxy = frame.ambient_color.rgb * frame.ambient_color.w;")
+				&& mesh.contains("return lil_correct_light_color(main_light + sh_proxy);"),
+			"lilToon fd.lightColor must include an SH/environment proxy, matching lilToon main light + SH semantics"
+		);
+		assert!(
+			mesh.contains("let effect_light_color = select(raw_light_color, lil_light_color, is_liltoon);"),
+			"Only the lilToon-like path should replace direct light with the lilToon lightColor approximation"
+		);
+	}
 }

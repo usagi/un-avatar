@@ -1580,13 +1580,22 @@ fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
 	return clamp(mix(1.0, sample, strength), 0.0, 1.0);
 }
 
-fn lil_direct_light_color() -> vec3<f32> {
-	let raw = frame.light_color.rgb * frame.light_color.w;
+fn lil_correct_light_color(raw: vec3<f32>) -> vec3<f32> {
 	let luminance = dot(raw, vec3<f32>(0.2126, 0.7152, 0.0722));
 	let monochrome = mix(raw, vec3<f32>(luminance, luminance, luminance), clamp(drawu.lighting_ext_params.z, 0.0, 1.0));
 	let min_limit = max(drawu.lighting_ext_params.x, 0.0);
 	let max_limit = max(drawu.lighting_ext_params.y, min_limit);
 	return clamp(monochrome, vec3<f32>(min_limit, min_limit, min_limit), vec3<f32>(max_limit, max_limit, max_limit));
+}
+
+fn lil_direct_light_color() -> vec3<f32> {
+	return lil_correct_light_color(frame.light_color.rgb * frame.light_color.w);
+}
+
+fn liltoon_light_color() -> vec3<f32> {
+	let main_light = frame.light_color.rgb * frame.light_color.w;
+	let sh_proxy = frame.ambient_color.rgb * frame.ambient_color.w;
+	return lil_correct_light_color(main_light + sh_proxy);
 }
 
 @fragment
@@ -1723,6 +1732,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let lil_n_faced = lil_flip_backface_normal(n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
 	let geometry_n = select(lil_geometry_n_faced, normalize(lil_geometry_n_faced - v * 0.2), gem_backface_normal);
 	let n = select(lil_n_faced, normalize(lil_n_faced - v * 0.2), gem_backface_normal);
+	let raw_light_color = frame.light_color.rgb * frame.light_color.w;
+	let lil_light_color = liltoon_light_color();
+	let effect_light_color = select(raw_light_color, lil_light_color, is_liltoon);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
@@ -1770,7 +1782,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	var lit: vec3<f32>;
 	if (drawu.shadow_params.x > 0.5) {
-		let light_color = lil_direct_light_color();
+		let light_color = select(lil_direct_light_color(), lil_light_color, is_liltoon);
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
 		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
@@ -1936,11 +1948,11 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let specular_term = smith_joint_ggx * ggx * nl_spec;
 			specular_reflect = specular_term * fresnel_term(specular_color, lh);
 		}
-		specular = specular_reflect * frame.light_color.rgb * frame.light_color.w;
+		specular = specular_reflect * effect_light_color;
 		specular_blend = specular_reflect;
 		let reflection_lighting = mix(
 			vec3<f32>(1.0, 1.0, 1.0),
-			frame.light_color.rgb * frame.light_color.w,
+			effect_light_color,
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
 		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
@@ -1960,7 +1972,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let cube_tint = drawu.reflection_cube_color.rgb;
 		let gem_reflection_lighting = mix(
 			vec3<f32>(1.0, 1.0, 1.0),
-			frame.light_color.rgb * frame.light_color.w,
+			effect_light_color,
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
 		let gem_reflection_dir = normalize(reflect(-v, n));
@@ -2017,7 +2029,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let ln_dir = clamp((ln_raw + dir_range) / max(1.0 + dir_range, 0.00001), 0.0, 1.0);
 			let rim_dir_raw = mix(rim_raw, rim_raw * ln_dir, rim_dir_strength);
 			let rim_factor = lil_tooning_scale(rim_dir_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
-			let lit_rim_color = mix(rim_color, rim_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.rim_control.z, 0.0, 1.0));
+			let lit_rim_color = mix(rim_color, rim_color * effect_light_color, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
 			let rim_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
 			let rim_backface = lil_backface_visibility(drawu.rim_ext_params.z, front_facing);
@@ -2066,7 +2078,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let reflection_color_alpha = clamp(drawu.reflection_color.a * reflection_color_texel.a * reflection_transparency, 0.0, 1.0);
 		lit = lit - reflection_metallic * lit;
 		let reflection_tint = drawu.reflection_color.rgb * reflection_color_texel.rgb;
-		let reflection_light_tint = reflection_tint * frame.light_color.rgb * frame.light_color.w;
+		let reflection_light_tint = reflection_tint * effect_light_color;
 		lit = lil_blend_color3(lit, reflection_light_tint, specular_blend * reflection_color_alpha * drawu.reflection_control.y, drawu.reflection_control.w);
 		if (is_liltoon_gem) {
 			let refraction_strength = drawu.gem_params.x;
@@ -2102,7 +2114,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
 				let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 				let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
-				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
+				let lit_matcap = mix(matcap_raw, matcap_raw * effect_light_color, clamp(drawu.matcap_params.z, 0.0, 1.0));
 				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
 				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).rgb;
@@ -2120,7 +2132,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
 				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
-				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
+				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
 				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
@@ -2160,7 +2172,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let authored_backlight_color = drawu.backlight_color * backlight_color_sample;
 			let backlight = clamp(backlight_factor * backlight_ln, 0.0, 1.0) * backlight_backface * clamp(authored_backlight_color.a, 0.0, 1.0);
 			let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
-			lit = lit + backlight * backlight_color * frame.light_color.rgb * frame.light_color.w;
+			lit = lit + backlight * backlight_color * effect_light_color;
 		}
 		lit = lil_blend_weighted_color(lit, rim, rim_blend, drawu.rim_control.w);
 	} else {
@@ -2174,7 +2186,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 			let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 			if (drawu.matcap_params.x > 0.0) {
-				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
+				let lit_matcap = mix(matcap_raw, matcap_raw * effect_light_color, clamp(drawu.matcap_params.z, 0.0, 1.0));
 				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
 				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).rgb;
@@ -2194,7 +2206,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
 				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
-				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));
+				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
 				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
@@ -2232,7 +2244,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		glitter_alpha = mix(glitter_alpha, glitter_alpha * out_a, clamp(drawu.glitter_ext.w, 0.0, 1.0));
 		glitter_alpha = glitter_alpha * lil_backface_visibility(drawu.glitter_ext2.x, front_facing);
 		glitter_alpha = mix(glitter_alpha, glitter_alpha * lil_effect_shadowmix, clamp(drawu.glitter_ext.z, 0.0, 1.0));
-		let glitter_lit = mix(glitter_color, glitter_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.glitter_ext.y, 0.0, 1.0));
+		let glitter_lit = mix(glitter_color, glitter_color * effect_light_color, clamp(drawu.glitter_ext.y, 0.0, 1.0));
 		lit = lit + glitter_lit * glitter_alpha;
 	}
 
