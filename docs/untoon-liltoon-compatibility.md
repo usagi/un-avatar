@@ -385,7 +385,7 @@ Status legend:
   - remaining: lilToon 本家の lighting/shadow 合成後の albedo 参照位置と一致するか確認する。
 - `[~]` `_MatCapBlend`
 	- done: glTF `UN_avatar` extras / Unity property から読み取り、1st MatCap の final blend weight として WGSL に接続した。
-	- done: `_MatCapApplyTransparency` を保持し、1st MatCap blend weight へ fragment alpha を反映する。
+	- done: `_MatCapApplyTransparency` を保持し、本家 `LIL_RENDER == 2 && !LIL_REFRACTION` と同じく transparent non-refraction material の 1st MatCap blend weight へだけ fragment alpha を反映する。
 	- remaining: blend mask / transparency / shadowmix の本家合成順を検証する。
 - `[~]` `_MatCapBlendMode`
   - done: Normal / Add / Screen / Multiply の 0..3 を読み取り、lilToon `lilBlendColor` 相当の WGSL branch に接続した。
@@ -524,7 +524,7 @@ Status legend:
   - remaining: alpha semantics、directional rim / indirect rim での共用順を本家に合わせる。
 - `[~]` `_RimMainStrength`
   - done: v2 rim parameter として保持し、shader で `lerp(rimColor, rimColor * albedo, value)` 相当へ接続した。
-  - done: `_RimApplyTransparency` を保持し、direct / indirect rim contribution へ fragment alpha を反映する。
+  - done: `_RimApplyTransparency` を保持し、本家 `LIL_RENDER == 2 && !LIL_REFRACTION` と同じく transparent non-refraction material の direct / indirect rim contribution へだけ fragment alpha を反映する。
   - remaining: texture alpha、indirect rim、RimShade との順序を照合する。
 - `[~]` `_RimBorder`
   - done: v2 rim parameter として保持し、rim factor の toon border へ接続した。
@@ -662,7 +662,7 @@ Status legend:
 ### Advanced / Deferred
 
 - `[~]` Glitter
-  - done: `_UseGlitter` / `_GlitterColor` / `_GlitterColorTex` / `_GlitterShapeTex` / `_GlitterParams1` / `_GlitterParams2` / `_GlitterAtras` / strength / contrast / lighting / shadow / transparency / backface / UV mode / shape / angle randomize / VR parallax strength を source params として保持し、renderer へ接続する。
+  - done: `_UseGlitter` / `_GlitterColor` / `_GlitterColorTex` / `_GlitterShapeTex` / `_GlitterParams1` / `_GlitterParams2` / `_GlitterAtras` / strength / contrast / lighting / shadow / transparency / backface / UV mode / shape / angle randomize / VR parallax strength を source params として保持し、renderer へ接続する。transparency は本家 `LIL_RENDER == 2 && !LIL_REFRACTION` と同じく transparent non-refraction material だけに適用する。
   - done: 本家 lilToon の Unity `_Time.x = t/20` 相当、Voronoi cell、color texture、shape atlas、shape rotation、scale randomize、UV set selection を WGSL に実装した。
   - remaining: VR parallax basis は UNA に Unity の正確な `fd.headV` / stereo camera basis が無いため近似。
 - `[~]` Parallax / POM

@@ -324,14 +324,18 @@ mod tests {
 	fn liltoon_reflection_apply_transparency_is_transparent_only() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains(
-				"let reflection_apply_transparency = select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, is_liltoon_refraction || alpha_kind <= 1.5);"
-			),
-			"lilToon applies _ReflectionApplyTransparency only in transparent render mode and not in refraction"
+			mesh.contains("let liltoon_apply_effect_transparency = is_liltoon && alpha_kind > 1.5 && !is_liltoon_refraction;"),
+			"lilToon effect transparency flags apply only in transparent render mode and not in refraction"
 		);
 		assert!(
+			mesh.contains("let reflection_apply_transparency = select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency);")
+				&& mesh.contains("let matcap_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.x, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency));")
+				&& mesh.contains("let matcap2_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.y, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency));")
+				&& mesh.contains("let rim_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.z, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency));")
+				&& mesh.contains("glitter_alpha = mix(glitter_alpha, glitter_alpha * out_a, select(clamp(drawu.glitter_ext.w, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency));")
+				&&
 			mesh.contains("let reflection_transparency = mix(1.0, a, reflection_apply_transparency);"),
-			"reflection alpha should use the gated transparency factor"
+			"MatCap, Rim, Glitter, and Reflection transparency should use the gated transparent-only factor"
 		);
 	}
 
