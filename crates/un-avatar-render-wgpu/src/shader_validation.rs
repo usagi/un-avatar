@@ -419,6 +419,21 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_effects_and_specular_use_raw_shadowmix() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("var lil_shadowmix = 1.0;")
+				&& mesh.contains("lil_shadowmix = lil_shadow;")
+				&& mesh.contains("let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);"),
+			"lilToon effect masks must use fd.shadowmix before _ShadowStrength is applied"
+		);
+		assert!(
+			mesh.contains("specular_reflect = specular_reflect * select(1.0, lil_shadowmix, is_liltoon);"),
+			"lilToon screen-shadow specular path attenuates specular by fd.shadowmix"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh

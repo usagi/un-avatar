@@ -1758,6 +1758,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 
 	let force_shift_zero = (dbg & DBG_FORCE_SHADING_SHIFT_ZERO) != 0u;
 	var shading: f32;
+	var lil_shadowmix = 1.0;
 	if (drawu.shadow_params.x > 0.5) {
 		let shadow_strength_mask_uv = uv * drawu.shadow_strength_mask_uv_offset_scale.zw + drawu.shadow_strength_mask_uv_offset_scale.xy;
 		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
@@ -1774,6 +1775,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
 		let lil_shadow = lil_shadow_apply_post_ao(lil_shadow_raw, shadow_border_mask.r, shadow_post_ao);
+		lil_shadowmix = lil_shadow;
 		shading = mix(1.0, lil_shadow, clamp(drawu.shadow_params.y * shadow_strength_mask.r, 0.0, 1.0));
 	} else {
 		let raw_shift_tex_value = textureSample(shading_shift_tex, shading_shift_samp, uv).r * drawu.shading_params.z;
@@ -1785,6 +1787,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let toony_st = clamp(drawu.shading_params.y, 0.0, 1.0);
 		let toony_boundary = 1.0 - toony_st;
 		shading = linearstep(-toony_boundary, toony_boundary, shading);
+		lil_shadowmix = shading;
 	}
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
 	let shade_uv = uv * drawu.shade_uv_offset_scale.zw + drawu.shade_uv_offset_scale.xy;
@@ -1952,6 +1955,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let specular_term = smith_joint_ggx * ggx * nl_spec;
 			specular_reflect = specular_term * fresnel_term(specular_color, lh);
 		}
+		specular_reflect = specular_reflect * select(1.0, lil_shadowmix, is_liltoon);
 		specular = specular_reflect * effect_light_color;
 		specular_blend = specular_reflect;
 		let reflection_lighting = mix(
@@ -2018,7 +2022,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);
 	var rim_blend = 0.0;
-	let lil_effect_shadowmix = select(shading, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);
+	let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);
 	if (!disable_rim) {
 		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
 		if (is_liltoon && drawu.rim_control.x > 0.0) {
