@@ -1440,6 +1440,7 @@ impl AvatarApp {
 			}
 			status.unmotion_zenoh_received_frames = self.gpu.as_ref().map_or(0, |g| g.unmotion_zenoh_received_frames());
 			status.motion_applied_frames = self.gpu.as_ref().map_or(0, |g| g.motion_applied_frames());
+			status.audio_link_texture_needed = self.gpu.as_ref().is_some_and(|g| g.audio_link_texture_needed());
 			status.primary_motion_source = self
 				.gpu
 				.as_ref()
@@ -1754,6 +1755,7 @@ impl AvatarApp {
 			debug_material_dump: self.opts.debug_material_dump,
 			vmc_address: self.opts.vmc_address,
 			unmotion_zenoh: self.opts.unmotion_zenoh.clone(),
+			audio_link: self.opts.audio_link.clone(),
 			debug_vmc: self.opts.debug.vmc,
 		}
 	}
@@ -2850,6 +2852,9 @@ struct RendererRuntimeSnapshot {
 	unmotion_zenoh_received_frames: u64,
 	#[serde(default)]
 	motion_applied_frames: u64,
+	/// 現在の profile と可視 material set が external AudioLink texture を必要としているか。
+	#[serde(default)]
+	audio_link_texture_needed: bool,
 	/// 旧 status 互換の primary motion source。
 	#[serde(default)]
 	primary_motion_source: crate::options::PrimaryMotionSource,
@@ -2970,6 +2975,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		unmotion_zenoh_key: opts.unmotion_zenoh.base_key_expr.clone(),
 		unmotion_zenoh_received_frames: 0,
 		motion_applied_frames: 0,
+		audio_link_texture_needed: false,
 		primary_motion_source: opts.primary_motion_source,
 		show_axes: opts.show_axes,
 		show_bone_colliders: opts.show_bone_colliders,
@@ -3847,6 +3853,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.runtime_bus_key.is_some() {
 		opts.runtime_bus_key = cli.runtime_bus_key;
+	}
+	if cli.audio_link != default.audio_link {
+		opts.audio_link = cli.audio_link;
 	}
 	// CLI で `--no-spring-bones` が指定されたときだけ強制 OFF。指定なしは
 	// manifest 値（または既定値 true）をそのまま使う。

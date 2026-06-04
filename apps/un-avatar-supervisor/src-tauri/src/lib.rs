@@ -276,6 +276,8 @@ struct RendererRuntimeStatus {
 	unmotion_zenoh_received_frames: u64,
 	#[serde(default)]
 	motion_applied_frames: u64,
+	#[serde(default)]
+	audio_link_texture_needed: bool,
 	/// `"vmc"` / `"unmotion_zenoh"`。VMC と UNMotion 同時受信時の primary 選択値。
 	#[serde(default)]
 	primary_motion_source: String,
@@ -498,6 +500,8 @@ struct RendererRuntimeTelemetry {
 	unmotion_zenoh_received_frames: u64,
 	#[serde(default)]
 	motion_applied_frames: u64,
+	#[serde(default)]
+	audio_link_texture_needed: bool,
 	#[serde(default)]
 	primary_motion_source: String,
 	#[serde(default)]
@@ -5477,6 +5481,7 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.unwrap_or_else(|| info.unmotion_zenoh_key.clone().unwrap_or_default()),
 		unmotion_zenoh_received_frames: telemetry.as_ref().map_or(0, |telemetry| telemetry.unmotion_zenoh_received_frames),
 		motion_applied_frames: telemetry.as_ref().map_or(0, |telemetry| telemetry.motion_applied_frames),
+		audio_link_texture_needed: telemetry.as_ref().is_some_and(|telemetry| telemetry.audio_link_texture_needed),
 		primary_motion_source: telemetry
 			.as_ref()
 			.map(|telemetry| telemetry.primary_motion_source.clone())
@@ -8630,6 +8635,7 @@ mod tests {
 			unmotion_zenoh_key: String::new(),
 			unmotion_zenoh_received_frames: 0,
 			motion_applied_frames: 0,
+			audio_link_texture_needed: false,
 			primary_motion_source: "vmc".to_string(),
 			show_axes: false,
 			show_bone_colliders: false,

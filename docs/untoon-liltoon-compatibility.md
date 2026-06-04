@@ -687,6 +687,7 @@ Status legend:
   - remaining: POM step count は GPU 安定性のため上限 64 の近似。本家の `LIL_POM_DETAIL 200` と完全一致する高負荷 path ではない。
 - `[~]` AudioLink
   - done: v2 profile / renderer manifest の `[audio_link]` schema と lazy runtime policy を `docs/unavatar-v2-audiolink.md` に固定した。`source = "none"` では CPU audio worker を起動せず shader fallback のみ、`source = "input_device"` でも可視 wardrobe material が AudioLink を使う時だけ capture/FFT を起動する方針。
+  - done: renderer scene upload 後の可視 draw set から external AudioLink texture 要否を判定し、`audio_link_texture_needed` runtime status として公開する。判定条件は lilToon-like material、`_UseAudioLink > 0`、Main2nd/Main3rd/Emission/Emission2nd/Vertex 系 target toggle のいずれか。
   - done: glTF importer / `UnaLilToonLikeMaterial` が `_UseAudioLink`、default value、UV params、mask/local map source slots、Main2nd/Main3rd/Emission/Emission2nd/Vertex 連動 toggle を保持する。
   - done: FullOnePass renderer は本家 `fd.audioLinkValue = 1.0` 初期値と、AudioLink package 未接続時の `_AudioLinkDefaultValue` fallback 波形を実装し、`_AudioLink2Emission` / `_AudioLink2EmissionGrad` / `_AudioLink2Emission2nd` / `_AudioLink2Emission2ndGrad` を emission alpha と gradation UV offset へ接続する。
   - remaining: external `_AudioTexture` 入力、`_AudioLinkMask` / `_AudioLinkLocalMap` sampling、Main2nd/Main3rd alpha 連動、vertex displacement、mode 3/4 spectrum mask、mode 5 object-space position の厳密化は未実装。現状の mode 5 は fragment world position 近似。

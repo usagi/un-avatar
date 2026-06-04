@@ -26,7 +26,9 @@ use crate::{
 		AvatarOutlineOptions, AvatarOutlinePolicy, MaterialTier, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshes,
 		TextureUploadSummary,
 	},
-	options::{BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions},
+	options::{
+		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
+	},
 	post_process::PostProcess,
 	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
 	WindowDebugOptions,
@@ -210,6 +212,7 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) debug_material_dump: bool,
 	pub(crate) vmc_address: Option<SocketAddr>,
 	pub(crate) unmotion_zenoh: crate::options::UnmotionZenohOptions,
+	pub(crate) audio_link: AudioLinkOptions,
 	pub(crate) debug_vmc: bool,
 }
 
@@ -221,6 +224,7 @@ pub(crate) struct PreparedDocumentScene {
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	bone_collider_count: u32,
 	bone_collider_source: BoneColliderSource,
+	audio_link_texture_needed: bool,
 	expression_presets: Vec<String>,
 }
 
@@ -872,6 +876,8 @@ pub(crate) struct GpuState {
 	unmotion_zenoh_live: bool,
 	/// UNMotion/Zenoh subscriber が受信したフレーム数。適用前で数える。
 	unmotion_zenoh_received_frames: Arc<AtomicU64>,
+	/// 現在の profile と可視 material set が外部 AudioLink texture を必要としているか。
+	audio_link_texture_needed: bool,
 	/// 描画直前に motion buffer から取り出して document に適用したフレーム数。
 	motion_applied_frames: Arc<AtomicU64>,
 	motion_receiver_generation: Arc<AtomicU64>,
@@ -1244,6 +1250,7 @@ impl GpuState {
 			primary_motion_source,
 			unmotion_zenoh_live,
 			unmotion_zenoh_received_frames,
+			audio_link_texture_needed: false,
 			motion_applied_frames,
 			motion_receiver_generation: Arc::new(AtomicU64::new(0)),
 			// XYZ 軸はデフォルト Off（manifest や CLI、UI からの明示指示で表示）。
@@ -1336,6 +1343,10 @@ impl GpuState {
 
 	pub fn motion_applied_frames(&self) -> u64 {
 		self.motion_applied_frames.load(Ordering::Relaxed)
+	}
+
+	pub fn audio_link_texture_needed(&self) -> bool {
+		self.audio_link_texture_needed
 	}
 
 	/// XYZ デバッグ軸表示の ON/OFF。
@@ -2192,6 +2203,7 @@ impl GpuState {
 		self.bone_colliders = prepared.bone_colliders;
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
+		self.audio_link_texture_needed = options.audio_link.source == AudioLinkSource::InputDevice && prepared.audio_link_texture_needed;
 		self.reconfigure_motion_receivers(options.vmc_address, options.unmotion_zenoh, options.debug_vmc)?;
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
@@ -2221,6 +2233,7 @@ impl GpuSceneBuildContext {
 		let document_wrapped = Arc::new(RwLock::new(document));
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
+		let mut audio_link_texture_needed = false;
 		{
 			let guard = document_wrapped.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			if let Some(sc) = &guard.scene {
@@ -2262,6 +2275,10 @@ impl GpuSceneBuildContext {
 					texture_summary = Some(sm.texture_summary());
 					let world = crate::scene_transform::scene_world_matrices(sc);
 					sm.update_draw_transforms(&queue, sc, &world, guard.expression_weights.as_ref(), None);
+					audio_link_texture_needed = sm.needs_audio_link_texture();
+					if audio_link_texture_needed && options.audio_link.source == AudioLinkSource::InputDevice {
+						eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
+					}
 					scene_meshes = Some(sm);
 				}
 			}
@@ -2303,6 +2320,7 @@ impl GpuSceneBuildContext {
 			bone_colliders,
 			bone_collider_count: bone_collider_stats.count,
 			bone_collider_source: bone_collider_stats.source,
+			audio_link_texture_needed,
 			expression_presets,
 		})
 	}

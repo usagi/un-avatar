@@ -1009,6 +1009,29 @@ fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
 	})
 }
 
+fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonLikeAudioLink) -> bool {
+	[
+		audio_link.to_main_second_factor,
+		audio_link.to_main_third_factor,
+		audio_link.to_emission_factor,
+		audio_link.to_emission_gradation_factor,
+		audio_link.to_emission_second_factor,
+		audio_link.to_emission_second_gradation_factor,
+		audio_link.to_vertex_factor,
+	]
+	.into_iter()
+	.any(|value| value > 0.5)
+}
+
+fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShadingModel) -> bool {
+	if shading != UnaShadingModel::LilToonLike {
+		return false;
+	}
+	material.liltoon_like.as_ref().is_some_and(|liltoon_like| {
+		liltoon_like.audio_link.enabled_factor > 0.5 && liltoon_audio_link_has_active_target(&liltoon_like.audio_link)
+	})
+}
+
 fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 	material_needs_screen_refraction(&draw.material)
 }
@@ -7504,6 +7527,12 @@ impl SceneMeshes {
 		self.draws.iter().any(|draw| material_needs_screen_refraction(&draw.material))
 	}
 
+	pub fn needs_audio_link_texture(&self) -> bool {
+		self.draws
+			.iter()
+			.any(|draw| material_needs_audio_link_texture(&draw.material, draw.shading))
+	}
+
 	pub fn set_screen_grab_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
 		self.frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("mesh_frame"),
@@ -9557,6 +9586,40 @@ mod tests {
 		assert_eq!(draw.audio_link_uv_params, [0.6, 0.1, 0.25, 0.75]);
 		assert_eq!(draw.audio_link_start, [1.0, 2.0, 3.0, 0.0]);
 		assert_eq!(draw.audio_link_ext, [0.5, 0.25, 1.0, 1.0]);
+	}
+
+	#[test]
+	fn liltoon_audio_link_texture_need_requires_enabled_liltoon_target() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.audio_link.enabled_factor = 1.0;
+		liltoon_like.audio_link.to_emission_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like.clone()),
+			..Default::default()
+		};
+		assert!(material_needs_audio_link_texture(&mat, UnaShadingModel::LilToonLike));
+		assert!(!material_needs_audio_link_texture(&mat, UnaShadingModel::MToonLike));
+
+		liltoon_like.audio_link.enabled_factor = 0.0;
+		let disabled = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like.clone()),
+			..Default::default()
+		};
+		assert!(!material_needs_audio_link_texture(&disabled, UnaShadingModel::LilToonLike));
+
+		liltoon_like.audio_link.enabled_factor = 1.0;
+		liltoon_like.audio_link.to_emission_factor = 0.0;
+		liltoon_like.audio_link.to_main_second_factor = 0.0;
+		liltoon_like.audio_link.to_main_third_factor = 0.0;
+		liltoon_like.audio_link.to_emission_gradation_factor = 0.0;
+		liltoon_like.audio_link.to_emission_second_factor = 0.0;
+		liltoon_like.audio_link.to_emission_second_gradation_factor = 0.0;
+		liltoon_like.audio_link.to_vertex_factor = 0.0;
+		let no_target = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+		assert!(!material_needs_audio_link_texture(&no_target, UnaShadingModel::LilToonLike));
 	}
 
 	#[test]

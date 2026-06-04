@@ -147,6 +147,7 @@ export type RendererRuntimeStatus = {
   unmotion_zenoh_key: string;
   unmotion_zenoh_received_frames: number;
   motion_applied_frames: number;
+  audio_link_texture_needed: boolean;
   unmotion_zenoh_received_fps?: number;
   motion_applied_fps?: number;
   primary_motion_source: PrimaryMotionSource;
