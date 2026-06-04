@@ -1008,6 +1008,16 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 	)
 }
 
+fn transparent_forward_zwrite_enabled(
+	alpha_mode: UnaAlphaMode,
+	transparent_with_z_write: bool,
+	shading: UnaShadingModel,
+) -> bool {
+	alpha_mode == UnaAlphaMode::Blend
+		&& transparent_with_z_write
+		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+}
+
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
 	let mut fur_draw_indices = Vec::new();
@@ -1065,7 +1075,14 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 				if draw_uses_liltoon_gem_prepass(draw) {
 					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
 				}
-				blended_draws.push((blend_pipeline_for_draw(draw, shading, false), draw_index));
+				blended_draws.push((
+					blend_pipeline_for_draw(
+						draw,
+						shading,
+						transparent_forward_zwrite_enabled(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading),
+					),
+					draw_index,
+				));
 			}
 		}
 	}
@@ -8172,6 +8189,26 @@ mod tests {
 			true,
 			UnaShadingModel::LilToonLike,
 			false
+		));
+		assert!(transparent_forward_zwrite_enabled(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::LilToonLike
+		));
+		assert!(transparent_forward_zwrite_enabled(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::MToonLike
+		));
+		assert!(!transparent_forward_zwrite_enabled(
+			UnaAlphaMode::Blend,
+			true,
+			UnaShadingModel::LitLambert
+		));
+		assert!(!transparent_forward_zwrite_enabled(
+			UnaAlphaMode::Blend,
+			false,
+			UnaShadingModel::LilToonLike
 		));
 	}
 
