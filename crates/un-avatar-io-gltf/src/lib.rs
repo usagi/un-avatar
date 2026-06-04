@@ -2492,6 +2492,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.texture_uv_mode_factors = unavatar_material_uv_mode_factors(extras);
 	out.flip_backface_normal_factor = unavatar_material_float_param(extras, "_FlipNormal").unwrap_or(0.0).clamp(0.0, 1.0);
 	out.rendering.render_queue_number = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue")));
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_BackfaceColor") {
+		out.rendering.backface_color_factor = value;
+	}
 	if let Some(value) = mtoon.and_then(|m| {
 		json_vec4(
 			m.get("mainTexHsvgFactor")
@@ -5739,6 +5742,7 @@ mod tests {
 					"_Main3rdDissolveNoiseStrength": 0.36
 				},
 				"colorParams": {
+					"_BackfaceColor": [0.9, 0.8, 0.7, 0.6],
 					"_Color2nd": [0.11, 0.22, 0.33, 0.44],
 					"_Color3rd": [0.55, 0.66, 0.77, 0.88],
 					"_Main2ndDissolveColor": [0.2, 0.3, 0.4, 0.5],
@@ -5849,6 +5853,7 @@ mod tests {
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
 		assert_eq!(liltoon_like.flip_backface_normal_factor, 1.0);
+		assert_eq!(liltoon_like.rendering.backface_color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));

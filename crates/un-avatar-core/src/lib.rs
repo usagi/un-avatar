@@ -1262,6 +1262,8 @@ pub struct UnaLilToonLikeBlendState {
 pub struct UnaLilToonLikeRendering {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub render_queue_number: Option<i32>,
+	#[serde(default)]
+	pub backface_color_factor: [f32; 4],
 	#[serde(default = "default_liltoon_distance_fade")]
 	pub distance_fade_factor: [f32; 4],
 	#[serde(default = "default_liltoon_distance_fade_color")]
@@ -1777,6 +1779,7 @@ impl Default for UnaLilToonLikeRendering {
 	fn default() -> Self {
 		Self {
 			render_queue_number: None,
+			backface_color_factor: [0.0, 0.0, 0.0, 0.0],
 			distance_fade_factor: default_liltoon_distance_fade(),
 			distance_fade_color_factor: default_liltoon_distance_fade_color(),
 			distance_fade_rim_color_factor: [0.0, 0.0, 0.0, 0.0],

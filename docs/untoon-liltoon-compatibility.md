@@ -604,7 +604,8 @@ Status legend:
 - `[~]` `_EmissionBlend`
   - done: v2 emission parameter として保持し、emission contribution alpha に接続した。
   - done: `_EmissionBlink` と `_EmissionBlendMask` を保持し、FullOnePass renderer の emission blend 係数へ反映する。`_EmissionBlendMask_ScrollRotate` も mask sampling に適用する。
-  - remaining: transparent application、AudioLink と合わせた最終係数を本家に合わせる。Portable16 は texture budget 維持のため `_EmissionBlendMask` sampling を落とす。
+  - done: Transparent lilToon では本家 `emissionBlend *= fd.col.a` 相当として、1st / 2nd emission blend に fragment alpha を掛ける。
+  - remaining: AudioLink と合わせた最終係数を本家に合わせる。Portable16 は texture budget 維持のため `_EmissionBlendMask` sampling を落とす。
 - `[~]` `_EmissionBlendMode`
   - done: v2 emission parameter として保持し、`lilBlendColor` 互換の Normal/Add/Screen/Multiply に接続した。
   - remaining: lilToon の blend mode enum 全体と 2nd emission との合成順を実装する。
@@ -669,6 +670,9 @@ Status legend:
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_DistanceFade` / `_DistanceFadeColor` / `_DistanceFadeMode` / `_DistanceFadeRimColor` / `_DistanceFadeRimFresnelPower` を保持する。
   - done: Renderer は本家 `lilDistanceFade()` の distance ramp、facing gate、negative-alpha fade、rim fresnel color を final color/alpha へ接続する。
   - remaining: `_DistanceFadeMode` の object depth は UNA fragment に object-center depth が無いため camera-to-fragment distance 近似。
+- `[~]` Backface color
+  - done: glTF importer / `UnaLilToonLikeMaterial` が `_BackfaceColor` を保持する。
+  - done: Renderer は本家 `lil_pass_forward_normal.hlsl` と同じく Emission / Dissolve additive 後、Distance Fade 前に backface fragment の `rgb` を `lerp(rgb, _BackfaceColor.rgb * fd.lightColor, _BackfaceColor.a)` 相当へ接続する。
 - `[~]` dissolve
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_DissolveMask` / `_DissolveNoiseMask` / `_DissolveNoiseMask_ScrollRotate` / `_DissolveNoiseStrength` / `_DissolveColor` / `_DissolveParams` / `_DissolvePos` を保持する。
   - done: Renderer は本家 `lilCalcDissolve()` / `lilCalcDissolveWithNoise()` 相当の mode 1 texture / mode 2 UV / noise / edge emission (`_DissolveColor.rgb * dissolveAlpha`) を base material alpha/discard へ接続する。Portable16 tier は Dissolve textures を white/no-noise fallback に落とす。

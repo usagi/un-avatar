@@ -496,6 +496,18 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_backface_color_runs_before_distance_fade() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let dissolve_add = mesh.find("lit = lit + drawu.dissolve_color.rgb * dissolve_result.y").unwrap();
+		let backface = mesh.find("drawu.backface_color.rgb * effect_light_color").unwrap();
+		let distance_fade = mesh.find("let distance_faded = select").unwrap();
+		assert!(
+			dissolve_add < backface && backface < distance_fade,
+			"lilToon _BackfaceColor should run after emission/dissolve and before distance fade"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh

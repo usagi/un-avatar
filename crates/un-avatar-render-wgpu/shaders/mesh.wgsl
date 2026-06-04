@@ -21,6 +21,7 @@ struct DrawTransform {
 
 struct DrawMaterial {
 	base_color: vec4<f32>,
+	backface_color: vec4<f32>,
 	params: vec4<f32>,
 	shade_color: vec4<f32>,
 	shading_params: vec4<f32>,
@@ -2313,6 +2314,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	if is_liltoon {
 		lit = lit + drawu.dissolve_color.rgb * dissolve_result.y + main_layers.dissolve_emission;
+	}
+	if is_liltoon && !front_facing {
+		lit = mix(lit, drawu.backface_color.rgb * effect_light_color, clamp(drawu.backface_color.a, 0.0, 1.0));
 	}
 	let distance_faded = select(vec4<f32>(lit, out_a), lil_apply_distance_fade(lit, out_a, i.wp, n, v, front_facing), is_liltoon);
 	let final_a = clamp(distance_faded.a, 0.0, 1.0);

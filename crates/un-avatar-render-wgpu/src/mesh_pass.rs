@@ -456,6 +456,7 @@ struct MeshDrawTransformGpu {
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
 	base_color: [f32; 4],
+	backface_color: [f32; 4],
 	params: [f32; 4],
 	shade_color: [f32; 4],
 	shading_params: [f32; 4],
@@ -644,7 +645,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2832);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2848);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -3877,6 +3878,9 @@ fn mesh_draw_material_gpu(
 	let distance_fade = liltoon_like
 		.map(|u| u.rendering.distance_fade_factor)
 		.unwrap_or([0.1, 0.01, 0.0, 0.0]);
+	let backface_color = liltoon_like
+		.map(|u| u.rendering.backface_color_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let distance_fade_color = liltoon_like
 		.map(|u| u.rendering.distance_fade_color_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
@@ -4121,6 +4125,7 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
+		backface_color,
 		params: [0.0, eff_alpha.as_shader_alpha_kind(), mat.alpha_cutoff, f32::from_bits(flags)],
 		shade_color: [
 			shade_color[0],
@@ -9087,6 +9092,7 @@ mod tests {
 	#[test]
 	fn liltoon_distance_fade_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.backface_color_factor = [0.9, 0.8, 0.7, 0.6];
 		liltoon_like.rendering.distance_fade_factor = [0.2, 5.0, 0.75, 1.0];
 		liltoon_like.rendering.distance_fade_color_factor = [0.3, 0.4, 0.5, 0.6];
 		liltoon_like.rendering.distance_fade_rim_color_factor = [0.7, 0.8, 0.9, 0.25];
@@ -9099,6 +9105,7 @@ mod tests {
 
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
+		assert_eq!(draw.backface_color, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(draw.distance_fade, [0.2, 5.0, 0.75, 1.0]);
 		assert_eq!(draw.distance_fade_color, [0.3, 0.4, 0.5, 0.6]);
 		assert_eq!(draw.distance_fade_rim_color, [0.7, 0.8, 0.9, 0.25]);
