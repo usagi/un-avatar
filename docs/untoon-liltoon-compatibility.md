@@ -421,14 +421,15 @@ Status legend:
   - remaining: Unity の environment reflection、roughness mip、normal strength、forward add 条件を本家に合わせる。
 - `[~]` `_Smoothness`
   - done: source raw params を保持し、lilToon-like specular power と reflection の perceptual roughness / surface reduction へ接続した。
-  - remaining: GSAA、roughness mip selection として本家 `lilReflection` に合わせる。
+  - done: smoothness / anisotropy 由来の perceptual roughness は本家 `lilReflection` と同じく 0..1 saturate 相当にし、GGX specular の `max(fd.roughness, 0.002)` だけを specular 計算側に残す。
+  - remaining: roughness mip selection として本家 `lilReflection` に合わせる。
 - `[~]` `_SmoothnessTex`
   - done: Exporter / importer / v2 material で texture reference を保持し、smoothness factor に mask.r を掛ける。
   - done: Renderer は `_SmoothnessTex` の slot 別 Tiling / Offset を sampling UV に使う。
   - remaining: texture UV mode / UV set、GSAA、roughness mip selection との順序を本家へ合わせる。
 - `[~]` `_Metallic`
   - done: source raw params を保持し、specular color の `lerp(_Reflectance, albedo, metallic)` 相当へ接続した。
-  - done: lilToon branch では PBR 的な metallic base color energy reduction を適用しない。lilToon reflection は主色を消す材質モデルではなく、主色上への specular / reflection 合成として扱う。
+  - done: 本家 `lilReflection` と同じく metallic 分だけ `fd.col.rgb` を減らし、specular color は `lerp(_Reflectance, fd.albedo, metallic)` として扱う。
   - remaining: MatCap / Rim / environment reflection との正確な ordering を本家へ合わせる。
 - `[~]` `_MetallicGlossMap`
   - done: Exporter / importer / v2 material で texture reference を保持し、metallic factor に mask.r を掛ける。

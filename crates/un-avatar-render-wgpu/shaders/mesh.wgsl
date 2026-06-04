@@ -1921,8 +1921,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		smoothness = lil_gsaa_smoothness(smoothness, n, drawu.rendering_ext_params.x);
 		let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
 		reflection_metallic = metallic;
-		let base_perceptual_roughness = max(1.0 - smoothness, 0.02);
-		let aniso_perceptual_roughness = max(1.2 - abs(anisotropy_basis.amount), 0.02);
+		let base_perceptual_roughness = clamp(1.0 - smoothness, 0.0, 1.0);
+		let aniso_perceptual_roughness = clamp(1.2 - abs(anisotropy_basis.amount), 0.0, 1.0);
 		let perceptual_roughness = mix(base_perceptual_roughness, aniso_perceptual_roughness, clamp(drawu.anisotropy_params.z * anisotropy_basis.enabled, 0.0, 1.0));
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let reflectance = clamp(drawu.reflection_params.z, 0.0, 1.0);

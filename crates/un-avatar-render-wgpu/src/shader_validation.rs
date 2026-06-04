@@ -261,6 +261,27 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_reflection_perceptual_roughness_has_no_floor() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let base_perceptual_roughness = clamp(1.0 - smoothness, 0.0, 1.0);"),
+			"lilToon derives perceptual roughness from smoothness without a nonzero floor before reflection sampling"
+		);
+		assert!(
+			mesh.contains("let aniso_perceptual_roughness = clamp(1.2 - abs(anisotropy_basis.amount), 0.0, 1.0);"),
+			"lilToon anisotropy perceptual roughness is saturate(1.2 - abs(anisotropy))"
+		);
+		assert!(
+			!mesh.contains("max(1.0 - smoothness, 0.02)") && !mesh.contains("max(1.2 - abs(anisotropy_basis.amount), 0.02)"),
+			"do not add a perceptual roughness floor before environment reflection"
+		);
+		assert!(
+			mesh.contains("let roughness2 = max(roughness, 0.002);"),
+			"the GGX specular branch should keep lilToon's roughness lower bound inside lilCalcSpecular"
+		);
+	}
+
+	#[test]
 	fn liltoon_dissolve_separates_noise_and_non_noise_directional_uv() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
