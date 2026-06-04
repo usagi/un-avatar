@@ -42,7 +42,7 @@ const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl
 
 const PORTABLE_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
 const PORTABLE_SAMPLERS_PER_STAGE: u32 = 16;
-const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 54;
+const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -3770,7 +3770,7 @@ mod tests {
 
 	#[test]
 	fn full_liltoon_texture_budget_covers_highest_mesh_binding() {
-		assert_eq!(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE, 54);
+		assert_eq!(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE, 56);
 	}
 
 	#[test]

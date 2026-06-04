@@ -69,6 +69,7 @@ The shader path remains lilToon-source-compatible:
 - `_UseAudioLink` gates AudioLink value calculation.
 - `_AudioLinkDefaultValue` fallback works without an external audio texture.
 - AudioLink target toggles decide where the value is applied for Main2nd, Main3rd, Emission, Emission2nd, and Vertex displacement.
+- `_AudioLinkMask` and `_AudioLinkLocalMap` are sampled in the lilToon-like path for mask, spectrum-mask, local-map, and vertex-displacement behavior.
 
 External audio texture support must layer on top of this behavior rather than replacing it.
 

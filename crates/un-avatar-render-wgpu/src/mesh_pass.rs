@@ -591,6 +591,11 @@ struct MeshDrawMaterialGpu {
 	audio_link_vertex_params: [f32; 4],
 	audio_link_vertex_uv_params: [f32; 4],
 	audio_link_vertex_start: [f32; 4],
+	audio_link_vertex_strength: [f32; 4],
+	audio_link_mask_params: [f32; 4],
+	audio_link_mask_uv_offset_scale: [f32; 4],
+	audio_link_mask_uv_anim_params: [f32; 4],
+	audio_link_local_map_params: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
 	outline_lit_color: [f32; 4],
@@ -683,7 +688,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3040);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3120);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1722,6 +1727,8 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(75, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(76, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(77, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -4235,9 +4242,9 @@ fn mesh_draw_material_gpu(
 		.map(|u| {
 			[
 				u.audio_link.to_vertex_factor.clamp(0.0, 1.0),
-				u.audio_link.vertex_uv_mode_factor.clamp(0.0, 5.0),
-				u.audio_link.vertex_strength_factor[0],
+				u.audio_link.vertex_uv_mode_factor.clamp(0.0, 3.0),
 				u.audio_link.as_local_factor.clamp(0.0, 1.0),
+				0.0,
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
@@ -4245,6 +4252,32 @@ fn mesh_draw_material_gpu(
 		.map(|u| u.audio_link.vertex_uv_params_factor)
 		.unwrap_or([0.25, 0.0, 0.0, 0.125]);
 	let audio_link_vertex_start = liltoon_like.map(|u| u.audio_link.vertex_start_factor).unwrap_or([0.0; 4]);
+	let audio_link_vertex_strength = liltoon_like
+		.map(|u| u.audio_link.vertex_strength_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let audio_link_mask_texture_present = liltoon_like
+		.map(|u| if u.audio_link.mask_texture_index.is_some() { 1.0 } else { 0.0 })
+		.unwrap_or(0.0);
+	let audio_link_local_map_texture_present = liltoon_like
+		.map(|u| if u.audio_link.local_map_texture_index.is_some() { 1.0 } else { 0.0 })
+		.unwrap_or(0.0);
+	let audio_link_mask_params = liltoon_like
+		.map(|u| {
+			[
+				u.audio_link.mask_uv_mode_factor.clamp(0.0, 3.0),
+				audio_link_mask_texture_present,
+				audio_link_local_map_texture_present,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let audio_link_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_AudioLinkMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let audio_link_mask_uv_anim_params = liltoon_like.map(|u| u.audio_link.mask_uv_scroll_rotate_factor).unwrap_or([0.0; 4]);
+	let audio_link_local_map_params = liltoon_like
+		.map(|u| u.audio_link.local_map_params_factor)
+		.unwrap_or([120.0, 1.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
 		backface_color,
@@ -4380,6 +4413,11 @@ fn mesh_draw_material_gpu(
 		audio_link_vertex_params,
 		audio_link_vertex_uv_params,
 		audio_link_vertex_start,
+		audio_link_vertex_strength,
+		audio_link_mask_params,
+		audio_link_mask_uv_offset_scale,
+		audio_link_mask_uv_anim_params,
+		audio_link_local_map_params,
 		outline_color,
 		outline_params: [
 			outline_mode_gpu(outline_mode),
@@ -5163,6 +5201,8 @@ impl SceneMeshes {
 				texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
 				texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
 				texture_bind_group_layout_entry(75, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(76, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(77, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
@@ -5774,7 +5814,7 @@ impl SceneMeshes {
 			image_sampler_indices.push(sampler_index);
 		}
 
-		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 5);
+		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 6);
 
 		let white_texture = create_solid_texture_1x1(device, queue, "white1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [255, 255, 255, 255]);
 		textures.push(white_texture);
@@ -5809,6 +5849,9 @@ impl SceneMeshes {
 		);
 		textures.push(transparent_black_texture);
 		let transparent_black_view = textures[3].create_view(&wgpu::TextureViewDescriptor::default());
+		let blue_texture = create_solid_texture_1x1(device, queue, "blue1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 255, 255]);
+		textures.push(blue_texture);
+		let blue_view = textures[4].create_view(&wgpu::TextureViewDescriptor::default());
 		report("gpu-upload", "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
 			limit_max_dimension: texture_max_dimension,
@@ -6580,6 +6623,16 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
 				let fur_mask_view = texture_view_or(&image_views, fur_mask_texture_index, &white_view);
+				let audio_link_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.audio_link.mask_texture_index);
+				let audio_link_mask_view = texture_view_or(&image_views, audio_link_mask_texture_index, &blue_view);
+				let audio_link_local_map_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.audio_link.local_map_texture_index);
+				let audio_link_local_map_view = texture_view_or(&image_views, audio_link_local_map_texture_index, &black_view);
 				let compute_fur_cards_cpu_fur_maps = ComputeFurCardsCpuFurMaps {
 					length_mask: fur_length_mask_texture_index.and_then(|index| scene.images.get(index)),
 					fur_mask: fur_mask_texture_index.and_then(|index| scene.images.get(index)),
@@ -6897,6 +6950,14 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 75,
 							resource: wgpu::BindingResource::TextureView(main_color_adjust_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 76,
+							resource: wgpu::BindingResource::TextureView(audio_link_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 77,
+							resource: wgpu::BindingResource::TextureView(audio_link_local_map_view),
 						},
 					]);
 				}
@@ -7812,7 +7873,7 @@ mod tests {
 	fn mesh_toon_pipeline_interfaces_match() {
 		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
 		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 54;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 56;
 		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -9682,6 +9743,14 @@ mod tests {
 		liltoon_like.audio_link.as_local_factor = 1.0;
 		liltoon_like.audio_link.vertex_uv_params_factor = [0.7, 0.2, 0.3, 0.4];
 		liltoon_like.audio_link.vertex_start_factor = [4.0, 5.0, 6.0, 0.0];
+		liltoon_like.audio_link.mask_texture_index = Some(2);
+		liltoon_like.audio_link.mask_uv_mode_factor = 2.0;
+		liltoon_like.audio_link.mask_uv_scroll_rotate_factor = [0.01, 0.02, 0.03, 0.04];
+		liltoon_like.audio_link.local_map_texture_index = Some(3);
+		liltoon_like.audio_link.local_map_params_factor = [128.0, 2.0, 0.5, 0.0];
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_AudioLinkMask".to_string(), [0.1, 0.2, 0.3, 0.4]);
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -9694,9 +9763,14 @@ mod tests {
 		assert_eq!(draw.audio_link_uv_params, [0.6, 0.1, 0.25, 0.75]);
 		assert_eq!(draw.audio_link_start, [1.0, 2.0, 3.0, 0.0]);
 		assert_eq!(draw.audio_link_ext, [0.5, 0.25, 1.0, 1.0]);
-		assert_eq!(draw.audio_link_vertex_params, [1.0, 3.0, 0.2, 1.0]);
+		assert_eq!(draw.audio_link_vertex_params, [1.0, 3.0, 1.0, 0.0]);
 		assert_eq!(draw.audio_link_vertex_uv_params, [0.7, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.audio_link_vertex_start, [4.0, 5.0, 6.0, 0.0]);
+		assert_eq!(draw.audio_link_vertex_strength, [0.2, 0.0, 0.0, 0.0]);
+		assert_eq!(draw.audio_link_mask_params, [2.0, 1.0, 1.0, 0.0]);
+		assert_eq!(draw.audio_link_mask_uv_offset_scale, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.audio_link_mask_uv_anim_params, [0.01, 0.02, 0.03, 0.04]);
+		assert_eq!(draw.audio_link_local_map_params, [128.0, 2.0, 0.5, 0.0]);
 	}
 
 	#[test]

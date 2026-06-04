@@ -131,6 +131,11 @@ struct DrawMaterial {
 	audio_link_vertex_params: vec4<f32>,
 	audio_link_vertex_uv_params: vec4<f32>,
 	audio_link_vertex_start: vec4<f32>,
+	audio_link_vertex_strength: vec4<f32>,
+	audio_link_mask_params: vec4<f32>,
+	audio_link_mask_uv_offset_scale: vec4<f32>,
+	audio_link_mask_uv_anim_params: vec4<f32>,
+	audio_link_local_map_params: vec4<f32>,
 	outline_color: vec4<f32>,
 	outline_params: vec4<f32>,
 	outline_lit_color: vec4<f32>,
@@ -299,6 +304,8 @@ struct MorphU {
 @group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;
 @group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;
 @group(1) @binding(75) var main_color_adjust_mask_tex: texture_2d<f32>;
+@group(1) @binding(76) var audio_link_mask_tex: texture_2d<f32>;
+@group(1) @binding(77) var audio_link_local_map_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -392,29 +399,59 @@ fn morphed_position_normal(pos_in: vec3<f32>, norm_in: vec3<f32>, vertex_index: 
 	return array<vec3<f32>, 2>(pos, normalize(norm));
 }
 
-fn lil_calc_audio_link_vertex_value(uv0: vec2<f32>, pos: vec3<f32>) -> f32 {
+fn lil_texture_load_repeat(tex_in: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+	let dims = textureDimensions(tex_in);
+	let xy = vec2<i32>(fract(uv) * vec2<f32>(dims));
+	return textureLoad(tex_in, xy, 0);
+}
+
+fn lil_calc_audio_link_mask_uv(uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>) -> vec2<f32> {
+	var uv_mask = uv0;
+	let mask_mode = drawu.audio_link_mask_params.x;
+	if (mask_mode >= 0.5 && mask_mode < 1.5) {
+		uv_mask = uv1;
+	} else if (mask_mode >= 1.5 && mask_mode < 2.5) {
+		uv_mask = uv2;
+	} else if (mask_mode >= 2.5 && mask_mode < 3.5) {
+		uv_mask = uv3;
+	}
+	return lil_calc_uv_scroll_rotate(uv_mask, drawu.audio_link_mask_uv_offset_scale, drawu.audio_link_mask_uv_anim_params);
+}
+
+fn lil_calc_audio_link_vertex_value(uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, pos: vec3<f32>) -> array<f32, 2> {
+	var out_value = array<f32, 2>(0.0, 1.0);
 	if (drawu.audio_link_params.x <= 0.5 || drawu.audio_link_vertex_params.x <= 0.5) {
-		return 0.0;
+		return out_value;
 	}
 	let mode = drawu.audio_link_vertex_params.y;
 	var audio_link_x = drawu.audio_link_vertex_uv_params.y;
+	var audio_link_y = drawu.audio_link_vertex_uv_params.w;
+	var audio_link_mask = vec4<f32>(1.0);
 	if (mode >= 0.5 && mode < 1.5) {
-		audio_link_x = drawu.audio_link_vertex_uv_params.x + drawu.audio_link_vertex_uv_params.y;
+		audio_link_x = distance(pos, drawu.audio_link_vertex_start.xyz) * drawu.audio_link_vertex_uv_params.x + drawu.audio_link_vertex_uv_params.y;
 	} else if (mode >= 1.5 && mode < 2.5) {
 		let rotated = lil_rotate_uv(uv0, drawu.audio_link_vertex_uv_params.z);
 		audio_link_x = rotated.x * drawu.audio_link_vertex_uv_params.x + drawu.audio_link_vertex_uv_params.y;
-	} else if (mode >= 2.5 && mode < 3.5) {
-		let rotated = lil_rotate_uv(uv0, drawu.audio_link_vertex_uv_params.z);
-		audio_link_x = rotated.y * drawu.audio_link_vertex_uv_params.x + drawu.audio_link_vertex_uv_params.y;
 	} else if (mode >= 3.5 && mode < 4.5) {
-		audio_link_x = distance(pos, drawu.audio_link_vertex_start.xyz) * drawu.audio_link_vertex_uv_params.x + drawu.audio_link_vertex_uv_params.y;
+		audio_link_mask = lil_texture_load_repeat(audio_link_mask_tex, lil_calc_audio_link_mask_uv(uv0, uv1, uv2, uv3));
+		audio_link_x = audio_link_mask.r;
+		audio_link_y = audio_link_mask.g;
+	}
+	out_value[1] = audio_link_mask.b;
+	let fallback_value = drawu.audio_link_default.x - clamp(fract(frame.time_params.x * drawu.audio_link_default.z - audio_link_x) + drawu.audio_link_default.w, 0.0, 1.0) * drawu.audio_link_default.y * drawu.audio_link_default.x;
+	out_value[0] = clamp(fallback_value, 0.0, 1.0);
+	if (drawu.audio_link_vertex_params.z > 0.5) {
+		let local_x = audio_link_x + fract(-frame.time_params.x * drawu.audio_link_local_map_params.x / 60.0 * drawu.audio_link_local_map_params.y) + drawu.audio_link_local_map_params.z;
+		out_value[0] = lil_texture_load_repeat(audio_link_local_map_tex, vec2<f32>(local_x, audio_link_y)).r;
+		return out_value;
 	}
 	if (frame.audio_link_params.x > 0.5) {
 		let tex_x = i32(clamp(fract(audio_link_x), 0.0, 0.999) * f32(textureDimensions(audio_link_tex).x));
-		return textureLoad(audio_link_tex, vec2<i32>(tex_x, 0), 0).r;
+		let tex_y = i32(clamp(audio_link_y * 0.0625, 0.0, 0.999) * f32(textureDimensions(audio_link_tex).y));
+		out_value[0] = textureLoad(audio_link_tex, vec2<i32>(tex_x, tex_y), 0).r;
 	}
-	let value = drawu.audio_link_default.x - clamp(fract(frame.time_params.x * drawu.audio_link_default.z - audio_link_x) + drawu.audio_link_default.w, 0.0, 1.0) * drawu.audio_link_default.y * drawu.audio_link_default.x;
-	return clamp(value, 0.0, 1.0);
+	out_value[0] = clamp(out_value[0], 0.0, 1.0);
+	return out_value;
 }
 
 fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
@@ -422,10 +459,6 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let morphed = morphed_position_normal(v.pos, v.norm, vertex_index);
 	var pos = morphed[0];
 	let norm = morphed[1];
-	if (drawu.audio_link_vertex_params.w > 0.5) {
-		let audio_link_vertex_value = lil_calc_audio_link_vertex_value(v.uv, pos);
-		pos = pos + norm * audio_link_vertex_value * drawu.audio_link_vertex_params.z;
-	}
 	let tangent = v.tangent.xyz;
 	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0) * object_negative_scale_sign();
 	let j0 = v.joints.x;
@@ -436,9 +469,11 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	if (dbg & DBG_BIND_POSE_RIGID) != 0u {
 		var wp = drawt.model * vec4<f32>(pos, 1.0);
 		let mn = normal_matrix(drawt.model) * norm;
-		if (drawu.audio_link_vertex_params.w <= 0.5) {
-			let audio_link_vertex_value = lil_calc_audio_link_vertex_value(v.uv, wp.xyz);
-			wp = vec4<f32>(wp.xyz + normalize_or(mn, vec3<f32>(0.0, 1.0, 0.0)) * audio_link_vertex_value * drawu.audio_link_vertex_params.z, wp.w);
+		let audio_link_vertex = lil_calc_audio_link_vertex_value(v.uv, v.uv1, v.uv2, v.uv3, pos);
+		if (audio_link_vertex[0] != 0.0 && audio_link_vertex[1] != 0.0) {
+			let offset_os = norm * drawu.audio_link_vertex_strength.w + drawu.audio_link_vertex_strength.xyz;
+			let offset_ws = mat3_upper(drawt.model) * offset_os;
+			wp = vec4<f32>(wp.xyz + offset_ws * audio_link_vertex[0] * audio_link_vertex[1], wp.w);
 		}
 		let mt = mat3_upper(drawt.model) * tangent;
 		o.wn = normalize(mn);
@@ -469,9 +504,12 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let n3 = mat3_upper(m3) * norm;
 	let local_n = normalize(v.weights.x * n0 + v.weights.y * n1 + v.weights.z * n2 + v.weights.w * n3);
 	let wn = normalize(normal_matrix(drawt.model) * local_n);
-	if (drawu.audio_link_vertex_params.w <= 0.5) {
-		let audio_link_vertex_value = lil_calc_audio_link_vertex_value(v.uv, wp.xyz);
-		wp = vec4<f32>(wp.xyz + normalize_or(wn, vec3<f32>(0.0, 1.0, 0.0)) * audio_link_vertex_value * drawu.audio_link_vertex_params.z, wp.w);
+	let audio_link_vertex = lil_calc_audio_link_vertex_value(v.uv, v.uv1, v.uv2, v.uv3, pos);
+	if (audio_link_vertex[0] != 0.0 && audio_link_vertex[1] != 0.0) {
+		let offset_os = norm * drawu.audio_link_vertex_strength.w + drawu.audio_link_vertex_strength.xyz;
+		let offset_local = v.weights.x * (mat3_upper(m0) * offset_os) + v.weights.y * (mat3_upper(m1) * offset_os) + v.weights.z * (mat3_upper(m2) * offset_os) + v.weights.w * (mat3_upper(m3) * offset_os);
+		let offset_ws = mat3_upper(drawt.model) * offset_local;
+		wp = vec4<f32>(wp.xyz + offset_ws * audio_link_vertex[0] * audio_link_vertex[1], wp.w);
 	}
 	let t0 = mat3_upper(m0) * tangent;
 	let t1 = mat3_upper(m1) * tangent;
@@ -1526,25 +1564,53 @@ fn lil_calc_blink(blink: vec4<f32>) -> f32 {
 	return mix(1.0, out_blink, clamp(blink.x, 0.0, 1.0));
 }
 
-fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, wp: vec3<f32>) -> f32 {
+fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, wp: vec3<f32>) -> f32 {
 	if (drawu.audio_link_params.x <= 0.5) {
 		return 1.0;
 	}
 	let mode = drawu.audio_link_params.y;
 	var audio_link_x = drawu.audio_link_uv_params.y;
+	var audio_link_y = drawu.audio_link_uv_params.w;
+	var audio_link_mask = vec4<f32>(1.0);
 	if (mode >= 0.5 && mode < 1.5) {
 		audio_link_x = drawu.audio_link_uv_params.x - nv * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
 	} else if (mode >= 1.5 && mode < 2.5) {
 		let rotated = lil_rotate_uv(uv0, drawu.audio_link_uv_params.z);
 		audio_link_x = rotated.x * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
+	} else if (mode >= 2.5 && mode < 4.5) {
+		let uv_mask = lil_calc_audio_link_mask_uv(uv0, uv1, uv2, uv3);
+		audio_link_mask = textureSample(audio_link_mask_tex, base_samp, uv_mask);
+		if (mode < 3.5) {
+			audio_link_x = audio_link_mask.r;
+			audio_link_y = audio_link_mask.g;
+		} else {
+			audio_link_x = fract(audio_link_mask.g * 2.0);
+			audio_link_y = 4.5 / 4.0 + floor(audio_link_mask.g * 2.0) / 4.0;
+		}
 	} else if (mode >= 4.5 && mode < 5.5) {
 		audio_link_x = distance(wp, drawu.audio_link_start.xyz) * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
 	}
-	if (frame.audio_link_params.x > 0.5) {
-		return textureSample(audio_link_tex, screen_samp, vec2<f32>(fract(audio_link_x), 0.5 / 64.0)).r;
+	var value = 1.0;
+	if (mode >= 3.5 && mode < 4.5) {
+		let default_y = audio_link_mask.r * 4.0 + drawu.audio_link_default.w;
+		let default_val = sin(frame.time_params.x * drawu.audio_link_default.z - audio_link_mask.g * drawu.audio_link_default.y) * drawu.audio_link_default.x * drawu.audio_link_uv_params.x + drawu.audio_link_default.x * drawu.audio_link_uv_params.x;
+		value = select(0.0, 1.0, select(default_val > default_y, abs(default_val - default_y) < drawu.audio_link_uv_params.w, drawu.audio_link_uv_params.w < 1.0));
+	} else {
+		value = drawu.audio_link_default.x - clamp(fract(frame.time_params.x * drawu.audio_link_default.z - audio_link_x) + drawu.audio_link_default.w, 0.0, 1.0) * drawu.audio_link_default.y * drawu.audio_link_default.x;
 	}
-	let value = drawu.audio_link_default.x - clamp(fract(frame.time_params.x * drawu.audio_link_default.z - audio_link_x) + drawu.audio_link_default.w, 0.0, 1.0) * drawu.audio_link_default.y * drawu.audio_link_default.x;
-	return clamp(value, 0.0, 1.0);
+	if (drawu.audio_link_vertex_params.z > 0.5) {
+		let local_x = audio_link_x + fract(-frame.time_params.x * drawu.audio_link_local_map_params.x / 60.0 * drawu.audio_link_local_map_params.y) + drawu.audio_link_local_map_params.z;
+		value = textureSample(audio_link_local_map_tex, base_samp, vec2<f32>(local_x, audio_link_y)).r;
+	} else if (frame.audio_link_params.x > 0.5) {
+		let audio_tex = textureSample(audio_link_tex, screen_samp, vec2<f32>(fract(audio_link_x), audio_link_y * 0.0625));
+		if (mode >= 3.5 && mode < 4.5) {
+			let audio_val = audio_tex.b * drawu.audio_link_uv_params.x * mix(drawu.audio_link_uv_params.y, drawu.audio_link_uv_params.z, audio_link_mask.g);
+			value = select(0.0, 1.0, select(audio_val > audio_link_mask.r, abs(audio_val - audio_link_mask.r) < drawu.audio_link_uv_params.w, drawu.audio_link_uv_params.w < 1.0));
+		} else {
+			value = audio_tex.r;
+		}
+	}
+	return clamp(value, 0.0, 1.0) * audio_link_mask.b;
 }
 
 fn lil_parallax_offset(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> vec2<f32> {
@@ -1819,7 +1885,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let layer_nv = clamp(dot(geometry_n_faced_pre, v), 0.0, 1.0);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_color_adjustments(samp_tex.rgb, uv);
-	let audio_link_value = lil_calc_audio_link_value(layer_nv, uv, i.wp);
+	let audio_link_value = lil_calc_audio_link_value(layer_nv, uv, i.uv1, i.uv2, i.uv3, i.wp);
 	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, is_liltoon, audio_link_value);
 	let main_col = main_layers.col;
 	var a = apply_lil_alpha_mask(main_col.a, uv);
