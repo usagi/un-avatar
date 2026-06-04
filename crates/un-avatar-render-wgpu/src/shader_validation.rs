@@ -450,6 +450,21 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_reflection_without_source_cube_uses_environment_fallback() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn liltoon_environment_reflection")
+				&& mesh.contains("let fallback_env = liltoon_environment_reflection(perceptual_roughness);")
+				&& mesh.contains("let uses_source_cube = drawu.rendering_ext_params.y > 0.5;"),
+			"lilToon reflection without _ReflectionCubeOverride must use environment reflection instead of black cube"
+		);
+		assert!(
+			mesh.contains("let env = select(fallback_env, source_cube_env * cube_tint * reflection_lighting, uses_source_cube);"),
+			"_ReflectionCubeColor and _ReflectionCubeEnableLighting apply only to source-cube reflection"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh

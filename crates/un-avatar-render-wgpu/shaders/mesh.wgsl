@@ -1620,6 +1620,14 @@ fn liltoon_light_color() -> vec3<f32> {
 	return lil_correct_light_color(main_light + sh_proxy);
 }
 
+fn liltoon_environment_reflection(perceptual_roughness: f32) -> vec3<f32> {
+	let ambient = frame.ambient_color.rgb * frame.ambient_color.w;
+	let main_light = frame.light_color.rgb * frame.light_color.w;
+	let env = max(ambient + main_light * 0.18, vec3<f32>(0.04));
+	let roughness_fade = mix(1.0, 0.72, clamp(perceptual_roughness, 0.0, 1.0));
+	return lil_correct_light_color(env) * roughness_fade;
+}
+
 @fragment
 fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
@@ -1973,9 +1981,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			effect_light_color,
 			clamp(drawu.reflection_ext_params.x, 0.0, 1.0),
 		);
-		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
 		let reflection_lod = lil_reflection_mip(perceptual_roughness);
-		let env = textureSampleLevel(reflection_tex, reflection_samp, reflection_dir, reflection_lod).rgb * cube_tint * reflection_lighting;
+		let source_cube_env = textureSampleLevel(reflection_tex, reflection_samp, reflection_dir, reflection_lod).rgb;
+		let fallback_env = liltoon_environment_reflection(perceptual_roughness);
+		let uses_source_cube = drawu.rendering_ext_params.y > 0.5;
+		let cube_tint = mix(vec3<f32>(1.0, 1.0, 1.0), drawu.reflection_cube_color.rgb, clamp(drawu.reflection_cube_color.a, 0.0, 1.0));
+		let env = select(fallback_env, source_cube_env * cube_tint * reflection_lighting, uses_source_cube);
 		authored_reflection_env = env;
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
