@@ -901,15 +901,14 @@ fn toon_matcap_uv(
 	perspective: f32,
 	z_rot_cancel: f32,
 ) -> vec2<f32> {
-	let camera_pos_len = length(frame.camera_pos.xyz);
-	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
-	let normal_vd = normalize(mix(camera_dir, v, clamp(perspective, 0.0, 1.0)));
-	let camera_up = vec3<f32>(0.0, 1.0, 0.0);
-	let old_tangent_raw = vec3<f32>(normal_vd.z, 0.0, -normal_vd.x);
-	let old_tangent_len = length(old_tangent_raw);
-	let old_tangent = select(vec3<f32>(1.0, 0.0, 0.0), old_tangent_raw / old_tangent_len, old_tangent_len > 0.0001);
-	let old_bitangent = normalize(cross(normal_vd, old_tangent));
-	let bitangent = lil_ortho_normalize(mix(old_bitangent, camera_up, step(0.5, z_rot_cancel)), normal_vd);
+	let camera_dir = normalize_or(
+		vec3<f32>(frame.view[0][2], frame.view[1][2], frame.view[2][2]),
+		vec3<f32>(0.0, 0.0, 1.0),
+	);
+	let normal_vd = normalize_or(select(camera_dir, v, perspective >= 0.5), camera_dir);
+	let camera_up = vec3<f32>(frame.view[0][1], frame.view[1][1], frame.view[2][1]);
+	let bitangent_src = select(camera_up, vec3<f32>(0.0, 1.0, 0.0), z_rot_cancel >= 0.5);
+	let bitangent = lil_ortho_normalize(bitangent_src, normal_vd);
 	let tangent = cross(normal_vd, bitangent);
 	var uv_mat = vec2<f32>(dot(tangent, n), dot(bitangent, n));
 	uv_mat = mix(

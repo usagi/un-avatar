@@ -131,6 +131,13 @@ mod tests {
 			"lilToon MatCap UV must apply _MatCapBlendUV1 and _MatCapTex_ST like lilCalcMatCapUV"
 		);
 		assert!(
+			mesh.contains("vec3<f32>(frame.view[0][2], frame.view[1][2], frame.view[2][2])")
+				&& mesh.contains("select(camera_dir, v, perspective >= 0.5)")
+				&& mesh.contains("vec3<f32>(frame.view[0][1], frame.view[1][1], frame.view[2][1])")
+				&& mesh.contains("select(camera_up, vec3<f32>(0.0, 1.0, 0.0), z_rot_cancel >= 0.5)"),
+			"lilToon MatCap UV must use view-matrix camera direction/up and boolean perspective/z-rotation controls"
+		);
+		assert!(
 			mesh.contains("drawu.matcap_tex_uv_offset_scale, drawu.matcap_uv_ext_params.xy")
 				&& mesh.contains("drawu.matcap2_tex_uv_offset_scale, drawu.matcap_uv_ext_params.zw"),
 			"both MatCap slots must route their own ST and BlendUV1 controls"
