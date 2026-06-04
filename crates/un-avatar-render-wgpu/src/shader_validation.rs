@@ -304,6 +304,23 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_environment_reflection_fresnel_uses_base_nv() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let reflection_dir = normalize(reflect(-v, reflection_n));"),
+			"environment lookup should still use the reflection normal"
+		);
+		assert!(
+			mesh.contains("fresnel_lerp(specular_color, grazing_term, max(dot(n, v), 0.0))"),
+			"lilToon environment reflection Fresnel uses fd.nv, not the reflection-normal dot"
+		);
+		assert!(
+			!mesh.contains("fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0))"),
+			"do not reuse reflection normal strength for the Fresnel nv term"
+		);
+	}
+
+	#[test]
 	fn liltoon_dissolve_separates_noise_and_non_noise_directional_uv() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

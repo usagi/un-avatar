@@ -1997,7 +1997,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let one_minus_reflectivity = 0.96 - metallic * 0.96;
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
-		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(reflection_n, v), 0.0));
+		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(n, v), 0.0));
 		authored_reflection_blend = authored_reflection * select(1.0, a, is_liltoon_refraction);
 	} else if (is_liltoon_gem) {
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;

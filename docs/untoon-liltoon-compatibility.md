@@ -460,8 +460,9 @@ Status legend:
   - done: source raw params を保持し、specular highlight 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
   - remaining: lilToon の `fd.N` と完全一致する tangent / view-space 入力、GSAA、backface behavior を検証する。
 - `[~]` `_ReflectionNormalStrength`
-  - done: source raw params を保持し、reflection UV / fresnel 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - done: source raw params を保持し、environment reflection lookup 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
   - done: authored cube source upload では roughness blur 付き RGBA16F mip chain を生成し、roughness LOD sampling が mip 0 固定にならないようにした。
+  - done: environment reflection の lookup direction は reflection normal を使うが、Fresnel の `nv` は本家 `fd.nv` と同じく base normal / view dot を使う。
   - remaining: lilToon の `fd.reflectionN`、seam-aware PMREM convolution、true cubemap face rotation、backface behavior と合わせて検証する。
 - `[~]` `_ApplyReflection`
   - done: source raw params を保持し、reflection texture / environment approximation の blend weight gate として接続した。reflection term 本体には二重乗算しない。
