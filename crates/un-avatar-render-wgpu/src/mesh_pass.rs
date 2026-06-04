@@ -6425,7 +6425,7 @@ impl SceneMeshes {
 					.liltoon_like
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
-				let anisotropy_shift_noise_view = texture_view_or(&image_views, anisotropy_shift_noise_texture_index, &neutral_normal_view);
+				let anisotropy_shift_noise_view = texture_view_or(&image_views, anisotropy_shift_noise_texture_index, &white_view);
 				let fur_vector_texture_index = mat
 					.liltoon_like
 					.as_ref()
