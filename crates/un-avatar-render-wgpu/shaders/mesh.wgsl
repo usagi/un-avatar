@@ -2105,6 +2105,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
 		lit = lit + backlight * backlight_color * effect_light_color;
 	}
+	let lil_premultiplied_before_effects = is_liltoon && alpha_kind > 1.5 && !is_liltoon_additive_blend;
+	lit = mix(lit, lit * out_a, select(0.0, 1.0, lil_premultiplied_before_effects));
 	if (is_liltoon_refraction) {
 		let refraction_strength = drawu.gem_params.x;
 		if (abs(refraction_strength) > 0.00001) {
@@ -2314,7 +2316,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let distance_faded = select(vec4<f32>(lit, out_a), lil_apply_distance_fade(lit, out_a, i.wp, n, v, front_facing), is_liltoon);
 	let final_a = clamp(distance_faded.a, 0.0, 1.0);
 	return vec4<f32>(
-		premultiply_when_blending(max(distance_faded.rgb, vec3<f32>(0.0, 0.0, 0.0)), final_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend),
+		premultiply_when_blending(max(distance_faded.rgb, vec3<f32>(0.0, 0.0, 0.0)), final_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend && !lil_premultiplied_before_effects),
 		final_a,
 	);
 }

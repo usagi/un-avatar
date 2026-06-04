@@ -465,6 +465,23 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_transparent_premultiplies_before_reflection_effects() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let premultiply = mesh
+			.find("let lil_premultiplied_before_effects = is_liltoon && alpha_kind > 1.5 && !is_liltoon_additive_blend;")
+			.expect("lilToon transparent premultiply flag");
+		let reflection = premultiply
+			+ mesh[premultiply..]
+				.find("let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;")
+				.expect("lilToon reflection blend block");
+		assert!(premultiply < reflection, "lilToon LIL_PREMULTIPLY runs before reflection");
+		assert!(
+			mesh.contains("!is_liltoon_additive_blend && !lil_premultiplied_before_effects"),
+			"final blend premultiply must not multiply lilToon transparent output twice"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh
