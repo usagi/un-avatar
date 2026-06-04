@@ -83,8 +83,12 @@ namespace UNAvatar.UnityExporter
                 var useMain3rd = IsMaterialFeatureEnabled(material, "_UseMain3rdTex", ReadTexture(material, "_Main3rdTex") != null);
                 AddTextureIndex(mtoon, "main2ndTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndTex") : null);
                 AddTextureIndex(mtoon, "main2ndBlendMaskTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndBlendMask") : null);
+                AddTextureIndex(mtoon, "main2ndDissolveMaskTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndDissolveMask") : null);
+                AddTextureIndex(mtoon, "main2ndDissolveNoiseMaskTextureIndex", useMain2nd ? ReadTexture(material, "_Main2ndDissolveNoiseMask") : null);
                 AddTextureIndex(mtoon, "main3rdTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdTex") : null);
                 AddTextureIndex(mtoon, "main3rdBlendMaskTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdBlendMask") : null);
+                AddTextureIndex(mtoon, "main3rdDissolveMaskTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdDissolveMask") : null);
+                AddTextureIndex(mtoon, "main3rdDissolveNoiseMaskTextureIndex", useMain3rd ? ReadTexture(material, "_Main3rdDissolveNoiseMask") : null);
 
                 var useMatCap = IsMaterialFeatureEnabled(material, "_UseMatCap", ReadTexture(material, "_MatCapTex") != null || ReadTexture(material, "_MatcapTex") != null);
                 var matcapMainStrength = ReadFloat(material, "_MatCapMainStrength", ReadFloat(material, "_MatCapBlend", 1.0f));
@@ -108,6 +112,15 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "rimShadeMaskTextureIndex", useRimShade ? ReadTexture(material, "_RimShadeMask") : null);
                 var useBacklight = IsMaterialFeatureEnabled(material, "_UseBacklight", ReadTexture(material, "_BacklightColorTex") != null);
                 AddTextureIndex(mtoon, "backlightColorTextureIndex", useBacklight ? ReadTexture(material, "_BacklightColorTex") : null);
+
+                var useGlitter = IsMaterialFeatureEnabled(material, "_UseGlitter", ReadTexture(material, "_GlitterColorTex") != null);
+                AddTextureIndex(mtoon, "glitterColorTextureIndex", useGlitter ? ReadTexture(material, "_GlitterColorTex") : null);
+                AddTextureIndex(mtoon, "glitterShapeTextureIndex", useGlitter ? ReadTexture(material, "_GlitterShapeTex") : null);
+                var useDissolve = ReadVector(material, "_DissolveParams", new Vector4(0.0f, 0.0f, 0.5f, 0.1f)).x != 0.0f;
+                AddTextureIndex(mtoon, "dissolveMaskTextureIndex", useDissolve ? ReadTexture(material, "_DissolveMask") : null);
+                AddTextureIndex(mtoon, "dissolveNoiseMaskTextureIndex", useDissolve ? ReadTexture(material, "_DissolveNoiseMask") : null);
+                var useParallax = ReadFloat(material, "_UseParallax", ReadTexture(material, "_ParallaxMap") != null ? 1.0f : 0.0f) > 0.5f;
+                AddTextureIndex(mtoon, "parallaxTextureIndex", useParallax ? ReadTexture(material, "_ParallaxMap") : null);
 
                 var useEmission = IsMaterialFeatureEnabled(
                     material,
@@ -240,11 +253,12 @@ namespace UNAvatar.UnityExporter
             {
                 return new[]
                 {
-                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main3rdTex", "_Main3rdBlendMask",
+                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main2ndDissolveMask", "_Main2ndDissolveNoiseMask", "_Main3rdTex", "_Main3rdBlendMask", "_Main3rdDissolveMask", "_Main3rdDissolveNoiseMask",
                     "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap",
                     "_ShadowColorTex", "_Shadow2ndColorTex", "_Shadow3rdColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
                     "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCap2ndTex", "_MatCap2ndBlendMask",
                     "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
+                    "_GlitterColorTex", "_GlitterShapeTex", "_DissolveMask", "_DissolveNoiseMask", "_ParallaxMap",
                     "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
                     "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_MainGradationTex", "_GradationMap",
                     "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask",
@@ -265,7 +279,8 @@ namespace UNAvatar.UnityExporter
                 {
                     var type = shader.GetPropertyType(i);
                     if (type != UnityEngine.Rendering.ShaderPropertyType.Float &&
-                        type != UnityEngine.Rendering.ShaderPropertyType.Range)
+                        type != UnityEngine.Rendering.ShaderPropertyType.Range &&
+                        type != UnityEngine.Rendering.ShaderPropertyType.Int)
                     {
                         continue;
                     }

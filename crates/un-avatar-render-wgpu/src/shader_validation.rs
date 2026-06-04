@@ -22,7 +22,7 @@ mod tests {
 		validate_wgsl("fxaa.wgsl", include_str!("../shaders/fxaa.wgsl"));
 		validate_wgsl("smaa.wgsl", include_str!("../shaders/smaa.wgsl"));
 		validate_wgsl("blit.wgsl", include_str!("../shaders/blit.wgsl"));
-		validate_wgsl("csfc_fur.wgsl", include_str!("../shaders/csfc_fur.wgsl"));
+		validate_wgsl("compute_fur_cards.wgsl", include_str!("../shaders/compute_fur_cards.wgsl"));
 	}
 
 	#[test]
@@ -85,11 +85,14 @@ mod tests {
 			"lilToon samples _MatCap2ndBlendMask as rgb for per-channel blending"
 		);
 		assert!(
-			!lines.contains(&"let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;"),
+			!lines
+				.contains(&"let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;"),
 			"MatCap blend mask must not collapse to the red channel"
 		);
 		assert!(
-			!lines.contains(&"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;"),
+			!lines.contains(
+				&"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;"
+			),
 			"MatCap 2nd blend mask must not collapse to the red channel"
 		);
 	}
@@ -165,12 +168,169 @@ mod tests {
 			"_GlitterParams1/_GlitterParams2 must drive scale, size, contrast, speed, angle, and random color"
 		);
 		assert!(
+			mesh.contains("let unity_time_x = frame.time_params.x * 0.05")
+				&& mesh.contains("let time_seed = unity_time_x * drawu.glitter_params2.x"),
+			"lilToon Glitter speed uses Unity _Time.x, which is t/20 rather than raw seconds"
+		);
+		assert!(
+			mesh.contains("let factor = fract(sin(dot(random_cell, vec2<f32>(12.9898, 78.233))) * 46203.4357) + 0.5;")
+				&& mesh.contains("let factor2 = floor(dd + vec2<f32>(factor * 0.5, factor * 0.5));"),
+			"lilToon Glitter mipmap cell factor must keep the upstream randomized density rule"
+		);
+		assert!(
+			mesh.contains("glitter_color_tex") && mesh.contains("drawu.glitter_color.rgb * glitter_color_texel.rgb"),
+			"_GlitterColorTex must mask/tint Glitter color like upstream lilToon"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_color.a * glitter_color_texel.a"),
+			"_GlitterColorTex alpha must constrain Glitter to authored mask regions"
+		);
+		assert!(
+			mesh.contains("glitter_shape_tex") && mesh.contains("drawu.glitter_ext3.y > 0.5"),
+			"_GlitterShapeTex and _GlitterApplyShape must gate shaped glitter particles"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_ext3.z > 0.5") && mesh.contains("nearest.z * 785.238"),
+			"_GlitterAngleRandomize must rotate shaped glitter like upstream lilToon"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_atlas.xy") && mesh.contains("floor(nearest.xy * atlas)"),
+			"_GlitterAtras must atlas-select shape texture cells"
+		);
+		assert!(
+			mesh.contains("lil_select_uv(drawu.glitter_ext2.z") && mesh.contains("lil_select_uv(drawu.glitter_ext2.w"),
+			"_GlitterUVMode and _GlitterColorTex_UVMode must select authored UV sets"
+		);
+		assert!(
+			mesh.contains("let glitter_color_uv_raw = lil_select_uv(drawu.glitter_ext2.w, uv, i.uv1, i.uv2, i.uv3);"),
+			"_GlitterColorTex_UVMode 0 must use fd.uvMain-equivalent UV, not raw uv0"
+		);
+		assert!(
+			mesh.contains("let glitter_uv = lil_select_uv(drawu.glitter_ext2.z, uv, i.uv1, uv, uv);"),
+			"_GlitterUVMode 0 must use parallax-adjusted fd.uv0-equivalent UV"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_ext3.x") && mesh.contains("glitter_view"),
+			"_GlitterVRParallaxStrength must blend Glitter view/camera directions"
+		);
+		assert!(
 			mesh.contains("drawu.glitter_ext.z") && mesh.contains("lil_effect_shadowmix"),
 			"_GlitterShadowMask must mix glitter alpha with lilToon shadow mix"
 		);
 		assert!(
 			mesh.contains("drawu.glitter_ext.w") && mesh.contains("drawu.glitter_ext2.x"),
 			"_GlitterApplyTransparency and _GlitterBackfaceMask must affect glitter alpha"
+		);
+	}
+
+	#[test]
+	fn liltoon_dissolve_separates_noise_and_non_noise_directional_uv() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_rotate_uv"),
+			"lilToon non-noise UV directional dissolve uses lilRotateUV"
+		);
+		assert!(
+			mesh.contains("let has_noise = drawu.dissolve_ext.z > 0.5;"),
+			"Dissolve must branch by whether a noise mask is present"
+		);
+		assert!(
+			mesh.contains("select(lil_rotate_uv(uv, drawu.dissolve_pos.w).x, dot(uv, normalize_or2(drawu.dissolve_pos.xy"),
+			"Base dissolve UV directional mode must match lilCalcDissolve versus lilCalcDissolveWithNoise"
+		);
+		assert!(
+			mesh.contains("select(lil_rotate_uv(uv, pos.w).x, dot(uv, normalize_or2(pos.xy"),
+			"Main2nd/Main3rd dissolve UV directional mode must match layer-specific lilToon dissolve"
+		);
+	}
+
+	#[test]
+	fn liltoon_main_layer_texture_uv_modes_use_authored_uv_sets() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let layer_uv_raw = lil_select_layer_uv(drawu.main2nd_ext.x, uv, uv1, uv2, uv3, uv_mat);"),
+			"_Main2ndTex_UVMode must select fd.uv0/1/2/3/uvMat, with mode 0 using parallax-adjusted uv0"
+		);
+		assert!(
+			mesh.contains("let layer_uv_raw = lil_select_layer_uv(drawu.main3rd_ext.x, uv, uv1, uv2, uv3, uv_mat);"),
+			"_Main3rdTex_UVMode must select fd.uv0/1/2/3/uvMat, with mode 0 using parallax-adjusted uv0"
+		);
+		assert!(
+			mesh.contains("fn lil_select_layer_uv") && mesh.contains("return uv_mat;"),
+			"Main layer UV mode 4 must use MatCap UV instead of falling through to UV3"
+		);
+		assert!(
+			mesh.contains("let mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw")
+				&& mesh.contains("let mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw"),
+			"Main layer blend masks must follow fd.uvMain like upstream lilToon"
+		);
+		assert!(
+			mesh.contains("apply_lil_layer_distance_fade(layer_alpha, drawu.main2nd_distance_fade")
+				&& mesh.contains("apply_lil_layer_distance_fade(layer_alpha, drawu.main3rd_distance_fade"),
+			"Main layer distance fade must affect layer alpha"
+		);
+		assert!(
+			mesh.contains("apply_lil_layer_cull(layer_alpha, drawu.main2nd_ext.y")
+				&& mesh.contains("apply_lil_layer_cull(layer_alpha, drawu.main3rd_ext.y"),
+			"Main layer cull mode must affect layer alpha"
+		);
+		assert!(
+			mesh.contains("second_unlit = vec4<f32>(layer.rgb, layer_alpha * (1.0 - clamp(drawu.main2nd_params.y")
+				&& mesh.contains("third_unlit = vec4<f32>(layer.rgb, layer_alpha * (1.0 - clamp(drawu.main3rd_params.y"),
+			"Main layer unlit contribution must be preserved for post-shadow blending"
+		);
+		assert!(
+			mesh.contains("lit = lil_blend_color(lit, main_layers.second_unlit.rgb, main_layers.second_unlit.a, drawu.main2nd_params.w);")
+				&& mesh.contains(
+					"lit = lil_blend_color(lit, main_layers.third_unlit.rgb, main_layers.third_unlit.a, drawu.main3rd_params.w);"
+				),
+			"Main layer unlit contribution must be restored after shadow like upstream lilToon"
+		);
+		assert!(
+			mesh.contains("fn lil_calc_decal_uv")
+				&& mesh.contains("fn lil_layer_sub_tex_uv")
+				&& mesh.contains("fn lil_calc_atlas_animation_uv")
+				&& mesh.contains("floor(frame.time_params.x * decal_animation.w) % decal_animation.z"),
+			"Main2nd/Main3rd decal UV must keep lilToon decal/copy/flip/animated atlas semantics"
+		);
+		assert!(
+			mesh.contains("drawu.main2nd_decal_flags")
+				&& mesh.contains("drawu.main3rd_decal_flags")
+				&& mesh.contains("layer.a * layer_uv.alpha_mask"),
+			"Main2nd/Main3rd decal alpha masking must affect sampled layer alpha"
+		);
+	}
+
+	#[test]
+	fn liltoon_emission_uv_modes_use_authored_uv_sets_and_rim_uv() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_select_emission_uv") && mesh.contains("return uv_rim;"),
+			"Emission UV mode 4 must use lilToon fd.uvRim semantics"
+		);
+		assert!(
+			mesh.contains("let uv_rim = vec2<f32>(abs(dot(n, v)));"),
+			"Emission rim UV must match lilToon float2(fd.nvabs, fd.nvabs)"
+		);
+		assert!(
+			mesh.contains("lil_select_emission_uv(drawu.emission_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim)")
+				&& mesh.contains("lil_select_emission_uv(drawu.emission2nd_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim)"),
+			"Emission and Emission2nd maps must use their authored _UVMode values"
+		);
+	}
+
+	#[test]
+	fn liltoon_second_normal_uv_mode_uses_authored_uv_sets() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);"),
+			"_Bump2ndMap_UVMode must select fd.uv0/1/2/3 before _Bump2ndMap_ST"
+		);
+		assert!(
+			mesh.contains(
+				"let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;"
+			),
+			"_Bump2ndMap_ST must be applied after the authored UV mode selection"
 		);
 	}
 }

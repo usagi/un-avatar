@@ -1,8 +1,8 @@
 # lilToon Fur 技術目標
 
-状態: UNAvatar Fur 実装のための調査メモ。
+状態: UNAvatar Fur 実装のための調査メモ。2026-06-05 時点で、実装方針は Compute Fur Cards として確定済み。
 
-実装設計: [`csfc-fur-design.md`](csfc-fur-design.md)。
+実装設計: [`compute-fur-cards-design.md`](compute-fur-cards-design.md)。
 
 ## 参照元
 
@@ -65,15 +65,15 @@ lilToon には複数の Fur rendering mode がある。
 
 ## UNAvatar の目標
 
-現在の UNAvatar instanced-shell path は正しい quality target ではない。Low / Compatible として残す価値はあるが、Fur completion の定義にはしない。
+旧 UNAvatar instanced-shell path は正しい quality target ではない。現行実装では shell fallback を削除し、Compute Fur Cards を唯一の実用 Fur path とする。
 
 ## Compute 方針
 
 UNAvatar は wgpu を対象にするため、geometry shader と tessellation shader を実装 primitive として使えない。この制約で設計目標が変わる。
 
-最初に実装するのは CBF: Compute Barycentric Fur。これは lilToon geometry shader の `AppendFur()` を Compute で透過的に実行する互換実装であり、v2-lilToon-like Fur の完了条件とする。
+実装するのは Compute Fur Cards。これは lilToon geometry shader の `AppendFur()` を Compute で透過的に実行する互換実装であり、v2-lilToon-like Fur の完了条件とする。旧称の CBF / CSFC は歴史的な呼称であり、現行コード名ではない。
 
-CBF で合わせるもの:
+Compute Fur Cards で合わせるもの:
 
 - triangle-local な固定 barycentric sample sequence。
 - `_FurLayerNum` 1 / 2 / 3 に対応する 4 / 7 / 13 points。
@@ -82,31 +82,27 @@ CBF で合わせるもの:
 - `_FurVectorTex`, `_FurLengthMask`, `_FurGravity`, `_FurRandomize`, `_FurCutoutLength`。
 - Fur 専用 fragment alpha、AO、rim、cutout / transparent state。
 
-Area/UV-density based Compute Fur Cards、Area-Weighted Blue-Noise Fur、Strand/Groom は CBF 互換が成立した後の上位機能。これらは理論上 CBF を内包できるべきだが、CBF を実装せずに先へ進まない。
+Area/UV-density based sampling、Area-Weighted Blue-Noise Fur、Strand/Groom は lilToon 互換が成立した後の上位機能。これらは理論上 Compute Fur Cards を内包できるべきだが、互換実装を崩して先へ進まない。
 
-## 目標 tier
+## 実装状態
 
-- Low / Compatible:
-  - portability と old hardware のため instanced shell を残す。
-  - imported parameters、textures、alpha / noise / mask / root / AO / rim、可能な範囲の two-pass-style pre coverage を material correctness として整える。
-  - sparse fur meshes では Unity Scene quality に届かないことを受け入れる。
-
-- High:
-  - CBF を primary high-tier Fur path として実装する。
+- Compute Fur Cards:
+  - primary Fur path。
   - Unity/lilToon の `AppendFur()` topology、fur vector、fragment alpha、AO、rim、render state を一致させる。
-  - bones / morphs / material animation が fur source に影響する場合は per-frame で動く。
+  - bones / morphs / material animation が fur source に影響する場合は per-frame で source vertices を更新する。
   - Fur-specific toon fragment path で generated buffers を描画する。
-  - FurTwoPass-equivalent rendering を追加する。pre cutout / AlphaToMask-style coverage + transparent Fur pass。
-  - `_FurVectorTex`, `_FurLengthMask`, `_FurNoiseMask`, `_FurMask`, `_FurRootOffset`, `_FurAO`, `_FurCutoutLength`, `_FurRimColor`, `_FurRimFresnelPower`, `_FurRimAntiLight`, blend / ZWrite / ZTest / cull controls を一致させる。
+  - FurTwoPass-equivalent rendering として pre cutout / AlphaToMask-style coverage + transparent Fur pass を持つ。
+  - `_FurVectorTex`, `_FurLengthMask`, `_FurNoiseMask`, `_FurMask`, `_FurRootOffset`, `_FurAO`, `_FurCutoutLength`, `_FurRimColor`, `_FurRimFresnelPower`, `_FurRimAntiLight`, blend / ZWrite / ZTest / cull controls を一致対象にする。
+  - 旧 instanced shell fallback は削除済み。
 
 - Future:
-  - CBF 互換を保った上で Area/UV-density based Compute Fur Cards や Area-Weighted Blue-Noise Fur を追加する。
+  - lilToon 互換を保った上で Area/UV-density based sampling や Area-Weighted Blue-Noise Fur を追加する。
   - 必要に応じて Fur generation 前に compute tessellation / subdivision を行う。
   - lilToon compatibility を超える UNAvatar extension として compute strand / groom mode を実装する。
 
 ## 受け入れ基準
 
-UNAvatar Fur は、High path が `mizuki-split` など既知の lilToon FurTwoPass asset で Unity Editor Scene view quality 以上に到達するまで complete ではない。
+UNAvatar Fur は、Compute Fur Cards が `mizuki-split` など既知の lilToon FurTwoPass asset で Unity Editor Scene view quality 以上に到達することを complete 条件とする。
 
 最初の visual milestone:
 
@@ -115,3 +111,5 @@ UNAvatar Fur は、High path が `mizuki-split` など既知の lilToon FurTwoPa
 - Fur length / mask / noise が Unity に近い strand breakup を出す。
 - Two-pass Fur が hard cutout-only aliasing と transparent-shell blobbing の両方を避ける。
 - comparison target で lilToon 2.3.2 Scene view と同等以上。
+
+2026-06-05 時点の動作試験では、`mizuki-split` の Fur は美しく表現され、不具合は目視確認されていない。

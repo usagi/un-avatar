@@ -40,7 +40,7 @@ const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl
 
 const PORTABLE_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
 const PORTABLE_SAMPLERS_PER_STAGE: u32 = 16;
-const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 40;
+const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 49;
 const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -1805,7 +1805,7 @@ impl GpuState {
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("screenshot") });
 		if draw_scene {
 			if let Some(sm) = &self.scene_meshes {
-				sm.encode_csfc_fur(&mut encoder);
+				sm.encode_compute_fur_cards(&mut encoder);
 			}
 		}
 		if draw_scene && needs_screen_refraction {
@@ -2947,7 +2947,7 @@ impl GpuState {
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
 		if draw_scene {
 			if let Some(sm) = &self.scene_meshes {
-				sm.encode_csfc_fur(&mut encoder);
+				sm.encode_compute_fur_cards(&mut encoder);
 			}
 		}
 

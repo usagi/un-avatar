@@ -174,10 +174,30 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 				liltoon_like.main_color.second_blend_mask_texture_index,
 				TextureRole::Data,
 			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.second_dissolve.mask_texture_index,
+				TextureRole::Data,
+			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.second_dissolve.noise_mask_texture_index,
+				TextureRole::Data,
+			);
 			mark_texture_role(&mut roles, liltoon_like.main_color.third_texture_index, TextureRole::GenericColor);
 			mark_texture_role(
 				&mut roles,
 				liltoon_like.main_color.third_blend_mask_texture_index,
+				TextureRole::Data,
+			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.third_dissolve.mask_texture_index,
+				TextureRole::Data,
+			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.third_dissolve.noise_mask_texture_index,
 				TextureRole::Data,
 			);
 			mark_texture_role(&mut roles, liltoon_like.normal.second_texture_index, TextureRole::Normal);
@@ -216,6 +236,11 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, liltoon_like.rim.texture_index, TextureRole::GenericColor);
 			mark_texture_role(&mut roles, liltoon_like.rim.shade_mask_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, liltoon_like.backlight.texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.glitter.color_texture_index, TextureRole::GenericColor);
+			mark_texture_role(&mut roles, liltoon_like.glitter.shape_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.dissolve.mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.dissolve.noise_mask_texture_index, TextureRole::Data);
+			mark_texture_role(&mut roles, liltoon_like.parallax.texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, liltoon_like.emission.texture_index, TextureRole::Emissive);
 			mark_texture_role(&mut roles, liltoon_like.emission.blend_mask_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, liltoon_like.emission.gradation_texture_index, TextureRole::Emissive);

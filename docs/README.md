@@ -20,6 +20,8 @@ v1 公開時点で残す文書の索引。
 | [`render-quality-plan.md`](render-quality-plan.md) | AA、texture cache / compression、renderer 品質方針 |
 | [`unavatar-format-v0.1.md`](unavatar-format-v0.1.md) | `.unavatar` GLB extension preview spec |
 | [`unity-exporter-v0.1.md`](unity-exporter-v0.1.md) | Unity Editor Exporter の境界、配置、MVP |
+| [`compute-fur-cards-design.md`](compute-fur-cards-design.md) | lilToon Fur の Geometry Shader 互換を Compute で実現する設計 |
+| [`liltoon-fur-technical-target.md`](liltoon-fur-technical-target.md) | lilToon Fur の本家挙動と UNAvatar 側の技術目標 |
 | [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) | Modular Avatar bake 相当 resolver の対応計画 |
 | [`unity-exporter-dependency-research.md`](unity-exporter-dependency-research.md) | Unity Exporter の GLB writer / Modular Avatar bake 依存調査 |
 | [`v2-open-decisions.md`](v2-open-decisions.md) | v2 実装前に相談・決定する項目 |

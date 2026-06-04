@@ -442,6 +442,12 @@ pub struct UnaMeshBuffers {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub tex_coords_0: Option<Vec<[f32; 2]>>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tex_coords_1: Option<Vec<[f32; 2]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tex_coords_2: Option<Vec<[f32; 2]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tex_coords_3: Option<Vec<[f32; 2]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub colors_0: Option<Vec<[f32; 4]>>,
 	/// スキン内ジョイントインデックス（頂点ごと 4 本）。未使用スロットは 0。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -568,6 +574,20 @@ pub struct UnaLilToonLikeMainColor {
 	#[serde(default)]
 	pub second_alpha_mode_factor: f32,
 	#[serde(default)]
+	pub second_cull_factor: f32,
+	#[serde(default = "default_liltoon_layer_distance_fade")]
+	pub second_distance_fade_factor: [f32; 4],
+	#[serde(default)]
+	pub second_decal_flags_factor: [f32; 4],
+	#[serde(default)]
+	pub second_decal_transform_factor: [f32; 4],
+	#[serde(default)]
+	pub second_decal_animation_factor: [f32; 4],
+	#[serde(default)]
+	pub second_decal_sub_param_factor: [f32; 4],
+	#[serde(default)]
+	pub second_dissolve: UnaLilToonLikeDissolve,
+	#[serde(default)]
 	pub third_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub third_texture_index: Option<usize>,
@@ -581,6 +601,20 @@ pub struct UnaLilToonLikeMainColor {
 	pub third_enable_lighting_factor: f32,
 	#[serde(default)]
 	pub third_alpha_mode_factor: f32,
+	#[serde(default)]
+	pub third_cull_factor: f32,
+	#[serde(default = "default_liltoon_layer_distance_fade")]
+	pub third_distance_fade_factor: [f32; 4],
+	#[serde(default)]
+	pub third_decal_flags_factor: [f32; 4],
+	#[serde(default)]
+	pub third_decal_transform_factor: [f32; 4],
+	#[serde(default)]
+	pub third_decal_animation_factor: [f32; 4],
+	#[serde(default)]
+	pub third_decal_sub_param_factor: [f32; 4],
+	#[serde(default)]
+	pub third_dissolve: UnaLilToonLikeDissolve,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1013,10 +1047,16 @@ pub struct UnaLilToonLikeGlitter {
 	pub enabled_factor: f32,
 	#[serde(default = "one_vec4")]
 	pub color_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub color_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub shape_texture_index: Option<usize>,
 	#[serde(default = "default_liltoon_glitter_params1")]
 	pub params1_factor: [f32; 4],
 	#[serde(default = "default_liltoon_glitter_params2")]
 	pub params2_factor: [f32; 4],
+	#[serde(default = "one_vec4")]
+	pub atlas_factor: [f32; 4],
 	#[serde(default)]
 	pub main_strength_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1037,6 +1077,82 @@ pub struct UnaLilToonLikeGlitter {
 	pub scale_randomize_factor: f32,
 	#[serde(default)]
 	pub uv_mode_factor: f32,
+	#[serde(default)]
+	pub color_texture_uv_mode_factor: f32,
+	#[serde(default)]
+	pub apply_shape_factor: f32,
+	#[serde(default)]
+	pub angle_randomize_factor: f32,
+	#[serde(default)]
+	pub vr_parallax_strength_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeDissolve {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mask_texture_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub noise_mask_texture_index: Option<usize>,
+	#[serde(default = "default_liltoon_dissolve_color")]
+	pub color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_dissolve_params")]
+	pub params_factor: [f32; 4],
+	#[serde(default)]
+	pub position_factor: [f32; 4],
+	#[serde(default = "default_liltoon_dissolve_noise_strength")]
+	pub noise_strength_factor: f32,
+	#[serde(default)]
+	pub noise_uv_scroll_rotate_factor: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeParallax {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default)]
+	pub pom_enabled_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub texture_index: Option<usize>,
+	#[serde(default = "default_liltoon_parallax_scale")]
+	pub scale_factor: f32,
+	#[serde(default = "default_liltoon_parallax_offset")]
+	pub offset_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeIdMask {
+	#[serde(default)]
+	pub compile_factor: f32,
+	#[serde(default = "default_liltoon_id_mask_from")]
+	pub from_factor: f32,
+	#[serde(default)]
+	pub is_bitmap_factor: f32,
+	#[serde(default)]
+	pub controls_dissolve_factor: f32,
+	#[serde(default)]
+	pub flags_factor: [f32; 8],
+	#[serde(default)]
+	pub prior_flags_factor: [f32; 8],
+	#[serde(default)]
+	pub indices_factor: [i32; 8],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeUdimDiscard {
+	#[serde(default)]
+	pub compile_factor: f32,
+	#[serde(default)]
+	pub mode_factor: f32,
+	#[serde(default)]
+	pub uv_factor: f32,
+	#[serde(default)]
+	pub row0_factor: [f32; 4],
+	#[serde(default)]
+	pub row1_factor: [f32; 4],
+	#[serde(default)]
+	pub row2_factor: [f32; 4],
+	#[serde(default)]
+	pub row3_factor: [f32; 4],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1132,6 +1248,16 @@ pub struct UnaLilToonLikeBlendState {
 pub struct UnaLilToonLikeRendering {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub render_queue_number: Option<i32>,
+	#[serde(default = "default_liltoon_distance_fade")]
+	pub distance_fade_factor: [f32; 4],
+	#[serde(default = "default_liltoon_distance_fade_color")]
+	pub distance_fade_color_factor: [f32; 4],
+	#[serde(default)]
+	pub distance_fade_rim_color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_distance_fade_rim_fresnel_power")]
+	pub distance_fade_rim_fresnel_power_factor: f32,
+	#[serde(default)]
+	pub distance_fade_mode_factor: f32,
 	#[serde(default = "default_liltoon_light_min_limit")]
 	pub light_min_limit_factor: f32,
 	#[serde(default = "one_f32")]
@@ -1178,6 +1304,14 @@ pub struct UnaLilToonLikeMaterial {
 	pub backlight: UnaLilToonLikeBacklight,
 	#[serde(default)]
 	pub glitter: UnaLilToonLikeGlitter,
+	#[serde(default)]
+	pub dissolve: UnaLilToonLikeDissolve,
+	#[serde(default)]
+	pub parallax: UnaLilToonLikeParallax,
+	#[serde(default)]
+	pub id_mask: UnaLilToonLikeIdMask,
+	#[serde(default)]
+	pub udim_discard: UnaLilToonLikeUdimDiscard,
 	#[serde(default)]
 	pub alpha_mask: UnaLilToonLikeAlphaMask,
 	#[serde(default)]
@@ -1237,6 +1371,13 @@ impl Default for UnaLilToonLikeMainColor {
 			second_blend_mode: UnaLilToonLikeBlendMode::default(),
 			second_enable_lighting_factor: 1.0,
 			second_alpha_mode_factor: 0.0,
+			second_cull_factor: 0.0,
+			second_distance_fade_factor: default_liltoon_layer_distance_fade(),
+			second_decal_flags_factor: [0.0, 0.0, 0.0, 0.0],
+			second_decal_transform_factor: [0.0, 0.0, 0.0, 0.0],
+			second_decal_animation_factor: [0.0, 0.0, 0.0, 0.0],
+			second_decal_sub_param_factor: [0.0, 0.0, 0.0, 0.0],
+			second_dissolve: UnaLilToonLikeDissolve::default(),
 			third_enabled_factor: 0.0,
 			third_texture_index: None,
 			third_blend_mask_texture_index: None,
@@ -1244,6 +1385,13 @@ impl Default for UnaLilToonLikeMainColor {
 			third_blend_mode: UnaLilToonLikeBlendMode::default(),
 			third_enable_lighting_factor: 1.0,
 			third_alpha_mode_factor: 0.0,
+			third_cull_factor: 0.0,
+			third_distance_fade_factor: default_liltoon_layer_distance_fade(),
+			third_decal_flags_factor: [0.0, 0.0, 0.0, 0.0],
+			third_decal_transform_factor: [0.0, 0.0, 0.0, 0.0],
+			third_decal_animation_factor: [0.0, 0.0, 0.0, 0.0],
+			third_decal_sub_param_factor: [0.0, 0.0, 0.0, 0.0],
+			third_dissolve: UnaLilToonLikeDissolve::default(),
 		}
 	}
 }
@@ -1468,8 +1616,11 @@ impl Default for UnaLilToonLikeGlitter {
 		Self {
 			enabled_factor: 0.0,
 			color_factor: [1.0, 1.0, 1.0, 1.0],
+			color_texture_index: None,
+			shape_texture_index: None,
 			params1_factor: default_liltoon_glitter_params1(),
 			params2_factor: default_liltoon_glitter_params2(),
+			atlas_factor: [1.0, 1.0, 0.0, 0.0],
 			main_strength_factor: 0.0,
 			normal_strength_factor: 1.0,
 			post_contrast_factor: 1.0,
@@ -1480,6 +1631,10 @@ impl Default for UnaLilToonLikeGlitter {
 			backface_mask_factor: 0.0,
 			scale_randomize_factor: 0.0,
 			uv_mode_factor: 0.0,
+			color_texture_uv_mode_factor: 0.0,
+			apply_shape_factor: 0.0,
+			angle_randomize_factor: 0.0,
+			vr_parallax_strength_factor: 0.0,
 		}
 	}
 }
@@ -1491,6 +1646,60 @@ impl Default for UnaLilToonLikeAlphaMask {
 			texture_index: None,
 			scale_factor: 1.0,
 			value_factor: 0.0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeDissolve {
+	fn default() -> Self {
+		Self {
+			mask_texture_index: None,
+			noise_mask_texture_index: None,
+			color_factor: default_liltoon_dissolve_color(),
+			params_factor: default_liltoon_dissolve_params(),
+			position_factor: [0.0, 0.0, 0.0, 0.0],
+			noise_strength_factor: default_liltoon_dissolve_noise_strength(),
+			noise_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeParallax {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			pom_enabled_factor: 0.0,
+			texture_index: None,
+			scale_factor: default_liltoon_parallax_scale(),
+			offset_factor: default_liltoon_parallax_offset(),
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeIdMask {
+	fn default() -> Self {
+		Self {
+			compile_factor: 0.0,
+			from_factor: default_liltoon_id_mask_from(),
+			is_bitmap_factor: 0.0,
+			controls_dissolve_factor: 0.0,
+			flags_factor: [0.0; 8],
+			prior_flags_factor: [0.0; 8],
+			indices_factor: [0; 8],
+		}
+	}
+}
+
+impl Default for UnaLilToonLikeUdimDiscard {
+	fn default() -> Self {
+		Self {
+			compile_factor: 0.0,
+			mode_factor: 0.0,
+			uv_factor: 0.0,
+			row0_factor: [0.0; 4],
+			row1_factor: [0.0; 4],
+			row2_factor: [0.0; 4],
+			row3_factor: [0.0; 4],
 		}
 	}
 }
@@ -1547,6 +1756,11 @@ impl Default for UnaLilToonLikeRendering {
 	fn default() -> Self {
 		Self {
 			render_queue_number: None,
+			distance_fade_factor: default_liltoon_distance_fade(),
+			distance_fade_color_factor: default_liltoon_distance_fade_color(),
+			distance_fade_rim_color_factor: [0.0, 0.0, 0.0, 0.0],
+			distance_fade_rim_fresnel_power_factor: default_liltoon_distance_fade_rim_fresnel_power(),
+			distance_fade_mode_factor: 0.0,
 			light_min_limit_factor: default_liltoon_light_min_limit(),
 			light_max_limit_factor: 1.0,
 			monochrome_lighting_factor: 0.0,
@@ -1575,6 +1789,10 @@ impl Default for UnaLilToonLikeMaterial {
 			outline: UnaLilToonLikeOutline::default(),
 			backlight: UnaLilToonLikeBacklight::default(),
 			glitter: UnaLilToonLikeGlitter::default(),
+			dissolve: UnaLilToonLikeDissolve::default(),
+			parallax: UnaLilToonLikeParallax::default(),
+			id_mask: UnaLilToonLikeIdMask::default(),
+			udim_discard: UnaLilToonLikeUdimDiscard::default(),
 			alpha_mask: UnaLilToonLikeAlphaMask::default(),
 			fur: UnaLilToonLikeFur::default(),
 			blend_state: UnaLilToonLikeBlendState::default(),
@@ -1740,6 +1958,34 @@ fn default_liltoon_glitter_sensitivity() -> f32 {
 	0.25
 }
 
+fn default_liltoon_dissolve_color() -> [f32; 4] {
+	[1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_liltoon_dissolve_params() -> [f32; 4] {
+	[0.0, 0.0, 0.5, 0.1]
+}
+
+fn default_liltoon_dissolve_noise_strength() -> f32 {
+	0.1
+}
+
+fn default_liltoon_layer_distance_fade() -> [f32; 4] {
+	[0.0, 0.0, 0.0, 0.0]
+}
+
+fn default_liltoon_parallax_scale() -> f32 {
+	0.02
+}
+
+fn default_liltoon_parallax_offset() -> f32 {
+	0.5
+}
+
+fn default_liltoon_id_mask_from() -> f32 {
+	8.0
+}
+
 fn default_liltoon_smoothness() -> f32 {
 	0.5
 }
@@ -1838,6 +2084,18 @@ fn default_liltoon_main_texture_hsvg() -> [f32; 4] {
 
 fn default_liltoon_light_min_limit() -> f32 {
 	0.05
+}
+
+fn default_liltoon_distance_fade() -> [f32; 4] {
+	[0.1, 0.01, 0.0, 0.0]
+}
+
+fn default_liltoon_distance_fade_color() -> [f32; 4] {
+	[0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_liltoon_distance_fade_rim_fresnel_power() -> f32 {
+	5.0
 }
 
 fn default_mtoon_rim_fresnel_power() -> f32 {
@@ -2193,6 +2451,9 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
 			colors_0: None,
 			joints: None,
 			weights: None,
@@ -2231,6 +2492,9 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
 			colors_0: None,
 			joints: None,
 			weights: None,

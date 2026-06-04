@@ -1,10 +1,10 @@
-// CSFC (Compute Surface Fur Cards) generator.
+// Compute Fur Cards generator.
 //
 // This is the first GPU-side skeleton: one deterministic card per source
 // triangle. Density allocation, texture-driven length/mask/vector sampling,
 // and animated physics will be layered onto this interface.
 
-struct CsfcParams {
+struct ComputeFurCardsParams {
 	source_triangle_count: u32,
 	card_count: u32,
 	max_generated_vertices: u32,
@@ -27,10 +27,10 @@ struct CsfcParams {
 	inv_model: mat4x4<f32>,
 }
 
-const CSFC_FEATURE_FUR_VECTOR_TEX: u32 = 1u;
-const CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2u;
+const COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX: u32 = 1u;
+const COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2u;
 
-struct CsfcSourceVertex {
+struct ComputeFurCardsSourceVertex {
 	position: vec4<f32>,
 	normal: vec4<f32>,
 	tangent: vec4<f32>,
@@ -40,7 +40,7 @@ struct CsfcSourceVertex {
 	weights: vec4<f32>,
 }
 
-struct CsfcCardSource {
+struct ComputeFurCardsCardSource {
 	indices: vec4<u32>,
 	sample_index: u32,
 	_pad0: u32,
@@ -48,7 +48,7 @@ struct CsfcCardSource {
 	_pad2: u32,
 }
 
-struct CsfcGeneratedVertex {
+struct ComputeFurCardsGeneratedVertex {
 	position_layer: vec4<f32>,
 	normal_side: vec4<f32>,
 	uv: vec2<f32>,
@@ -58,10 +58,10 @@ struct CsfcGeneratedVertex {
 	pre_position: vec4<f32>,
 }
 
-@group(0) @binding(0) var<uniform> params: CsfcParams;
-@group(0) @binding(1) var<storage, read> source_vertices: array<CsfcSourceVertex>;
-@group(0) @binding(2) var<storage, read> card_sources: array<CsfcCardSource>;
-@group(0) @binding(3) var<storage, read_write> generated_vertices: array<CsfcGeneratedVertex>;
+@group(0) @binding(0) var<uniform> params: ComputeFurCardsParams;
+@group(0) @binding(1) var<storage, read> source_vertices: array<ComputeFurCardsSourceVertex>;
+@group(0) @binding(2) var<storage, read> card_sources: array<ComputeFurCardsCardSource>;
+@group(0) @binding(3) var<storage, read_write> generated_vertices: array<ComputeFurCardsGeneratedVertex>;
 @group(0) @binding(4) var<storage, read_write> generated_indices: array<u32>;
 @group(0) @binding(5) var fur_vector_tex: texture_2d<f32>;
 @group(0) @binding(6) var fur_length_mask_tex: texture_2d<f32>;
@@ -220,17 +220,17 @@ fn liltoon_vertex_noise(vertex_ids: vec3<u32>, weight: vec3<u32>) -> vec3<f32> {
 	return safe_normalize(vec3<f32>(n) * (2.0 / 4294967295.0) - vec3<f32>(1.0), vec3<f32>(0.0, 1.0, 0.0));
 }
 
-fn fur_vector_for_vertex(v: CsfcSourceVertex, random_dir: vec3<f32>, cutout_scale: f32) -> vec3<f32> {
+fn fur_vector_for_vertex(v: ComputeFurCardsSourceVertex, random_dir: vec3<f32>, cutout_scale: f32) -> vec3<f32> {
 	let normal = safe_normalize(v.normal.xyz, vec3<f32>(0.0, 1.0, 0.0));
 	let tangent = v.tangent.xyz;
 	let side_dir = make_card_side(normal, tangent);
 	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0);
 	let bitangent = safe_normalize(cross(normal, side_dir), vec3<f32>(0.0, 0.0, 1.0)) * tangent_sign;
 	var authored_vector = params.direction.xyz + vec3<f32>(0.0, 0.0, 0.001);
-	if (params.feature_flags & CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR) != 0u {
+	if (params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR) != 0u {
 		authored_vector = lil_blend_normal(authored_vector, v.color.xyz);
 	}
-	if (params.feature_flags & CSFC_FEATURE_FUR_VECTOR_TEX) != 0u {
+	if (params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX) != 0u {
 		let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, fur_samp, main_uv(v.uv.xy), 0.0), params.direction.w);
 		authored_vector = lil_blend_normal(authored_vector, vector_tex);
 	}
@@ -247,13 +247,13 @@ fn fur_vector_for_vertex(v: CsfcSourceVertex, random_dir: vec3<f32>, cutout_scal
 }
 
 fn fur_tip_for_sample(
-	v0: CsfcSourceVertex,
-	v1: CsfcSourceVertex,
-	v2: CsfcSourceVertex,
+	v0: ComputeFurCardsSourceVertex,
+	v1: ComputeFurCardsSourceVertex,
+	v2: ComputeFurCardsSourceVertex,
 	bary: vec3<f32>,
 	seed: u32,
 	vertex_ids: vec3<u32>,
-) -> CsfcGeneratedVertex {
+) -> ComputeFurCardsGeneratedVertex {
 	let normal = safe_normalize(interpolate3b(v0.normal.xyz, v1.normal.xyz, v2.normal.xyz, bary), vec3<f32>(0.0, 1.0, 0.0));
 	let root = interpolate3b(v0.position.xyz, v1.position.xyz, v2.position.xyz, bary);
 	let root_ws = (params.model * vec4<f32>(root, 1.0)).xyz;
@@ -270,7 +270,7 @@ fn fur_tip_for_sample(
 	let pre_fv1 = fur_vector_for_vertex(v1, random1, cutout_scale);
 	let pre_fv2 = fur_vector_for_vertex(v2, random2, cutout_scale);
 	let pre_fur_vector = interpolate3b(pre_fv0, pre_fv1, pre_fv2, bary);
-	return CsfcGeneratedVertex(
+	return ComputeFurCardsGeneratedVertex(
 		vec4<f32>(transform_position_ws_to_os(root_ws + fur_vector), 1.0),
 		vec4<f32>(normal, 0.0),
 		uv,
@@ -281,10 +281,10 @@ fn fur_tip_for_sample(
 	);
 }
 
-fn fur_root_for_tip(tip: CsfcGeneratedVertex, v0: CsfcSourceVertex, v1: CsfcSourceVertex, v2: CsfcSourceVertex, bary: vec3<f32>, seed: u32) -> CsfcGeneratedVertex {
+fn fur_root_for_tip(tip: ComputeFurCardsGeneratedVertex, v0: ComputeFurCardsSourceVertex, v1: ComputeFurCardsSourceVertex, v2: ComputeFurCardsSourceVertex, bary: vec3<f32>, seed: u32) -> ComputeFurCardsGeneratedVertex {
 	let normal = safe_normalize(interpolate3b(v0.normal.xyz, v1.normal.xyz, v2.normal.xyz, bary), vec3<f32>(0.0, 1.0, 0.0));
 	let root = interpolate3b(v0.position.xyz, v1.position.xyz, v2.position.xyz, bary);
-	return CsfcGeneratedVertex(
+	return ComputeFurCardsGeneratedVertex(
 		vec4<f32>(root, 0.0),
 		vec4<f32>(normal, 0.0),
 		tip.uv,
@@ -296,7 +296,7 @@ fn fur_root_for_tip(tip: CsfcGeneratedVertex, v0: CsfcSourceVertex, v1: CsfcSour
 }
 
 fn write_vertex(vertex_index: u32, center_position: vec3<f32>, layer: f32, normal: vec3<f32>, signed_half_width: f32, uv: vec2<f32>, alpha: f32, seed: u32) {
-	generated_vertices[vertex_index] = CsfcGeneratedVertex(
+	generated_vertices[vertex_index] = ComputeFurCardsGeneratedVertex(
 		vec4<f32>(center_position, layer),
 		vec4<f32>(normal, signed_half_width),
 		uv,
@@ -308,7 +308,7 @@ fn write_vertex(vertex_index: u32, center_position: vec3<f32>, layer: f32, norma
 }
 
 @compute @workgroup_size(64)
-fn csfc_generate(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn compute_fur_cards_generate(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let card_index = gid.x;
 	if card_index >= params.card_count {
 		return;

@@ -174,8 +174,8 @@ pub struct SceneMeshLoadOpts {
 	/// shading / GI / rim / matcap / emissive / shade_term を全てスキップ。
 	/// これでリングが残るならテクスチャ自身またはメッシュ重なり由来。
 	pub debug_base_texture_only: bool,
-	/// lilToon Fur shell pass を完全にスキップする診断 toggle。
-	/// Fur 実装の副作用が通常描画へ波及しているかを切り分ける。
+	/// lilToon Fur 描画を完全にスキップする診断 toggle。
+	/// Compute Fur 実装の副作用が通常描画へ波及しているかを切り分ける。
 	pub disable_fur: bool,
 	/// アバター用途の outline override。既定は VRM / MToon authored outline を尊重する。
 	pub avatar_outline: AvatarOutlineOptions,
@@ -200,7 +200,7 @@ pub(crate) enum MaterialTier {
 use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
-const SHADER_CSFC_FUR: &str = include_str!("../shaders/csfc_fur.wgsl");
+const SHADER_COMPUTE_FUR_CARDS: &str = include_str!("../shaders/compute_fur_cards.wgsl");
 
 fn mesh_shader_source_for_tier(tier: MaterialTier) -> Cow<'static, str> {
 	match tier {
@@ -240,20 +240,67 @@ fn portable_mesh_shader_source() -> String {
 		"@group(1) @binding(60) var fur_length_mask_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(61) var fur_noise_mask_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(62) var fur_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(63) var glitter_color_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(64) var glitter_shape_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(65) var dissolve_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(66) var dissolve_noise_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(67) var parallax_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(68) var main2nd_dissolve_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(69) var main2nd_dissolve_noise_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(70) var main3rd_dissolve_mask_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(71) var main3rd_dissolve_noise_mask_tex: texture_2d<f32>;\n",
 	] {
 		shader = shader.replace(snippet, "");
 	}
 	shader = shader.replace(
-		"fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {\n\tif (shell <= 0.0) {\n\t\treturn 1.0;\n\t}\n\tlet fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;\n\tlet noise_uv = uv * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;\n\tlet noise = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;\n\tlet root_density = clamp(fur_mask * length_mask, 0.0, 1.0);\n\tlet shell_cut = pow(clamp(shell, 0.0, 1.0), mix(0.75, 2.0, clamp(drawu.fur_params.w, 0.0, 1.0)));\n\tlet breakup = clamp(noise + (1.0 - shell) * 0.35 - shell_cut * 0.75, 0.0, 1.0);\n\treturn root_density * breakup * (1.0 - shell * 0.82);\n}\n",
-		"fn fur_shell_alpha(uv: vec2<f32>, shell: f32, length_mask: f32) -> f32 {\n\t_ = uv;\n\t_ = shell;\n\treturn length_mask;\n}\n",
+		"let glitter_color_texel = textureSample(glitter_color_tex, base_samp, glitter_color_uv);",
+		"let glitter_color_texel = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
 	);
+	shader = shader.replace(
+		"let shape_tex = textureSampleGrad(glitter_shape_tex, base_samp, mask_uv, abs(dpdx(pos)) * mipfactor.x, abs(dpdy(pos)) * mipfactor.y);",
+		"let shape_tex = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
+	);
+	shader = shader.replace(
+		"let dissolve_mask_val = textureSample(dissolve_mask_tex, base_samp, dissolve_mask_uv).r;",
+		"let dissolve_mask_val = 1.0;",
+	);
+	shader = shader.replace(
+		"let dissolve_noise = (textureSample(dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.dissolve_ext.x * drawu.dissolve_ext.z;",
+		"let dissolve_noise = 0.0;",
+	);
+	for (from, to) in [
+		(
+			"let layer = textureSample(main2nd_tex, base_samp, layer_uv.sample_uv) * drawu.main2nd_color;",
+			"let layer = drawu.main2nd_color;",
+		),
+		("textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r", "1.0"),
+		("textureSample(main2nd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r", "1.0"),
+		(
+			"textureSample(main2nd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r",
+			"0.5",
+		),
+		(
+			"let layer = textureSample(main3rd_tex, base_samp, layer_uv.sample_uv) * drawu.main3rd_color;",
+			"let layer = drawu.main3rd_color;",
+		),
+		("textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r", "1.0"),
+		("textureSample(main3rd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r", "1.0"),
+		(
+			"textureSample(main3rd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r",
+			"0.5",
+		),
+	] {
+		shader = shader.replace(from, to);
+	}
+	shader = shader.replace("textureSampleLevel(parallax_tex, base_samp, parallax_map_uv, 0.0).r", "0.5");
+	shader = shader.replace("textureSampleLevel(parallax_tex, base_samp, ray_pos.xy, 0.0).r", "0.5");
 	shader = shader.replace(
 		"let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;",
 		"let fur_mask = 1.0;",
 	);
 	shader = shader.replace(
-		"let noise = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;",
-		"let noise = 1.0;",
+		"let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;",
+		"let fur_noise_mask = 1.0;",
 	);
 	shader = shader.replace(
 		"let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;",
@@ -312,7 +359,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tlet emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tvar emission2nd_rgb_work = emission2nd_sample.rgb;\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
+		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv_base = lil_select_emission_uv(drawu.emission2nd_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(emission2nd_uv_base, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tlet emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tvar emission2nd_rgb_work = emission2nd_sample.rgb;\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
 		"",
 	);
 	shader = shader.replace(
@@ -324,12 +371,8 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_uv = uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;\n\t\tvar tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\t\ttn2.x = tn2.x * drawu.normal2nd_params.y;\n\t\ttn2.y = tn2.y * drawu.normal2nd_params.y;\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
-	);
-	shader = shader.replace(
-		"fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {\n\tvar out_col = base;\n\tif (drawu.main2nd_params.x > 0.5) {\n\t\tlet layer_uv = uv * drawu.main2nd_uv_offset_scale.zw + drawu.main2nd_uv_offset_scale.xy;\n\t\tlet mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw + drawu.main2nd_blend_mask_uv_offset_scale.xy;\n\t\tlet layer = textureSample(main2nd_tex, base_samp, layer_uv) * drawu.main2nd_color;\n\t\tlet layer_alpha = layer.a * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;\n\t\tlet out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main2nd_params.z);\n\t\tlet out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main2nd_params.y, drawu.main2nd_params.w);\n\t\tout_col = vec4<f32>(out_rgb, out_alpha);\n\t}\n\tif (drawu.main3rd_params.x > 0.5) {\n\t\tlet layer_uv = uv * drawu.main3rd_uv_offset_scale.zw + drawu.main3rd_uv_offset_scale.xy;\n\t\tlet mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw + drawu.main3rd_blend_mask_uv_offset_scale.xy;\n\t\tlet layer = textureSample(main3rd_tex, base_samp, layer_uv) * drawu.main3rd_color;\n\t\tlet layer_alpha = layer.a * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;\n\t\tlet out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main3rd_params.z);\n\t\tlet out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main3rd_params.y, drawu.main3rd_params.w);\n\t\tout_col = vec4<f32>(out_rgb, out_alpha);\n\t}\n\treturn out_col;\n}\n",
-		"fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {\n\treturn base;\n}\n",
 	);
 	shader = shader.replace(
 		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;",
@@ -442,6 +485,35 @@ struct MeshDrawMaterialGpu {
 	glitter_control: [f32; 4],
 	glitter_ext: [f32; 4],
 	glitter_ext2: [f32; 4],
+	glitter_ext3: [f32; 4],
+	glitter_color_uv_offset_scale: [f32; 4],
+	glitter_shape_uv_offset_scale: [f32; 4],
+	glitter_atlas: [f32; 4],
+	distance_fade: [f32; 4],
+	distance_fade_color: [f32; 4],
+	distance_fade_rim_color: [f32; 4],
+	distance_fade_params: [f32; 4],
+	dissolve_color: [f32; 4],
+	dissolve_params: [f32; 4],
+	dissolve_pos: [f32; 4],
+	dissolve_ext: [f32; 4],
+	dissolve_mask_uv_offset_scale: [f32; 4],
+	dissolve_noise_uv_offset_scale: [f32; 4],
+	dissolve_noise_uv_anim_params: [f32; 4],
+	parallax_params: [f32; 4],
+	parallax_uv_offset_scale: [f32; 4],
+	id_mask_params: [f32; 4],
+	id_mask_flags0: [f32; 4],
+	id_mask_flags1: [f32; 4],
+	id_mask_prior_flags0: [f32; 4],
+	id_mask_prior_flags1: [f32; 4],
+	id_mask_indices0: [f32; 4],
+	id_mask_indices1: [f32; 4],
+	udim_discard_params: [f32; 4],
+	udim_discard_row0: [f32; 4],
+	udim_discard_row1: [f32; 4],
+	udim_discard_row2: [f32; 4],
+	udim_discard_row3: [f32; 4],
 	emission_color: [f32; 4],
 	emission_params: [f32; 4],
 	emission_blink_params: [f32; 4],
@@ -499,12 +571,38 @@ struct MeshDrawMaterialGpu {
 	main_gradation_params: [f32; 4],
 	main2nd_color: [f32; 4],
 	main2nd_params: [f32; 4],
+	main2nd_ext: [f32; 4],
+	main2nd_distance_fade: [f32; 4],
+	main2nd_decal_flags: [f32; 4],
+	main2nd_decal_transform: [f32; 4],
+	main2nd_decal_animation: [f32; 4],
+	main2nd_decal_sub_param: [f32; 4],
 	main2nd_uv_offset_scale: [f32; 4],
 	main2nd_blend_mask_uv_offset_scale: [f32; 4],
+	main2nd_dissolve_color: [f32; 4],
+	main2nd_dissolve_params: [f32; 4],
+	main2nd_dissolve_pos: [f32; 4],
+	main2nd_dissolve_ext: [f32; 4],
+	main2nd_dissolve_mask_uv_offset_scale: [f32; 4],
+	main2nd_dissolve_noise_uv_offset_scale: [f32; 4],
+	main2nd_dissolve_noise_uv_anim_params: [f32; 4],
 	main3rd_color: [f32; 4],
 	main3rd_params: [f32; 4],
+	main3rd_ext: [f32; 4],
+	main3rd_distance_fade: [f32; 4],
+	main3rd_decal_flags: [f32; 4],
+	main3rd_decal_transform: [f32; 4],
+	main3rd_decal_animation: [f32; 4],
+	main3rd_decal_sub_param: [f32; 4],
 	main3rd_uv_offset_scale: [f32; 4],
 	main3rd_blend_mask_uv_offset_scale: [f32; 4],
+	main3rd_dissolve_color: [f32; 4],
+	main3rd_dissolve_params: [f32; 4],
+	main3rd_dissolve_pos: [f32; 4],
+	main3rd_dissolve_ext: [f32; 4],
+	main3rd_dissolve_mask_uv_offset_scale: [f32; 4],
+	main3rd_dissolve_noise_uv_offset_scale: [f32; 4],
+	main3rd_dissolve_noise_uv_anim_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -517,7 +615,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1856);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2736);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -527,12 +625,15 @@ struct Vertex {
 	norm: [f32; 3],
 	tangent: [f32; 4],
 	uv: [f32; 2],
+	uv1: [f32; 2],
+	uv2: [f32; 2],
+	uv3: [f32; 2],
 	joints: [u16; 4],
 	weights: [f32; 4],
 	color: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<Vertex>() == 88);
+const _: () = assert!(std::mem::size_of::<Vertex>() == 112);
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct TextureUploadSummary {
@@ -716,7 +817,7 @@ struct MeshDraw {
 	morph_weight_buffer: wgpu::Buffer,
 	_morph_delta_buffer: wgpu::Buffer,
 	morph_bind_group: wgpu::BindGroup,
-	_csfc_fur: Option<CsfcDrawResources>,
+	_compute_fur_cards: Option<ComputeFurCardsDrawResources>,
 	world_node_index: usize,
 	shading: UnaShadingModel,
 	morph_pos: Vec<Vec<[f32; 3]>>,
@@ -735,8 +836,8 @@ struct MeshDraw {
 }
 
 #[allow(dead_code)]
-struct CsfcDrawResources {
-	params: CsfcGenerateParamsGpu,
+struct ComputeFurCardsDrawResources {
+	params: ComputeFurCardsGenerateParamsGpu,
 	params_buffer: wgpu::Buffer,
 	source_vertex_buffer: wgpu::Buffer,
 	card_source_buffer: wgpu::Buffer,
@@ -748,7 +849,7 @@ struct CsfcDrawResources {
 	generated_index_count: u32,
 	dispatch_workgroups: u32,
 	base_vertices: Vec<Vertex>,
-	source_vertex_scratch: Vec<CsfcSourceVertexGpu>,
+	source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 }
 
 #[derive(Default)]
@@ -959,10 +1060,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 
 pub(crate) struct SceneMeshes {
 	pipeline_outline_toon: wgpu::RenderPipeline,
-	_csfc_fur_compute_pipeline: CsfcFurComputePipeline,
-	pipeline_csfc_fur_pre_toon: wgpu::RenderPipeline,
-	pipeline_csfc_fur_toon: wgpu::RenderPipeline,
-	pipeline_fur_toon: wgpu::RenderPipeline,
+	_compute_fur_cards_compute_pipeline: ComputeFurCardsComputePipeline,
+	pipeline_compute_fur_cards_pre_toon: wgpu::RenderPipeline,
+	pipeline_compute_fur_cards_toon: wgpu::RenderPipeline,
 	pipeline_opaque_lit: wgpu::RenderPipeline,
 	pipeline_opaque_unlit: wgpu::RenderPipeline,
 	pipeline_opaque_toon: wgpu::RenderPipeline,
@@ -1077,6 +1177,9 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 	let normals = buf.normals.as_deref();
 	let tangents = buf.tangents.as_deref();
 	let uvs = buf.tex_coords_0.as_deref();
+	let uvs1 = buf.tex_coords_1.as_deref();
+	let uvs2 = buf.tex_coords_2.as_deref();
+	let uvs3 = buf.tex_coords_3.as_deref();
 	let colors = buf.colors_0.as_deref();
 	let joints_buf = buf.joints.as_deref();
 	let weights_buf = buf.weights.as_deref();
@@ -1116,6 +1219,9 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 			}
 		}
 		let uv = uvs.and_then(|uu| uu.get(pi)).copied().unwrap_or([0.0, 0.0]);
+		let uv1 = uvs1.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
+		let uv2 = uvs2.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
+		let uv3 = uvs3.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
 		let tangent = tangents.and_then(|tt| tt.get(pi)).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
 		let color = colors.and_then(|cc| cc.get(pi)).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
 		let jo = joints_buf.and_then(|jj| jj.get(pi)).copied().unwrap_or(j_default);
@@ -1129,6 +1235,9 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 			norm: n,
 			tangent,
 			uv,
+			uv1,
+			uv2,
+			uv3,
 			joints: jo,
 			weights: we,
 			color,
@@ -1471,6 +1580,15 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(60, wgpu::ShaderStages::VERTEX),
 			texture_bind_group_layout_entry(61, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(62, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(63, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(64, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(65, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(66, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(67, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(68, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(69, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(70, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(71, wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -2015,7 +2133,7 @@ fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel)
 	if shading != UnaShadingModel::LilToonLike || liltoon_like.fur.enabled_factor <= 0.5 {
 		return 0;
 	}
-	liltoon_fur_shell_sample_count(liltoon_like.fur.layer_count_factor)
+	liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor)
 }
 
 fn liltoon_fur_layer_num(layer_num: f32) -> u32 {
@@ -2028,7 +2146,7 @@ fn liltoon_fur_layer_num(layer_num: f32) -> u32 {
 	}
 }
 
-fn liltoon_fur_shell_sample_count(layer_num: f32) -> u32 {
+fn liltoon_fur_sample_count_for_layer_num(layer_num: f32) -> u32 {
 	match liltoon_fur_layer_num(layer_num) {
 		1 => 4,
 		2 => 7,
@@ -2037,12 +2155,12 @@ fn liltoon_fur_shell_sample_count(layer_num: f32) -> u32 {
 }
 
 fn liltoon_fur_segment_count(layer_num: f32) -> u32 {
-	liltoon_fur_shell_sample_count(layer_num).saturating_sub(1)
+	liltoon_fur_sample_count_for_layer_num(layer_num).saturating_sub(1)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-enum CsfcExpressionMode {
+enum ComputeFurCardsExpressionMode {
 	LilToonCompatible,
 	UnaStandard,
 	UnaHighQuality,
@@ -2050,7 +2168,7 @@ enum CsfcExpressionMode {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(dead_code)]
-struct CsfcTriangleMetrics {
+struct ComputeFurCardsTriangleMetrics {
 	world_area: f32,
 	uv_area: f32,
 	average_fur_mask: f32,
@@ -2061,7 +2179,7 @@ struct CsfcTriangleMetrics {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(dead_code)]
-struct CsfcAllocationParams {
+struct ComputeFurCardsAllocationParams {
 	target_world_area: f32,
 	target_uv_area: f32,
 	target_fur_length: f32,
@@ -2070,7 +2188,7 @@ struct CsfcAllocationParams {
 	global_quality_scale: f32,
 }
 
-impl Default for CsfcAllocationParams {
+impl Default for ComputeFurCardsAllocationParams {
 	fn default() -> Self {
 		Self {
 			target_world_area: 0.00018,
@@ -2085,14 +2203,14 @@ impl Default for CsfcAllocationParams {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(dead_code)]
-struct CsfcBarycentricSample {
+struct ComputeFurCardsBarycentricSample {
 	barycentric: [f32; 3],
 	seed: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-struct CsfcBufferRequirements {
+struct ComputeFurCardsBufferRequirements {
 	card_count: u32,
 	vertex_count: u32,
 	index_count: u32,
@@ -2102,7 +2220,7 @@ struct CsfcBufferRequirements {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-struct CsfcSourceBufferRequirements {
+struct ComputeFurCardsSourceBufferRequirements {
 	vertex_count: u32,
 	triangle_count: u32,
 	vertex_bytes: u64,
@@ -2111,7 +2229,7 @@ struct CsfcSourceBufferRequirements {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-struct CsfcSourceVertexGpu {
+struct ComputeFurCardsSourceVertexGpu {
 	position: [f32; 4],
 	normal: [f32; 4],
 	tangent: [f32; 4],
@@ -2123,13 +2241,13 @@ struct CsfcSourceVertexGpu {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
-struct CsfcSourceTriangleGpu {
+struct ComputeFurCardsSourceTriangleGpu {
 	indices: [u32; 4],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
-struct CsfcCardSourceGpu {
+struct ComputeFurCardsCardSourceGpu {
 	indices: [u32; 4],
 	sample_index: u32,
 	_pad: [u32; 3],
@@ -2137,14 +2255,14 @@ struct CsfcCardSourceGpu {
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
-struct CsfcCpuFurMaps<'a> {
+struct ComputeFurCardsCpuFurMaps<'a> {
 	length_mask: Option<&'a UnaImageRgba>,
 	fur_mask: Option<&'a UnaImageRgba>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CsfcGenerateParamsGpu {
+struct ComputeFurCardsGenerateParamsGpu {
 	source_triangle_count: u32,
 	card_count: u32,
 	max_generated_vertices: u32,
@@ -2167,7 +2285,7 @@ struct CsfcGenerateParamsGpu {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CsfcGeneratedVertexGpu {
+struct ComputeFurCardsGeneratedVertexGpu {
 	root_or_tip_position: [f32; 3],
 	fur_layer: f32,
 	normal: [f32; 3],
@@ -2179,27 +2297,27 @@ struct CsfcGeneratedVertexGpu {
 	pre_position: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CsfcSourceVertexGpu>() == 112);
-const _: () = assert!(std::mem::size_of::<CsfcSourceTriangleGpu>() == 16);
-const _: () = assert!(std::mem::size_of::<CsfcCardSourceGpu>() == 32);
-const _: () = assert!(std::mem::size_of::<CsfcGenerateParamsGpu>() == 224);
-const _: () = assert!(std::mem::size_of::<CsfcGeneratedVertexGpu>() == 80);
+const _: () = assert!(std::mem::size_of::<ComputeFurCardsSourceVertexGpu>() == 112);
+const _: () = assert!(std::mem::size_of::<ComputeFurCardsSourceTriangleGpu>() == 16);
+const _: () = assert!(std::mem::size_of::<ComputeFurCardsCardSourceGpu>() == 32);
+const _: () = assert!(std::mem::size_of::<ComputeFurCardsGenerateParamsGpu>() == 224);
+const _: () = assert!(std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() == 80);
 
-const CSFC_FEATURE_FUR_VECTOR_TEX: u32 = 1;
-const CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2;
+const COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX: u32 = 1;
+const COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2;
 
 #[allow(dead_code)]
-fn csfc_mode_density(layer_num: f32, mode: CsfcExpressionMode) -> f32 {
-	let compatible = liltoon_fur_shell_sample_count(layer_num) as f32;
+fn compute_fur_cards_mode_density(layer_num: f32, mode: ComputeFurCardsExpressionMode) -> f32 {
+	let compatible = liltoon_fur_sample_count_for_layer_num(layer_num) as f32;
 	match mode {
-		CsfcExpressionMode::LilToonCompatible => compatible,
-		CsfcExpressionMode::UnaStandard => compatible * 1.25,
-		CsfcExpressionMode::UnaHighQuality => compatible * 2.0,
+		ComputeFurCardsExpressionMode::LilToonCompatible => compatible,
+		ComputeFurCardsExpressionMode::UnaStandard => compatible * 1.25,
+		ComputeFurCardsExpressionMode::UnaHighQuality => compatible * 2.0,
 	}
 }
 
 #[allow(dead_code)]
-fn csfc_safe_ratio(value: f32, target: f32) -> f32 {
+fn compute_fur_cards_safe_ratio(value: f32, target: f32) -> f32 {
 	if !value.is_finite() || !target.is_finite() || target <= 0.0 {
 		return 1.0;
 	}
@@ -2207,7 +2325,12 @@ fn csfc_safe_ratio(value: f32, target: f32) -> f32 {
 }
 
 #[allow(dead_code)]
-fn csfc_triangle_card_count(layer_num: f32, mode: CsfcExpressionMode, metrics: CsfcTriangleMetrics, params: CsfcAllocationParams) -> u32 {
+fn compute_fur_cards_triangle_card_count(
+	layer_num: f32,
+	mode: ComputeFurCardsExpressionMode,
+	metrics: ComputeFurCardsTriangleMetrics,
+	params: ComputeFurCardsAllocationParams,
+) -> u32 {
 	let mask = metrics.average_fur_mask.clamp(0.0, 1.0);
 	let length_mask = metrics.average_length_mask.clamp(0.0, 1.0);
 	let fur_length = metrics.fur_length.max(0.0);
@@ -2215,10 +2338,10 @@ fn csfc_triangle_card_count(layer_num: f32, mode: CsfcExpressionMode, metrics: C
 		return 0;
 	}
 
-	let base = csfc_mode_density(layer_num, mode);
-	let area_weight = csfc_safe_ratio(metrics.world_area, params.target_world_area);
-	let uv_weight = csfc_safe_ratio(metrics.uv_area, params.target_uv_area);
-	let length_weight = csfc_safe_ratio(length_mask * fur_length, params.target_fur_length);
+	let base = compute_fur_cards_mode_density(layer_num, mode);
+	let area_weight = compute_fur_cards_safe_ratio(metrics.world_area, params.target_world_area);
+	let uv_weight = compute_fur_cards_safe_ratio(metrics.uv_area, params.target_uv_area);
+	let length_weight = compute_fur_cards_safe_ratio(length_mask * fur_length, params.target_fur_length);
 	let screen_weight = metrics.projected_area_factor.max(0.0).sqrt().clamp(0.25, 4.0);
 	let quality = params.global_quality_scale.max(0.0);
 
@@ -2230,7 +2353,7 @@ fn csfc_triangle_card_count(layer_num: f32, mode: CsfcExpressionMode, metrics: C
 }
 
 #[allow(dead_code)]
-fn csfc_hash_u32(mut x: u32) -> u32 {
+fn compute_fur_cards_hash_u32(mut x: u32) -> u32 {
 	x ^= x >> 16;
 	x = x.wrapping_mul(0x7feb_352d);
 	x ^= x >> 15;
@@ -2239,13 +2362,13 @@ fn csfc_hash_u32(mut x: u32) -> u32 {
 }
 
 #[allow(dead_code)]
-fn csfc_unit_from_hash(seed: u32) -> f32 {
-	let value = csfc_hash_u32(seed) >> 8;
+fn compute_fur_cards_unit_from_hash(seed: u32) -> f32 {
+	let value = compute_fur_cards_hash_u32(seed) >> 8;
 	((value as f32) + 0.5) * (1.0 / 16_777_216.0)
 }
 
 #[allow(dead_code)]
-fn csfc_radical_inverse_vdc(mut bits: u32) -> f32 {
+fn compute_fur_cards_radical_inverse_vdc(mut bits: u32) -> f32 {
 	bits = bits.rotate_right(16);
 	bits = ((bits & 0x5555_5555) << 1) | ((bits & 0xaaaa_aaaa) >> 1);
 	bits = ((bits & 0x3333_3333) << 2) | ((bits & 0xcccc_cccc) >> 2);
@@ -2255,33 +2378,33 @@ fn csfc_radical_inverse_vdc(mut bits: u32) -> f32 {
 }
 
 #[allow(dead_code)]
-fn csfc_barycentric_sample(triangle_seed: u32, sample_index: u32) -> CsfcBarycentricSample {
-	let seed = csfc_hash_u32(triangle_seed ^ sample_index.wrapping_mul(0x9e37_79b9));
-	let jitter = csfc_unit_from_hash(seed);
+fn compute_fur_cards_barycentric_sample(triangle_seed: u32, sample_index: u32) -> ComputeFurCardsBarycentricSample {
+	let seed = compute_fur_cards_hash_u32(triangle_seed ^ sample_index.wrapping_mul(0x9e37_79b9));
+	let jitter = compute_fur_cards_unit_from_hash(seed);
 	let u = ((sample_index as f32 + jitter) * 0.618_034).fract();
-	let v = csfc_radical_inverse_vdc(sample_index ^ seed);
+	let v = compute_fur_cards_radical_inverse_vdc(sample_index ^ seed);
 	let su = u.sqrt();
 	let barycentric = [1.0 - su, su * (1.0 - v), su * v];
-	CsfcBarycentricSample { barycentric, seed }
+	ComputeFurCardsBarycentricSample { barycentric, seed }
 }
 
 #[allow(dead_code)]
-fn csfc_interpolate_vec2(values: [Vec2; 3], barycentric: [f32; 3]) -> Vec2 {
+fn compute_fur_cards_interpolate_vec2(values: [Vec2; 3], barycentric: [f32; 3]) -> Vec2 {
 	values[0] * barycentric[0] + values[1] * barycentric[1] + values[2] * barycentric[2]
 }
 
 #[allow(dead_code)]
-fn csfc_interpolate_vec3(values: [Vec3; 3], barycentric: [f32; 3]) -> Vec3 {
+fn compute_fur_cards_interpolate_vec3(values: [Vec3; 3], barycentric: [f32; 3]) -> Vec3 {
 	values[0] * barycentric[0] + values[1] * barycentric[1] + values[2] * barycentric[2]
 }
 
 #[allow(dead_code)]
-fn csfc_buffer_requirements(card_count: u32) -> Option<CsfcBufferRequirements> {
+fn compute_fur_cards_buffer_requirements(card_count: u32) -> Option<ComputeFurCardsBufferRequirements> {
 	let vertex_count = card_count.checked_mul(4)?;
 	let index_count = card_count.checked_mul(6)?;
-	let vertex_bytes = (vertex_count as u64).checked_mul(std::mem::size_of::<CsfcGeneratedVertexGpu>() as u64)?;
+	let vertex_bytes = (vertex_count as u64).checked_mul(std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() as u64)?;
 	let index_bytes = (index_count as u64).checked_mul(std::mem::size_of::<u32>() as u64)?;
-	Some(CsfcBufferRequirements {
+	Some(ComputeFurCardsBufferRequirements {
 		card_count,
 		vertex_count,
 		index_count,
@@ -2291,8 +2414,8 @@ fn csfc_buffer_requirements(card_count: u32) -> Option<CsfcBufferRequirements> {
 }
 
 #[allow(dead_code)]
-fn csfc_source_vertex_from_vertex(vertex: Vertex) -> CsfcSourceVertexGpu {
-	CsfcSourceVertexGpu {
+fn compute_fur_cards_source_vertex_from_vertex(vertex: Vertex) -> ComputeFurCardsSourceVertexGpu {
+	ComputeFurCardsSourceVertexGpu {
 		position: [vertex.pos[0], vertex.pos[1], vertex.pos[2], 1.0],
 		normal: [vertex.norm[0], vertex.norm[1], vertex.norm[2], 0.0],
 		tangent: vertex.tangent,
@@ -2309,11 +2432,11 @@ fn csfc_source_vertex_from_vertex(vertex: Vertex) -> CsfcSourceVertexGpu {
 }
 
 #[allow(dead_code)]
-fn csfc_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<CsfcSourceVertexGpu> {
-	verts.iter().copied().map(csfc_source_vertex_from_vertex).collect()
+fn compute_fur_cards_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<ComputeFurCardsSourceVertexGpu> {
+	verts.iter().copied().map(compute_fur_cards_source_vertex_from_vertex).collect()
 }
 
-fn csfc_palette_matrix(raw: &[f32], joint_index: u16) -> Mat4 {
+fn compute_fur_cards_palette_matrix(raw: &[f32], joint_index: u16) -> Mat4 {
 	let matrix_count = raw.len() / 16;
 	if matrix_count == 0 {
 		return Mat4::IDENTITY;
@@ -2323,7 +2446,7 @@ fn csfc_palette_matrix(raw: &[f32], joint_index: u16) -> Mat4 {
 	Mat4::from_cols_array(&raw[base..base + 16].try_into().expect("palette matrix slice length"))
 }
 
-fn csfc_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -> CsfcSourceVertexGpu {
+fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -> ComputeFurCardsSourceVertexGpu {
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
 	let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
@@ -2335,7 +2458,7 @@ fn csfc_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -
 		if weight.abs() <= 0.000001 {
 			continue;
 		}
-		let matrix = csfc_palette_matrix(palette_raw, vertex.joints[i]);
+		let matrix = compute_fur_cards_palette_matrix(palette_raw, vertex.joints[i]);
 		skinned_position += matrix.transform_point3(position) * weight;
 		skinned_normal += matrix.transform_vector3(normal) * weight;
 		skinned_tangent += matrix.transform_vector3(tangent) * weight;
@@ -2346,7 +2469,7 @@ fn csfc_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -
 	if skinned_tangent.length_squared() <= 0.0000001 {
 		skinned_tangent = tangent;
 	}
-	CsfcSourceVertexGpu {
+	ComputeFurCardsSourceVertexGpu {
 		position: [skinned_position.x, skinned_position.y, skinned_position.z, 1.0],
 		normal: [
 			skinned_normal.normalize_or_zero().x,
@@ -2372,19 +2495,23 @@ fn csfc_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -
 	}
 }
 
-fn csfc_skinned_source_vertices_from_mesh(verts: &[Vertex], palette_raw: &[f32], out: &mut Vec<CsfcSourceVertexGpu>) {
+fn compute_fur_cards_skinned_source_vertices_from_mesh(
+	verts: &[Vertex],
+	palette_raw: &[f32],
+	out: &mut Vec<ComputeFurCardsSourceVertexGpu>,
+) {
 	out.clear();
 	out.reserve(verts.len());
 	out.extend(
 		verts
 			.iter()
 			.copied()
-			.map(|vertex| csfc_skinned_source_vertex_from_vertex(vertex, palette_raw)),
+			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_raw)),
 	);
 }
 
 #[allow(dead_code)]
-fn csfc_source_triangles_from_indices(indices: &[u32], vertex_count: usize) -> Vec<CsfcSourceTriangleGpu> {
+fn compute_fur_cards_source_triangles_from_indices(indices: &[u32], vertex_count: usize) -> Vec<ComputeFurCardsSourceTriangleGpu> {
 	indices
 		.chunks_exact(3)
 		.filter_map(|tri| {
@@ -2392,7 +2519,7 @@ fn csfc_source_triangles_from_indices(indices: &[u32], vertex_count: usize) -> V
 			let i1 = tri[1] as usize;
 			let i2 = tri[2] as usize;
 			if i0 < vertex_count && i1 < vertex_count && i2 < vertex_count {
-				Some(CsfcSourceTriangleGpu {
+				Some(ComputeFurCardsSourceTriangleGpu {
 					indices: [tri[0], tri[1], tri[2], 0],
 				})
 			} else {
@@ -2404,20 +2531,20 @@ fn csfc_source_triangles_from_indices(indices: &[u32], vertex_count: usize) -> V
 
 #[allow(dead_code)]
 #[allow(dead_code)]
-fn csfc_cpu_map_red_at(map: Option<&UnaImageRgba>, uv: Vec2, fallback: f32) -> f32 {
+fn compute_fur_cards_cpu_map_red_at(map: Option<&UnaImageRgba>, uv: Vec2, fallback: f32) -> f32 {
 	map.map(|image| sample_image_bilinear(image, uv.x, uv.y, true, false)[0])
 		.unwrap_or(fallback)
 		.clamp(0.0, 1.0)
 }
 
 #[allow(dead_code)]
-fn csfc_average_cpu_map_red(map: Option<&UnaImageRgba>, uvs: [Vec2; 3], fallback: f32) -> f32 {
+fn compute_fur_cards_average_cpu_map_red(map: Option<&UnaImageRgba>, uvs: [Vec2; 3], fallback: f32) -> f32 {
 	let centroid = (uvs[0] + uvs[1] + uvs[2]) * (1.0 / 3.0);
 	[
-		csfc_cpu_map_red_at(map, uvs[0], fallback),
-		csfc_cpu_map_red_at(map, uvs[1], fallback),
-		csfc_cpu_map_red_at(map, uvs[2], fallback),
-		csfc_cpu_map_red_at(map, centroid, fallback),
+		compute_fur_cards_cpu_map_red_at(map, uvs[0], fallback),
+		compute_fur_cards_cpu_map_red_at(map, uvs[1], fallback),
+		compute_fur_cards_cpu_map_red_at(map, uvs[2], fallback),
+		compute_fur_cards_cpu_map_red_at(map, centroid, fallback),
 	]
 	.into_iter()
 	.sum::<f32>()
@@ -2425,12 +2552,12 @@ fn csfc_average_cpu_map_red(map: Option<&UnaImageRgba>, uvs: [Vec2; 3], fallback
 }
 
 #[allow(dead_code)]
-fn csfc_triangle_metrics_from_source(
+fn compute_fur_cards_triangle_metrics_from_source(
 	verts: &[Vertex],
-	triangle: CsfcSourceTriangleGpu,
+	triangle: ComputeFurCardsSourceTriangleGpu,
 	fur_length: f32,
-	cpu_maps: CsfcCpuFurMaps<'_>,
-) -> Option<CsfcTriangleMetrics> {
+	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
+) -> Option<ComputeFurCardsTriangleMetrics> {
 	let i0 = triangle.indices[0] as usize;
 	let i1 = triangle.indices[1] as usize;
 	let i2 = triangle.indices[2] as usize;
@@ -2448,23 +2575,23 @@ fn csfc_triangle_metrics_from_source(
 	let uv_e2 = uv2 - uv0;
 	let uv_area = (uv_e1.x * uv_e2.y - uv_e1.y * uv_e2.x).abs() * 0.5;
 	let uvs = [uv0, uv1, uv2];
-	Some(CsfcTriangleMetrics {
+	Some(ComputeFurCardsTriangleMetrics {
 		world_area,
 		uv_area,
-		average_fur_mask: csfc_average_cpu_map_red(cpu_maps.fur_mask, uvs, 1.0),
-		average_length_mask: csfc_average_cpu_map_red(cpu_maps.length_mask, uvs, 1.0),
+		average_fur_mask: compute_fur_cards_average_cpu_map_red(cpu_maps.fur_mask, uvs, 1.0),
+		average_length_mask: compute_fur_cards_average_cpu_map_red(cpu_maps.length_mask, uvs, 1.0),
 		fur_length,
 		projected_area_factor: 1.0,
 	})
 }
 
 #[allow(dead_code)]
-fn csfc_card_sources_from_triangles(
+fn compute_fur_cards_card_sources_from_triangles(
 	material: &UnaMaterialPbr,
 	verts: &[Vertex],
-	triangles: &[CsfcSourceTriangleGpu],
-	cpu_maps: CsfcCpuFurMaps<'_>,
-) -> Option<Vec<CsfcCardSourceGpu>> {
+	triangles: &[ComputeFurCardsSourceTriangleGpu],
+	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
+) -> Option<Vec<ComputeFurCardsCardSourceGpu>> {
 	let liltoon_fur = material.liltoon_like.as_ref().map(|liltoon_like| &liltoon_like.fur);
 	let layer_num = liltoon_fur.map(|fur| fur.layer_count_factor).unwrap_or(1.0);
 	let fur_length = liltoon_fur.map(|fur| fur.vector_factor[3].max(0.0)).unwrap_or(0.0);
@@ -2474,12 +2601,12 @@ fn csfc_card_sources_from_triangles(
 	}
 	let mut card_sources = Vec::new();
 	for &triangle in triangles {
-		let metrics = csfc_triangle_metrics_from_source(verts, triangle, fur_length, cpu_maps)?;
+		let metrics = compute_fur_cards_triangle_metrics_from_source(verts, triangle, fur_length, cpu_maps)?;
 		if metrics.average_fur_mask <= 0.0001 || metrics.average_length_mask <= 0.0001 {
 			continue;
 		}
 		for sample_index in 0..segment_count {
-			card_sources.push(CsfcCardSourceGpu {
+			card_sources.push(ComputeFurCardsCardSourceGpu {
 				indices: triangle.indices,
 				sample_index,
 				_pad: [0; 3],
@@ -2490,10 +2617,10 @@ fn csfc_card_sources_from_triangles(
 }
 
 #[allow(dead_code)]
-fn csfc_source_buffer_requirements(vertex_count: u32, triangle_count: u32) -> Option<CsfcSourceBufferRequirements> {
-	let vertex_bytes = (vertex_count as u64).checked_mul(std::mem::size_of::<CsfcSourceVertexGpu>() as u64)?;
-	let triangle_bytes = (triangle_count as u64).checked_mul(std::mem::size_of::<CsfcSourceTriangleGpu>() as u64)?;
-	Some(CsfcSourceBufferRequirements {
+fn compute_fur_cards_source_buffer_requirements(vertex_count: u32, triangle_count: u32) -> Option<ComputeFurCardsSourceBufferRequirements> {
+	let vertex_bytes = (vertex_count as u64).checked_mul(std::mem::size_of::<ComputeFurCardsSourceVertexGpu>() as u64)?;
+	let triangle_bytes = (triangle_count as u64).checked_mul(std::mem::size_of::<ComputeFurCardsSourceTriangleGpu>() as u64)?;
+	Some(ComputeFurCardsSourceBufferRequirements {
 		vertex_count,
 		triangle_count,
 		vertex_bytes,
@@ -2502,20 +2629,20 @@ fn csfc_source_buffer_requirements(vertex_count: u32, triangle_count: u32) -> Op
 }
 
 #[allow(dead_code)]
-fn csfc_dispatch_workgroups(triangle_count: u32) -> u32 {
+fn compute_fur_cards_dispatch_workgroups(triangle_count: u32) -> u32 {
 	triangle_count.saturating_add(63) / 64
 }
 
 #[allow(dead_code)]
-struct CsfcFurComputePipeline {
+struct ComputeFurCardsComputePipeline {
 	_bind_group_layout: wgpu::BindGroupLayout,
 	_pipeline: wgpu::ComputePipeline,
 }
 
 #[allow(dead_code)]
-fn create_csfc_fur_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+fn create_compute_fur_cards_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 	device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-		label: Some("csfc_fur"),
+		label: Some("compute_fur_cards"),
 		entries: &[
 			uniform_bind_group_layout_entry(0, wgpu::ShaderStages::COMPUTE),
 			storage_bind_group_layout_entry(1, wgpu::ShaderStages::COMPUTE, true),
@@ -2532,52 +2659,55 @@ fn create_csfc_fur_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
 }
 
 #[allow(dead_code)]
-fn create_csfc_fur_compute_pipeline(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout) -> CsfcFurComputePipeline {
+fn create_compute_fur_cards_compute_pipeline(
+	device: &wgpu::Device,
+	bind_group_layout: &wgpu::BindGroupLayout,
+) -> ComputeFurCardsComputePipeline {
 	let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-		label: Some("csfc_fur"),
+		label: Some("compute_fur_cards"),
 		bind_group_layouts: &[Some(&bind_group_layout)],
 		immediate_size: 0,
 	});
 	let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-		label: Some("csfc_fur"),
-		source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_CSFC_FUR)),
+		label: Some("compute_fur_cards"),
+		source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_COMPUTE_FUR_CARDS)),
 	});
 	let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-		label: Some("csfc_fur"),
+		label: Some("compute_fur_cards"),
 		layout: Some(&pipeline_layout),
 		module: &shader,
-		entry_point: Some("csfc_generate"),
+		entry_point: Some("compute_fur_cards_generate"),
 		compilation_options: wgpu::PipelineCompilationOptions::default(),
 		cache: None,
 	});
-	CsfcFurComputePipeline {
+	ComputeFurCardsComputePipeline {
 		_bind_group_layout: bind_group_layout.clone(),
 		_pipeline: pipeline,
 	}
 }
 
 #[allow(dead_code)]
-fn csfc_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
+fn compute_fur_cards_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
 	material
 		.liltoon_like
 		.as_ref()
-		.map(|liltoon_like| liltoon_fur_shell_sample_count(liltoon_like.fur.layer_count_factor))
+		.map(|liltoon_like| liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor))
 		.unwrap_or(1)
 		.max(1)
 }
 
 #[allow(dead_code)]
-fn csfc_generate_params_from_material(
+fn compute_fur_cards_generate_params_from_material(
 	material: &UnaMaterialPbr,
 	source_triangle_count: u32,
 	_cards_per_triangle: u32,
-	generated: CsfcBufferRequirements,
-) -> CsfcGenerateParamsGpu {
+	generated: ComputeFurCardsBufferRequirements,
+) -> ComputeFurCardsGenerateParamsGpu {
 	let fur = material.liltoon_like.as_ref().map(|liltoon_like| &liltoon_like.fur);
 	let vector = fur.map(|f| f.vector_factor).unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let fur_length = vector[3].max(0.0);
 	let cards_per_triangle = fur.map(|f| liltoon_fur_segment_count(f.layer_count_factor)).unwrap_or(0);
-	CsfcGenerateParamsGpu {
+	ComputeFurCardsGenerateParamsGpu {
 		source_triangle_count,
 		card_count: generated.card_count,
 		max_generated_vertices: generated.vertex_count,
@@ -2589,10 +2719,10 @@ fn csfc_generate_params_from_material(
 			.map(|f| {
 				let mut flags = 0;
 				if f.vector_texture_index.is_some() {
-					flags |= CSFC_FEATURE_FUR_VECTOR_TEX;
+					flags |= COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX;
 				}
 				if f.vertex_color_to_vector_factor > 0.5 {
-					flags |= CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR;
+					flags |= COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR;
 				}
 				flags
 			})
@@ -2618,62 +2748,62 @@ fn csfc_generate_params_from_material(
 }
 
 #[allow(dead_code)]
-fn create_csfc_draw_resources(
+fn create_compute_fur_cards_draw_resources(
 	device: &wgpu::Device,
-	csfc_bind_group_layout: &wgpu::BindGroupLayout,
+	compute_fur_cards_bind_group_layout: &wgpu::BindGroupLayout,
 	material: &UnaMaterialPbr,
 	verts: &[Vertex],
 	indices: &[u32],
-	cpu_maps: CsfcCpuFurMaps<'_>,
+	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 	fur_vector_view: &wgpu::TextureView,
 	fur_length_mask_view: &wgpu::TextureView,
 	fur_noise_mask_view: &wgpu::TextureView,
 	fur_mask_view: &wgpu::TextureView,
 	fur_sampler: &wgpu::Sampler,
-) -> Option<CsfcDrawResources> {
-	let source_vertices = csfc_source_vertices_from_mesh(verts);
-	let source_triangles = csfc_source_triangles_from_indices(indices, source_vertices.len());
+) -> Option<ComputeFurCardsDrawResources> {
+	let source_vertices = compute_fur_cards_source_vertices_from_mesh(verts);
+	let source_triangles = compute_fur_cards_source_triangles_from_indices(indices, source_vertices.len());
 	let triangle_count = u32::try_from(source_triangles.len()).ok()?;
 	if triangle_count == 0 {
 		return None;
 	}
 	let vertex_count = u32::try_from(source_vertices.len()).ok()?;
-	let _source_requirements = csfc_source_buffer_requirements(vertex_count, triangle_count)?;
-	let card_sources = csfc_card_sources_from_triangles(material, verts, &source_triangles, cpu_maps)?;
+	let _source_requirements = compute_fur_cards_source_buffer_requirements(vertex_count, triangle_count)?;
+	let card_sources = compute_fur_cards_card_sources_from_triangles(material, verts, &source_triangles, cpu_maps)?;
 	let card_count = u32::try_from(card_sources.len()).ok()?;
-	let generated_requirements = csfc_buffer_requirements(card_count)?;
-	let params = csfc_generate_params_from_material(material, triangle_count, 0, generated_requirements);
+	let generated_requirements = compute_fur_cards_buffer_requirements(card_count)?;
+	let params = compute_fur_cards_generate_params_from_material(material, triangle_count, 0, generated_requirements);
 
 	let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-		label: Some("csfc_fur_params"),
+		label: Some("compute_fur_cards_params"),
 		contents: bytemuck::bytes_of(&params),
 		usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 	});
 	let source_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-		label: Some("csfc_fur_source_vertices"),
+		label: Some("compute_fur_cards_source_vertices"),
 		contents: bytemuck::cast_slice(&source_vertices),
 		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
 	});
 	let card_source_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-		label: Some("csfc_fur_card_sources"),
+		label: Some("compute_fur_cards_card_sources"),
 		contents: bytemuck::cast_slice(&card_sources),
 		usage: wgpu::BufferUsages::STORAGE,
 	});
 	let generated_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-		label: Some("csfc_fur_generated_vertices"),
+		label: Some("compute_fur_cards_generated_vertices"),
 		size: generated_requirements.vertex_bytes,
 		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
 		mapped_at_creation: false,
 	});
 	let generated_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-		label: Some("csfc_fur_generated_indices"),
+		label: Some("compute_fur_cards_generated_indices"),
 		size: generated_requirements.index_bytes,
 		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
 		mapped_at_creation: false,
 	});
 	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-		label: Some("csfc_fur_bg"),
-		layout: csfc_bind_group_layout,
+		label: Some("compute_fur_cards_bg"),
+		layout: compute_fur_cards_bind_group_layout,
 		entries: &[
 			wgpu::BindGroupEntry {
 				binding: 0,
@@ -2718,7 +2848,7 @@ fn create_csfc_draw_resources(
 		],
 	});
 
-	Some(CsfcDrawResources {
+	Some(ComputeFurCardsDrawResources {
 		params,
 		params_buffer,
 		source_vertex_buffer,
@@ -2729,14 +2859,10 @@ fn create_csfc_draw_resources(
 		triangle_count,
 		card_count: generated_requirements.card_count,
 		generated_index_count: generated_requirements.index_count,
-		dispatch_workgroups: csfc_dispatch_workgroups(card_count),
+		dispatch_workgroups: compute_fur_cards_dispatch_workgroups(card_count),
 		base_vertices: verts.to_vec(),
 		source_vertex_scratch: Vec::with_capacity(verts.len()),
 	})
-}
-
-fn draw_fur_layer_count(d: &MeshDraw) -> u32 {
-	material_fur_layer_count(&d.material, d.shading)
 }
 
 fn material_has_fur(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> bool {
@@ -2853,7 +2979,13 @@ fn mesh_draw_material_gpu(
 			[
 				u.normal.second_enabled_factor.clamp(0.0, 1.0),
 				u.normal.second_scale_factor,
-				0.0,
+				u.texture_uv_mode_factors
+					.get("_Bump2ndMap")
+					.or_else(|| u.texture_uv_mode_factors.get("_BumpMap2nd"))
+					.or_else(|| u.texture_uv_mode_factors.get("_NormalMap2nd"))
+					.copied()
+					.unwrap_or(0.0)
+					.clamp(0.0, 3.0),
 				0.0,
 			]
 		})
@@ -2938,12 +3070,73 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let main2nd_ext = liltoon_like
+		.map(|u| {
+			[
+				u.texture_uv_mode_factors.get("_Main2ndTex").copied().unwrap_or(0.0).clamp(0.0, 4.0),
+				u.main_color.second_cull_factor.clamp(0.0, 2.0),
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_distance_fade = liltoon_like
+		.map(|u| u.main_color.second_distance_fade_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_decal_flags = liltoon_like
+		.map(|u| u.main_color.second_decal_flags_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_decal_transform = liltoon_like
+		.map(|u| u.main_color.second_decal_transform_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_decal_animation = liltoon_like
+		.map(|u| u.main_color.second_decal_animation_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_decal_sub_param = liltoon_like
+		.map(|u| u.main_color.second_decal_sub_param_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let main2nd_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let main2nd_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndBlendMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main2nd_dissolve_color = liltoon_like
+		.map(|u| u.main_color.second_dissolve.color_factor)
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let main2nd_dissolve_params = liltoon_like
+		.map(|u| u.main_color.second_dissolve.params_factor)
+		.unwrap_or([0.0, 0.0, 0.5, 0.1]);
+	let main2nd_dissolve_pos = liltoon_like
+		.map(|u| u.main_color.second_dissolve.position_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main2nd_dissolve_ext = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.second_dissolve.noise_strength_factor,
+				if u.main_color.second_dissolve.mask_texture_index.is_some() {
+					1.0
+				} else {
+					0.0
+				},
+				if u.main_color.second_dissolve.noise_mask_texture_index.is_some() {
+					1.0
+				} else {
+					0.0
+				},
+				0.0,
+			]
+		})
+		.unwrap_or([0.1, 0.0, 0.0, 0.0]);
+	let main2nd_dissolve_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndDissolveMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main2nd_dissolve_noise_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main2ndDissolveNoiseMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main2nd_dissolve_noise_uv_anim_params = liltoon_like
+		.map(|u| u.main_color.second_dissolve.noise_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let main3rd_color = liltoon_like
 		.map(|u| u.main_color.third_color_factor)
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
@@ -2957,12 +3150,73 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
+	let main3rd_ext = liltoon_like
+		.map(|u| {
+			[
+				u.texture_uv_mode_factors.get("_Main3rdTex").copied().unwrap_or(0.0).clamp(0.0, 4.0),
+				u.main_color.third_cull_factor.clamp(0.0, 2.0),
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_distance_fade = liltoon_like
+		.map(|u| u.main_color.third_distance_fade_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_decal_flags = liltoon_like
+		.map(|u| u.main_color.third_decal_flags_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_decal_transform = liltoon_like
+		.map(|u| u.main_color.third_decal_transform_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_decal_animation = liltoon_like
+		.map(|u| u.main_color.third_decal_animation_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_decal_sub_param = liltoon_like
+		.map(|u| u.main_color.third_decal_sub_param_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let main3rd_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let main3rd_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdBlendMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main3rd_dissolve_color = liltoon_like
+		.map(|u| u.main_color.third_dissolve.color_factor)
+		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let main3rd_dissolve_params = liltoon_like
+		.map(|u| u.main_color.third_dissolve.params_factor)
+		.unwrap_or([0.0, 0.0, 0.5, 0.1]);
+	let main3rd_dissolve_pos = liltoon_like
+		.map(|u| u.main_color.third_dissolve.position_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let main3rd_dissolve_ext = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.third_dissolve.noise_strength_factor,
+				if u.main_color.third_dissolve.mask_texture_index.is_some() {
+					1.0
+				} else {
+					0.0
+				},
+				if u.main_color.third_dissolve.noise_mask_texture_index.is_some() {
+					1.0
+				} else {
+					0.0
+				},
+				0.0,
+			]
+		})
+		.unwrap_or([0.1, 0.0, 0.0, 0.0]);
+	let main3rd_dissolve_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdDissolveMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main3rd_dissolve_noise_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Main3rdDissolveNoiseMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let main3rd_dissolve_noise_uv_anim_params = liltoon_like
+		.map(|u| u.main_color.third_dissolve.noise_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
@@ -3277,7 +3531,7 @@ fn mesh_draw_material_gpu(
 		.map(|u| {
 			[
 				u.fur.enabled_factor.clamp(0.0, 1.0),
-				liltoon_fur_shell_sample_count(u.fur.layer_count_factor) as f32,
+				liltoon_fur_sample_count_for_layer_num(u.fur.layer_count_factor) as f32,
 				u.fur.gravity_factor,
 				u.fur.randomize_factor.clamp(0.0, 1.0),
 			]
@@ -3479,10 +3733,181 @@ fn mesh_draw_material_gpu(
 				u.glitter.backface_mask_factor.clamp(0.0, 1.0),
 				u.glitter.scale_randomize_factor.clamp(0.0, 1.0),
 				u.glitter.uv_mode_factor.clamp(0.0, 1.0),
+				u.glitter.color_texture_uv_mode_factor.clamp(0.0, 3.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let glitter_ext3 = liltoon_like
+		.map(|u| {
+			[
+				u.glitter.vr_parallax_strength_factor.clamp(0.0, 1.0),
+				u.glitter.apply_shape_factor.clamp(0.0, 1.0),
+				u.glitter.angle_randomize_factor.clamp(0.0, 1.0),
 				0.0,
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let glitter_color_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_GlitterColorTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let glitter_shape_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_GlitterShapeTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let glitter_atlas = liltoon_like.map(|u| u.glitter.atlas_factor).unwrap_or([1.0, 1.0, 0.0, 0.0]);
+	let distance_fade = liltoon_like
+		.map(|u| u.rendering.distance_fade_factor)
+		.unwrap_or([0.1, 0.01, 0.0, 0.0]);
+	let distance_fade_color = liltoon_like
+		.map(|u| u.rendering.distance_fade_color_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let distance_fade_rim_color = liltoon_like
+		.map(|u| u.rendering.distance_fade_rim_color_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let distance_fade_params = liltoon_like
+		.map(|u| {
+			[
+				u.rendering.distance_fade_mode_factor.clamp(0.0, 1.0),
+				u.rendering.distance_fade_rim_fresnel_power_factor.max(0.00001),
+				0.0,
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 5.0, 0.0, 0.0]);
+	let dissolve_color = liltoon_like.map(|u| u.dissolve.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let dissolve_params = liltoon_like.map(|u| u.dissolve.params_factor).unwrap_or([0.0, 0.0, 0.5, 0.1]);
+	let dissolve_pos = liltoon_like.map(|u| u.dissolve.position_factor).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let dissolve_ext = liltoon_like
+		.map(|u| {
+			[
+				u.dissolve.noise_strength_factor,
+				if u.dissolve.mask_texture_index.is_some() { 1.0 } else { 0.0 },
+				if u.dissolve.noise_mask_texture_index.is_some() { 1.0 } else { 0.0 },
+				0.0,
+			]
+		})
+		.unwrap_or([0.1, 0.0, 0.0, 0.0]);
+	let dissolve_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_DissolveMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let dissolve_noise_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_DissolveNoiseMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let dissolve_noise_uv_anim_params = liltoon_like
+		.map(|u| u.dissolve.noise_uv_scroll_rotate_factor)
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let parallax_params = liltoon_like
+		.map(|u| {
+			[
+				u.parallax
+					.enabled_factor
+					.max(if u.parallax.texture_index.is_some() { 1.0 } else { 0.0 })
+					.clamp(0.0, 1.0),
+				u.parallax.pom_enabled_factor.clamp(0.0, 1.0),
+				u.parallax.scale_factor,
+				u.parallax.offset_factor,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.02, 0.5]);
+	let parallax_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_ParallaxMap"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let id_mask_params = liltoon_like
+		.map(|u| {
+			let flag_sum = u.id_mask.flags_factor.iter().copied().sum::<f32>()
+				+ u.id_mask.prior_flags_factor.iter().copied().sum::<f32>()
+				+ u.id_mask.controls_dissolve_factor;
+			[
+				u.id_mask
+					.compile_factor
+					.max(if flag_sum > 0.0001 { 1.0 } else { 0.0 })
+					.clamp(0.0, 1.0),
+				u.id_mask.from_factor.clamp(0.0, 8.0),
+				u.id_mask.is_bitmap_factor.clamp(0.0, 1.0),
+				u.id_mask.controls_dissolve_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 8.0, 0.0, 0.0]);
+	let id_mask_flags0 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.flags_factor[0],
+				u.id_mask.flags_factor[1],
+				u.id_mask.flags_factor[2],
+				u.id_mask.flags_factor[3],
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let id_mask_flags1 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.flags_factor[4],
+				u.id_mask.flags_factor[5],
+				u.id_mask.flags_factor[6],
+				u.id_mask.flags_factor[7],
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let id_mask_prior_flags0 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.prior_flags_factor[0],
+				u.id_mask.prior_flags_factor[1],
+				u.id_mask.prior_flags_factor[2],
+				u.id_mask.prior_flags_factor[3],
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let id_mask_prior_flags1 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.prior_flags_factor[4],
+				u.id_mask.prior_flags_factor[5],
+				u.id_mask.prior_flags_factor[6],
+				u.id_mask.prior_flags_factor[7],
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let id_mask_indices0 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.indices_factor[0] as f32,
+				u.id_mask.indices_factor[1] as f32,
+				u.id_mask.indices_factor[2] as f32,
+				u.id_mask.indices_factor[3] as f32,
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let id_mask_indices1 = liltoon_like
+		.map(|u| {
+			[
+				u.id_mask.indices_factor[4] as f32,
+				u.id_mask.indices_factor[5] as f32,
+				u.id_mask.indices_factor[6] as f32,
+				u.id_mask.indices_factor[7] as f32,
+			]
+		})
+		.unwrap_or([0.0; 4]);
+	let udim_discard_params = liltoon_like
+		.map(|u| {
+			let row_sum = u.udim_discard.row0_factor.iter().copied().sum::<f32>()
+				+ u.udim_discard.row1_factor.iter().copied().sum::<f32>()
+				+ u.udim_discard.row2_factor.iter().copied().sum::<f32>()
+				+ u.udim_discard.row3_factor.iter().copied().sum::<f32>();
+			[
+				u.udim_discard
+					.compile_factor
+					.max(if row_sum > 0.0001 { 1.0 } else { 0.0 })
+					.clamp(0.0, 1.0),
+				u.udim_discard.mode_factor.clamp(0.0, 1.0),
+				u.udim_discard.uv_factor.clamp(0.0, 3.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let udim_discard_row0 = liltoon_like.map(|u| u.udim_discard.row0_factor).unwrap_or([0.0; 4]);
+	let udim_discard_row1 = liltoon_like.map(|u| u.udim_discard.row1_factor).unwrap_or([0.0; 4]);
+	let udim_discard_row2 = liltoon_like.map(|u| u.udim_discard.row2_factor).unwrap_or([0.0; 4]);
+	let udim_discard_row3 = liltoon_like.map(|u| u.udim_discard.row3_factor).unwrap_or([0.0; 4]);
 	let emission_color = liltoon_like.map(|u| u.emission.color_factor).unwrap_or([
 		mat.emissive_factor[0],
 		mat.emissive_factor[1],
@@ -3508,7 +3933,16 @@ fn mesh_draw_material_gpu(
 		.map(|u| u.emission.blink_factor)
 		.unwrap_or([0.0, 0.0, std::f32::consts::PI, 0.0]);
 	let emission_uv_anim_params = liltoon_like
-		.map(|u| u.emission.uv_scroll_rotate_factor)
+		.map(|u| {
+			let mut params = u.emission.uv_scroll_rotate_factor;
+			params[3] = u
+				.texture_uv_mode_factors
+				.get("_EmissionMap")
+				.copied()
+				.unwrap_or(0.0)
+				.clamp(0.0, 4.0);
+			params
+		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let emission_grad_params = liltoon_like
 		.map(|u| {
@@ -3551,7 +3985,16 @@ fn mesh_draw_material_gpu(
 		.map(|u| [u.emission.second_parallax_depth_factor, 0.0, 0.0, 0.0])
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let emission2nd_uv_anim_params = liltoon_like
-		.map(|u| u.emission.second_uv_scroll_rotate_factor)
+		.map(|u| {
+			let mut params = u.emission.second_uv_scroll_rotate_factor;
+			params[3] = u
+				.texture_uv_mode_factors
+				.get("_Emission2ndMap")
+				.copied()
+				.unwrap_or(0.0)
+				.clamp(0.0, 4.0);
+			params
+		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let emission2nd_blend_mask_uv_anim_params = liltoon_like
 		.map(|u| u.emission.second_blend_mask_uv_scroll_rotate_factor)
@@ -3634,6 +4077,35 @@ fn mesh_draw_material_gpu(
 		glitter_control,
 		glitter_ext,
 		glitter_ext2,
+		glitter_ext3,
+		glitter_color_uv_offset_scale,
+		glitter_shape_uv_offset_scale,
+		glitter_atlas,
+		distance_fade,
+		distance_fade_color,
+		distance_fade_rim_color,
+		distance_fade_params,
+		dissolve_color,
+		dissolve_params,
+		dissolve_pos,
+		dissolve_ext,
+		dissolve_mask_uv_offset_scale,
+		dissolve_noise_uv_offset_scale,
+		dissolve_noise_uv_anim_params,
+		parallax_params,
+		parallax_uv_offset_scale,
+		id_mask_params,
+		id_mask_flags0,
+		id_mask_flags1,
+		id_mask_prior_flags0,
+		id_mask_prior_flags1,
+		id_mask_indices0,
+		id_mask_indices1,
+		udim_discard_params,
+		udim_discard_row0,
+		udim_discard_row1,
+		udim_discard_row2,
+		udim_discard_row3,
 		emission_color,
 		emission_params,
 		emission_blink_params,
@@ -3714,12 +4186,38 @@ fn mesh_draw_material_gpu(
 		main_gradation_params,
 		main2nd_color,
 		main2nd_params,
+		main2nd_ext,
+		main2nd_distance_fade,
+		main2nd_decal_flags,
+		main2nd_decal_transform,
+		main2nd_decal_animation,
+		main2nd_decal_sub_param,
 		main2nd_uv_offset_scale,
 		main2nd_blend_mask_uv_offset_scale,
+		main2nd_dissolve_color,
+		main2nd_dissolve_params,
+		main2nd_dissolve_pos,
+		main2nd_dissolve_ext,
+		main2nd_dissolve_mask_uv_offset_scale,
+		main2nd_dissolve_noise_uv_offset_scale,
+		main2nd_dissolve_noise_uv_anim_params,
 		main3rd_color,
 		main3rd_params,
+		main3rd_ext,
+		main3rd_distance_fade,
+		main3rd_decal_flags,
+		main3rd_decal_transform,
+		main3rd_decal_animation,
+		main3rd_decal_sub_param,
 		main3rd_uv_offset_scale,
 		main3rd_blend_mask_uv_offset_scale,
+		main3rd_dissolve_color,
+		main3rd_dissolve_params,
+		main3rd_dissolve_pos,
+		main3rd_dissolve_ext,
+		main3rd_dissolve_mask_uv_offset_scale,
+		main3rd_dissolve_noise_uv_offset_scale,
+		main3rd_dissolve_noise_uv_anim_params,
 	}
 }
 
@@ -3754,7 +4252,7 @@ impl SceneMeshes {
 		cull_mode: Option<wgpu::Face>,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
-		let alpha_to_coverage_enabled = matches!(label, "mesh_opaque_toon" | "mesh_csfc_fur_pre_toon");
+		let alpha_to_coverage_enabled = matches!(label, "mesh_opaque_toon" | "mesh_compute_fur_cards_pre_toon");
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -4341,6 +4839,46 @@ impl SceneMeshes {
 					},
 					count: None,
 				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 63,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 64,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 65,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 66,
+					visibility: wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
+					count: None,
+				},
 			],
 		});
 		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
@@ -4481,8 +5019,8 @@ impl SceneMeshes {
 				},
 			],
 		});
-		let csfc_fur_bind_group_layout = create_csfc_fur_bind_group_layout(device);
-		let csfc_fur_compute_pipeline = create_csfc_fur_compute_pipeline(device, &csfc_fur_bind_group_layout);
+		let compute_fur_cards_bind_group_layout = create_compute_fur_cards_bind_group_layout(device);
+		let compute_fur_cards_compute_pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout);
 
 		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 			label: Some("mesh"),
@@ -4510,7 +5048,7 @@ impl SceneMeshes {
 			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
 		});
 
-		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 7] = [
+		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 10] = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -4532,19 +5070,34 @@ impl SceneMeshes {
 				format: wgpu::VertexFormat::Float32x2,
 			},
 			wgpu::VertexAttribute {
-				offset: 48,
+				offset: 72,
 				shader_location: 4,
 				format: wgpu::VertexFormat::Uint16x4,
 			},
 			wgpu::VertexAttribute {
-				offset: 56,
+				offset: 80,
 				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
 			wgpu::VertexAttribute {
-				offset: 72,
+				offset: 96,
 				shader_location: 6,
 				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
+				shader_location: 7,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 56,
+				shader_location: 8,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 9,
+				format: wgpu::VertexFormat::Float32x2,
 			},
 		];
 		let vb_layout = wgpu::VertexBufferLayout {
@@ -4552,7 +5105,7 @@ impl SceneMeshes {
 			step_mode: wgpu::VertexStepMode::Vertex,
 			attributes: &MESH_VTX_ATTRS,
 		};
-		const CSFC_FUR_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
+		const COMPUTE_FUR_CARDS_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -4584,10 +5137,10 @@ impl SceneMeshes {
 				format: wgpu::VertexFormat::Float32x4,
 			},
 		];
-		let csfc_fur_vb_layout = wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<CsfcGeneratedVertexGpu>() as u64,
+		let compute_fur_cards_vb_layout = wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() as u64,
 			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &CSFC_FUR_VTX_ATTRS,
+			attributes: &COMPUTE_FUR_CARDS_VTX_ATTRS,
 		};
 
 		let pipeline_outline_toon = Self::create_mesh_pipeline(
@@ -4731,30 +5284,14 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_fur_toon = Self::create_mesh_pipeline(
+		let pipeline_compute_fur_cards_pre_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
-			&vb_layout,
-			"mesh_fur_toon",
-			"vs_fur",
-			"fs_fur_toon",
-			premultiplied_blend,
-			wgpu::ColorWrites::ALL,
-			false,
-			wgpu::CompareFunction::LessEqual,
-			None,
-			sample_count,
-		);
-		let pipeline_csfc_fur_pre_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&csfc_fur_vb_layout,
-			"mesh_csfc_fur_pre_toon",
-			"vs_csfc_fur_pre",
+			&compute_fur_cards_vb_layout,
+			"mesh_compute_fur_cards_pre_toon",
+			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
 			None,
 			wgpu::ColorWrites::ALL,
@@ -4763,14 +5300,14 @@ impl SceneMeshes {
 			None,
 			sample_count,
 		);
-		let pipeline_csfc_fur_toon = Self::create_mesh_pipeline(
+		let pipeline_compute_fur_cards_toon = Self::create_mesh_pipeline(
 			device,
 			&pipeline_layout,
 			&shader,
 			format,
-			&csfc_fur_vb_layout,
-			"mesh_csfc_fur_toon",
-			"vs_csfc_fur",
+			&compute_fur_cards_vb_layout,
+			"mesh_compute_fur_cards_toon",
+			"vs_compute_fur_cards",
 			"fs_fur_toon",
 			blend,
 			wgpu::ColorWrites::ALL,
@@ -5517,6 +6054,17 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.main_color.second_blend_mask_texture_index);
 				let main2nd_blend_mask_view = texture_view_or(&image_views, main2nd_blend_mask_texture_index, &white_view);
+				let main2nd_dissolve_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.mask_texture_index);
+				let main2nd_dissolve_mask_view = texture_view_or(&image_views, main2nd_dissolve_mask_texture_index, &white_view);
+				let main2nd_dissolve_noise_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.noise_mask_texture_index);
+				let main2nd_dissolve_noise_mask_view =
+					texture_view_or(&image_views, main2nd_dissolve_noise_mask_texture_index, &white_view);
 				let main3rd_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -5527,6 +6075,17 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
 				let main3rd_blend_mask_view = texture_view_or(&image_views, main3rd_blend_mask_texture_index, &white_view);
+				let main3rd_dissolve_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.mask_texture_index);
+				let main3rd_dissolve_mask_view = texture_view_or(&image_views, main3rd_dissolve_mask_texture_index, &white_view);
+				let main3rd_dissolve_noise_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.noise_mask_texture_index);
+				let main3rd_dissolve_noise_mask_view =
+					texture_view_or(&image_views, main3rd_dissolve_noise_mask_texture_index, &white_view);
 				let main_gradation_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -5554,7 +6113,32 @@ impl SceneMeshes {
 					.liltoon_like
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
+				let glitter_color_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.glitter.color_texture_index);
+				let glitter_shape_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.glitter.shape_texture_index);
+				let dissolve_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.dissolve.mask_texture_index);
+				let dissolve_noise_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.dissolve.noise_mask_texture_index);
+				let parallax_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.parallax.texture_index);
 				let backlight_color_view = texture_view_or(&image_views, backlight_color_texture_index, &white_view);
+				let glitter_color_view = texture_view_or(&image_views, glitter_color_texture_index, &white_view);
+				let glitter_shape_view = texture_view_or(&image_views, glitter_shape_texture_index, &white_view);
+				let dissolve_mask_view = texture_view_or(&image_views, dissolve_mask_texture_index, &white_view);
+				let dissolve_noise_mask_view = texture_view_or(&image_views, dissolve_noise_mask_texture_index, &white_view);
+				let parallax_view = texture_view_or(&image_views, parallax_texture_index, &white_view);
 				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
 					liltoon_reflection_texture_index(liltoon_like)
 				} else {
@@ -5673,7 +6257,7 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
 				let fur_mask_view = texture_view_or(&image_views, fur_mask_texture_index, &white_view);
-				let csfc_cpu_fur_maps = CsfcCpuFurMaps {
+				let compute_fur_cards_cpu_fur_maps = ComputeFurCardsCpuFurMaps {
 					length_mask: fur_length_mask_texture_index.and_then(|index| scene.images.get(index)),
 					fur_mask: fur_mask_texture_index.and_then(|index| scene.images.get(index)),
 				};
@@ -5939,6 +6523,42 @@ impl SceneMeshes {
 							binding: 62,
 							resource: wgpu::BindingResource::TextureView(fur_mask_view),
 						},
+						wgpu::BindGroupEntry {
+							binding: 63,
+							resource: wgpu::BindingResource::TextureView(glitter_color_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 64,
+							resource: wgpu::BindingResource::TextureView(glitter_shape_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 65,
+							resource: wgpu::BindingResource::TextureView(dissolve_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 66,
+							resource: wgpu::BindingResource::TextureView(dissolve_noise_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 67,
+							resource: wgpu::BindingResource::TextureView(parallax_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 68,
+							resource: wgpu::BindingResource::TextureView(main2nd_dissolve_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 69,
+							resource: wgpu::BindingResource::TextureView(main2nd_dissolve_noise_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 70,
+							resource: wgpu::BindingResource::TextureView(main3rd_dissolve_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 71,
+							resource: wgpu::BindingResource::TextureView(main3rd_dissolve_noise_mask_view),
+						},
 					]);
 				}
 				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -6041,14 +6661,14 @@ impl SceneMeshes {
 						},
 					],
 				});
-				let csfc_fur = if material_has_fur(&mat, mat.shading, &opts) {
-					create_csfc_draw_resources(
+				let compute_fur_cards = if material_has_fur(&mat, mat.shading, &opts) {
+					create_compute_fur_cards_draw_resources(
 						device,
-						&csfc_fur_bind_group_layout,
+						&compute_fur_cards_bind_group_layout,
 						&mat,
 						&verts,
 						&indices,
-						csfc_cpu_fur_maps,
+						compute_fur_cards_cpu_fur_maps,
 						fur_vector_view,
 						fur_length_mask_view,
 						fur_noise_mask_view,
@@ -6074,7 +6694,7 @@ impl SceneMeshes {
 					morph_weight_buffer,
 					_morph_delta_buffer: morph_delta_buffer,
 					morph_bind_group,
-					_csfc_fur: csfc_fur,
+					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
 					shading: mat.shading,
 					morph_pos,
@@ -6099,10 +6719,9 @@ impl SceneMeshes {
 
 		Ok(Self {
 			pipeline_outline_toon,
-			_csfc_fur_compute_pipeline: csfc_fur_compute_pipeline,
-			pipeline_csfc_fur_pre_toon,
-			pipeline_csfc_fur_toon,
-			pipeline_fur_toon,
+			_compute_fur_cards_compute_pipeline: compute_fur_cards_compute_pipeline,
+			pipeline_compute_fur_cards_pre_toon,
+			pipeline_compute_fur_cards_toon,
 			pipeline_opaque_lit,
 			pipeline_opaque_unlit,
 			pipeline_opaque_toon,
@@ -6243,12 +6862,12 @@ impl SceneMeshes {
 		self.draw_inner_with_material(pass, state, draw_index, bind_material);
 	}
 
-	fn draw_csfc_fur_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) -> bool {
+	fn draw_compute_fur_cards_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) -> bool {
 		let d = &self.draws[draw_index];
-		let Some(csfc) = d._csfc_fur.as_ref() else {
+		let Some(compute_fur_cards) = d._compute_fur_cards.as_ref() else {
 			return false;
 		};
-		if csfc.generated_index_count == 0 {
+		if compute_fur_cards.generated_index_count == 0 {
 			return false;
 		}
 		if !state.frame_bound {
@@ -6262,9 +6881,9 @@ impl SceneMeshes {
 			state.skin_palette_index = Some(d.skin_palette_index);
 		}
 		pass.set_bind_group(3, &d.morph_bind_group, &[]);
-		pass.set_vertex_buffer(0, csfc.generated_vertex_buffer.slice(..));
-		pass.set_index_buffer(csfc.generated_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-		pass.draw_indexed(0..csfc.generated_index_count, 0, 0..1);
+		pass.set_vertex_buffer(0, compute_fur_cards.generated_vertex_buffer.slice(..));
+		pass.set_index_buffer(compute_fur_cards.generated_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+		pass.draw_indexed(0..compute_fur_cards.generated_index_count, 0, 0..1);
 		true
 	}
 
@@ -6284,30 +6903,30 @@ impl SceneMeshes {
 		}
 	}
 
-	pub fn encode_csfc_fur(&self, encoder: &mut wgpu::CommandEncoder) {
+	pub fn encode_compute_fur_cards(&self, encoder: &mut wgpu::CommandEncoder) {
 		if self.fur_draw_indices.is_empty() {
 			return;
 		}
 		let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-			label: Some("csfc-fur"),
+			label: Some("compute_fur_cards"),
 			timestamp_writes: None,
 		});
-		pass.set_pipeline(&self._csfc_fur_compute_pipeline._pipeline);
+		pass.set_pipeline(&self._compute_fur_cards_compute_pipeline._pipeline);
 		for &draw_index in &self.fur_draw_indices {
-			let Some(csfc) = self.draws[draw_index]._csfc_fur.as_ref() else {
+			let Some(compute_fur_cards) = self.draws[draw_index]._compute_fur_cards.as_ref() else {
 				continue;
 			};
-			if csfc.dispatch_workgroups == 0 {
+			if compute_fur_cards.dispatch_workgroups == 0 {
 				continue;
 			}
-			pass.set_bind_group(0, &csfc.bind_group, &[]);
-			pass.dispatch_workgroups(csfc.dispatch_workgroups, 1, 1);
+			pass.set_bind_group(0, &compute_fur_cards.bind_group, &[]);
+			pass.dispatch_workgroups(compute_fur_cards.dispatch_workgroups, 1, 1);
 		}
 	}
 
-	fn update_csfc_source_vertices(&mut self, queue: &wgpu::Queue) {
+	fn update_compute_fur_cards_source_vertices(&mut self, queue: &wgpu::Queue) {
 		for draw in &mut self.draws {
-			let Some(csfc) = draw._csfc_fur.as_mut() else {
+			let Some(compute_fur_cards) = draw._compute_fur_cards.as_mut() else {
 				continue;
 			};
 			let Some(palette) = self.skin_palettes.get(draw.skin_palette_index) else {
@@ -6316,11 +6935,19 @@ impl SceneMeshes {
 			if palette.static_identity {
 				continue;
 			}
-			csfc_skinned_source_vertices_from_mesh(&csfc.base_vertices, &palette.uploaded, &mut csfc.source_vertex_scratch);
-			if csfc.source_vertex_scratch.len() != csfc.base_vertices.len() {
+			compute_fur_cards_skinned_source_vertices_from_mesh(
+				&compute_fur_cards.base_vertices,
+				&palette.uploaded,
+				&mut compute_fur_cards.source_vertex_scratch,
+			);
+			if compute_fur_cards.source_vertex_scratch.len() != compute_fur_cards.base_vertices.len() {
 				continue;
 			}
-			queue.write_buffer(&csfc.source_vertex_buffer, 0, bytemuck::cast_slice(&csfc.source_vertex_scratch));
+			queue.write_buffer(
+				&compute_fur_cards.source_vertex_buffer,
+				0,
+				bytemuck::cast_slice(&compute_fur_cards.source_vertex_scratch),
+			);
 		}
 	}
 
@@ -6491,25 +7118,16 @@ impl SceneMeshes {
 	fn draw_fur_blended(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.fur_draw_indices.is_empty() {
 			*state = DrawBindState::default();
-			pass.set_pipeline(&self.pipeline_csfc_fur_pre_toon);
+			pass.set_pipeline(&self.pipeline_compute_fur_cards_pre_toon);
 			for &draw_index in &self.fur_draw_indices {
-				let _ = self.draw_csfc_fur_inner(pass, state, draw_index);
+				let _ = self.draw_compute_fur_cards_inner(pass, state, draw_index);
 			}
 			*state = DrawBindState::default();
-			pass.set_pipeline(&self.pipeline_csfc_fur_toon);
+			pass.set_pipeline(&self.pipeline_compute_fur_cards_toon);
 			for &draw_index in &self.fur_draw_indices {
-				if self.draw_csfc_fur_inner(pass, state, draw_index) {
+				if self.draw_compute_fur_cards_inner(pass, state, draw_index) {
 					continue;
 				}
-			}
-			pass.set_pipeline(&self.pipeline_fur_toon);
-			*state = DrawBindState::default();
-			for &draw_index in &self.fur_draw_indices {
-				if self.draws[draw_index]._csfc_fur.is_some() {
-					continue;
-				}
-				let layer_count = draw_fur_layer_count(&self.draws[draw_index]);
-				self.draw_inner_with_material_instances(pass, state, draw_index, &self.draws[draw_index].bind_material, layer_count);
 			}
 		}
 	}
@@ -6551,7 +7169,7 @@ impl SceneMeshes {
 			let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
 			Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 		}
-		self.update_csfc_source_vertices(queue);
+		self.update_compute_fur_cards_source_vertices(queue);
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
 		for d in &mut self.draws {
@@ -6604,13 +7222,13 @@ impl SceneMeshes {
 				queue.write_buffer(&d.draw_transform, 0, bytemuck::bytes_of(&transform));
 				d.draw_transform_uploaded = Some(transform);
 			}
-			if let Some(csfc) = d._csfc_fur.as_mut() {
+			if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
 				let model = mesh_world.to_cols_array_2d();
 				let inv_model = mesh_world.inverse().to_cols_array_2d();
-				if csfc.params.model != model || csfc.params.inv_model != inv_model {
-					csfc.params.model = model;
-					csfc.params.inv_model = inv_model;
-					queue.write_buffer(&csfc.params_buffer, 0, bytemuck::bytes_of(&csfc.params));
+				if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
+					compute_fur_cards.params.model = model;
+					compute_fur_cards.params.inv_model = inv_model;
+					queue.write_buffer(&compute_fur_cards.params_buffer, 0, bytemuck::bytes_of(&compute_fur_cards.params));
 				}
 			}
 		}
@@ -6711,38 +7329,38 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_fur_shader_validates() {
-		let module = naga::front::wgsl::parse_str(SHADER_CSFC_FUR).expect("CSFC fur shader parses");
+	fn compute_fur_cards_shader_validates() {
+		let module = naga::front::wgsl::parse_str(SHADER_COMPUTE_FUR_CARDS).expect("Compute Fur Cards shader parses");
 		let mut validator = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
-		validator.validate(&module).expect("CSFC fur shader validates");
+		validator.validate(&module).expect("Compute Fur Cards shader validates");
 	}
 
 	#[test]
-	fn csfc_fur_compute_pipeline_interfaces_match() {
+	fn compute_fur_cards_compute_pipeline_interfaces_match() {
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 		let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
 			power_preference: wgpu::PowerPreference::LowPower,
 			compatible_surface: None,
 			force_fallback_adapter: false,
 		})) else {
-			eprintln!("skipping CSFC compute pipeline interface test: no wgpu adapter");
+			eprintln!("skipping Compute Fur Cards pipeline interface test: no wgpu adapter");
 			return;
 		};
 
 		let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
 		let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-			label: Some("csfc-compute-pipeline-interface-test"),
+			label: Some("compute_fur_cards-compute-pipeline-interface-test"),
 			required_features: wgpu::Features::empty(),
 			required_limits: limits,
 			memory_hints: Default::default(),
 			..Default::default()
 		})) else {
-			eprintln!("skipping CSFC compute pipeline interface test: request_device failed");
+			eprintln!("skipping Compute Fur Cards pipeline interface test: request_device failed");
 			return;
 		};
 
-		let bind_group_layout = create_csfc_fur_bind_group_layout(&device);
-		let _pipeline = create_csfc_fur_compute_pipeline(&device, &bind_group_layout);
+		let bind_group_layout = create_compute_fur_cards_bind_group_layout(&device);
+		let _pipeline = create_compute_fur_cards_compute_pipeline(&device, &bind_group_layout);
 	}
 
 	#[test]
@@ -6777,6 +7395,15 @@ mod tests {
 			"@group(1) @binding(60)",
 			"@group(1) @binding(61)",
 			"@group(1) @binding(62)",
+			"@group(1) @binding(63)",
+			"@group(1) @binding(64)",
+			"@group(1) @binding(65)",
+			"@group(1) @binding(66)",
+			"@group(1) @binding(67)",
+			"@group(1) @binding(68)",
+			"@group(1) @binding(69)",
+			"@group(1) @binding(70)",
+			"@group(1) @binding(71)",
 		] {
 			assert!(!source.contains(binding), "portable shader still contains {binding}");
 		}
@@ -6789,7 +7416,7 @@ mod tests {
 	fn mesh_toon_pipeline_interfaces_match() {
 		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
 		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 40;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 49;
 		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -6925,19 +7552,34 @@ mod tests {
 				format: wgpu::VertexFormat::Float32x2,
 			},
 			wgpu::VertexAttribute {
-				offset: 48,
+				offset: 72,
 				shader_location: 4,
 				format: wgpu::VertexFormat::Uint16x4,
 			},
 			wgpu::VertexAttribute {
-				offset: 56,
+				offset: 80,
 				shader_location: 5,
 				format: wgpu::VertexFormat::Float32x4,
 			},
 			wgpu::VertexAttribute {
-				offset: 72,
+				offset: 96,
 				shader_location: 6,
 				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
+				shader_location: 7,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 56,
+				shader_location: 8,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 9,
+				format: wgpu::VertexFormat::Float32x2,
 			},
 		];
 		let vb_layout = wgpu::VertexBufferLayout {
@@ -6945,7 +7587,7 @@ mod tests {
 			step_mode: wgpu::VertexStepMode::Vertex,
 			attributes: &attrs,
 		};
-		let csfc_attrs = [
+		let compute_fur_cards_attrs = [
 			wgpu::VertexAttribute {
 				offset: 0,
 				shader_location: 0,
@@ -6977,10 +7619,10 @@ mod tests {
 				format: wgpu::VertexFormat::Float32x4,
 			},
 		];
-		let csfc_vb_layout = wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<CsfcGeneratedVertexGpu>() as u64,
+		let compute_fur_cards_vb_layout = wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() as u64,
 			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &csfc_attrs,
+			attributes: &compute_fur_cards_attrs,
 		};
 
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
@@ -6999,30 +7641,14 @@ mod tests {
 			None,
 			1,
 		);
-		let _fur_toon = SceneMeshes::create_mesh_pipeline(
+		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
 			&shader,
 			wgpu::TextureFormat::Rgba8Unorm,
-			&vb_layout,
-			"mesh_fur_toon",
-			"vs_fur",
-			"fs_fur_toon",
-			Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-			wgpu::ColorWrites::ALL,
-			false,
-			wgpu::CompareFunction::LessEqual,
-			None,
-			1,
-		);
-		let _csfc_fur_pre_toon = SceneMeshes::create_mesh_pipeline(
-			&device,
-			&pipeline_layout,
-			&shader,
-			wgpu::TextureFormat::Rgba8Unorm,
-			&csfc_vb_layout,
-			"mesh_csfc_fur_pre_toon",
-			"vs_csfc_fur_pre",
+			&compute_fur_cards_vb_layout,
+			"mesh_compute_fur_cards_pre_toon",
+			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
 			None,
 			wgpu::ColorWrites::ALL,
@@ -7031,14 +7657,14 @@ mod tests {
 			None,
 			1,
 		);
-		let _csfc_fur_toon = SceneMeshes::create_mesh_pipeline(
+		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
 			&shader,
 			wgpu::TextureFormat::Rgba8Unorm,
-			&csfc_vb_layout,
-			"mesh_csfc_fur_toon",
-			"vs_csfc_fur",
+			&compute_fur_cards_vb_layout,
+			"mesh_compute_fur_cards_toon",
+			"vs_compute_fur_cards",
 			"fs_fur_toon",
 			Some(wgpu::BlendState::ALPHA_BLENDING),
 			wgpu::ColorWrites::ALL,
@@ -7249,6 +7875,9 @@ mod tests {
 			normals: Some(vec![[0.0, 1.0, 0.0]]),
 			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
 			colors_0: None,
 			joints: None,
 			weights: None,
@@ -7468,6 +8097,12 @@ mod tests {
 		liltoon_like
 			.texture_uv_offset_scales
 			.insert("_BumpMap".to_string(), [0.1, 0.2, 0.75, 1.5]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Bump2ndMap".to_string(), [0.3, 0.4, 1.25, 1.75]);
+		liltoon_like.texture_uv_mode_factors.insert("_Bump2ndMap".to_string(), 2.0);
+		liltoon_like.normal.second_enabled_factor = 1.0;
+		liltoon_like.normal.second_scale_factor = 0.6;
 		let mat = UnaMaterialPbr {
 			normal_texture_index: Some(0),
 			liltoon_like: Some(liltoon_like),
@@ -7477,6 +8112,8 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
+		assert_eq!(draw.normal2nd_uv_offset_scale, [0.3, 0.4, 1.25, 1.75]);
+		assert_eq!(draw.normal2nd_params, [1.0, 0.6, 2.0, 0.0]);
 	}
 
 	#[test]
@@ -7681,24 +8318,39 @@ mod tests {
 
 	#[test]
 	fn liltoon_fur_layer_num_maps_to_geometry_sample_count() {
-		assert_eq!(liltoon_fur_shell_sample_count(1.0), 4);
-		assert_eq!(liltoon_fur_shell_sample_count(2.0), 7);
-		assert_eq!(liltoon_fur_shell_sample_count(3.0), 13);
-		assert_eq!(liltoon_fur_shell_sample_count(12.0), 13);
+		assert_eq!(liltoon_fur_sample_count_for_layer_num(1.0), 4);
+		assert_eq!(liltoon_fur_sample_count_for_layer_num(2.0), 7);
+		assert_eq!(liltoon_fur_sample_count_for_layer_num(3.0), 13);
+		assert_eq!(liltoon_fur_sample_count_for_layer_num(12.0), 13);
 	}
 
 	#[test]
-	fn csfc_mode_density_uses_liltoon_layer_num_as_compatibility_hint() {
-		assert_eq!(csfc_mode_density(1.0, CsfcExpressionMode::LilToonCompatible), 4.0);
-		assert_eq!(csfc_mode_density(2.0, CsfcExpressionMode::LilToonCompatible), 7.0);
-		assert_eq!(csfc_mode_density(3.0, CsfcExpressionMode::LilToonCompatible), 13.0);
-		assert!(csfc_mode_density(3.0, CsfcExpressionMode::UnaStandard) > csfc_mode_density(3.0, CsfcExpressionMode::LilToonCompatible));
-		assert!(csfc_mode_density(3.0, CsfcExpressionMode::UnaHighQuality) > csfc_mode_density(3.0, CsfcExpressionMode::UnaStandard));
+	fn compute_fur_cards_mode_density_uses_liltoon_layer_num_as_compatibility_hint() {
+		assert_eq!(
+			compute_fur_cards_mode_density(1.0, ComputeFurCardsExpressionMode::LilToonCompatible),
+			4.0
+		);
+		assert_eq!(
+			compute_fur_cards_mode_density(2.0, ComputeFurCardsExpressionMode::LilToonCompatible),
+			7.0
+		);
+		assert_eq!(
+			compute_fur_cards_mode_density(3.0, ComputeFurCardsExpressionMode::LilToonCompatible),
+			13.0
+		);
+		assert!(
+			compute_fur_cards_mode_density(3.0, ComputeFurCardsExpressionMode::UnaStandard)
+				> compute_fur_cards_mode_density(3.0, ComputeFurCardsExpressionMode::LilToonCompatible)
+		);
+		assert!(
+			compute_fur_cards_mode_density(3.0, ComputeFurCardsExpressionMode::UnaHighQuality)
+				> compute_fur_cards_mode_density(3.0, ComputeFurCardsExpressionMode::UnaStandard)
+		);
 	}
 
 	#[test]
-	fn csfc_triangle_card_count_is_monotonic_for_area_mask_length_and_quality() {
-		let base_metrics = CsfcTriangleMetrics {
+	fn compute_fur_cards_triangle_card_count_is_monotonic_for_area_mask_length_and_quality() {
+		let base_metrics = ComputeFurCardsTriangleMetrics {
 			world_area: 0.0004,
 			uv_area: 0.0002,
 			average_fur_mask: 0.5,
@@ -7706,46 +8358,46 @@ mod tests {
 			fur_length: 0.02,
 			projected_area_factor: 1.0,
 		};
-		let params = CsfcAllocationParams {
+		let params = ComputeFurCardsAllocationParams {
 			min_cards_per_visible_triangle: 1,
 			max_cards_per_triangle: 128,
 			..Default::default()
 		};
 
-		let base = csfc_triangle_card_count(3.0, CsfcExpressionMode::UnaStandard, base_metrics, params);
-		let larger_area = csfc_triangle_card_count(
+		let base = compute_fur_cards_triangle_card_count(3.0, ComputeFurCardsExpressionMode::UnaStandard, base_metrics, params);
+		let larger_area = compute_fur_cards_triangle_card_count(
 			3.0,
-			CsfcExpressionMode::UnaStandard,
-			CsfcTriangleMetrics {
+			ComputeFurCardsExpressionMode::UnaStandard,
+			ComputeFurCardsTriangleMetrics {
 				world_area: base_metrics.world_area * 4.0,
 				..base_metrics
 			},
 			params,
 		);
-		let stronger_mask = csfc_triangle_card_count(
+		let stronger_mask = compute_fur_cards_triangle_card_count(
 			3.0,
-			CsfcExpressionMode::UnaStandard,
-			CsfcTriangleMetrics {
+			ComputeFurCardsExpressionMode::UnaStandard,
+			ComputeFurCardsTriangleMetrics {
 				average_fur_mask: 1.0,
 				..base_metrics
 			},
 			params,
 		);
-		let longer_fur = csfc_triangle_card_count(
+		let longer_fur = compute_fur_cards_triangle_card_count(
 			3.0,
-			CsfcExpressionMode::UnaStandard,
-			CsfcTriangleMetrics {
+			ComputeFurCardsExpressionMode::UnaStandard,
+			ComputeFurCardsTriangleMetrics {
 				average_length_mask: 1.0,
 				fur_length: 0.04,
 				..base_metrics
 			},
 			params,
 		);
-		let higher_quality = csfc_triangle_card_count(
+		let higher_quality = compute_fur_cards_triangle_card_count(
 			3.0,
-			CsfcExpressionMode::UnaStandard,
+			ComputeFurCardsExpressionMode::UnaStandard,
 			base_metrics,
-			CsfcAllocationParams {
+			ComputeFurCardsAllocationParams {
 				global_quality_scale: 2.0,
 				..params
 			},
@@ -7756,10 +8408,10 @@ mod tests {
 		assert!(longer_fur >= base);
 		assert!(higher_quality >= base);
 		assert_eq!(
-			csfc_triangle_card_count(
+			compute_fur_cards_triangle_card_count(
 				3.0,
-				CsfcExpressionMode::UnaStandard,
-				CsfcTriangleMetrics {
+				ComputeFurCardsExpressionMode::UnaStandard,
+				ComputeFurCardsTriangleMetrics {
 					average_fur_mask: 0.0,
 					..base_metrics
 				},
@@ -7770,43 +8422,49 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_barycentric_samples_are_deterministic_and_normalized() {
-		let a = csfc_barycentric_sample(12345, 7);
-		let b = csfc_barycentric_sample(12345, 7);
-		let c = csfc_barycentric_sample(12345, 8);
+	fn compute_fur_cards_barycentric_samples_are_deterministic_and_normalized() {
+		let a = compute_fur_cards_barycentric_sample(12345, 7);
+		let b = compute_fur_cards_barycentric_sample(12345, 7);
+		let c = compute_fur_cards_barycentric_sample(12345, 8);
 		assert_eq!(a, b);
 		assert_ne!(a, c);
 		let sum = a.barycentric[0] + a.barycentric[1] + a.barycentric[2];
 		assert!((sum - 1.0).abs() < 0.00001);
 		assert!(a.barycentric.iter().all(|&v| (0.0..=1.0).contains(&v)));
 
-		let p = csfc_interpolate_vec3(
+		let p = compute_fur_cards_interpolate_vec3(
 			[Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)],
 			a.barycentric,
 		);
 		assert!((p.x + p.y + p.z - 1.0).abs() < 0.00001);
-		let uv = csfc_interpolate_vec2([Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)], a.barycentric);
+		let uv = compute_fur_cards_interpolate_vec2([Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)], a.barycentric);
 		assert!(uv.x >= 0.0 && uv.y >= 0.0 && uv.x + uv.y <= 1.00001);
 	}
 
 	#[test]
-	fn csfc_buffer_requirements_use_quad_cards_and_reject_overflow() {
-		let req = csfc_buffer_requirements(10).expect("buffer requirements");
+	fn compute_fur_cards_buffer_requirements_use_quad_cards_and_reject_overflow() {
+		let req = compute_fur_cards_buffer_requirements(10).expect("buffer requirements");
 		assert_eq!(req.vertex_count, 40);
 		assert_eq!(req.index_count, 60);
-		assert_eq!(req.vertex_bytes, 40 * std::mem::size_of::<CsfcGeneratedVertexGpu>() as u64);
+		assert_eq!(
+			req.vertex_bytes,
+			40 * std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() as u64
+		);
 		assert_eq!(req.index_bytes, 60 * std::mem::size_of::<u32>() as u64);
-		assert!(csfc_buffer_requirements(u32::MAX).is_none());
+		assert!(compute_fur_cards_buffer_requirements(u32::MAX).is_none());
 	}
 
 	#[test]
-	fn csfc_source_buffers_pack_mesh_vertices_and_valid_triangles() {
+	fn compute_fur_cards_source_buffers_pack_mesh_vertices_and_valid_triangles() {
 		let verts = vec![
 			Vertex {
 				pos: [1.0, 2.0, 3.0],
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.25, 0.5],
+				uv1: [0.25, 0.5],
+				uv2: [0.25, 0.5],
+				uv3: [0.25, 0.5],
 				joints: [1, 2, 3, 4],
 				weights: [0.1, 0.2, 0.3, 0.4],
 				color: [0.2, 0.4, 0.6, 1.0],
@@ -7816,6 +8474,9 @@ mod tests {
 				norm: [0.0, 0.0, 1.0],
 				tangent: [0.0, 1.0, 0.0, -1.0],
 				uv: [0.75, 0.125],
+				uv1: [0.75, 0.125],
+				uv2: [0.75, 0.125],
+				uv3: [0.75, 0.125],
 				joints: [5, 6, 7, 8],
 				weights: [0.4, 0.3, 0.2, 0.1],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7825,41 +8486,53 @@ mod tests {
 				norm: [1.0, 0.0, 0.0],
 				tangent: [0.0, 0.0, 1.0, 1.0],
 				uv: [1.0, 0.0],
+				uv1: [1.0, 0.0],
+				uv2: [1.0, 0.0],
+				uv3: [1.0, 0.0],
 				joints: [9, 10, 11, 12],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
 
-		let source_vertices = csfc_source_vertices_from_mesh(&verts);
+		let source_vertices = compute_fur_cards_source_vertices_from_mesh(&verts);
 		assert_eq!(source_vertices.len(), 3);
 		assert_eq!(source_vertices[0].position, [1.0, 2.0, 3.0, 1.0]);
 		assert_eq!(source_vertices[0].uv, [0.25, 0.5, 0.0, 0.0]);
 		assert_eq!(source_vertices[0].color, [0.2, 0.4, 0.6, 1.0]);
 		assert_eq!(source_vertices[0].joints, [1, 2, 3, 4]);
 
-		let source_triangles = csfc_source_triangles_from_indices(&[0, 1, 2, 0, 2, 9, 2, 1, 0], verts.len());
+		let source_triangles = compute_fur_cards_source_triangles_from_indices(&[0, 1, 2, 0, 2, 9, 2, 1, 0], verts.len());
 		assert_eq!(
 			source_triangles,
 			vec![
-				CsfcSourceTriangleGpu { indices: [0, 1, 2, 0] },
-				CsfcSourceTriangleGpu { indices: [2, 1, 0, 0] },
+				ComputeFurCardsSourceTriangleGpu { indices: [0, 1, 2, 0] },
+				ComputeFurCardsSourceTriangleGpu { indices: [2, 1, 0, 0] },
 			]
 		);
 
-		let source_req =
-			csfc_source_buffer_requirements(source_vertices.len() as u32, source_triangles.len() as u32).expect("source requirements");
-		assert_eq!(source_req.vertex_bytes, 3 * std::mem::size_of::<CsfcSourceVertexGpu>() as u64);
-		assert_eq!(source_req.triangle_bytes, 2 * std::mem::size_of::<CsfcSourceTriangleGpu>() as u64);
+		let source_req = compute_fur_cards_source_buffer_requirements(source_vertices.len() as u32, source_triangles.len() as u32)
+			.expect("source requirements");
+		assert_eq!(
+			source_req.vertex_bytes,
+			3 * std::mem::size_of::<ComputeFurCardsSourceVertexGpu>() as u64
+		);
+		assert_eq!(
+			source_req.triangle_bytes,
+			2 * std::mem::size_of::<ComputeFurCardsSourceTriangleGpu>() as u64
+		);
 	}
 
 	#[test]
-	fn csfc_source_vertices_can_follow_skin_palette() {
+	fn compute_fur_cards_source_vertices_can_follow_skin_palette() {
 		let verts = vec![Vertex {
 			pos: [1.0, 2.0, 3.0],
 			norm: [0.0, 1.0, 0.0],
 			tangent: [1.0, 0.0, 0.0, -1.0],
 			uv: [0.25, 0.5],
+			uv1: [0.25, 0.5],
+			uv2: [0.25, 0.5],
+			uv3: [0.25, 0.5],
 			joints: [0, 1, 0, 0],
 			weights: [0.25, 0.75, 0.0, 0.0],
 			color: [0.25, 0.5, 0.75, 1.0],
@@ -7868,7 +8541,7 @@ mod tests {
 		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
 		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
 		let mut source_vertices = Vec::new();
-		csfc_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices);
+		compute_fur_cards_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices);
 
 		assert_eq!(source_vertices.len(), 1);
 		assert!((source_vertices[0].position[0] - 4.0).abs() < 0.00001);
@@ -7880,13 +8553,16 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_card_sources_emit_liltoon_compatible_segments_per_triangle() {
+	fn compute_fur_cards_card_sources_emit_liltoon_compatible_segments_per_triangle() {
 		let verts = vec![
 			Vertex {
 				pos: [0.0, 0.0, 0.0],
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.0, 0.0],
+				uv1: [0.0, 0.0],
+				uv2: [0.0, 0.0],
+				uv3: [0.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7896,6 +8572,9 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [1.0, 0.0],
+				uv1: [1.0, 0.0],
+				uv2: [1.0, 0.0],
+				uv3: [1.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7905,6 +8584,9 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.0, 1.0],
+				uv1: [0.0, 1.0],
+				uv2: [0.0, 1.0],
+				uv3: [0.0, 1.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7914,6 +8596,9 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [4.0, 0.0],
+				uv1: [4.0, 0.0],
+				uv2: [4.0, 0.0],
+				uv3: [4.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7923,12 +8608,15 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.0, 4.0],
+				uv1: [0.0, 4.0],
+				uv2: [0.0, 4.0],
+				uv3: [0.0, 4.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
-		let triangles = csfc_source_triangles_from_indices(&[0, 1, 2, 0, 3, 4], verts.len());
+		let triangles = compute_fur_cards_source_triangles_from_indices(&[0, 1, 2, 0, 3, 4], verts.len());
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.layer_count_factor = 3.0;
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.04];
@@ -7937,11 +8625,11 @@ mod tests {
 			..Default::default()
 		};
 
-		let card_sources = csfc_card_sources_from_triangles(
+		let card_sources = compute_fur_cards_card_sources_from_triangles(
 			&mat,
 			&verts,
 			&triangles,
-			CsfcCpuFurMaps {
+			ComputeFurCardsCpuFurMaps {
 				length_mask: None,
 				fur_mask: None,
 			},
@@ -7957,13 +8645,16 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_card_sources_use_cpu_fur_masks_for_allocation_budget() {
+	fn compute_fur_cards_card_sources_use_cpu_fur_masks_for_allocation_budget() {
 		let verts = vec![
 			Vertex {
 				pos: [0.0, 0.0, 0.0],
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.0, 0.0],
+				uv1: [0.0, 0.0],
+				uv2: [0.0, 0.0],
+				uv3: [0.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7973,6 +8664,9 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [1.0, 0.0],
+				uv1: [1.0, 0.0],
+				uv2: [1.0, 0.0],
+				uv3: [1.0, 0.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
@@ -7982,12 +8676,15 @@ mod tests {
 				norm: [0.0, 1.0, 0.0],
 				tangent: [1.0, 0.0, 0.0, 1.0],
 				uv: [0.0, 1.0],
+				uv1: [0.0, 1.0],
+				uv2: [0.0, 1.0],
+				uv3: [0.0, 1.0],
 				joints: [0; 4],
 				weights: [1.0, 0.0, 0.0, 0.0],
 				color: [1.0, 1.0, 1.0, 1.0],
 			},
 		];
-		let triangles = csfc_source_triangles_from_indices(&[0, 1, 2], verts.len());
+		let triangles = compute_fur_cards_source_triangles_from_indices(&[0, 1, 2], verts.len());
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.layer_count_factor = 3.0;
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.04];
@@ -8008,21 +8705,21 @@ mod tests {
 			pixels: vec![0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255],
 		};
 
-		let full = csfc_card_sources_from_triangles(
+		let full = compute_fur_cards_card_sources_from_triangles(
 			&mat,
 			&verts,
 			&triangles,
-			CsfcCpuFurMaps {
+			ComputeFurCardsCpuFurMaps {
 				length_mask: Some(&white_mask),
 				fur_mask: Some(&white_mask),
 			},
 		)
 		.expect("full mask cards");
-		let masked = csfc_card_sources_from_triangles(
+		let masked = compute_fur_cards_card_sources_from_triangles(
 			&mat,
 			&verts,
 			&triangles,
-			CsfcCpuFurMaps {
+			ComputeFurCardsCpuFurMaps {
 				length_mask: Some(&white_mask),
 				fur_mask: Some(&black_mask),
 			},
@@ -8033,7 +8730,7 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_params_convert_liltoon_root_offset_to_outward_bias() {
+	fn compute_fur_cards_params_convert_liltoon_root_offset_to_outward_bias() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.1];
 		liltoon_like.fur.root_offset_factor = -0.4;
@@ -8046,17 +8743,20 @@ mod tests {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
-		let generated = csfc_buffer_requirements(2).expect("requirements");
+		let generated = compute_fur_cards_buffer_requirements(2).expect("requirements");
 
-		let params = csfc_generate_params_from_material(&mat, 1, 2, generated);
+		let params = compute_fur_cards_generate_params_from_material(&mat, 1, 2, generated);
 
 		assert!((params.root_offset - 0.04).abs() < 0.00001);
 		assert!((params.card_width - 0.014).abs() < 0.00001);
 		assert_eq!(params.direction[3], 1.5);
-		assert_eq!(params.feature_flags & CSFC_FEATURE_FUR_VECTOR_TEX, CSFC_FEATURE_FUR_VECTOR_TEX);
 		assert_eq!(
-			params.feature_flags & CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR,
-			CSFC_FEATURE_VERTEX_COLOR_FUR_VECTOR
+			params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX,
+			COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX
+		);
+		assert_eq!(
+			params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR,
+			COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR
 		);
 		assert_eq!(params.main_uv, [2.0, 3.0, 0.25, -0.5]);
 		assert_eq!(params.model, Mat4::IDENTITY.to_cols_array_2d());
@@ -8065,11 +8765,11 @@ mod tests {
 	}
 
 	#[test]
-	fn csfc_dispatch_workgroups_cover_all_source_triangles() {
-		assert_eq!(csfc_dispatch_workgroups(0), 0);
-		assert_eq!(csfc_dispatch_workgroups(1), 1);
-		assert_eq!(csfc_dispatch_workgroups(64), 1);
-		assert_eq!(csfc_dispatch_workgroups(65), 2);
+	fn compute_fur_cards_dispatch_workgroups_cover_all_source_triangles() {
+		assert_eq!(compute_fur_cards_dispatch_workgroups(0), 0);
+		assert_eq!(compute_fur_cards_dispatch_workgroups(1), 1);
+		assert_eq!(compute_fur_cards_dispatch_workgroups(64), 1);
+		assert_eq!(compute_fur_cards_dispatch_workgroups(65), 2);
 	}
 
 	#[test]
@@ -8125,7 +8825,7 @@ mod tests {
 	}
 
 	#[test]
-	fn disable_fur_diagnostic_suppresses_fur_shell_draws() {
+	fn disable_fur_diagnostic_suppresses_fur_draws() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.fur.enabled_factor = 1.0;
 		liltoon_like.fur.layer_count_factor = 2.0;
@@ -8173,12 +8873,200 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_distance_fade_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.distance_fade_factor = [0.2, 5.0, 0.75, 1.0];
+		liltoon_like.rendering.distance_fade_color_factor = [0.3, 0.4, 0.5, 0.6];
+		liltoon_like.rendering.distance_fade_rim_color_factor = [0.7, 0.8, 0.9, 0.25];
+		liltoon_like.rendering.distance_fade_rim_fresnel_power_factor = 6.5;
+		liltoon_like.rendering.distance_fade_mode_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.distance_fade, [0.2, 5.0, 0.75, 1.0]);
+		assert_eq!(draw.distance_fade_color, [0.3, 0.4, 0.5, 0.6]);
+		assert_eq!(draw.distance_fade_rim_color, [0.7, 0.8, 0.9, 0.25]);
+		assert_eq!(draw.distance_fade_params, [1.0, 6.5, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_dissolve_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.dissolve.mask_texture_index = Some(3);
+		liltoon_like.dissolve.noise_mask_texture_index = Some(4);
+		liltoon_like.dissolve.color_factor = [1.2, 1.1, 1.0, 0.9];
+		liltoon_like.dissolve.params_factor = [1.0, 0.0, 0.45, 0.12];
+		liltoon_like.dissolve.position_factor = [0.25, 0.75, 0.0, 0.5];
+		liltoon_like.dissolve.noise_strength_factor = 0.25;
+		liltoon_like.dissolve.noise_uv_scroll_rotate_factor = [0.01, 0.02, 0.03, 0.04];
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_DissolveMask".to_string(), [0.1, 0.2, 0.3, 0.4]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_DissolveNoiseMask".to_string(), [0.5, 0.6, 0.7, 0.8]);
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.dissolve_color, [1.2, 1.1, 1.0, 0.9]);
+		assert_eq!(draw.dissolve_params, [1.0, 0.0, 0.45, 0.12]);
+		assert_eq!(draw.dissolve_pos, [0.25, 0.75, 0.0, 0.5]);
+		assert_eq!(draw.dissolve_ext, [0.25, 1.0, 1.0, 0.0]);
+		assert_eq!(draw.dissolve_mask_uv_offset_scale, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.dissolve_noise_uv_offset_scale, [0.5, 0.6, 0.7, 0.8]);
+		assert_eq!(draw.dissolve_noise_uv_anim_params, [0.01, 0.02, 0.03, 0.04]);
+	}
+
+	#[test]
+	fn liltoon_parallax_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.parallax.texture_index = Some(5);
+		liltoon_like.parallax.enabled_factor = 1.0;
+		liltoon_like.parallax.pom_enabled_factor = 1.0;
+		liltoon_like.parallax.scale_factor = 0.07;
+		liltoon_like.parallax.offset_factor = 0.35;
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_ParallaxMap".to_string(), [0.12, 0.23, 1.2, 1.3]);
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.parallax_params, [1.0, 1.0, 0.07, 0.35]);
+		assert_eq!(draw.parallax_uv_offset_scale, [0.12, 0.23, 1.2, 1.3]);
+	}
+
+	#[test]
+	fn liltoon_main_layer_dissolve_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.texture_uv_mode_factors.insert("_Main2ndTex".to_string(), 2.0);
+		liltoon_like.texture_uv_mode_factors.insert("_Main3rdTex".to_string(), 4.0);
+		liltoon_like.main_color.second_cull_factor = 1.0;
+		liltoon_like.main_color.second_distance_fade_factor = [1.0, 6.0, 0.4, 0.0];
+		liltoon_like.main_color.second_decal_flags_factor = [1.0, 1.0, 0.0, 1.0];
+		liltoon_like.main_color.second_decal_transform_factor = [0.25, 1.0, 0.0, 0.0];
+		liltoon_like.main_color.second_decal_animation_factor = [4.0, 2.0, 0.0, 0.0];
+		liltoon_like.main_color.second_decal_sub_param_factor = [1.0, 1.0, 0.5, 0.0];
+		liltoon_like.main_color.third_cull_factor = 2.0;
+		liltoon_like.main_color.third_distance_fade_factor = [2.0, 7.0, 0.5, 0.0];
+		liltoon_like.main_color.third_decal_flags_factor = [1.0, 0.0, 1.0, 0.0];
+		liltoon_like.main_color.third_decal_transform_factor = [0.5, 0.0, 1.0, 0.0];
+		liltoon_like.main_color.third_decal_animation_factor = [3.0, 3.0, 0.0, 0.0];
+		liltoon_like.main_color.third_decal_sub_param_factor = [0.5, 0.5, 0.25, 0.0];
+		liltoon_like.main_color.second_dissolve.mask_texture_index = Some(5);
+		liltoon_like.main_color.second_dissolve.noise_mask_texture_index = Some(6);
+		liltoon_like.main_color.second_dissolve.color_factor = [0.2, 0.3, 0.4, 0.5];
+		liltoon_like.main_color.second_dissolve.params_factor = [1.0, 0.0, 0.25, 0.05];
+		liltoon_like.main_color.second_dissolve.position_factor = [0.11, 0.22, 0.33, 0.44];
+		liltoon_like.main_color.second_dissolve.noise_strength_factor = 0.26;
+		liltoon_like.main_color.second_dissolve.noise_uv_scroll_rotate_factor = [0.05, 0.06, 0.07, 0.08];
+		liltoon_like.main_color.third_dissolve.mask_texture_index = Some(7);
+		liltoon_like.main_color.third_dissolve.noise_mask_texture_index = Some(8);
+		liltoon_like.main_color.third_dissolve.color_factor = [0.6, 0.7, 0.8, 0.9];
+		liltoon_like.main_color.third_dissolve.params_factor = [2.0, 1.0, 0.35, 0.06];
+		liltoon_like.main_color.third_dissolve.position_factor = [0.55, 0.66, 0.77, 0.88];
+		liltoon_like.main_color.third_dissolve.noise_strength_factor = 0.36;
+		liltoon_like.main_color.third_dissolve.noise_uv_scroll_rotate_factor = [0.09, 0.10, 0.11, 0.12];
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Main2ndDissolveMask".to_string(), [0.1, 0.2, 1.1, 1.2]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Main2ndDissolveNoiseMask".to_string(), [0.3, 0.4, 1.3, 1.4]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Main3rdDissolveMask".to_string(), [0.5, 0.6, 1.5, 1.6]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Main3rdDissolveNoiseMask".to_string(), [0.7, 0.8, 1.7, 1.8]);
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.main2nd_ext, [2.0, 1.0, 0.0, 0.0]);
+		assert_eq!(draw.main2nd_distance_fade, [1.0, 6.0, 0.4, 0.0]);
+		assert_eq!(draw.main2nd_decal_flags, [1.0, 1.0, 0.0, 1.0]);
+		assert_eq!(draw.main2nd_decal_transform, [0.25, 1.0, 0.0, 0.0]);
+		assert_eq!(draw.main2nd_decal_animation, [4.0, 2.0, 0.0, 0.0]);
+		assert_eq!(draw.main2nd_decal_sub_param, [1.0, 1.0, 0.5, 0.0]);
+		assert_eq!(draw.main2nd_dissolve_color, [0.2, 0.3, 0.4, 0.5]);
+		assert_eq!(draw.main2nd_dissolve_params, [1.0, 0.0, 0.25, 0.05]);
+		assert_eq!(draw.main2nd_dissolve_pos, [0.11, 0.22, 0.33, 0.44]);
+		assert_eq!(draw.main2nd_dissolve_ext, [0.26, 1.0, 1.0, 0.0]);
+		assert_eq!(draw.main2nd_dissolve_mask_uv_offset_scale, [0.1, 0.2, 1.1, 1.2]);
+		assert_eq!(draw.main2nd_dissolve_noise_uv_offset_scale, [0.3, 0.4, 1.3, 1.4]);
+		assert_eq!(draw.main2nd_dissolve_noise_uv_anim_params, [0.05, 0.06, 0.07, 0.08]);
+		assert_eq!(draw.main3rd_ext, [4.0, 2.0, 0.0, 0.0]);
+		assert_eq!(draw.main3rd_distance_fade, [2.0, 7.0, 0.5, 0.0]);
+		assert_eq!(draw.main3rd_decal_flags, [1.0, 0.0, 1.0, 0.0]);
+		assert_eq!(draw.main3rd_decal_transform, [0.5, 0.0, 1.0, 0.0]);
+		assert_eq!(draw.main3rd_decal_animation, [3.0, 3.0, 0.0, 0.0]);
+		assert_eq!(draw.main3rd_decal_sub_param, [0.5, 0.5, 0.25, 0.0]);
+		assert_eq!(draw.main3rd_dissolve_color, [0.6, 0.7, 0.8, 0.9]);
+		assert_eq!(draw.main3rd_dissolve_params, [2.0, 1.0, 0.35, 0.06]);
+		assert_eq!(draw.main3rd_dissolve_pos, [0.55, 0.66, 0.77, 0.88]);
+		assert_eq!(draw.main3rd_dissolve_ext, [0.36, 1.0, 1.0, 0.0]);
+		assert_eq!(draw.main3rd_dissolve_mask_uv_offset_scale, [0.5, 0.6, 1.5, 1.6]);
+		assert_eq!(draw.main3rd_dissolve_noise_uv_offset_scale, [0.7, 0.8, 1.7, 1.8]);
+		assert_eq!(draw.main3rd_dissolve_noise_uv_anim_params, [0.09, 0.10, 0.11, 0.12]);
+	}
+
+	#[test]
+	fn liltoon_id_mask_and_udim_discard_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.id_mask.compile_factor = 1.0;
+		liltoon_like.id_mask.from_factor = 8.0;
+		liltoon_like.id_mask.is_bitmap_factor = 1.0;
+		liltoon_like.id_mask.controls_dissolve_factor = 1.0;
+		liltoon_like.id_mask.flags_factor = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+		liltoon_like.id_mask.prior_flags_factor = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+		liltoon_like.id_mask.indices_factor = [10, 20, 30, 40, 50, 60, 70, 80];
+		liltoon_like.udim_discard.compile_factor = 1.0;
+		liltoon_like.udim_discard.mode_factor = 1.0;
+		liltoon_like.udim_discard.uv_factor = 2.0;
+		liltoon_like.udim_discard.row0_factor = [0.0, 1.0, 0.0, 0.0];
+		liltoon_like.udim_discard.row2_factor = [0.0, 0.0, 0.0, 1.0];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.id_mask_params, [1.0, 8.0, 1.0, 1.0]);
+		assert_eq!(draw.id_mask_flags0, [1.0, 0.0, 1.0, 0.0]);
+		assert_eq!(draw.id_mask_flags1, [1.0, 0.0, 1.0, 0.0]);
+		assert_eq!(draw.id_mask_prior_flags0, [0.0, 1.0, 0.0, 1.0]);
+		assert_eq!(draw.id_mask_prior_flags1, [0.0, 1.0, 0.0, 1.0]);
+		assert_eq!(draw.id_mask_indices0, [10.0, 20.0, 30.0, 40.0]);
+		assert_eq!(draw.id_mask_indices1, [50.0, 60.0, 70.0, 80.0]);
+		assert_eq!(draw.udim_discard_params, [1.0, 1.0, 2.0, 0.0]);
+		assert_eq!(draw.udim_discard_row0, [0.0, 1.0, 0.0, 0.0]);
+		assert_eq!(draw.udim_discard_row2, [0.0, 0.0, 0.0, 1.0]);
+	}
+
+	#[test]
 	fn liltoon_glitter_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.glitter.enabled_factor = 1.0;
 		liltoon_like.glitter.color_factor = [0.2, 0.3, 0.4, 0.5];
 		liltoon_like.glitter.params1_factor = [512.0, 513.0, 0.08, 2.0];
 		liltoon_like.glitter.params2_factor = [0.6, 0.7, 0.8, 0.9];
+		liltoon_like.glitter.atlas_factor = [3.0, 4.0, 0.0, 0.0];
 		liltoon_like.glitter.main_strength_factor = 0.1;
 		liltoon_like.glitter.normal_strength_factor = 0.2;
 		liltoon_like.glitter.post_contrast_factor = 1.3;
@@ -8189,6 +9077,16 @@ mod tests {
 		liltoon_like.glitter.backface_mask_factor = 0.8;
 		liltoon_like.glitter.scale_randomize_factor = 0.9;
 		liltoon_like.glitter.uv_mode_factor = 1.0;
+		liltoon_like.glitter.color_texture_uv_mode_factor = 2.0;
+		liltoon_like.glitter.apply_shape_factor = 1.0;
+		liltoon_like.glitter.angle_randomize_factor = 1.0;
+		liltoon_like.glitter.vr_parallax_strength_factor = 0.4;
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_GlitterColorTex".to_string(), [0.1, 0.2, 0.3, 0.4]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_GlitterShapeTex".to_string(), [0.5, 0.6, 0.7, 0.8]);
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -8201,7 +9099,11 @@ mod tests {
 		assert_eq!(draw.glitter_params2, [0.6, 0.7, 0.8, 0.9]);
 		assert_eq!(draw.glitter_control, [1.0, 0.1, 0.2, 1.3]);
 		assert_eq!(draw.glitter_ext, [0.4, 0.5, 0.6, 0.7]);
-		assert_eq!(draw.glitter_ext2, [0.8, 0.9, 1.0, 0.0]);
+		assert_eq!(draw.glitter_ext2, [0.8, 0.9, 1.0, 2.0]);
+		assert_eq!(draw.glitter_ext3, [0.4, 1.0, 1.0, 0.0]);
+		assert_eq!(draw.glitter_color_uv_offset_scale, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.glitter_shape_uv_offset_scale, [0.5, 0.6, 0.7, 0.8]);
+		assert_eq!(draw.glitter_atlas, [3.0, 4.0, 0.0, 0.0]);
 	}
 
 	#[test]
@@ -8298,6 +9200,11 @@ mod tests {
 		liltoon_like
 			.texture_uv_offset_scales
 			.insert("_EmissionMap".to_string(), [0.05, 0.06, 1.05, 1.06]);
+		liltoon_like.texture_uv_mode_factors.insert("_EmissionMap".to_string(), 4.0);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Emission2ndMap".to_string(), [0.15, 0.16, 1.15, 1.16]);
+		liltoon_like.texture_uv_mode_factors.insert("_Emission2ndMap".to_string(), 3.0);
 		liltoon_like
 			.texture_uv_offset_scales
 			.insert("_ReflectionColorTex".to_string(), [0.07, 0.08, 1.07, 1.08]);
@@ -8335,6 +9242,9 @@ mod tests {
 		assert_eq!(draw.shade_uv_offset_scale, [0.01, 0.02, 1.01, 1.02]);
 		assert_eq!(draw.rim_uv_offset_scale, [0.03, 0.04, 1.03, 1.04]);
 		assert_eq!(draw.emission_uv_offset_scale, [0.05, 0.06, 1.05, 1.06]);
+		assert_eq!(draw.emission_uv_anim_params[3], 4.0);
+		assert_eq!(draw.emission2nd_uv_offset_scale, [0.15, 0.16, 1.15, 1.16]);
+		assert_eq!(draw.emission2nd_uv_anim_params[3], 3.0);
 		assert_eq!(draw.reflection_color_uv_offset_scale, [0.07, 0.08, 1.07, 1.08]);
 		assert_eq!(draw.smoothness_uv_offset_scale, [0.09, 0.10, 1.09, 1.10]);
 		assert_eq!(draw.metallic_uv_offset_scale, [0.11, 0.12, 1.11, 1.12]);

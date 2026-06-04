@@ -73,6 +73,35 @@ struct DrawMaterial {
 	glitter_control: vec4<f32>,
 	glitter_ext: vec4<f32>,
 	glitter_ext2: vec4<f32>,
+	glitter_ext3: vec4<f32>,
+	glitter_color_uv_offset_scale: vec4<f32>,
+	glitter_shape_uv_offset_scale: vec4<f32>,
+	glitter_atlas: vec4<f32>,
+	distance_fade: vec4<f32>,
+	distance_fade_color: vec4<f32>,
+	distance_fade_rim_color: vec4<f32>,
+	distance_fade_params: vec4<f32>,
+	dissolve_color: vec4<f32>,
+	dissolve_params: vec4<f32>,
+	dissolve_pos: vec4<f32>,
+	dissolve_ext: vec4<f32>,
+	dissolve_mask_uv_offset_scale: vec4<f32>,
+	dissolve_noise_uv_offset_scale: vec4<f32>,
+	dissolve_noise_uv_anim_params: vec4<f32>,
+	parallax_params: vec4<f32>,
+	parallax_uv_offset_scale: vec4<f32>,
+	id_mask_params: vec4<f32>,
+	id_mask_flags0: vec4<f32>,
+	id_mask_flags1: vec4<f32>,
+	id_mask_prior_flags0: vec4<f32>,
+	id_mask_prior_flags1: vec4<f32>,
+	id_mask_indices0: vec4<f32>,
+	id_mask_indices1: vec4<f32>,
+	udim_discard_params: vec4<f32>,
+	udim_discard_row0: vec4<f32>,
+	udim_discard_row1: vec4<f32>,
+	udim_discard_row2: vec4<f32>,
+	udim_discard_row3: vec4<f32>,
 	emission_color: vec4<f32>,
 	emission_params: vec4<f32>,
 	emission_blink_params: vec4<f32>,
@@ -130,12 +159,38 @@ struct DrawMaterial {
 	main_gradation_params: vec4<f32>,
 	main2nd_color: vec4<f32>,
 	main2nd_params: vec4<f32>,
+	main2nd_ext: vec4<f32>,
+	main2nd_distance_fade: vec4<f32>,
+	main2nd_decal_flags: vec4<f32>,
+	main2nd_decal_transform: vec4<f32>,
+	main2nd_decal_animation: vec4<f32>,
+	main2nd_decal_sub_param: vec4<f32>,
 	main2nd_uv_offset_scale: vec4<f32>,
 	main2nd_blend_mask_uv_offset_scale: vec4<f32>,
+	main2nd_dissolve_color: vec4<f32>,
+	main2nd_dissolve_params: vec4<f32>,
+	main2nd_dissolve_pos: vec4<f32>,
+	main2nd_dissolve_ext: vec4<f32>,
+	main2nd_dissolve_mask_uv_offset_scale: vec4<f32>,
+	main2nd_dissolve_noise_uv_offset_scale: vec4<f32>,
+	main2nd_dissolve_noise_uv_anim_params: vec4<f32>,
 	main3rd_color: vec4<f32>,
 	main3rd_params: vec4<f32>,
+	main3rd_ext: vec4<f32>,
+	main3rd_distance_fade: vec4<f32>,
+	main3rd_decal_flags: vec4<f32>,
+	main3rd_decal_transform: vec4<f32>,
+	main3rd_decal_animation: vec4<f32>,
+	main3rd_decal_sub_param: vec4<f32>,
 	main3rd_uv_offset_scale: vec4<f32>,
 	main3rd_blend_mask_uv_offset_scale: vec4<f32>,
+	main3rd_dissolve_color: vec4<f32>,
+	main3rd_dissolve_params: vec4<f32>,
+	main3rd_dissolve_pos: vec4<f32>,
+	main3rd_dissolve_ext: vec4<f32>,
+	main3rd_dissolve_mask_uv_offset_scale: vec4<f32>,
+	main3rd_dissolve_noise_uv_offset_scale: vec4<f32>,
+	main3rd_dissolve_noise_uv_anim_params: vec4<f32>,
 }
 
 struct MorphU {
@@ -210,6 +265,15 @@ struct MorphU {
 @group(1) @binding(60) var fur_length_mask_tex: texture_2d<f32>;
 @group(1) @binding(61) var fur_noise_mask_tex: texture_2d<f32>;
 @group(1) @binding(62) var fur_mask_tex: texture_2d<f32>;
+@group(1) @binding(63) var glitter_color_tex: texture_2d<f32>;
+@group(1) @binding(64) var glitter_shape_tex: texture_2d<f32>;
+@group(1) @binding(65) var dissolve_mask_tex: texture_2d<f32>;
+@group(1) @binding(66) var dissolve_noise_mask_tex: texture_2d<f32>;
+@group(1) @binding(67) var parallax_tex: texture_2d<f32>;
+@group(1) @binding(68) var main2nd_dissolve_mask_tex: texture_2d<f32>;
+@group(1) @binding(69) var main2nd_dissolve_noise_mask_tex: texture_2d<f32>;
+@group(1) @binding(70) var main3rd_dissolve_mask_tex: texture_2d<f32>;
+@group(1) @binding(71) var main3rd_dissolve_noise_mask_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -223,6 +287,9 @@ struct VsIn {
 	@location(4) joints: vec4<u32>,
 	@location(5) weights: vec4<f32>,
 	@location(6) color: vec4<f32>,
+	@location(7) uv1: vec2<f32>,
+	@location(8) uv2: vec2<f32>,
+	@location(9) uv3: vec2<f32>,
 }
 
 struct VsOut {
@@ -231,6 +298,10 @@ struct VsOut {
 	@location(1) uv: vec2<f32>,
 	@location(2) wp: vec3<f32>,
 	@location(3) wt: vec4<f32>,
+	@location(4) uv1: vec2<f32>,
+	@location(5) uv2: vec2<f32>,
+	@location(6) uv3: vec2<f32>,
+	@location(7) @interpolate(flat) id_mask: vec4<f32>,
 }
 
 struct FurVsOut {
@@ -239,13 +310,17 @@ struct FurVsOut {
 	@location(1) uv: vec2<f32>,
 	@location(2) wp: vec3<f32>,
 	@location(3) wt: vec4<f32>,
-	@location(4) fur_shell: f32,
-	@location(5) fur_alpha: f32,
-	@location(6) fur_card_side: f32,
-	@location(7) fur_uv0: vec2<f32>,
+	@location(4) uv1: vec2<f32>,
+	@location(5) uv2: vec2<f32>,
+	@location(6) uv3: vec2<f32>,
+	@location(7) @interpolate(flat) id_mask: vec4<f32>,
+	@location(8) fur_layer: f32,
+	@location(9) fur_alpha: f32,
+	@location(10) fur_card_side: f32,
+	@location(11) fur_uv0: vec2<f32>,
 }
 
-struct CsfcFurVsIn {
+struct ComputeFurCardsVsIn {
 	@location(0) position_layer: vec4<f32>,
 	@location(1) normal_side: vec4<f32>,
 	@location(2) uv: vec2<f32>,
@@ -294,6 +369,10 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 		let mt = mat3_upper(drawt.model) * tangent;
 		o.wn = normalize(mn);
 		o.uv = v.uv;
+		o.uv1 = v.uv1;
+		o.uv2 = v.uv2;
+		o.uv3 = v.uv3;
+		o.id_mask = lil_id_mask_vertex_state(v, vertex_index);
 		o.wp = wp.xyz;
 		o.wt = vec4<f32>(mt, tangent_sign);
 		o.clip = frame.view_proj * wp;
@@ -325,6 +404,10 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 
 	o.wn = wn;
 	o.uv = v.uv;
+	o.uv1 = v.uv1;
+	o.uv2 = v.uv2;
+	o.uv3 = v.uv3;
+	o.id_mask = lil_id_mask_vertex_state(v, vertex_index);
 	o.wp = wp.xyz;
 	o.wt = vec4<f32>(wt, tangent_sign);
 	o.clip = frame.view_proj * wp;
@@ -336,9 +419,13 @@ fn fur_vs_out_from_base(o: VsOut) -> FurVsOut {
 	out.clip = o.clip;
 	out.wn = o.wn;
 	out.uv = o.uv;
+	out.uv1 = o.uv1;
+	out.uv2 = o.uv2;
+	out.uv3 = o.uv3;
+	out.id_mask = o.id_mask;
 	out.wp = o.wp;
 	out.wt = o.wt;
-	out.fur_shell = 0.0;
+	out.fur_layer = 0.0;
 	out.fur_alpha = 1.0;
 	out.fur_card_side = 0.0;
 	out.fur_uv0 = o.uv;
@@ -351,6 +438,79 @@ fn normalize_or(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
 		return fallback;
 	}
 	return v * inverseSqrt(len2);
+}
+
+fn normalize_or2(v: vec2<f32>, fallback: vec2<f32>) -> vec2<f32> {
+	let len2 = dot(v, v);
+	if len2 <= 0.0000001 {
+		return fallback;
+	}
+	return v * inverseSqrt(len2);
+}
+
+fn lil_rotate_uv(uv: vec2<f32>, angle: f32) -> vec2<f32> {
+	let s = sin(angle);
+	let c = cos(angle);
+	let centered = uv - vec2<f32>(0.5, 0.5);
+	return vec2<f32>(
+		centered.x * c - centered.y * s,
+		centered.x * s + centered.y * c,
+	) + vec2<f32>(0.5, 0.5);
+}
+
+fn lil_id_mask_range(mask_input: u32, flags0: vec4<f32>, flags1: vec4<f32>) -> bool {
+	let vertex = f32(mask_input);
+	let indices0 = round(drawu.id_mask_indices0);
+	let indices1 = round(drawu.id_mask_indices1);
+	let a0 = vertex - indices0.x;
+	let a1 = vertex - indices0.y;
+	let a2 = vertex - indices0.z;
+	let a3 = vertex - indices0.w;
+	let a4 = vertex - indices1.x;
+	let a5 = vertex - indices1.y;
+	let a6 = vertex - indices1.z;
+	let a7 = vertex - indices1.w;
+	let b0 = vec4<f32>(clamp(a0 + 1.0, 0.0, 1.0), clamp(a1 + 1.0, 0.0, 1.0), clamp(a2 + 1.0, 0.0, 1.0), clamp(a3 + 1.0, 0.0, 1.0)) *
+		vec4<f32>(clamp(-a1, 0.0, 1.0), clamp(-a2, 0.0, 1.0), clamp(-a3, 0.0, 1.0), clamp(-a4, 0.0, 1.0));
+	let b1 = vec4<f32>(clamp(a4 + 1.0, 0.0, 1.0), clamp(a5 + 1.0, 0.0, 1.0), clamp(a6 + 1.0, 0.0, 1.0), clamp(a7 + 1.0, 0.0, 1.0)) *
+		vec4<f32>(clamp(-a5, 0.0, 1.0), clamp(-a6, 0.0, 1.0), clamp(-a7, 0.0, 1.0), 1.0);
+	return dot(b0, flags0) + dot(b1, flags1) > 0.5;
+}
+
+fn lil_id_mask_bit(mask_input: u32, flags0: vec4<f32>, flags1: vec4<f32>) -> bool {
+	let enable0 = u32(round(flags0.x)) + u32(round(flags0.y)) * 2u + u32(round(flags0.z)) * 4u + u32(round(flags0.w)) * 8u;
+	let enable1 = u32(round(flags1.x)) * 16u + u32(round(flags1.y)) * 32u + u32(round(flags1.z)) * 64u + u32(round(flags1.w)) * 128u;
+	let enable_mask = enable0 + enable1;
+	return mask_input != 0u && (enable_mask & mask_input) == mask_input;
+}
+
+fn lil_id_mask_matches(mask_input: u32, flags0: vec4<f32>, flags1: vec4<f32>) -> bool {
+	if drawu.id_mask_params.z > 0.5 {
+		return lil_id_mask_bit(mask_input, flags0, flags1);
+	}
+	return lil_id_mask_range(mask_input, flags0, flags1);
+}
+
+fn lil_id_mask_vertex_state(v: VsIn, vertex_index: u32) -> vec4<f32> {
+	if drawu.id_mask_params.x <= 0.5 {
+		return vec4<f32>(1.0, 1.0, 0.0, 0.0);
+	}
+	var mask_input = vertex_index;
+	if drawu.id_mask_params.y < 0.5 {
+		mask_input = u32(max(round(v.uv.x), 0.0));
+	} else if drawu.id_mask_params.y < 1.5 {
+		mask_input = u32(max(round(v.uv1.x), 0.0));
+	} else if drawu.id_mask_params.y < 2.5 {
+		mask_input = u32(max(round(v.uv2.x), 0.0));
+	} else if drawu.id_mask_params.y < 3.5 {
+		mask_input = u32(max(round(v.uv3.x), 0.0));
+	}
+	let masked = lil_id_mask_matches(mask_input, drawu.id_mask_flags0, drawu.id_mask_flags1);
+	if drawu.id_mask_params.w > 0.5 {
+		let prior_masked = lil_id_mask_matches(mask_input, drawu.id_mask_prior_flags0, drawu.id_mask_prior_flags1);
+		return vec4<f32>(select(1.0, 0.0, masked && prior_masked), select(0.0, 1.0, masked != prior_masked), select(0.0, 1.0, prior_masked), 0.0);
+	}
+	return vec4<f32>(select(1.0, 0.0, masked), 1.0, 0.0, 0.0);
 }
 
 @vertex
@@ -390,52 +550,7 @@ fn vs_outline(v: VsIn, @builtin(vertex_index) vertex_index: u32) -> VsOut {
 	return o;
 }
 
-@vertex
-fn vs_fur(v: VsIn, @builtin(vertex_index) vertex_index: u32, @builtin(instance_index) instance_index: u32) -> FurVsOut {
-	var o = fur_vs_out_from_base(skinned_position_normal(v, vertex_index));
-	let enabled = clamp(drawu.fur_params.x, 0.0, 1.0);
-	let layer_count = max(drawu.fur_params.y, 1.0);
-	let shell = (f32(instance_index) + 1.0) / layer_count;
-	o.fur_shell = shell * enabled;
-	if (enabled <= 0.000001 || drawu.fur_params.y <= 0.0) {
-		return o;
-	}
-	let n = normalize(o.wn);
-	let t = normalize(o.wt.xyz - n * dot(n, o.wt.xyz));
-	let b = normalize(cross(n, t)) * o.wt.w;
-	let fur_uv = main_uv_without_animation(o.uv);
-	let length_mask = textureSampleLevel(fur_length_mask_tex, base_samp, fur_uv, 0.0).r;
-	var fur_vector_ts = drawu.fur_vector_params.xyz + vec3<f32>(0.0, 0.0, 0.001);
-	if (drawu.fur_rim_params.w > 0.5) {
-		fur_vector_ts = lil_blend_normal_ts(fur_vector_ts, v.color.xyz);
-	}
-	if (drawu.fur_rim_params.z > 0.5) {
-		let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, base_samp, fur_uv, 0.0), drawu.fur_ext_params.x);
-		fur_vector_ts = lil_blend_normal_ts(fur_vector_ts, vector_tex);
-	}
-	var fur_vector_ws = normalize(t * fur_vector_ts.x + b * fur_vector_ts.y + n * fur_vector_ts.z) * drawu.fur_vector_params.w;
-	let randomize = clamp(drawu.fur_params.w, 0.0, 1.0);
-	if (randomize > 0.000001) {
-		let seed = vec3<u32>(
-			vertex_index * 3u,
-			vertex_index * 5u + 1u,
-			vertex_index * 7u + 2u,
-		) * vec3<u32>(1597334677u, 3812015801u, 2912667907u);
-		let random_dir = normalize(vec3<f32>(seed) * (2.0 / 4294967295.0) - vec3<f32>(1.0));
-		fur_vector_ws = fur_vector_ws + random_dir * drawu.fur_vector_params.w * randomize;
-	}
-	let fur_length = length(fur_vector_ws);
-	fur_vector_ws.y = fur_vector_ws.y - drawu.fur_params.z * fur_length;
-	let wp = vec4<f32>(o.wp + fur_vector_ws * shell * enabled * length_mask, 1.0);
-	o.wp = wp.xyz;
-	o.fur_alpha = length_mask;
-	o.fur_card_side = 0.0;
-	o.fur_uv0 = v.uv;
-	o.clip = frame.view_proj * wp;
-	return o;
-}
-
-fn csfc_fur_vs(v: CsfcFurVsIn, cutout_pre: bool) -> FurVsOut {
+fn compute_fur_cards_vs(v: ComputeFurCardsVsIn, cutout_pre: bool) -> FurVsOut {
 	var o: FurVsOut;
 	let local_position = select(v.position_layer.xyz, v.pre_position.xyz, cutout_pre);
 	let center_wp = (drawt.model * vec4<f32>(local_position, 1.0)).xyz;
@@ -448,9 +563,13 @@ fn csfc_fur_vs(v: CsfcFurVsIn, cutout_pre: bool) -> FurVsOut {
 	o.clip = frame.view_proj * wp;
 	o.wn = wn;
 	o.uv = v.uv;
+	o.uv1 = v.uv;
+	o.uv2 = v.uv;
+	o.uv3 = v.uv;
+	o.id_mask = vec4<f32>(1.0, 1.0, 0.0, 0.0);
 	o.wp = world_pos;
 	o.wt = vec4<f32>(1.0, 0.0, 0.0, 1.0);
-	o.fur_shell = clamp(v.position_layer.w, 0.0, 1.0);
+	o.fur_layer = clamp(v.position_layer.w, 0.0, 1.0);
 	o.fur_alpha = 1.0 + clamp(v.fur_alpha, 0.0, 1.0);
 	o.fur_card_side = select(0.0, select(-1.0, 1.0, side_width >= 0.0), abs(side_width) > 0.0000001);
 	o.fur_uv0 = v.uv;
@@ -458,13 +577,13 @@ fn csfc_fur_vs(v: CsfcFurVsIn, cutout_pre: bool) -> FurVsOut {
 }
 
 @vertex
-fn vs_csfc_fur(v: CsfcFurVsIn) -> FurVsOut {
-	return csfc_fur_vs(v, false);
+fn vs_compute_fur_cards(v: ComputeFurCardsVsIn) -> FurVsOut {
+	return compute_fur_cards_vs(v, false);
 }
 
 @vertex
-fn vs_csfc_fur_pre(v: CsfcFurVsIn) -> FurVsOut {
-	return csfc_fur_vs(v, true);
+fn vs_compute_fur_cards_pre(v: ComputeFurCardsVsIn) -> FurVsOut {
+	return compute_fur_cards_vs(v, true);
 }
 
 const DBG_SOLID_PRIM_COLOR: u32 = 2u;
@@ -553,32 +672,32 @@ fn apply_lil_alpha_mask(a: f32, uv: vec2<f32>) -> f32 {
 	return a;
 }
 
-fn fur_shell_alpha(uv: vec2<f32>, fur_uv0: vec2<f32>, shell: f32, length_mask: f32, card_side: f32, fur_cutout_pre: bool) -> f32 {
+fn fur_layer_alpha(uv: vec2<f32>, fur_uv0: vec2<f32>, layer: f32, length_mask: f32, card_side: f32, fur_cutout_pre: bool) -> f32 {
 	if (length_mask > 1.0) {
-		let csfc_alpha = clamp(length_mask - 1.0, 0.0, 1.0);
+		let compute_fur_cards_alpha = clamp(length_mask - 1.0, 0.0, 1.0);
 		let center_alpha = pow(1.0 - clamp(abs(card_side), 0.0, 1.0), 1.65);
 		let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;
-		let shell01 = clamp(shell, 0.0, 1.0);
+		let layer01 = clamp(layer, 0.0, 1.0);
 		let noise_uv = fur_uv0 * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;
 		let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;
 		let root_offset = drawu.fur_ext_params.z;
-		let fur_layer_shift = shell01 - shell01 * root_offset + root_offset;
+		let fur_layer_shift = layer01 - layer01 * root_offset + root_offset;
 		let fur_layer_abs = abs(fur_layer_shift);
 		let layer_alpha = select(
 			clamp(fur_noise_mask - fur_layer_shift * fur_layer_abs * fur_layer_abs, 0.0, 1.0),
 			clamp(fur_noise_mask - fur_layer_shift * fur_layer_abs * fur_layer_abs * fur_layer_abs + 0.25, 0.0, 1.0),
 			fur_cutout_pre,
 		);
-		return csfc_alpha * center_alpha * layer_alpha * fur_mask;
+		return compute_fur_cards_alpha * center_alpha * layer_alpha * fur_mask;
 	}
-	if (shell <= 0.0) {
+	if (layer <= 0.0) {
 		return 1.0;
 	}
 	let fur_mask = textureSample(fur_mask_tex, base_samp, uv).r;
 	let noise_uv = fur_uv0 * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;
 	let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;
 	let root_offset = drawu.fur_ext_params.z;
-	let fur_layer_shift = shell - shell * root_offset + root_offset;
+	let fur_layer_shift = layer - layer * root_offset + root_offset;
 	let fur_layer_abs = abs(fur_layer_shift);
 	let fur_alpha = select(
 		clamp(fur_noise_mask - fur_layer_shift * fur_layer_abs * fur_layer_abs, 0.0, 1.0),
@@ -588,18 +707,18 @@ fn fur_shell_alpha(uv: vec2<f32>, fur_uv0: vec2<f32>, shell: f32, length_mask: f
 	return fur_alpha * fur_mask * clamp(length_mask, 0.0, 1.0);
 }
 
-fn fur_shell_ao(shell: f32, fur_uv0: vec2<f32>, fur_cutout_pre: bool) -> f32 {
-	if (shell <= 0.0) {
+fn fur_layer_ao(layer: f32, fur_uv0: vec2<f32>, fur_cutout_pre: bool) -> f32 {
+	if (layer <= 0.0) {
 		return 1.0;
 	}
 	let fur_ao = clamp(drawu.fur_ext_params.y, 0.0, 1.0);
 	if (fur_cutout_pre) {
-		let cutout_ao = fur_ao * clamp(1.0 - fwidth(shell), 0.0, 1.0);
-		return shell * cutout_ao * 2.0 + 1.0 - cutout_ao;
+		let cutout_ao = fur_ao * clamp(1.0 - fwidth(layer), 0.0, 1.0);
+		return layer * cutout_ao * 2.0 + 1.0 - cutout_ao;
 	}
 	let noise_uv = fur_uv0 * max(drawu.fur_noise_params.xy, vec2<f32>(0.0001, 0.0001)) + drawu.fur_noise_params.zw;
 	let fur_noise_mask = textureSample(fur_noise_mask_tex, base_samp, noise_uv).r;
-	return clamp(1.0 - fur_noise_mask + fur_noise_mask * shell, 0.0, 1.0) * fur_ao * 1.25 + 1.0 - fur_ao;
+	return clamp(1.0 - fur_noise_mask + fur_noise_mask * layer, 0.0, 1.0) * fur_ao * 1.25 + 1.0 - fur_ao;
 }
 
 fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32, premultiply: bool) -> vec3<f32> {
@@ -607,6 +726,85 @@ fn premultiply_when_blending(rgb: vec3<f32>, out_a: f32, alpha_kind: f32, premul
 		return rgb * out_a;
 	}
 	return rgb;
+}
+
+fn lil_apply_distance_fade(rgb: vec3<f32>, out_a: f32, wp: vec3<f32>, n: vec3<f32>, v: vec3<f32>, front_facing: bool) -> vec4<f32> {
+	let fade_params = drawu.distance_fade;
+	if abs(fade_params.z) <= 0.000001 {
+		return vec4<f32>(rgb, out_a);
+	}
+	let denom = select(0.000001, fade_params.y - fade_params.x, abs(fade_params.y - fade_params.x) > 0.000001);
+	let depth = length(frame.camera_pos.xyz - wp);
+	var dist_fade = clamp((depth - fade_params.x) / denom, 0.0, 1.0);
+	if abs(fade_params.w) <= 0.000001 {
+		dist_fade = dist_fade * fade_params.z;
+	} else {
+		let facing = select(0.0, 1.0, front_facing);
+		dist_fade = select(dist_fade * fade_params.z, fade_params.z, facing < (fade_params.w - 1.0));
+	}
+	var fade_color = drawu.distance_fade_color.rgb;
+	if drawu.distance_fade_rim_color.a > 0.0 {
+		let fade_rim = pow(clamp(1.0 - abs(dot(normalize(n), normalize(v))), 0.0, 1.0), max(drawu.distance_fade_params.y, 0.00001));
+		fade_color = mix(fade_color, drawu.distance_fade_rim_color.rgb * rgb, fade_rim * drawu.distance_fade_rim_color.a);
+	}
+	if drawu.distance_fade_color.a < 0.0 {
+		return vec4<f32>(mix(rgb, fade_color, dist_fade), out_a - dist_fade);
+	}
+	return vec4<f32>(
+		mix(rgb, fade_color * drawu.distance_fade_color.a, dist_fade),
+		mix(out_a, out_a * drawu.distance_fade_color.a, dist_fade),
+	);
+}
+
+fn lil_apply_dissolve(alpha: f32, uv: vec2<f32>, wp: vec3<f32>, dissolve_active: f32, invert: f32) -> vec2<f32> {
+	let params = vec4<f32>(round(drawu.dissolve_params.x), round(drawu.dissolve_params.y), drawu.dissolve_params.z, max(drawu.dissolve_params.w, 0.000001));
+	if params.x <= 0.0 || dissolve_active <= 0.5 {
+		return vec2<f32>(alpha, 0.0);
+	}
+	let dissolve_mask_uv = uv * drawu.dissolve_mask_uv_offset_scale.zw + drawu.dissolve_mask_uv_offset_scale.xy;
+	let dissolve_mask_val = textureSample(dissolve_mask_tex, base_samp, dissolve_mask_uv).r;
+	let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.dissolve_noise_uv_offset_scale, drawu.dissolve_noise_uv_anim_params);
+	let dissolve_noise = (textureSample(dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.dissolve_ext.x * drawu.dissolve_ext.z;
+	let has_noise = drawu.dissolve_ext.z > 0.5;
+	var dissolve_mask = select(1.0, dissolve_mask_val, params.x == 1.0 && drawu.dissolve_ext.y > 0.5);
+	var dissolve_alpha = 0.0;
+	if params.x == 1.0 {
+		let value = dissolve_mask + dissolve_noise;
+		dissolve_alpha = 1.0 - clamp(abs(value - params.z) / params.w, 0.0, 1.0);
+		dissolve_mask = select(0.0, 1.0, value > params.z);
+	} else if params.x == 2.0 {
+		let directional = select(lil_rotate_uv(uv, drawu.dissolve_pos.w).x, dot(uv, normalize_or2(drawu.dissolve_pos.xy, vec2<f32>(1.0, 0.0))) + dissolve_noise, has_noise);
+		let shape_value = select(distance(uv, drawu.dissolve_pos.xy) + dissolve_noise, directional, params.y == 1.0);
+		dissolve_mask = dissolve_mask * select(0.0, 1.0, shape_value > params.z);
+		dissolve_alpha = 1.0 - clamp(abs(shape_value - params.z) / params.w, 0.0, 1.0);
+	} else if params.x == 3.0 {
+		let shape_value = select(distance(wp, drawu.dissolve_pos.xyz), dot(wp, normalize_or(drawu.dissolve_pos.xyz, vec3<f32>(1.0, 0.0, 0.0))), params.y == 1.0) + dissolve_noise;
+		dissolve_mask = dissolve_mask * select(0.0, 1.0, shape_value > params.z);
+		dissolve_alpha = 1.0 - clamp(abs(shape_value - params.z) / params.w, 0.0, 1.0);
+	}
+	let dissolve_alpha_mask = select(dissolve_mask, 1.0 - dissolve_mask, invert > 0.5);
+	let edge_alpha = select(dissolve_alpha, 1.0 - dissolve_alpha, invert > 0.5);
+	return vec2<f32>(alpha * dissolve_alpha_mask, edge_alpha);
+}
+
+fn lil_udim_discard(i: VsOut) -> bool {
+	if drawu.udim_discard_params.x <= 0.5 {
+		return false;
+	}
+	let udim = lil_select_uv(drawu.udim_discard_params.z, i.uv, i.uv1, i.uv2, i.uv3);
+	let xmask = vec4<f32>(
+		select(0.0, 1.0, udim.x >= 0.0 && udim.x < 1.0),
+		select(0.0, 1.0, udim.x >= 1.0 && udim.x < 2.0),
+		select(0.0, 1.0, udim.x >= 2.0 && udim.x < 3.0),
+		select(0.0, 1.0, udim.x >= 3.0 && udim.x < 4.0),
+	);
+	var discarded = 0.0;
+	discarded = discarded + select(0.0, dot(drawu.udim_discard_row0, xmask), udim.y >= 0.0 && udim.y < 1.0);
+	discarded = discarded + select(0.0, dot(drawu.udim_discard_row1, xmask), udim.y >= 1.0 && udim.y < 2.0);
+	discarded = discarded + select(0.0, dot(drawu.udim_discard_row2, xmask), udim.y >= 2.0 && udim.y < 3.0);
+	discarded = discarded + select(0.0, dot(drawu.udim_discard_row3, xmask), udim.y >= 3.0 && udim.y < 4.0);
+	let in_grid = udim.y >= 0.0 && udim.y < 4.0 && udim.x >= 0.0 && udim.x < 4.0;
+	return in_grid && discarded > 0.001;
 }
 
 fn discard_invisible_transparent_zwrite(a: f32, alpha_kind: f32, transparent_zwrite: f32) {
@@ -795,42 +993,141 @@ fn lil_shadow_apply_post_ao(value: f32, mask: f32, post_ao: bool) -> f32 {
 	return select(value, value * mask, post_ao);
 }
 
-fn lil_glitter_hash(cell: vec2<f32>) -> vec3<f32> {
-	let x = dot(cell, vec2<f32>(127.1, 311.7));
-	let y = dot(cell, vec2<f32>(269.5, 183.3));
-	let z = dot(cell, vec2<f32>(419.2, 371.9));
-	return fract(sin(vec3<f32>(x, y, z)) * vec3<f32>(43758.5453, 22578.1459, 19642.3490));
+struct GlitterVoronoi {
+	near: vec4<f32>,
+	nearoffset: vec2<f32>,
 }
 
-fn lil_glitter_voronoi(pos: vec2<f32>, scale_randomize: f32) -> vec4<f32> {
-	let base_cell = floor(pos);
-	let frac_pos = fract(pos);
-	var nearest_hash = vec3<f32>(0.0, 0.0, 0.0);
-	var nearest_dist = 8.0;
-	for (var y = -1; y <= 1; y = y + 1) {
-		for (var x = -1; x <= 1; x = x + 1) {
-			let offset = vec2<f32>(f32(x), f32(y));
-			let rand = lil_glitter_hash(base_cell + offset);
-			let cell_scale = mix(1.0, 0.5 + rand.z, clamp(scale_randomize, 0.0, 1.0));
-			let to_cell = offset + rand.xy * cell_scale - frac_pos;
-			let dist = dot(to_cell, to_cell);
-			if (dist < nearest_dist) {
-				nearest_dist = dist;
-				nearest_hash = rand;
-			}
-		}
+fn lil_glitter_hash(cell: vec2<f32>) -> vec3<f32> {
+	let h = dot(cell, vec2<f32>(12.9898, 78.233));
+	return fract(sin(vec3<f32>(h, h, h)) * vec3<f32>(46203.4357, 21091.5327, 35771.1966));
+}
+
+fn lil_nsq_distance(a: vec2<f32>, b: vec2<f32>) -> f32 {
+	let d = a - b;
+	return dot(d, d);
+}
+
+fn lil_glitter_voronoi(pos: vec2<f32>, scale_randomize: f32) -> GlitterVoronoi {
+	let q = floor(pos);
+	let noise0 = lil_glitter_hash(q);
+	let noise1 = lil_glitter_hash(q + vec2<f32>(1.0, 0.0));
+	let noise2 = lil_glitter_hash(q + vec2<f32>(0.0, 1.0));
+	let noise3 = lil_glitter_hash(q + vec2<f32>(1.0, 1.0));
+	let fracpos = fract(pos).xyxy + vec4<f32>(0.5, 0.5, -0.5, -0.5);
+	var dist4 = vec4<f32>(
+		lil_nsq_distance(fracpos.xy, noise0.xy),
+		lil_nsq_distance(fracpos.zy, noise1.xy),
+		lil_nsq_distance(fracpos.xw, noise2.xy),
+		lil_nsq_distance(fracpos.zw, noise3.xy),
+	);
+	dist4 = mix(dist4, dist4 / max(vec4<f32>(noise0.z, noise1.z, noise2.z, noise3.z), vec4<f32>(0.001)), clamp(scale_randomize, 0.0, 1.0));
+
+	let nearoffset0 = select(vec3<f32>(1.0, 0.0, dist4.y), vec3<f32>(0.0, 0.0, dist4.x), dist4.x < dist4.y);
+	let nearoffset1 = select(vec3<f32>(1.0, 1.0, dist4.w), vec3<f32>(0.0, 1.0, dist4.z), dist4.z < dist4.w);
+	let nearoffset = select(nearoffset1.xy, nearoffset0.xy, nearoffset0.z < nearoffset1.z);
+	let near0 = select(vec4<f32>(noise1, dist4.y), vec4<f32>(noise0, dist4.x), dist4.x < dist4.y);
+	let near1 = select(vec4<f32>(noise3, dist4.w), vec4<f32>(noise2, dist4.z), dist4.z < dist4.w);
+	return GlitterVoronoi(select(near1, near0, near0.w < near1.w), nearoffset);
+}
+
+fn lil_select_uv(mode: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>) -> vec2<f32> {
+	if (mode < 0.5) {
+		return uv0;
 	}
-	return vec4<f32>(nearest_hash, sqrt(nearest_dist));
+	if (mode < 1.5) {
+		return uv1;
+	}
+	if (mode < 2.5) {
+		return uv2;
+	}
+	return uv3;
+}
+
+fn lil_select_layer_uv(mode: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv_mat: vec2<f32>) -> vec2<f32> {
+	if (mode < 3.5) {
+		return lil_select_uv(mode, uv0, uv1, uv2, uv3);
+	}
+	return uv_mat;
+}
+
+fn lil_select_emission_uv(mode: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv_rim: vec2<f32>) -> vec2<f32> {
+	if (mode < 3.5) {
+		return lil_select_uv(mode, uv0, uv1, uv2, uv3);
+	}
+	return uv_rim;
+}
+
+fn lil_is_in_0_to_1_scalar(value_in: f32, nv: f32) -> f32 {
+	let value = 0.5 - abs(value_in - 0.5);
+	return clamp(value / clamp(fwidth(value), 0.0001, max(nv, 0.0001)), 0.0, 1.0);
+}
+
+fn lil_is_in_0_to_1(uv: vec2<f32>, nv: f32) -> f32 {
+	return lil_is_in_0_to_1_scalar(uv.x, nv) * lil_is_in_0_to_1_scalar(uv.y, nv);
+}
+
+fn lil_calc_atlas_animation_uv(uv: vec2<f32>, decal_animation: vec4<f32>, decal_sub_param: vec4<f32>) -> vec2<f32> {
+	if decal_animation.x <= 0.0 || decal_animation.y <= 0.0 || decal_animation.z <= 0.0 {
+		return uv;
+	}
+	var out_uv = mix(vec2<f32>(uv.x, 1.0 - uv.y), vec2<f32>(0.5, 0.5), clamp(decal_sub_param.z, 0.0, 1.0));
+	let anim_time = select(decal_animation.z, floor(frame.time_params.x * decal_animation.w) % decal_animation.z, decal_animation.w != 0.0);
+	let offset = vec2<f32>(anim_time % decal_animation.x, floor(anim_time / decal_animation.x));
+	out_uv = (out_uv + offset) * decal_sub_param.xy / max(decal_animation.xy, vec2<f32>(1.0, 1.0));
+	out_uv.y = 1.0 - out_uv.y;
+	return out_uv;
+}
+
+fn lil_calc_decal_uv(uv: vec2<f32>, uv_st: vec4<f32>, angle: f32, flags: vec4<f32>, transform: vec4<f32>, is_right_hand: bool) -> vec2<f32> {
+	var out_uv = uv;
+	if flags.w > 0.5 {
+		out_uv.x = abs(out_uv.x - 0.5) + 0.5;
+	}
+	out_uv = out_uv * uv_st.zw + uv_st.xy;
+	if transform.z > 0.5 && uv.x < 0.5 {
+		out_uv.x = 1.0 - out_uv.x;
+	}
+	if transform.y > 0.5 && is_right_hand {
+		out_uv.x = 1.0 - out_uv.x;
+	}
+	if flags.y > 0.5 && is_right_hand {
+		out_uv.x = -1.0;
+	}
+	if flags.z > 0.5 && !is_right_hand {
+		out_uv.x = -1.0;
+	}
+	out_uv = (out_uv - uv_st.xy) / max(abs(uv_st.zw), vec2<f32>(0.0001, 0.0001));
+	out_uv = lil_rotate_uv(out_uv, angle);
+	return out_uv * uv_st.zw + uv_st.xy;
+}
+
+struct LayerSubTexUv {
+	sample_uv: vec2<f32>,
+	alpha_mask: f32,
+}
+
+fn lil_layer_sub_tex_uv(uv: vec2<f32>, uv_st: vec4<f32>, flags: vec4<f32>, transform: vec4<f32>, decal_animation: vec4<f32>, decal_sub_param: vec4<f32>, nv: f32, is_right_hand: bool) -> LayerSubTexUv {
+	if flags.x <= 0.5 {
+		return LayerSubTexUv(uv * uv_st.zw + uv_st.xy, 1.0);
+	}
+	let decal_uv = lil_calc_decal_uv(uv, uv_st, transform.x, flags, transform, is_right_hand);
+	let sample_uv = lil_calc_atlas_animation_uv(decal_uv, decal_animation, decal_sub_param);
+	return LayerSubTexUv(sample_uv, lil_is_in_0_to_1(decal_uv, clamp(nv - 0.05, 0.0, 1.0)));
 }
 
 fn lil_calc_glitter(uv: vec2<f32>, normal: vec3<f32>, view_dir: vec3<f32>, camera_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
 	let scale = max(abs(drawu.glitter_params1.xy), vec2<f32>(0.0001, 0.0001));
 	let pos_raw = uv * scale;
-	let pixel_width = max(fwidth(pos_raw), vec2<f32>(1.0, 1.0));
-	let cell_factor = max(floor(pixel_width), vec2<f32>(1.0, 1.0));
-	let pos = pos_raw / cell_factor + scale * cell_factor;
-	let nearest = lil_glitter_voronoi(pos, drawu.glitter_ext2.y);
-	let time_seed = frame.time_params.x * drawu.glitter_params2.x;
+	let dd = fwidth(pos_raw);
+	let random_cell = floor(pos_raw / max(floor(dd + vec2<f32>(3.0, 3.0)), vec2<f32>(1.0, 1.0)));
+	let factor = fract(sin(dot(random_cell, vec2<f32>(12.9898, 78.233))) * 46203.4357) + 0.5;
+	let factor2 = floor(dd + vec2<f32>(factor * 0.5, factor * 0.5));
+	let pos = pos_raw / max(vec2<f32>(1.0, 1.0), factor2) + scale * factor2;
+	let voronoi = lil_glitter_voronoi(pos, drawu.glitter_ext2.y);
+	let nearest = voronoi.near;
+	let unity_time_x = frame.time_params.x * 0.05;
+	let time_seed = unity_time_x * drawu.glitter_params2.x;
 	var glitter_normal = abs(fract(nearest.xyz * 14.274 + vec3<f32>(time_seed)) * 2.0 - vec3<f32>(1.0));
 	glitter_normal = normalize_or(glitter_normal * 2.0 - vec3<f32>(1.0), normal);
 	let sensitivity = max(drawu.glitter_ext.x, 0.0001);
@@ -844,7 +1141,26 @@ fn lil_calc_glitter(uv: vec2<f32>, normal: vec3<f32>, view_dir: vec3<f32>, camer
 	let half_dir = normalize_or(view_dir + light_dir * drawu.glitter_params2.z, normal);
 	let nh = clamp(dot(normal, half_dir), 0.0, 1.0);
 	glitter = glitter * clamp(nh * drawu.glitter_params2.y + 1.0 - drawu.glitter_params2.y, 0.0, 1.0);
-	return glitter - glitter * fract(nearest.xyz * 278.436) * clamp(drawu.glitter_params2.w, 0.0, 1.0);
+	var glitter_color = glitter - glitter * fract(nearest.xyz * 278.436) * clamp(drawu.glitter_params2.w, 0.0, 1.0);
+	if (drawu.glitter_ext3.y > 0.5) {
+		var mask_uv = pos - floor(pos) - voronoi.nearoffset + vec2<f32>(0.5, 0.5) - nearest.xy;
+		mask_uv = mask_uv / max(drawu.glitter_params1.z, 0.0001) * drawu.glitter_shape_uv_offset_scale.zw + drawu.glitter_shape_uv_offset_scale.xy;
+		if (drawu.glitter_ext3.z > 0.5) {
+			let angle = nearest.z * 785.238;
+			let si = sin(angle);
+			let co = cos(angle);
+			mask_uv = vec2<f32>(mask_uv.x * co - mask_uv.y * si, mask_uv.x * si + mask_uv.y * co);
+		}
+		let random_scale = mix(1.0, inverseSqrt(max(nearest.z, 0.001)), clamp(drawu.glitter_ext2.y, 0.0, 1.0));
+		mask_uv = mask_uv * random_scale + vec2<f32>(0.5, 0.5);
+		let in_bounds = mask_uv.x == clamp(mask_uv.x, 0.0, 1.0) && mask_uv.y == clamp(mask_uv.y, 0.0, 1.0);
+		let atlas = max(drawu.glitter_atlas.xy, vec2<f32>(1.0, 1.0));
+		mask_uv = (mask_uv + floor(nearest.xy * atlas)) / atlas;
+		let mipfactor = 0.125 / max(drawu.glitter_params1.z, 0.0001) * atlas * drawu.glitter_shape_uv_offset_scale.zw * random_scale;
+		let shape_tex = textureSampleGrad(glitter_shape_tex, base_samp, mask_uv, abs(dpdx(pos)) * mipfactor.x, abs(dpdy(pos)) * mipfactor.y);
+		glitter_color = glitter_color * shape_tex.rgb * select(0.0, shape_tex.a, in_bounds);
+	}
+	return glitter_color;
 }
 
 fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
@@ -919,27 +1235,122 @@ fn apply_lil_main_layer_alpha(base_a: f32, layer_a: f32, alpha_mode: f32) -> f32
 	return clamp(base_a - layer_a, 0.0, 1.0);
 }
 
-fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
+fn apply_lil_layer_distance_fade(layer_a: f32, fade: vec4<f32>, depth: f32) -> f32 {
+	if abs(fade.z) <= 0.000001 {
+		return layer_a;
+	}
+	let denom = select(0.000001, fade.y - fade.x, abs(fade.y - fade.x) > 0.000001);
+	let fade_alpha = clamp((depth - fade.x) / denom, 0.0, 1.0);
+	return mix(layer_a, layer_a * fade_alpha, clamp(fade.z, 0.0, 1.0));
+}
+
+fn apply_lil_layer_cull(layer_a: f32, cull: f32, front_facing: bool) -> f32 {
+	if (cull > 0.5 && cull < 1.5 && front_facing) || (cull > 1.5 && !front_facing) {
+		return 0.0;
+	}
+	return layer_a;
+}
+
+struct MainLayerResult {
+	col: vec4<f32>,
+	dissolve_emission: vec3<f32>,
+	second_unlit: vec4<f32>,
+	third_unlit: vec4<f32>,
+}
+
+fn lil_apply_layer_dissolve(alpha: f32, uv: vec2<f32>, wp: vec3<f32>, params_in: vec4<f32>, pos: vec4<f32>, mask_val_in: f32, mask_enabled: f32, noise: f32, has_noise: bool) -> vec2<f32> {
+	let params = vec4<f32>(round(params_in.x), round(params_in.y), params_in.z, max(params_in.w, 0.000001));
+	if params.x <= 0.0 {
+		return vec2<f32>(alpha, 0.0);
+	}
+	var dissolve_mask = select(1.0, mask_val_in, params.x == 1.0 && mask_enabled > 0.5);
+	var dissolve_alpha = 0.0;
+	if params.x == 1.0 {
+		let value = dissolve_mask + noise;
+		dissolve_alpha = 1.0 - clamp(abs(value - params.z) / params.w, 0.0, 1.0);
+		dissolve_mask = select(0.0, 1.0, value > params.z);
+	} else if params.x == 2.0 {
+		let directional = select(lil_rotate_uv(uv, pos.w).x, dot(uv, normalize_or2(pos.xy, vec2<f32>(1.0, 0.0))) + noise, has_noise);
+		let shape_value = select(distance(uv, pos.xy) + noise, directional, params.y == 1.0);
+		dissolve_mask = dissolve_mask * select(0.0, 1.0, shape_value > params.z);
+		dissolve_alpha = 1.0 - clamp(abs(shape_value - params.z) / params.w, 0.0, 1.0);
+	} else if params.x == 3.0 {
+		let shape_value = select(distance(wp, pos.xyz), dot(wp, normalize_or(pos.xyz, vec3<f32>(1.0, 0.0, 0.0))), params.y == 1.0) + noise;
+		dissolve_mask = dissolve_mask * select(0.0, 1.0, shape_value > params.z);
+		dissolve_alpha = 1.0 - clamp(abs(shape_value - params.z) / params.w, 0.0, 1.0);
+	}
+	return vec2<f32>(alpha * dissolve_mask, dissolve_alpha);
+}
+
+fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv_mat: vec2<f32>, wp: vec3<f32>, nv: f32, is_right_hand: bool, front_facing: bool, is_liltoon: bool) -> MainLayerResult {
 	var out_col = base;
+	var dissolve_emission = vec3<f32>(0.0);
+	var second_unlit = vec4<f32>(0.0);
+	var third_unlit = vec4<f32>(0.0);
+	let depth = length(frame.camera_pos.xyz - wp);
 	if (drawu.main2nd_params.x > 0.5) {
-		let layer_uv = uv * drawu.main2nd_uv_offset_scale.zw + drawu.main2nd_uv_offset_scale.xy;
+		let layer_uv_raw = lil_select_layer_uv(drawu.main2nd_ext.x, uv, uv1, uv2, uv3, uv_mat);
+		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main2nd_uv_offset_scale, drawu.main2nd_decal_flags, drawu.main2nd_decal_transform, drawu.main2nd_decal_animation, drawu.main2nd_decal_sub_param, nv, is_right_hand);
 		let mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw + drawu.main2nd_blend_mask_uv_offset_scale.xy;
-		let layer = textureSample(main2nd_tex, base_samp, layer_uv) * drawu.main2nd_color;
-		let layer_alpha = layer.a * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;
+		let layer = textureSample(main2nd_tex, base_samp, layer_uv.sample_uv) * drawu.main2nd_color;
+		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;
+		if (is_liltoon) {
+			let dissolve_mask_uv = uv * drawu.main2nd_dissolve_mask_uv_offset_scale.zw + drawu.main2nd_dissolve_mask_uv_offset_scale.xy;
+			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main2nd_dissolve_noise_uv_offset_scale, drawu.main2nd_dissolve_noise_uv_anim_params);
+			let dissolve_noise = (textureSample(main2nd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.main2nd_dissolve_ext.x * drawu.main2nd_dissolve_ext.z;
+			let dissolve_result = lil_apply_layer_dissolve(
+				layer_alpha,
+				uv,
+				wp,
+				drawu.main2nd_dissolve_params,
+				drawu.main2nd_dissolve_pos,
+				textureSample(main2nd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r,
+				drawu.main2nd_dissolve_ext.y,
+				dissolve_noise,
+				drawu.main2nd_dissolve_ext.z > 0.5
+			);
+			layer_alpha = dissolve_result.x;
+			dissolve_emission = dissolve_emission + drawu.main2nd_dissolve_color.rgb * dissolve_result.y;
+		}
+		layer_alpha = apply_lil_layer_distance_fade(layer_alpha, drawu.main2nd_distance_fade, depth);
+		layer_alpha = apply_lil_layer_cull(layer_alpha, drawu.main2nd_ext.y, front_facing);
+		second_unlit = vec4<f32>(layer.rgb, layer_alpha * (1.0 - clamp(drawu.main2nd_params.y, 0.0, 1.0)));
 		let out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main2nd_params.z);
 		let out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main2nd_params.y, drawu.main2nd_params.w);
 		out_col = vec4<f32>(out_rgb, out_alpha);
 	}
 	if (drawu.main3rd_params.x > 0.5) {
-		let layer_uv = uv * drawu.main3rd_uv_offset_scale.zw + drawu.main3rd_uv_offset_scale.xy;
+		let layer_uv_raw = lil_select_layer_uv(drawu.main3rd_ext.x, uv, uv1, uv2, uv3, uv_mat);
+		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main3rd_uv_offset_scale, drawu.main3rd_decal_flags, drawu.main3rd_decal_transform, drawu.main3rd_decal_animation, drawu.main3rd_decal_sub_param, nv, is_right_hand);
 		let mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw + drawu.main3rd_blend_mask_uv_offset_scale.xy;
-		let layer = textureSample(main3rd_tex, base_samp, layer_uv) * drawu.main3rd_color;
-		let layer_alpha = layer.a * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;
+		let layer = textureSample(main3rd_tex, base_samp, layer_uv.sample_uv) * drawu.main3rd_color;
+		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;
+		if (is_liltoon) {
+			let dissolve_mask_uv = uv * drawu.main3rd_dissolve_mask_uv_offset_scale.zw + drawu.main3rd_dissolve_mask_uv_offset_scale.xy;
+			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main3rd_dissolve_noise_uv_offset_scale, drawu.main3rd_dissolve_noise_uv_anim_params);
+			let dissolve_noise = (textureSample(main3rd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.main3rd_dissolve_ext.x * drawu.main3rd_dissolve_ext.z;
+			let dissolve_result = lil_apply_layer_dissolve(
+				layer_alpha,
+				uv,
+				wp,
+				drawu.main3rd_dissolve_params,
+				drawu.main3rd_dissolve_pos,
+				textureSample(main3rd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r,
+				drawu.main3rd_dissolve_ext.y,
+				dissolve_noise,
+				drawu.main3rd_dissolve_ext.z > 0.5
+			);
+			layer_alpha = dissolve_result.x;
+			dissolve_emission = dissolve_emission + drawu.main3rd_dissolve_color.rgb * dissolve_result.y;
+		}
+		layer_alpha = apply_lil_layer_distance_fade(layer_alpha, drawu.main3rd_distance_fade, depth);
+		layer_alpha = apply_lil_layer_cull(layer_alpha, drawu.main3rd_ext.y, front_facing);
+		third_unlit = vec4<f32>(layer.rgb, layer_alpha * (1.0 - clamp(drawu.main3rd_params.y, 0.0, 1.0)));
 		let out_alpha = apply_lil_main_layer_alpha(out_col.a, layer_alpha, drawu.main3rd_params.z);
 		let out_rgb = lil_blend_color(out_col.rgb, layer.rgb, layer_alpha * drawu.main3rd_params.y, drawu.main3rd_params.w);
 		out_col = vec4<f32>(out_rgb, out_alpha);
 	}
-	return out_col;
+	return MainLayerResult(out_col, dissolve_emission, second_unlit, third_unlit);
 }
 
 fn animated_uv(uv: vec2<f32>) -> vec2<f32> {
@@ -989,7 +1400,54 @@ fn lil_parallax_offset(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> vec
 	return view_ts.xy / (view_ts.z + 0.5);
 }
 
-fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f32) -> vec3<f32> {
+fn lil_parallax_view_ts(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
+	let t = normalize(tangent_ortho);
+	let b = normalize(cross(n, t)) * tangent_in.w;
+	return vec3<f32>(dot(v, t), dot(v, b), max(dot(v, n), 0.0001));
+}
+
+fn lil_apply_parallax(uv: vec2<f32>, n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>, is_liltoon: bool) -> vec2<f32> {
+	if (!is_liltoon || drawu.parallax_params.x <= 0.5) {
+		return uv;
+	}
+	let scale = drawu.parallax_params.z;
+	if (abs(scale) <= 0.000001) {
+		return uv;
+	}
+	let view_ts = lil_parallax_view_ts(n, tangent_in, v);
+	let parallax_offset = view_ts.xy / (view_ts.z + 0.5);
+	let parallax_map_uv = uv * drawu.parallax_uv_offset_scale.zw + drawu.parallax_uv_offset_scale.xy;
+	if (drawu.parallax_params.y <= 0.5) {
+		let height = (textureSampleLevel(parallax_tex, base_samp, parallax_map_uv, 0.0).r - drawu.parallax_params.w) * scale;
+		return uv + height * parallax_offset;
+	}
+
+	var ray_pos = vec3<f32>(parallax_map_uv, 1.0) + (1.0 - drawu.parallax_params.w) * scale * view_ts;
+	let ray_step_unscaled = -view_ts;
+	var ray_step = vec3<f32>(ray_step_unscaled.xy * drawu.parallax_uv_offset_scale.zw, ray_step_unscaled.z);
+	let step_count = min(max(u32(abs(scale) * 400.0), 1u), 64u);
+	ray_step = ray_step / vec3<f32>(f32(step_count), f32(step_count), max(abs(scale) * f32(step_count), 0.0001));
+	var prev_height = 0.0;
+	var height = 0.0;
+	for (var step = 0u; step < step_count; step = step + 1u) {
+		prev_height = height;
+		ray_pos = ray_pos + ray_step;
+		height = textureSampleLevel(parallax_tex, base_samp, ray_pos.xy, 0.0).r;
+		if (height >= ray_pos.z) {
+			break;
+		}
+	}
+	let prev_pos = ray_pos.xy - ray_step.xy;
+	let next_delta = height - ray_pos.z;
+	let prev_delta = prev_height - ray_pos.z + ray_step.z;
+	let denom = next_delta - prev_delta;
+	let weight = select(clamp(next_delta / denom, 0.0, 1.0), 0.0, abs(denom) <= 0.000001);
+	let pom_uv = mix(ray_pos.xy, prev_pos, weight);
+	return uv + (pom_uv - parallax_map_uv);
+}
+
+fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, scale: f32) -> vec3<f32> {
 	let n = normalize(n_in);
 	if (abs(scale) < 0.000001) {
 		return n;
@@ -1000,7 +1458,8 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, scale: f
 	tn.x = tn.x * scale;
 	tn.y = tn.y * scale;
 	if (drawu.normal2nd_params.x > 0.5) {
-		let normal2nd_uv = uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
+		let normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);
+		let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
 		let packed2 = textureSample(normal2nd_tex, normal_samp, normal2nd_uv).xyz;
 		var tn2 = packed2 * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
 		tn2.x = tn2.x * drawu.normal2nd_params.y;
@@ -1085,7 +1544,8 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
-	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
+	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, uv, i.wp, 1.0, false, front_facing, false);
+	let main_col = main_layers.col;
 	let a = apply_lil_alpha_mask(main_col.a, uv);
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
@@ -1095,7 +1555,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u);
 	let l = normalize(frame.light_dir.xyz);
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u);
-	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
+	let n = face_normal(normal_mapped(i.wn, i.wt, i.uv, i.uv1, i.uv2, i.uv3, normal_scale), front_facing, dbg);
 	let ndl = max(dot(n, l), 0.0);
 	let ambient = frame.ambient_color.rgb * (frame.ambient_color.w * 0.57);
 	let direct = lil_direct_light_color() * (0.8 * ndl);
@@ -1110,7 +1570,8 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
-	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
+	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, uv, i.wp, 1.0, false, front_facing, false);
+	let main_col = main_layers.col;
 	let a = apply_lil_alpha_mask(main_col.a, uv);
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
@@ -1121,7 +1582,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	return vec4<f32>(base, out_a);
 }
 
-fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fur_shell: f32, fur_alpha_in: f32, fur_card_side: f32, fur_cutout_pre: bool, fur_uv0: vec2<f32>) -> vec4<f32> {
+fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fur_layer: f32, fur_alpha_in: f32, fur_card_side: f32, fur_cutout_pre: bool, fur_uv0: vec2<f32>) -> vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
 	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
 	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u;
@@ -1132,18 +1593,33 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	} else {
 		discard_by_cull_mode(front_facing, dbg);
 	}
-	let uv = animated_uv(i.uv);
+	if is_liltoon && lil_udim_discard(i) {
+		discard;
+	}
+	let v = normalize(frame.camera_pos.xyz - i.wp);
+	let geometry_n_faced_pre = face_normal(normalize(i.wn), front_facing, dbg);
+	let uv = lil_apply_parallax(animated_uv(i.uv), geometry_n_faced_pre, i.wt, v, is_liltoon);
+	let layer_uv_mat = toon_matcap_uv(geometry_n_faced_pre, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
+	let layer_nv = clamp(dot(geometry_n_faced_pre, v), 0.0, 1.0);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
-	let main_col = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv);
-	let a = apply_lil_alpha_mask(main_col.a, uv);
-	let fur_alpha = fur_shell_alpha(uv, fur_uv0, fur_shell, fur_alpha_in, fur_card_side, fur_cutout_pre);
-	if (fur_shell > 0.0 && fur_alpha <= 0.015) {
+	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, is_liltoon);
+	let main_col = main_layers.col;
+	var a = apply_lil_alpha_mask(main_col.a, uv);
+	if is_liltoon {
+		a = a * i.id_mask.x;
+	}
+	let dissolve_result = lil_apply_dissolve(a, uv, i.wp, i.id_mask.y, i.id_mask.z);
+	if is_liltoon {
+		a = dissolve_result.x;
+	}
+	let fur_alpha = fur_layer_alpha(uv, fur_uv0, fur_layer, fur_alpha_in, fur_card_side, fur_cutout_pre);
+	if (fur_layer > 0.0 && fur_alpha <= 0.015) {
 		discard;
 	}
 	let alpha_kind = drawu.params.y;
 	let cutoff = drawu.params.z;
-	let is_fur_pass = fur_shell > 0.0;
+	let is_fur_pass = fur_layer > 0.0;
 	if (is_fur_pass && (alpha_kind > 0.5 && alpha_kind < 1.5 || fur_cutout_pre)) {
 		if (a * fur_alpha <= 0.4) {
 			discard;
@@ -1168,8 +1644,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	} else if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
 		out_a = liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) * fur_alpha;
 	}
-	let compute_fur = fur_shell > 0.0 && fur_alpha_in > 1.0;
-	if (fur_shell > 0.0) {
+	let compute_fur = fur_layer > 0.0 && fur_alpha_in > 1.0;
+	if (fur_layer > 0.0) {
 		if (fur_cutout_pre || alpha_kind > 0.5 && alpha_kind < 1.5) {
 			if (out_a <= 0.0) {
 				discard;
@@ -1180,7 +1656,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			}
 		}
 	}
-	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u) * fur_shell_ao(fur_shell, fur_uv0, fur_cutout_pre);
+	let base = select(main_col.rgb, drawu.base_color.rgb, (dbg & DBG_SOLID_PRIM_COLOR) != 0u) * fur_layer_ao(fur_layer, fur_uv0, fur_cutout_pre);
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
@@ -1188,9 +1664,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u || is_fur_pass);
 	let geometry_n_faced = face_normal(normalize(i.wn), front_facing, dbg);
-	let n_faced = face_normal(normal_mapped(i.wn, i.wt, i.uv, normal_scale), front_facing, dbg);
+	let n_faced = face_normal(normal_mapped(i.wn, i.wt, uv, i.uv1, i.uv2, i.uv3, normal_scale), front_facing, dbg);
 	let l = normalize(frame.light_dir.xyz);
-	let v = normalize(frame.camera_pos.xyz - i.wp);
 	let gem_backface_normal = is_liltoon_gem && !front_facing;
 	let lil_geometry_n_faced = lil_flip_backface_normal(geometry_n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
 	let lil_n_faced = lil_flip_backface_normal(n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
@@ -1301,6 +1776,14 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let indirect_light = mix(shade_term, base, gi_equalization) * frame.ambient_color.rgb * frame.ambient_color.w;
 		lit = min(direct_color + indirect_light, base) * authored_occlusion(uv, dbg);
 	}
+	if (is_liltoon && !is_liltoon_gem) {
+		if drawu.main2nd_params.x > 0.5 {
+			lit = lil_blend_color(lit, main_layers.second_unlit.rgb, main_layers.second_unlit.a, drawu.main2nd_params.w);
+		}
+		if drawu.main3rd_params.x > 0.5 {
+			lit = lil_blend_color(lit, main_layers.third_unlit.rgb, main_layers.third_unlit.a, drawu.main3rd_params.w);
+		}
+	}
 	if (is_liltoon_gem) {
 		lit = base * clamp(abs(dot(n, v)), 0.0, 1.0) * 0.75;
 	}
@@ -1323,7 +1806,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.fur_rim_params.x, 0.00001));
 			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
 			let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
-			lit = lit + clamp(fur_shell, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
+			lit = lit + clamp(fur_layer, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
 		}
 		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
 	}
@@ -1661,19 +2144,26 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		lit = lit + specular + authored_reflection;
 		lit = lit + rim;
 	}
-	if (fur_shell > 0.0 && !disable_rim) {
+	if (fur_layer > 0.0 && !disable_rim) {
 		let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.fur_rim_params.x, 0.00001));
 		let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
 		let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
-		lit = lit + clamp(fur_shell, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
+		lit = lit + clamp(fur_layer, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
 	}
 
 	if (is_liltoon && drawu.glitter_control.x > 0.5) {
 		let glitter_n = normalize(mix(geometry_n, n, clamp(drawu.glitter_control.z, 0.0, 1.0)));
-		let glitter_proc = lil_calc_glitter(uv, glitter_n, v, v, l);
-		var glitter_color = drawu.glitter_color.rgb * glitter_proc;
+		let glitter_uv = lil_select_uv(drawu.glitter_ext2.z, uv, i.uv1, uv, uv);
+		let glitter_color_uv_raw = lil_select_uv(drawu.glitter_ext2.w, uv, i.uv1, i.uv2, i.uv3);
+		let glitter_color_uv = glitter_color_uv_raw * drawu.glitter_color_uv_offset_scale.zw + drawu.glitter_color_uv_offset_scale.xy;
+		let glitter_camera_front = normalize_or(frame.camera_pos.xyz, v);
+		let glitter_view = normalize_or(mix(glitter_camera_front, v, clamp(drawu.glitter_ext3.x, 0.0, 1.0)), v);
+		let glitter_camera = normalize_or(mix(glitter_camera_front, v, clamp(drawu.glitter_ext3.x, 0.0, 1.0)), v);
+		let glitter_proc = lil_calc_glitter(glitter_uv, glitter_n, glitter_view, glitter_camera, l);
+		let glitter_color_texel = textureSample(glitter_color_tex, base_samp, glitter_color_uv);
+		var glitter_color = drawu.glitter_color.rgb * glitter_color_texel.rgb * glitter_proc;
 		glitter_color = mix(glitter_color, glitter_color * base, clamp(drawu.glitter_control.y, 0.0, 1.0));
-		var glitter_alpha = clamp(drawu.glitter_color.a, 0.0, 1.0);
+		var glitter_alpha = clamp(drawu.glitter_color.a * glitter_color_texel.a, 0.0, 1.0);
 		glitter_alpha = mix(glitter_alpha, glitter_alpha * out_a, clamp(drawu.glitter_ext.w, 0.0, 1.0));
 		glitter_alpha = glitter_alpha * lil_backface_visibility(drawu.glitter_ext2.x, front_facing);
 		glitter_alpha = mix(glitter_alpha, glitter_alpha * lil_effect_shadowmix, clamp(drawu.glitter_ext.z, 0.0, 1.0));
@@ -1682,7 +2172,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;
-	let emission_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
+	let uv_rim = vec2<f32>(abs(dot(n, v)));
+	let emission_uv_base = lil_select_emission_uv(drawu.emission_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);
+	let emission_uv = lil_calc_uv_scroll_rotate(emission_uv_base, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
 	let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
 	if (!disable_emissive) {
 		if (is_liltoon) {
@@ -1700,7 +2192,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * emission_blink * emission_mask * drawu.emission_color.a * emission_tex_color.a, 0.0, 1.0);
 			lit = lil_blend_color(lit, emission_color, emission_blend, drawu.emission_params.w);
 			if (drawu.emission2nd_params.x > 0.5) {
-				let emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;
+				let emission2nd_uv_base = lil_select_emission_uv(drawu.emission2nd_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);
+				let emission2nd_uv = lil_calc_uv_scroll_rotate(emission2nd_uv_base, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;
 				let emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);
 				let emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);
 				var emission2nd_rgb_work = emission2nd_sample.rgb;
@@ -1719,7 +2212,15 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lit + emission_raw;
 		}
 	}
-	return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
+	if is_liltoon {
+		lit = lit + drawu.dissolve_color.rgb * dissolve_result.y + main_layers.dissolve_emission;
+	}
+	let distance_faded = select(vec4<f32>(lit, out_a), lil_apply_distance_fade(lit, out_a, i.wp, n, v, front_facing), is_liltoon);
+	let final_a = clamp(distance_faded.a, 0.0, 1.0);
+	return vec4<f32>(
+		premultiply_when_blending(max(distance_faded.rgb, vec3<f32>(0.0, 0.0, 0.0)), final_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend),
+		final_a,
+	);
 }
 
 @fragment
@@ -1740,9 +2241,13 @@ fn fs_fur_toon(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @locat
 	base.clip = i.clip;
 	base.wn = i.wn;
 	base.uv = i.uv;
+	base.uv1 = i.uv1;
+	base.uv2 = i.uv2;
+	base.uv3 = i.uv3;
+	base.id_mask = i.id_mask;
 	base.wp = i.wp;
 	base.wt = i.wt;
-	return toon_fragment(base, front_facing, false, i.fur_shell, i.fur_alpha, i.fur_card_side, false, i.fur_uv0);
+	return toon_fragment(base, front_facing, false, i.fur_layer, i.fur_alpha, i.fur_card_side, false, i.fur_uv0);
 }
 
 @fragment
@@ -1751,13 +2256,22 @@ fn fs_fur_toon_pre(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @l
 	base.clip = i.clip;
 	base.wn = i.wn;
 	base.uv = i.uv;
+	base.uv1 = i.uv1;
+	base.uv2 = i.uv2;
+	base.uv3 = i.uv3;
+	base.id_mask = i.id_mask;
 	base.wp = i.wp;
 	base.wt = i.wt;
-	return toon_fragment(base, front_facing, false, i.fur_shell, i.fur_alpha, i.fur_card_side, true, i.fur_uv0);
+	return toon_fragment(base, front_facing, false, i.fur_layer, i.fur_alpha, i.fur_card_side, true, i.fur_uv0);
 }
 
 @fragment
 fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
+	let dbg = bitcast<u32>(drawu.params.w);
+	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
+	if is_liltoon && (i.id_mask.x <= 0.0 || lil_udim_discard(i)) {
+		discard;
+	}
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let a = apply_lil_alpha_mask(samp_tex.a * drawu.base_color.a, uv);
