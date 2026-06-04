@@ -434,6 +434,22 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_reflection_uses_geometric_specular_antialiasing() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_gsaa_smoothness")
+				&& mesh.contains("let dx = abs(dpdx(normal_ws));")
+				&& mesh.contains("let dy = abs(dpdy(normal_ws));")
+				&& mesh.contains("dxy / (dxy * 5.0 + 0.002)"),
+			"lilToon reflection must match GSAAForSmoothness"
+		);
+		assert!(
+			mesh.contains("smoothness = lil_gsaa_smoothness(smoothness, n, drawu.rendering_ext_params.x);"),
+			"_GSAAStrength must reduce reflection smoothness before roughness is derived"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh

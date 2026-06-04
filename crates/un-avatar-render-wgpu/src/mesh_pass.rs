@@ -561,6 +561,7 @@ struct MeshDrawMaterialGpu {
 	fur_rim_params: [f32; 4],
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
+	rendering_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
 	material_ext_params: [f32; 4],
 	emissive_factor: [f32; 4],
@@ -635,7 +636,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2816);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2832);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -3700,6 +3701,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let rendering_ext_params = liltoon_like
+		.map(|u| [u.rendering.gsaa_strength_factor.max(0.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let transparency_params = liltoon_like
 		.map(|u| {
 			[
@@ -4244,6 +4248,7 @@ fn mesh_draw_material_gpu(
 		fur_rim_params,
 		alpha_ext_params,
 		lighting_ext_params,
+		rendering_ext_params,
 		transparency_params,
 		material_ext_params,
 		emissive_factor: [
@@ -9374,6 +9379,20 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
+	}
+
+	#[test]
+	fn liltoon_gsaa_strength_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.gsaa_strength_factor = 0.7;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.rendering_ext_params, [0.7, 0.0, 0.0, 0.0]);
 	}
 
 	#[test]

@@ -134,6 +134,7 @@ struct DrawMaterial {
 	fur_rim_params: vec4<f32>,
 	alpha_ext_params: vec4<f32>,
 	lighting_ext_params: vec4<f32>,
+	rendering_ext_params: vec4<f32>,
 	transparency_params: vec4<f32>,
 	material_ext_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
@@ -1189,6 +1190,14 @@ fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
 	return mix(specular, vec3<f32>(grazing_term), f);
 }
 
+fn lil_gsaa_smoothness(smoothness: f32, normal_ws: vec3<f32>, strength: f32) -> f32 {
+	let dx = abs(dpdx(normal_ws));
+	let dy = abs(dpdy(normal_ws));
+	let dxy = max(dot(dx, dx), dot(dy, dy));
+	let roughness_gsaa = dxy / (dxy * 5.0 + 0.002) * max(strength, 0.0);
+	return min(smoothness, clamp(1.0 - roughness_gsaa, 0.0, 1.0));
+}
+
 fn lil_reflection_mip(perceptual_roughness: f32) -> f32 {
 	let p = clamp(perceptual_roughness, 0.0, 1.0);
 	return p * (10.2 - 4.2 * p);
@@ -1899,7 +1908,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
 		let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
-		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		var smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		smoothness = lil_gsaa_smoothness(smoothness, n, drawu.rendering_ext_params.x);
 		let metallic = clamp(drawu.reflection_params.y * textureSample(metallic_tex, metallic_samp, metallic_uv).r, 0.0, 1.0);
 		reflection_metallic = metallic;
 		let base_perceptual_roughness = max(1.0 - smoothness, 0.02);
@@ -1974,7 +1984,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		authored_reflection_blend = authored_reflection * select(1.0, a, is_liltoon_refraction);
 	} else if (is_liltoon_gem) {
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
-		let smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		var smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
+		smoothness = lil_gsaa_smoothness(smoothness, n, drawu.rendering_ext_params.x);
 		let perceptual_roughness = clamp(1.0 - smoothness, 0.0, 1.0);
 		let roughness = perceptual_roughness * perceptual_roughness;
 		let cube_tint = drawu.reflection_cube_color.rgb;
