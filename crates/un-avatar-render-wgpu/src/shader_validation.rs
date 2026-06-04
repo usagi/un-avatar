@@ -486,13 +486,20 @@ mod tests {
 	fn liltoon_main_color_adjust_mask_limits_hsvg() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("fn apply_main_hsvg(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32>")
+			mesh.contains("fn apply_main_color_adjustments(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32>")
 				&& mesh.contains("let main_color_adjust_mask = textureSample(main_color_adjust_mask_tex, base_samp, uv).r;")
+				&& mesh.contains("let adjusted = apply_main_gradation(apply_main_hsvg(color));")
 				&& mesh.contains("return mix(color, adjusted, clamp(main_color_adjust_mask, 0.0, 1.0));"),
-			"_MainColorAdjustMask must limit lilToon main HSV/Gamma adjustment using fd.uvMain"
+			"_MainColorAdjustMask must limit lilToon main HSV/Gamma and gradation adjustments using fd.uvMain"
 		);
 		assert!(
-			mesh.contains("apply_main_hsvg(samp_tex.rgb, uv)"),
+			mesh.contains("var hsv = rgb_to_hsv(pow(abs(color), vec3<f32>(p.w)));")
+				&& mesh.contains("hsv.x = hsv.x + p.x;")
+				&& mesh.contains("hsv.z = clamp(hsv.z * p.z, 0.0, 1.0);"),
+			"lilToon main tone correction applies gamma before HSV shift and saturates value"
+		);
+		assert!(
+			mesh.contains("apply_main_color_adjustments(samp_tex.rgb, uv)"),
 			"main texture HSV/Gamma adjustment should receive fd.uvMain for its mask"
 		);
 	}
