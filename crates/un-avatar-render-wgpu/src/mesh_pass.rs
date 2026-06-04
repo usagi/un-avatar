@@ -1705,7 +1705,10 @@ fn wgpu_filter_mode(mode: UnaTextureFilterMode) -> wgpu::FilterMode {
 }
 
 fn rgba_upload_uses_linear_format(role: TextureRole, source: Option<&UnaImageSourceMetadata>) -> bool {
-	if matches!(role, TextureRole::Normal | TextureRole::Occlusion | TextureRole::Data) {
+	if matches!(role, TextureRole::Normal | TextureRole::Occlusion) {
+		return true;
+	}
+	if matches!(role, TextureRole::Data) && source.is_none() {
 		return true;
 	}
 	if let Some(source) = source {
@@ -7824,6 +7827,19 @@ mod tests {
 		assert!(rgba_upload_uses_linear_format(TextureRole::GenericColor, Some(&source)));
 		assert!(rgba_upload_uses_linear_format(TextureRole::Data, None));
 		assert!(!rgba_upload_uses_linear_format(TextureRole::GenericColor, None));
+	}
+
+	#[test]
+	fn data_role_respects_source_srgb_upload_format() {
+		let source = UnaImageSourceMetadata {
+			color_space: Some("srgb".to_string()),
+			srgb: Some(true),
+			byte_length: 1,
+			source_hash: 1,
+			..empty_source_metadata()
+		};
+		assert!(!rgba_upload_uses_linear_format(TextureRole::Data, Some(&source)));
+		assert!(rgba_upload_uses_linear_format(TextureRole::Normal, Some(&source)));
 	}
 
 	#[test]
