@@ -424,9 +424,11 @@ mod tests {
 			"Main layer UV mode 4 must use MatCap UV instead of falling through to UV3"
 		);
 		assert!(
-			mesh.contains("let mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw")
-				&& mesh.contains("let mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw"),
-			"Main layer blend masks must follow fd.uvMain like upstream lilToon"
+			mesh.contains("textureSample(main2nd_blend_mask_tex, base_samp, uv).r")
+				&& mesh.contains("textureSample(main3rd_blend_mask_tex, base_samp, uv).r")
+				&& !mesh.contains("main2nd_blend_mask_tex, base_samp, mask_uv")
+				&& !mesh.contains("main3rd_blend_mask_tex, base_samp, mask_uv"),
+			"Main layer blend masks must sample fd.uvMain without slot ST like upstream lilToon"
 		);
 		assert!(
 			mesh.contains("apply_lil_layer_distance_fade(layer_alpha, drawu.main2nd_distance_fade")

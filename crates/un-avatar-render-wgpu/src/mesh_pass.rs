@@ -284,7 +284,7 @@ fn portable_mesh_shader_source() -> String {
 			"let layer = textureSample(main2nd_tex, base_samp, layer_uv.sample_uv) * drawu.main2nd_color;",
 			"let layer = drawu.main2nd_color;",
 		),
-		("textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r", "1.0"),
+		("textureSample(main2nd_blend_mask_tex, base_samp, uv).r", "1.0"),
 		("textureSample(main2nd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r", "1.0"),
 		(
 			"textureSample(main2nd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r",
@@ -294,7 +294,7 @@ fn portable_mesh_shader_source() -> String {
 			"let layer = textureSample(main3rd_tex, base_samp, layer_uv.sample_uv) * drawu.main3rd_color;",
 			"let layer = drawu.main3rd_color;",
 		),
-		("textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r", "1.0"),
+		("textureSample(main3rd_blend_mask_tex, base_samp, uv).r", "1.0"),
 		("textureSample(main3rd_dissolve_mask_tex, base_samp, dissolve_mask_uv).r", "1.0"),
 		(
 			"textureSample(main3rd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r",

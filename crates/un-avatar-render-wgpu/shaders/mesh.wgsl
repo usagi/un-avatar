@@ -1357,9 +1357,8 @@ fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: ve
 	if (drawu.main2nd_params.x > 0.5) {
 		let layer_uv_raw = lil_select_layer_uv(drawu.main2nd_ext.x, uv, uv1, uv2, uv3, uv_mat);
 		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main2nd_uv_offset_scale, drawu.main2nd_decal_flags, drawu.main2nd_decal_transform, drawu.main2nd_decal_animation, drawu.main2nd_decal_sub_param, nv, is_right_hand);
-		let mask_uv = uv * drawu.main2nd_blend_mask_uv_offset_scale.zw + drawu.main2nd_blend_mask_uv_offset_scale.xy;
 		let layer = textureSample(main2nd_tex, base_samp, layer_uv.sample_uv) * drawu.main2nd_color;
-		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main2nd_blend_mask_tex, base_samp, mask_uv).r;
+		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main2nd_blend_mask_tex, base_samp, uv).r;
 		if (is_liltoon) {
 			let dissolve_mask_uv = uv * drawu.main2nd_dissolve_mask_uv_offset_scale.zw + drawu.main2nd_dissolve_mask_uv_offset_scale.xy;
 			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main2nd_dissolve_noise_uv_offset_scale, drawu.main2nd_dissolve_noise_uv_anim_params);
@@ -1388,9 +1387,8 @@ fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: ve
 	if (drawu.main3rd_params.x > 0.5) {
 		let layer_uv_raw = lil_select_layer_uv(drawu.main3rd_ext.x, uv, uv1, uv2, uv3, uv_mat);
 		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main3rd_uv_offset_scale, drawu.main3rd_decal_flags, drawu.main3rd_decal_transform, drawu.main3rd_decal_animation, drawu.main3rd_decal_sub_param, nv, is_right_hand);
-		let mask_uv = uv * drawu.main3rd_blend_mask_uv_offset_scale.zw + drawu.main3rd_blend_mask_uv_offset_scale.xy;
 		let layer = textureSample(main3rd_tex, base_samp, layer_uv.sample_uv) * drawu.main3rd_color;
-		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main3rd_blend_mask_tex, base_samp, mask_uv).r;
+		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main3rd_blend_mask_tex, base_samp, uv).r;
 		if (is_liltoon) {
 			let dissolve_mask_uv = uv * drawu.main3rd_dissolve_mask_uv_offset_scale.zw + drawu.main3rd_dissolve_mask_uv_offset_scale.xy;
 			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main3rd_dissolve_noise_uv_offset_scale, drawu.main3rd_dissolve_noise_uv_anim_params);
