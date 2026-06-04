@@ -3376,7 +3376,7 @@ fn mesh_draw_material_gpu(
 	let shadow_params = liltoon_like
 		.map(|u| {
 			[
-				1.0,
+				u.shadow.enabled_factor.clamp(0.0, 1.0),
 				(u.shadow.enabled_factor * u.shadow.strength_factor).clamp(0.0, 1.0),
 				u.shadow.border_factor.clamp(0.0, 1.0),
 				u.shadow.blur_factor.clamp(0.0, 1.0),
@@ -9521,6 +9521,8 @@ mod tests {
 	#[test]
 	fn liltoon_shadow_post_ao_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 0.0;
+		liltoon_like.shadow.strength_factor = 1.0;
 		liltoon_like.shadow.post_ao_factor = 1.0;
 		liltoon_like.shadow.ao_shift_factor = [3.0, 0.1, 2.0, 0.2];
 		liltoon_like.shadow.ao_shift2_factor = [1.5, 0.3, 0.0, 0.0];
@@ -9531,6 +9533,8 @@ mod tests {
 
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
+		assert_eq!(draw.shadow_params[0], 0.0);
+		assert_eq!(draw.shadow_params[1], 0.0);
 		assert_eq!(draw.shadow_ao_params, [1.0, 0.0, 0.0, 0.0]);
 		assert_eq!(draw.shadow_ao_shift, [3.0, 0.1, 2.0, 0.2]);
 		assert_eq!(draw.shadow_ao_shift2, [1.5, 0.3, 0.0, 0.0]);
