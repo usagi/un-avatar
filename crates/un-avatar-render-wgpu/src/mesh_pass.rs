@@ -410,7 +410,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;",
+		"let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;",
 		"let shadow_border_mask = lil_shadow_border_ao_mask(vec3<f32>(1.0, 1.0, 1.0));\n\t\tlet shadow_blur_mask = vec3<f32>(1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(

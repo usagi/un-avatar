@@ -164,12 +164,21 @@ mod tests {
 	fn liltoon_shadow_masks_preserve_rgb_channels() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb"),
+			mesh.contains("textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb"),
 			"lilToon uses _ShadowBorderMask rgb for first, second, and third shadow AO"
 		);
 		assert!(
-			mesh.contains("textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb"),
+			mesh.contains("textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb"),
 			"lilToon uses _ShadowBlurMask rgb for first, second, and third shadow blur"
+		);
+		assert!(
+			!mesh.contains("let shadow_border_mask_uv") && !mesh.contains("let shadow_blur_mask_uv"),
+			"lilToon shadow border/blur masks sample fd.uvMain directly without slot ST"
+		);
+		assert!(
+			mesh.contains("let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, uv);")
+				&& !mesh.contains("let shadow_strength_mask_uv"),
+			"lilToon _ShadowStrengthMask also samples fd.uvMain directly"
 		);
 		assert!(
 			mesh.contains("shadow_border_mask.g") && mesh.contains("shadow_border_mask.b"),

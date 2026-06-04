@@ -1811,14 +1811,11 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	var shading: f32;
 	var lil_shadowmix = 1.0;
 	if (drawu.shadow_params.x > 0.5) {
-		let shadow_strength_mask_uv = uv * drawu.shadow_strength_mask_uv_offset_scale.zw + drawu.shadow_strength_mask_uv_offset_scale.xy;
-		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
-		let shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;
-		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);
-		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;
+		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);
+		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;
 		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
 		let lil_shadow_value = lil_shadow_apply_pre_ao(dot(shadow_n, l) * 0.5 + 0.5, shadow_border_mask.r, shadow_post_ao);
-		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, shadow_strength_mask_uv);
+		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, uv);
 		let lil_shadow_raw = lil_tooning_scale_range(
 			lil_shadow_value,
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
@@ -1852,10 +1849,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let light_color = select(lil_direct_light_color(), lil_light_color, is_liltoon);
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
-		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
-		let shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;
-		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);
-		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;
+		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);
+		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;
 		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
 		let shadow2_value = lil_shadow_apply_pre_ao(dot(shadow2_n, l) * 0.5 + 0.5, shadow_border_mask.g, shadow_post_ao);
 		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);
