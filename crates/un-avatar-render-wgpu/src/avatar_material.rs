@@ -168,6 +168,11 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 				liltoon_like.main_color.gradation_texture_index,
 				TextureRole::GenericColor,
 			);
+			mark_texture_role(
+				&mut roles,
+				liltoon_like.main_color.main_color_adjust_mask_texture_index,
+				TextureRole::Data,
+			);
 			mark_texture_role(&mut roles, liltoon_like.main_color.second_texture_index, TextureRole::GenericColor);
 			mark_texture_role(
 				&mut roles,
@@ -514,13 +519,14 @@ mod tests {
 		});
 		assert_eq!(texture_roles_for_scene(&scene)[2], TextureRole::Normal);
 
-		scene.images.extend([image(), image(), image(), image()]);
-		scene.image_sources.extend([None, None, None, None]);
+		scene.images.extend([image(), image(), image(), image(), image()]);
+		scene.image_sources.extend([None, None, None, None, None]);
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.shadow.strength_mask_texture_index = Some(3);
 		liltoon_like.emission.gradation_texture_index = Some(4);
 		liltoon_like.reflection.anisotropy_tangent_texture_index = Some(5);
 		liltoon_like.alpha_mask.texture_index = Some(6);
+		liltoon_like.main_color.main_color_adjust_mask_texture_index = Some(7);
 		scene.materials.push(UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -530,5 +536,6 @@ mod tests {
 		assert_eq!(roles[4], TextureRole::Emissive);
 		assert_eq!(roles[5], TextureRole::Normal);
 		assert_eq!(roles[6], TextureRole::Data);
+		assert_eq!(roles[7], TextureRole::Data);
 	}
 }
