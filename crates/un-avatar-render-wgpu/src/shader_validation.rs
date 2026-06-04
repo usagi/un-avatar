@@ -191,6 +191,21 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_shadow_color_textures_use_main_uv_without_slot_transform() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let shade_texel = textureSample(shade_tex, shade_samp, uv);")
+				&& mesh.contains("let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, uv);")
+				&& mesh.contains("let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, uv);"),
+			"lilToon shadow color textures must sample fd.uvMain directly"
+		);
+		assert!(
+			!mesh.contains("let shade_uv = uv * drawu.shade_uv_offset_scale"),
+			"_ShadowColorTex/_Shadow2ndColorTex/_Shadow3rdColorTex must not apply slot ST"
+		);
+	}
+
+	#[test]
 	fn liltoon_flip_normal_flips_backface_normals() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

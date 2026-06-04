@@ -1838,8 +1838,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		lil_shadowmix = shading;
 	}
 	let disable_shade_color = (dbg & DBG_DISABLE_SHADE_COLOR) != 0u;
-	let shade_uv = uv * drawu.shade_uv_offset_scale.zw + drawu.shade_uv_offset_scale.xy;
-	let shade_texel = textureSample(shade_tex, shade_samp, shade_uv);
+	let shade_texel = textureSample(shade_tex, shade_samp, uv);
 	let mtoon_shade_term_raw = drawu.shade_color.rgb * shade_texel.rgb;
 	let lil_shadow_term_raw = mix(base, shade_texel.rgb, clamp(shade_texel.a, 0.0, 1.0)) * drawu.shade_color.rgb;
 	let shade_term_raw = select(mtoon_shade_term_raw, lil_shadow_term_raw, is_liltoon);
@@ -1853,7 +1852,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;
 		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
 		let shadow2_value = lil_shadow_apply_pre_ao(dot(shadow2_n, l) * 0.5 + 0.5, shadow_border_mask.g, shadow_post_ao);
-		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);
+		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, uv);
 		let shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;
 		let shadow2_raw = lil_tooning_scale_range(
 			shadow2_value,
@@ -1865,7 +1864,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
 		indirect_col = mix(indirect_col, shadow2_color * light_color, shadow2_strength);
 		let shadow3_value = lil_shadow_apply_pre_ao(dot(shadow3_n, l) * 0.5 + 0.5, shadow_border_mask.b, shadow_post_ao);
-		let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, shade_uv);
+		let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, uv);
 		let shadow3_color = mix(base, shadow3_color_texel.rgb, clamp(shadow3_color_texel.a, 0.0, 1.0)) * drawu.shadow3_color.rgb;
 		let shadow3_raw = lil_tooning_scale_range(
 			shadow3_value,
