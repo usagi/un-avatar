@@ -482,6 +482,20 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_transparent_emission_blend_uses_alpha() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let emission_transparency = select(1.0, out_a, alpha_kind > 1.5);"),
+			"lilToon transparent emission blend must use fd.col.a"
+		);
+		assert!(
+			mesh.contains("drawu.emission_color.a * emission_tex_color.a * emission_transparency")
+				&& mesh.contains("emission2nd_blink * emission2nd_sample.a * emission_transparency"),
+			"both lilToon emission layers must apply transparent alpha to their blend"
+		);
+	}
+
+	#[test]
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh
