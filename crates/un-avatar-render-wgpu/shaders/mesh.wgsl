@@ -346,6 +346,18 @@ fn mat3_upper(m: mat4x4<f32>) -> mat3x3<f32> {
 	return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
 }
 
+fn normal_matrix(m: mat4x4<f32>) -> mat3x3<f32> {
+	let upper = mat3_upper(m);
+	let c0 = upper[0];
+	let c1 = upper[1];
+	let c2 = upper[2];
+	let det = dot(c0, cross(c1, c2));
+	if (abs(det) <= 0.0000001) {
+		return upper;
+	}
+	return mat3x3<f32>(cross(c1, c2), cross(c2, c0), cross(c0, c1)) * (1.0 / det);
+}
+
 fn object_negative_scale_sign() -> f32 {
 	return select(1.0, -1.0, determinant(mat3_upper(drawt.model)) < 0.0);
 }
@@ -382,7 +394,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let dbg = bitcast<u32>(drawu.params.w);
 	if (dbg & DBG_BIND_POSE_RIGID) != 0u {
 		let wp = drawt.model * vec4<f32>(pos, 1.0);
-		let mn = mat3_upper(drawt.model) * norm;
+		let mn = normal_matrix(drawt.model) * norm;
 		let mt = mat3_upper(drawt.model) * tangent;
 		o.wn = normalize(mn);
 		o.uv = v.uv;
@@ -411,7 +423,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let n2 = mat3_upper(m2) * norm;
 	let n3 = mat3_upper(m3) * norm;
 	let local_n = normalize(v.weights.x * n0 + v.weights.y * n1 + v.weights.z * n2 + v.weights.w * n3);
-	let wn = normalize(mat3_upper(drawt.model) * local_n);
+	let wn = normalize(normal_matrix(drawt.model) * local_n);
 	let t0 = mat3_upper(m0) * tangent;
 	let t1 = mat3_upper(m1) * tangent;
 	let t2 = mat3_upper(m2) * tangent;
@@ -571,7 +583,7 @@ fn compute_fur_cards_vs(v: ComputeFurCardsVsIn, cutout_pre: bool) -> FurVsOut {
 	var o: FurVsOut;
 	let local_position = select(v.position_layer.xyz, v.pre_position.xyz, cutout_pre);
 	let center_wp = (drawt.model * vec4<f32>(local_position, 1.0)).xyz;
-	let wn = normalize_or(mat3_upper(drawt.model) * v.normal_side.xyz, vec3<f32>(0.0, 1.0, 0.0));
+	let wn = normalize_or(normal_matrix(drawt.model) * v.normal_side.xyz, vec3<f32>(0.0, 1.0, 0.0));
 	let view_dir = normalize_or(frame.camera_pos.xyz - center_wp, vec3<f32>(0.0, 0.0, 1.0));
 	let side_dir = normalize_or(cross(view_dir, wn), normalize_or(cross(vec3<f32>(0.0, 1.0, 0.0), wn), vec3<f32>(1.0, 0.0, 0.0)));
 	let side_width = v.normal_side.w;

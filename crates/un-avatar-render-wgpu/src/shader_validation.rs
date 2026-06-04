@@ -149,6 +149,18 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_normals_use_inverse_transpose_model_matrix() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn normal_matrix(m: mat4x4<f32>) -> mat3x3<f32>")
+				&& mesh.contains("return mat3x3<f32>(cross(c1, c2), cross(c2, c0), cross(c0, c1)) * (1.0 / det);")
+				&& mesh.contains("let mn = normal_matrix(drawt.model) * norm;")
+				&& mesh.contains("let wn = normalize(normal_matrix(drawt.model) * local_n);"),
+			"lilToon normalWS must match TransformObjectToWorldNormal semantics under non-uniform scale"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_masks_preserve_rgb_channels() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
