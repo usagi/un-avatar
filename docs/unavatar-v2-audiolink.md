@@ -28,12 +28,12 @@ Invalid or missing `source` values are treated as `none` by profile readers. Ren
 
 ## Backend Plan
 
-Initial implementation:
+Current implementation:
 
 - Device enumeration and input capture: `cpal`.
-- FFT: `realfft` or `rustfft`.
-- Worker handoff: existing channel infrastructure first; introduce a ring buffer only if callback pressure requires it.
-- GPU input: generate a small VRChat AudioLink-compatible `_AudioTexture`-style texture and bind it to the lilToon-like renderer path.
+- FFT: `rustfft` on a dedicated `un-avatar-audio-link-fft` worker thread.
+- Worker handoff: the audio callback pushes bounded sample chunks without blocking; the FFT worker publishes generated frames through a bounded lock-free queue that drops stale frames; the renderer drains the latest frame without blocking and never runs FFT.
+- GPU input: generate a small `_AudioTexture`-style texture and bind it to the lilToon-like renderer path.
 
 Windows follow-up:
 
@@ -59,7 +59,7 @@ Start `cpal` capture and FFT only when all of these are true:
 - that material has `_UseAudioLink > 0`;
 - at least one target toggle is active: `_AudioLink2Main2nd`, `_AudioLink2Main3rd`, `_AudioLink2Emission`, `_AudioLink2EmissionGrad`, `_AudioLink2Emission2nd`, `_AudioLink2Emission2ndGrad`, or `_AudioLink2Vertex`.
 
-Stop capture after the active visible material set no longer needs AudioLink. Use a short debounce window, initially 1-3 seconds, so wardrobe switching does not repeatedly open and close the audio device.
+Stop capture after the active visible material set no longer needs AudioLink. The current runtime stops immediately; a short debounce window, initially 1-3 seconds, is a follow-up if wardrobe switching repeatedly opens and closes the audio device.
 
 ## Shader Contract
 
@@ -68,9 +68,11 @@ The shader path remains lilToon-source-compatible:
 - `fd.audioLinkValue` equivalent is `1.0` when AudioLink is disabled.
 - `_UseAudioLink` gates AudioLink value calculation.
 - `_AudioLinkDefaultValue` fallback works without an external audio texture.
-- AudioLink target toggles decide where the value is applied.
+- AudioLink target toggles decide where the value is applied for Main2nd, Main3rd, Emission, Emission2nd, and Vertex displacement.
 
 External audio texture support must layer on top of this behavior rather than replacing it.
+
+The initial generated texture is intentionally lightweight. It provides a spectrum row and simple band/rms rows sufficient for lilToon-style value sampling, but it is not yet exact VRChat AudioLink controller data parity.
 
 ## Non-Goals for v2 Initial AudioLink
 
@@ -79,3 +81,4 @@ External audio texture support must layer on top of this behavior rather than re
 - Always-on FFT.
 - VST hosting.
 - Exact VRChat AudioLink controller UI parity.
+- Exact VRChat AudioLink texture layout parity.

@@ -458,7 +458,8 @@ struct MeshFrameGpu {
 	light_color: [f32; 4],
 	ambient_color: [f32; 4],
 	time_params: [f32; 4],
-	_pad: [[f32; 4]; 3],
+	audio_link_params: [f32; 4],
+	_pad: [[f32; 4]; 2],
 }
 
 #[repr(C)]
@@ -587,6 +588,9 @@ struct MeshDrawMaterialGpu {
 	audio_link_uv_params: [f32; 4],
 	audio_link_start: [f32; 4],
 	audio_link_ext: [f32; 4],
+	audio_link_vertex_params: [f32; 4],
+	audio_link_vertex_uv_params: [f32; 4],
+	audio_link_vertex_start: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
 	outline_lit_color: [f32; 4],
@@ -679,7 +683,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2992);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3040);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1201,6 +1205,10 @@ pub(crate) struct SceneMeshes {
 	frame_bind_group: wgpu::BindGroup,
 	screen_grab_sampler: wgpu::Sampler,
 	_screen_grab_fallback_texture: wgpu::Texture,
+	_audio_link_texture: wgpu::Texture,
+	audio_link_view: wgpu::TextureView,
+	audio_link_uploaded_sequence: u64,
+	audio_link_frame_params: [f32; 4],
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	#[allow(dead_code)]
@@ -4223,6 +4231,20 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let audio_link_vertex_params = liltoon_like
+		.map(|u| {
+			[
+				u.audio_link.to_vertex_factor.clamp(0.0, 1.0),
+				u.audio_link.vertex_uv_mode_factor.clamp(0.0, 5.0),
+				u.audio_link.vertex_strength_factor[0],
+				u.audio_link.as_local_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let audio_link_vertex_uv_params = liltoon_like
+		.map(|u| u.audio_link.vertex_uv_params_factor)
+		.unwrap_or([0.25, 0.0, 0.0, 0.125]);
+	let audio_link_vertex_start = liltoon_like.map(|u| u.audio_link.vertex_start_factor).unwrap_or([0.0; 4]);
 	MeshDrawMaterialGpu {
 		base_color,
 		backface_color,
@@ -4355,6 +4377,9 @@ fn mesh_draw_material_gpu(
 		audio_link_uv_params,
 		audio_link_start,
 		audio_link_ext,
+		audio_link_vertex_params,
+		audio_link_vertex_uv_params,
+		audio_link_vertex_start,
 		outline_color,
 		outline_params: [
 			outline_mode_gpu(outline_mode),
@@ -4618,6 +4643,16 @@ impl SceneMeshes {
 					binding: 2,
 					visibility: wgpu::ShaderStages::FRAGMENT,
 					ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 3,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Texture {
+						multisampled: false,
+						view_dimension: wgpu::TextureViewDimension::D2,
+						sample_type: wgpu::TextureSampleType::Float { filterable: true },
+					},
 					count: None,
 				},
 			],
@@ -5686,6 +5721,21 @@ impl SceneMeshes {
 			[0, 0, 0, 255],
 		);
 		let screen_grab_fallback_view = screen_grab_fallback_texture.create_view(&wgpu::TextureViewDescriptor::default());
+		let audio_link_texture = device.create_texture(&wgpu::TextureDescriptor {
+			label: Some("audio-link-texture"),
+			size: wgpu::Extent3d {
+				width: crate::audio_link::AUDIO_LINK_TEXTURE_WIDTH,
+				height: crate::audio_link::AUDIO_LINK_TEXTURE_HEIGHT,
+				depth_or_array_layers: 1,
+			},
+			mip_level_count: 1,
+			sample_count: 1,
+			dimension: wgpu::TextureDimension::D2,
+			format: wgpu::TextureFormat::Rgba8Unorm,
+			usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+			view_formats: &[],
+		});
+		let audio_link_view = audio_link_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
 		let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 			label: Some("mesh_frame"),
@@ -5702,6 +5752,10 @@ impl SceneMeshes {
 				wgpu::BindGroupEntry {
 					binding: 2,
 					resource: wgpu::BindingResource::Sampler(&screen_grab_sampler),
+				},
+				wgpu::BindGroupEntry {
+					binding: 3,
+					resource: wgpu::BindingResource::TextureView(&audio_link_view),
 				},
 			],
 		});
@@ -7025,6 +7079,10 @@ impl SceneMeshes {
 			frame_bind_group,
 			screen_grab_sampler,
 			_screen_grab_fallback_texture: screen_grab_fallback_texture,
+			_audio_link_texture: audio_link_texture,
+			audio_link_view,
+			audio_link_uploaded_sequence: 0,
+			audio_link_frame_params: [0.0; 4],
 			_samplers: samplers,
 			_textures: textures,
 			_cube_textures: cube_textures,
@@ -7087,6 +7145,7 @@ impl SceneMeshes {
 		light_color: Vec4,
 		ambient_color: Vec4,
 		time_secs: f32,
+		audio_link_params: [f32; 4],
 	) {
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
@@ -7096,7 +7155,8 @@ impl SceneMeshes {
 			light_color: light_color.to_array(),
 			ambient_color: ambient_color.to_array(),
 			time_params: [time_secs, 0.0, 0.0, 0.0],
-			_pad: [[0.0; 4]; 3],
+			audio_link_params,
+			_pad: [[0.0; 4]; 2],
 		};
 		if self.frame_uploaded != Some(f) {
 			queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&f));
@@ -7550,8 +7610,49 @@ impl SceneMeshes {
 					binding: 2,
 					resource: wgpu::BindingResource::Sampler(&self.screen_grab_sampler),
 				},
+				wgpu::BindGroupEntry {
+					binding: 3,
+					resource: wgpu::BindingResource::TextureView(&self.audio_link_view),
+				},
 			],
 		});
+	}
+
+	pub fn upload_audio_link_texture(&mut self, queue: &wgpu::Queue, frame: &crate::audio_link::AudioLinkTextureFrame) {
+		if frame.sequence == self.audio_link_uploaded_sequence || frame.pixels.is_empty() {
+			return;
+		}
+		queue.write_texture(
+			wgpu::TexelCopyTextureInfo {
+				texture: &self._audio_link_texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d::ZERO,
+				aspect: wgpu::TextureAspect::All,
+			},
+			&frame.pixels,
+			wgpu::TexelCopyBufferLayout {
+				offset: 0,
+				bytes_per_row: Some(crate::audio_link::AUDIO_LINK_TEXTURE_WIDTH * 4),
+				rows_per_image: Some(crate::audio_link::AUDIO_LINK_TEXTURE_HEIGHT),
+			},
+			wgpu::Extent3d {
+				width: crate::audio_link::AUDIO_LINK_TEXTURE_WIDTH,
+				height: crate::audio_link::AUDIO_LINK_TEXTURE_HEIGHT,
+				depth_or_array_layers: 1,
+			},
+		);
+		self.audio_link_uploaded_sequence = frame.sequence;
+		self.audio_link_frame_params = [1.0, frame.rms, frame.peak, frame.sequence as f32];
+	}
+
+	pub fn set_audio_link_external_enabled(&mut self, enabled: bool) {
+		if !enabled {
+			self.audio_link_frame_params = [0.0; 4];
+		}
+	}
+
+	pub fn audio_link_frame_params(&self) -> [f32; 4] {
+		self.audio_link_frame_params
 	}
 
 	pub(crate) fn texture_summary(&self) -> TextureUploadSummary {
@@ -7711,7 +7812,7 @@ mod tests {
 	fn mesh_toon_pipeline_interfaces_match() {
 		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
 		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 53;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 54;
 		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -7770,6 +7871,7 @@ mod tests {
 				uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 				texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
 				sampler_bind_group_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(3, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 		let material_entries = mesh_material_layout_entries(material_tier);
@@ -9574,6 +9676,12 @@ mod tests {
 		liltoon_like.audio_link.to_emission_second_gradation_factor = 0.25;
 		liltoon_like.audio_link.to_main_second_factor = 1.0;
 		liltoon_like.audio_link.to_main_third_factor = 1.0;
+		liltoon_like.audio_link.to_vertex_factor = 1.0;
+		liltoon_like.audio_link.vertex_uv_mode_factor = 3.0;
+		liltoon_like.audio_link.vertex_strength_factor = [0.2, 0.0, 0.0, 0.0];
+		liltoon_like.audio_link.as_local_factor = 1.0;
+		liltoon_like.audio_link.vertex_uv_params_factor = [0.7, 0.2, 0.3, 0.4];
+		liltoon_like.audio_link.vertex_start_factor = [4.0, 5.0, 6.0, 0.0];
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -9586,6 +9694,9 @@ mod tests {
 		assert_eq!(draw.audio_link_uv_params, [0.6, 0.1, 0.25, 0.75]);
 		assert_eq!(draw.audio_link_start, [1.0, 2.0, 3.0, 0.0]);
 		assert_eq!(draw.audio_link_ext, [0.5, 0.25, 1.0, 1.0]);
+		assert_eq!(draw.audio_link_vertex_params, [1.0, 3.0, 0.2, 1.0]);
+		assert_eq!(draw.audio_link_vertex_uv_params, [0.7, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.audio_link_vertex_start, [4.0, 5.0, 6.0, 0.0]);
 	}
 
 	#[test]

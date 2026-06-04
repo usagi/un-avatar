@@ -690,7 +690,9 @@ Status legend:
   - done: renderer scene upload 後の可視 draw set から external AudioLink texture 要否を判定し、`audio_link_texture_needed` runtime status として公開する。判定条件は lilToon-like material、`_UseAudioLink > 0`、Main2nd/Main3rd/Emission/Emission2nd/Vertex 系 target toggle のいずれか。
   - done: glTF importer / `UnaLilToonLikeMaterial` が `_UseAudioLink`、default value、UV params、mask/local map source slots、Main2nd/Main3rd/Emission/Emission2nd/Vertex 連動 toggle を保持する。
   - done: FullOnePass renderer は本家 `fd.audioLinkValue = 1.0` 初期値と、AudioLink package 未接続時の `_AudioLinkDefaultValue` fallback 波形を実装し、`_AudioLink2Emission` / `_AudioLink2EmissionGrad` / `_AudioLink2Emission2nd` / `_AudioLink2Emission2ndGrad` を emission alpha と gradation UV offset へ接続する。
-  - remaining: external `_AudioTexture` 入力、`_AudioLinkMask` / `_AudioLinkLocalMap` sampling、Main2nd/Main3rd alpha 連動、vertex displacement、mode 3/4 spectrum mask、mode 5 object-space position の厳密化は未実装。現状の mode 5 は fragment world position 近似。
+  - done: `source = "input_device"` かつ可視 material が AudioLink を必要とする場合だけ `cpal` capture と `rustfft` worker を起動し、renderer thread は lock-free queue から最新 frame を nonblocking で取得して upload する。FFT と audio IO は renderer/main thread では実行しない。
+  - done: generated external `_AudioTexture`-style input を emission / main layer / vertex AudioLink value へ接続し、Main2nd/Main3rd alpha 連動と vertex displacement を実装する。
+  - remaining: `_AudioLinkMask` / `_AudioLinkLocalMap` sampling、mode 3/4 spectrum mask、VRChat AudioLink texture layout の厳密 parity は未実装。mode 5 の fragment path は world position 近似。
 - `[~]` Distance fade
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_DistanceFade` / `_DistanceFadeColor` / `_DistanceFadeMode` / `_DistanceFadeRimColor` / `_DistanceFadeRimFresnelPower` を保持する。
   - done: Renderer は本家 `lilDistanceFade()` の distance ramp、facing gate、negative-alpha fade、rim fresnel color を final color/alpha へ接続する。

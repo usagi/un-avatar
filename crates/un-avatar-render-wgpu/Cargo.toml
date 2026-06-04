@@ -51,6 +51,9 @@ un-avatar-io-vrm = { path = "../un-avatar-io-vrm" }
 un-motion-frame = { workspace = true }
 un-motion-frame-zenoh = { workspace = true }
 crossbeam-channel = { workspace = true }
+crossbeam-queue = "0.3"
+cpal = "0.15"
+rustfft = "6"
 wgpu = { version = "29", default-features = false, features = [
  "std",
  "parking_lot",

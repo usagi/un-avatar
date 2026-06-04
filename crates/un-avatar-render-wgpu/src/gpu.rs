@@ -42,7 +42,7 @@ const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl
 
 const PORTABLE_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
 const PORTABLE_SAMPLERS_PER_STAGE: u32 = 16;
-const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 53;
+const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 54;
 const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -842,6 +842,8 @@ pub(crate) struct GpuState {
 	ssao: crate::SsaoOptions,
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
+	audio_link_options: AudioLinkOptions,
+	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	spring_sim: Option<SpringBoneSimulator>,
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	aa: AaMode,
@@ -1217,6 +1219,8 @@ impl GpuState {
 			ssao,
 			contact_shadow,
 			texture_summary,
+			audio_link_options: AudioLinkOptions::default(),
+			audio_link_runtime: None,
 			spring_sim,
 			bone_colliders: Vec::new(),
 			bone_collider_count,
@@ -1347,6 +1351,27 @@ impl GpuState {
 
 	pub fn audio_link_texture_needed(&self) -> bool {
 		self.audio_link_texture_needed
+	}
+
+	fn reconfigure_audio_link_runtime(&mut self) {
+		if self.audio_link_texture_needed {
+			if self.audio_link_runtime.is_none() {
+				match crate::audio_link::AudioLinkInputRuntime::start(&self.audio_link_options) {
+					Ok(runtime) => {
+						self.audio_link_runtime = Some(runtime);
+					}
+					Err(e) => {
+						eprintln!("un-avatar-renderer: AudioLink input disabled: {e}");
+						self.audio_link_runtime = None;
+					}
+				}
+			}
+		} else {
+			self.audio_link_runtime = None;
+			if let Some(sm) = &mut self.scene_meshes {
+				sm.set_audio_link_external_enabled(false);
+			}
+		}
 	}
 
 	/// XYZ デバッグ軸表示の ON/OFF。
@@ -2204,6 +2229,8 @@ impl GpuState {
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
 		self.audio_link_texture_needed = options.audio_link.source == AudioLinkSource::InputDevice && prepared.audio_link_texture_needed;
+		self.audio_link_options = options.audio_link.clone();
+		self.reconfigure_audio_link_runtime();
 		self.reconfigure_motion_receivers(options.vmc_address, options.unmotion_zenoh, options.debug_vmc)?;
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
@@ -2636,7 +2663,19 @@ impl GpuState {
 			self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&globals));
 			self.globals_uploaded = Some(globals);
 		}
+		let audio_link_frame = if self.audio_link_texture_needed {
+			self.audio_link_runtime
+				.as_mut()
+				.and_then(crate::audio_link::AudioLinkInputRuntime::next_texture_frame)
+		} else {
+			None
+		};
 		if let Some(sm) = &mut self.scene_meshes {
+			if let Some(frame) = audio_link_frame.as_ref() {
+				sm.upload_audio_link_texture(&self.queue, frame);
+			} else if !self.audio_link_texture_needed {
+				sm.set_audio_link_external_enabled(false);
+			}
 			sm.prepare_frame(
 				&self.queue,
 				view_proj,
@@ -2646,6 +2685,11 @@ impl GpuState {
 				directional_light_color,
 				environment_light_color,
 				self.animation_time_secs,
+				if self.audio_link_texture_needed {
+					sm.audio_link_frame_params()
+				} else {
+					[0.0; 4]
+				},
 			);
 		}
 	}
@@ -3726,7 +3770,7 @@ mod tests {
 
 	#[test]
 	fn full_liltoon_texture_budget_covers_highest_mesh_binding() {
-		assert_eq!(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE, 53);
+		assert_eq!(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE, 54);
 	}
 
 	#[test]

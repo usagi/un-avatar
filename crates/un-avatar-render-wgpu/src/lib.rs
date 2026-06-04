@@ -1,5 +1,6 @@
 //! winit + wgpu で独立アバター用ウィンドウを開く最小ブートストラップ（開発計画 Commit 1.1〜1.2）。
 
+mod audio_link;
 mod avatar_material;
 mod camera;
 mod debug_dump;
