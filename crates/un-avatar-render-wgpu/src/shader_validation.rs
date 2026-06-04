@@ -736,4 +736,23 @@ mod tests {
 			"lilToon pass order is RimShade -> Backlight -> Reflection -> MatCap -> RimLight"
 		);
 	}
+
+	#[test]
+	fn liltoon_effect_normal_strength_keeps_lerp_length() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let specular_base_n = mix(geometry_n, n, clamp(drawu.specular_toon_params.w, 0.0, 1.0));")
+				&& mesh.contains("let reflection_base_n = mix(geometry_n, n, clamp(drawu.reflection_params.w, 0.0, 1.0));"),
+			"lilToon specular/reflection normal strength uses raw lerp before anisotropy"
+		);
+		assert!(
+			mesh.contains("let rim_shade_n = mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0));")
+				&& mesh.contains("let backlight_n = mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0));"),
+			"lilToon rim shade/backlight normal strength should not renormalize the lerped normal"
+		);
+		assert!(
+			mesh.contains("let matcap2_n = select(matcap2_base_n, normalize(mix(matcap2_base_n, anisotropy_n, matcap2_anisotropy)), matcap2_anisotropy > 0.0);"),
+			"lilToon MatCap2nd keeps raw normal-strength lerp when anisotropy is disabled"
+		);
+	}
 }
