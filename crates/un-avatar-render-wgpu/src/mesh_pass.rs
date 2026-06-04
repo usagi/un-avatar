@@ -332,19 +332,19 @@ fn portable_mesh_shader_source() -> String {
 		"fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {\n\treturn base;\n}\n",
 	);
 	shader = shader.replace(
-		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).r;\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).r;",
-		"let shadow_border_mask = 1.0;\n\t\tlet shadow_blur_mask = 1.0;",
+		"let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;\n\t\tlet shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;\n\t\tlet shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);\n\t\tlet shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;",
+		"let shadow_border_mask = lil_shadow_border_ao_mask(vec3<f32>(1.0, 1.0, 1.0));\n\t\tlet shadow_blur_mask = vec3<f32>(1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(
 		"let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));",
 		"let matcap2_tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(
-		"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;",
-		"let matcap2_blend_mask = 1.0;",
+		"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;",
+		"let matcap2_blend_mask = vec3<f32>(1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(
-		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;\n\t\t\tlet matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);\n\t\t\tlit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
+		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;\n\t\t\tlet matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));\n\t\t\tlit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
 		"",
 	);
 	shader
@@ -395,6 +395,9 @@ struct MeshDrawMaterialGpu {
 	shading_params: [f32; 4],
 	shadow_params: [f32; 4],
 	shadow_ext_params: [f32; 4],
+	shadow_ao_params: [f32; 4],
+	shadow_ao_shift: [f32; 4],
+	shadow_ao_shift2: [f32; 4],
 	shadow_border_color: [f32; 4],
 	shadow2_color: [f32; 4],
 	shadow2_params: [f32; 4],
@@ -433,6 +436,12 @@ struct MeshDrawMaterialGpu {
 	backlight_params: [f32; 4],
 	backlight_ext_params: [f32; 4],
 	backlight_shadow_params: [f32; 4],
+	glitter_color: [f32; 4],
+	glitter_params1: [f32; 4],
+	glitter_params2: [f32; 4],
+	glitter_control: [f32; 4],
+	glitter_ext: [f32; 4],
+	glitter_ext2: [f32; 4],
 	emission_color: [f32; 4],
 	emission_params: [f32; 4],
 	emission_blink_params: [f32; 4],
@@ -463,6 +472,7 @@ struct MeshDrawMaterialGpu {
 	alpha_ext_params: [f32; 4],
 	lighting_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
+	material_ext_params: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -507,7 +517,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1696);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 1856);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -3022,6 +3032,11 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+	let shadow_ao_params = liltoon_like
+		.map(|u| [u.shadow.post_ao_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let shadow_ao_shift = liltoon_like.map(|u| u.shadow.ao_shift_factor).unwrap_or([1.0, 0.0, 1.0, 0.0]);
+	let shadow_ao_shift2 = liltoon_like.map(|u| u.shadow.ao_shift2_factor).unwrap_or([1.0, 0.0, 0.0, 0.0]);
 	let shadow_border_color = liltoon_like
 		.map(|u| {
 			[
@@ -3343,6 +3358,9 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let material_ext_params = liltoon_like
+		.map(|u| [u.flip_backface_normal_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
@@ -3432,6 +3450,39 @@ fn mesh_draw_material_gpu(
 	let backlight_shadow_params = liltoon_like
 		.map(|u| [u.backlight.receive_shadow_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
 		.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let glitter_color = liltoon_like.map(|u| u.glitter.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let glitter_params1 = liltoon_like.map(|u| u.glitter.params1_factor).unwrap_or([256.0, 256.0, 0.16, 50.0]);
+	let glitter_params2 = liltoon_like.map(|u| u.glitter.params2_factor).unwrap_or([0.25, 0.0, 0.0, 0.0]);
+	let glitter_control = liltoon_like
+		.map(|u| {
+			[
+				u.glitter.enabled_factor.clamp(0.0, 1.0),
+				u.glitter.main_strength_factor.clamp(0.0, 1.0),
+				u.glitter.normal_strength_factor.clamp(0.0, 1.0),
+				u.glitter.post_contrast_factor.max(0.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let glitter_ext = liltoon_like
+		.map(|u| {
+			[
+				u.glitter.sensitivity_factor.max(0.0),
+				u.glitter.enable_lighting_factor.clamp(0.0, 1.0),
+				u.glitter.shadow_mask_factor.clamp(0.0, 1.0),
+				u.glitter.apply_transparency_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.25, 1.0, 0.0, 1.0]);
+	let glitter_ext2 = liltoon_like
+		.map(|u| {
+			[
+				u.glitter.backface_mask_factor.clamp(0.0, 1.0),
+				u.glitter.scale_randomize_factor.clamp(0.0, 1.0),
+				u.glitter.uv_mode_factor.clamp(0.0, 1.0),
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let emission_color = liltoon_like.map(|u| u.emission.color_factor).unwrap_or([
 		mat.emissive_factor[0],
 		mat.emissive_factor[1],
@@ -3526,6 +3577,9 @@ fn mesh_draw_material_gpu(
 		],
 		shadow_params,
 		shadow_ext_params,
+		shadow_ao_params,
+		shadow_ao_shift,
+		shadow_ao_shift2,
 		shadow_border_color,
 		shadow2_color,
 		shadow2_params,
@@ -3574,6 +3628,12 @@ fn mesh_draw_material_gpu(
 		backlight_params,
 		backlight_ext_params,
 		backlight_shadow_params,
+		glitter_color,
+		glitter_params1,
+		glitter_params2,
+		glitter_control,
+		glitter_ext,
+		glitter_ext2,
 		emission_color,
 		emission_params,
 		emission_blink_params,
@@ -3609,6 +3669,7 @@ fn mesh_draw_material_gpu(
 		alpha_ext_params,
 		lighting_ext_params,
 		transparency_params,
+		material_ext_params,
 		emissive_factor: [
 			mat.emissive_factor[0],
 			mat.emissive_factor[1],
@@ -8112,6 +8173,38 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_glitter_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.glitter.enabled_factor = 1.0;
+		liltoon_like.glitter.color_factor = [0.2, 0.3, 0.4, 0.5];
+		liltoon_like.glitter.params1_factor = [512.0, 513.0, 0.08, 2.0];
+		liltoon_like.glitter.params2_factor = [0.6, 0.7, 0.8, 0.9];
+		liltoon_like.glitter.main_strength_factor = 0.1;
+		liltoon_like.glitter.normal_strength_factor = 0.2;
+		liltoon_like.glitter.post_contrast_factor = 1.3;
+		liltoon_like.glitter.sensitivity_factor = 0.4;
+		liltoon_like.glitter.enable_lighting_factor = 0.5;
+		liltoon_like.glitter.shadow_mask_factor = 0.6;
+		liltoon_like.glitter.apply_transparency_factor = 0.7;
+		liltoon_like.glitter.backface_mask_factor = 0.8;
+		liltoon_like.glitter.scale_randomize_factor = 0.9;
+		liltoon_like.glitter.uv_mode_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.glitter_color, [0.2, 0.3, 0.4, 0.5]);
+		assert_eq!(draw.glitter_params1, [512.0, 513.0, 0.08, 2.0]);
+		assert_eq!(draw.glitter_params2, [0.6, 0.7, 0.8, 0.9]);
+		assert_eq!(draw.glitter_control, [1.0, 0.1, 0.2, 1.3]);
+		assert_eq!(draw.glitter_ext, [0.4, 0.5, 0.6, 0.7]);
+		assert_eq!(draw.glitter_ext2, [0.8, 0.9, 1.0, 0.0]);
+	}
+
+	#[test]
 	fn liltoon_matcap_uv_flags_reach_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.matcap.perspective_factor = 0.1;
@@ -8143,6 +8236,38 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
+	}
+
+	#[test]
+	fn liltoon_flip_backface_normal_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.flip_backface_normal_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.material_ext_params, [1.0, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_shadow_post_ao_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.post_ao_factor = 1.0;
+		liltoon_like.shadow.ao_shift_factor = [3.0, 0.1, 2.0, 0.2];
+		liltoon_like.shadow.ao_shift2_factor = [1.5, 0.3, 0.0, 0.0];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.shadow_ao_params, [1.0, 0.0, 0.0, 0.0]);
+		assert_eq!(draw.shadow_ao_shift, [3.0, 0.1, 2.0, 0.2]);
+		assert_eq!(draw.shadow_ao_shift2, [1.5, 0.3, 0.0, 0.0]);
 	}
 
 	#[test]

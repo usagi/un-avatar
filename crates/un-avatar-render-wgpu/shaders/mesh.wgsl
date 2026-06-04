@@ -26,6 +26,9 @@ struct DrawMaterial {
 	shading_params: vec4<f32>,
 	shadow_params: vec4<f32>,
 	shadow_ext_params: vec4<f32>,
+	shadow_ao_params: vec4<f32>,
+	shadow_ao_shift: vec4<f32>,
+	shadow_ao_shift2: vec4<f32>,
 	shadow_border_color: vec4<f32>,
 	shadow2_color: vec4<f32>,
 	shadow2_params: vec4<f32>,
@@ -64,6 +67,12 @@ struct DrawMaterial {
 	backlight_params: vec4<f32>,
 	backlight_ext_params: vec4<f32>,
 	backlight_shadow_params: vec4<f32>,
+	glitter_color: vec4<f32>,
+	glitter_params1: vec4<f32>,
+	glitter_params2: vec4<f32>,
+	glitter_control: vec4<f32>,
+	glitter_ext: vec4<f32>,
+	glitter_ext2: vec4<f32>,
 	emission_color: vec4<f32>,
 	emission_params: vec4<f32>,
 	emission_blink_params: vec4<f32>,
@@ -94,6 +103,7 @@ struct DrawMaterial {
 	alpha_ext_params: vec4<f32>,
 	lighting_ext_params: vec4<f32>,
 	transparency_params: vec4<f32>,
+	material_ext_params: vec4<f32>,
 	emissive_factor: vec4<f32>,
 	uv_anim_params: vec4<f32>,
 	uv_offset_scale: vec4<f32>,
@@ -761,6 +771,82 @@ fn lil_backface_visibility(backface_mask: f32, front_facing: bool) -> f32 {
 	return select(backface_visible, 1.0, front_facing);
 }
 
+fn lil_flip_backface_normal(n: vec3<f32>, front_facing: bool, flip_backface_normal: f32) -> vec3<f32> {
+	return select(n, -n, !front_facing && flip_backface_normal > 0.5);
+}
+
+fn lil_shadow_border_ao_mask(mask: vec3<f32>) -> vec3<f32> {
+	return clamp(
+		vec3<f32>(
+			mask.r * drawu.shadow_ao_shift.x + drawu.shadow_ao_shift.y,
+			mask.g * drawu.shadow_ao_shift.z + drawu.shadow_ao_shift.w,
+			mask.b * drawu.shadow_ao_shift2.x + drawu.shadow_ao_shift2.y,
+		),
+		vec3<f32>(0.0),
+		vec3<f32>(1.0),
+	);
+}
+
+fn lil_shadow_apply_pre_ao(value: f32, mask: f32, post_ao: bool) -> f32 {
+	return select(value * mask, value, post_ao);
+}
+
+fn lil_shadow_apply_post_ao(value: f32, mask: f32, post_ao: bool) -> f32 {
+	return select(value, value * mask, post_ao);
+}
+
+fn lil_glitter_hash(cell: vec2<f32>) -> vec3<f32> {
+	let x = dot(cell, vec2<f32>(127.1, 311.7));
+	let y = dot(cell, vec2<f32>(269.5, 183.3));
+	let z = dot(cell, vec2<f32>(419.2, 371.9));
+	return fract(sin(vec3<f32>(x, y, z)) * vec3<f32>(43758.5453, 22578.1459, 19642.3490));
+}
+
+fn lil_glitter_voronoi(pos: vec2<f32>, scale_randomize: f32) -> vec4<f32> {
+	let base_cell = floor(pos);
+	let frac_pos = fract(pos);
+	var nearest_hash = vec3<f32>(0.0, 0.0, 0.0);
+	var nearest_dist = 8.0;
+	for (var y = -1; y <= 1; y = y + 1) {
+		for (var x = -1; x <= 1; x = x + 1) {
+			let offset = vec2<f32>(f32(x), f32(y));
+			let rand = lil_glitter_hash(base_cell + offset);
+			let cell_scale = mix(1.0, 0.5 + rand.z, clamp(scale_randomize, 0.0, 1.0));
+			let to_cell = offset + rand.xy * cell_scale - frac_pos;
+			let dist = dot(to_cell, to_cell);
+			if (dist < nearest_dist) {
+				nearest_dist = dist;
+				nearest_hash = rand;
+			}
+		}
+	}
+	return vec4<f32>(nearest_hash, sqrt(nearest_dist));
+}
+
+fn lil_calc_glitter(uv: vec2<f32>, normal: vec3<f32>, view_dir: vec3<f32>, camera_dir: vec3<f32>, light_dir: vec3<f32>) -> vec3<f32> {
+	let scale = max(abs(drawu.glitter_params1.xy), vec2<f32>(0.0001, 0.0001));
+	let pos_raw = uv * scale;
+	let pixel_width = max(fwidth(pos_raw), vec2<f32>(1.0, 1.0));
+	let cell_factor = max(floor(pixel_width), vec2<f32>(1.0, 1.0));
+	let pos = pos_raw / cell_factor + scale * cell_factor;
+	let nearest = lil_glitter_voronoi(pos, drawu.glitter_ext2.y);
+	let time_seed = frame.time_params.x * drawu.glitter_params2.x;
+	var glitter_normal = abs(fract(nearest.xyz * 14.274 + vec3<f32>(time_seed)) * 2.0 - vec3<f32>(1.0));
+	glitter_normal = normalize_or(glitter_normal * 2.0 - vec3<f32>(1.0), normal);
+	let sensitivity = max(drawu.glitter_ext.x, 0.0001);
+	let contrast = max(drawu.glitter_params1.w, 0.0);
+	var glitter = dot(glitter_normal, normalize_or(camera_dir, view_dir));
+	glitter = abs(fract(glitter * sensitivity + sensitivity) - 0.5) * 4.0 - 1.0;
+	glitter = clamp(1.0 - (glitter * contrast + contrast), 0.0, 1.0);
+	glitter = pow(glitter, max(drawu.glitter_control.w, 0.0001));
+	let size = max(drawu.glitter_params1.z, 0.0);
+	glitter = glitter * clamp((size - nearest.w) / max(fwidth(nearest.w), 0.0001), 0.0, 1.0);
+	let half_dir = normalize_or(view_dir + light_dir * drawu.glitter_params2.z, normal);
+	let nh = clamp(dot(normal, half_dir), 0.0, 1.0);
+	glitter = glitter * clamp(nh * drawu.glitter_params2.y + 1.0 - drawu.glitter_params2.y, 0.0, 1.0);
+	return glitter - glitter * fract(nearest.xyz * 278.436) * clamp(drawu.glitter_params2.w, 0.0, 1.0);
+}
+
 fn fresnel_lerp(specular: vec3<f32>, grazing_term: f32, nv: f32) -> vec3<f32> {
 	let f = pow(clamp(1.0 - nv, 0.0, 1.0), 5.0);
 	return mix(specular, vec3<f32>(grazing_term), f);
@@ -1106,8 +1192,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let l = normalize(frame.light_dir.xyz);
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 	let gem_backface_normal = is_liltoon_gem && !front_facing;
-	let geometry_n = select(geometry_n_faced, normalize(geometry_n_faced - v * 0.2), gem_backface_normal);
-	let n = select(n_faced, normalize(n_faced - v * 0.2), gem_backface_normal);
+	let lil_geometry_n_faced = lil_flip_backface_normal(geometry_n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
+	let lil_n_faced = lil_flip_backface_normal(n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
+	let geometry_n = select(lil_geometry_n_faced, normalize(lil_geometry_n_faced - v * 0.2), gem_backface_normal);
+	let n = select(lil_n_faced, normalize(lil_n_faced - v * 0.2), gem_backface_normal);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
@@ -1122,17 +1210,19 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let shadow_strength_mask_uv = uv * drawu.shadow_strength_mask_uv_offset_scale.zw + drawu.shadow_strength_mask_uv_offset_scale.xy;
 		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
 		let shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;
-		let shadow_border_mask = textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).r;
-		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).r;
-		let lil_shadow_value = (dot(shadow_n, l) * 0.5 + 0.5) * shadow_border_mask;
-		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, shadow_strength_mask_uv).r;
-		let lil_shadow = lil_tooning_scale_range(
+		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);
+		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;
+		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
+		let lil_shadow_value = lil_shadow_apply_pre_ao(dot(shadow_n, l) * 0.5 + 0.5, shadow_border_mask.r, shadow_post_ao);
+		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, shadow_strength_mask_uv);
+		let lil_shadow_raw = lil_tooning_scale_range(
 			lil_shadow_value,
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
-			clamp(drawu.shadow_params.w * shadow_blur_mask, 0.0, 1.0),
+			clamp(drawu.shadow_params.w * shadow_blur_mask.r, 0.0, 1.0),
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
-		shading = mix(1.0, lil_shadow, clamp(drawu.shadow_params.y * shadow_strength_mask, 0.0, 1.0));
+		let lil_shadow = lil_shadow_apply_post_ao(lil_shadow_raw, shadow_border_mask.r, shadow_post_ao);
+		shading = mix(1.0, lil_shadow, clamp(drawu.shadow_params.y * shadow_strength_mask.r, 0.0, 1.0));
 	} else {
 		let raw_shift_tex_value = textureSample(shading_shift_tex, shading_shift_samp, uv).r * drawu.shading_params.z;
 		let shift_tex_value = select(raw_shift_tex_value, 0.0, force_shift_zero);
@@ -1156,26 +1246,33 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let light_color = lil_direct_light_color();
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
-		let shadow2_value = dot(shadow2_n, l) * 0.5 + 0.5;
+		let shadow_border_mask_uv = uv * drawu.shadow_border_mask_uv_offset_scale.zw + drawu.shadow_border_mask_uv_offset_scale.xy;
+		let shadow_blur_mask_uv = uv * drawu.shadow_blur_mask_uv_offset_scale.zw + drawu.shadow_blur_mask_uv_offset_scale.xy;
+		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb);
+		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb;
+		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
+		let shadow2_value = lil_shadow_apply_pre_ao(dot(shadow2_n, l) * 0.5 + 0.5, shadow_border_mask.g, shadow_post_ao);
 		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, shade_uv);
 		let shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;
-		let shadow2 = lil_tooning_scale_range(
+		let shadow2_raw = lil_tooning_scale_range(
 			shadow2_value,
 			clamp(drawu.shadow2_params.x, 0.0, 1.0),
-			clamp(drawu.shadow2_params.y, 0.0, 1.0),
+			clamp(drawu.shadow2_params.y * shadow_blur_mask.g, 0.0, 1.0),
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
+		let shadow2 = lil_shadow_apply_post_ao(shadow2_raw, shadow_border_mask.g, shadow_post_ao);
 		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
 		indirect_col = mix(indirect_col, shadow2_color * light_color, shadow2_strength);
-		let shadow3_value = dot(shadow3_n, l) * 0.5 + 0.5;
+		let shadow3_value = lil_shadow_apply_pre_ao(dot(shadow3_n, l) * 0.5 + 0.5, shadow_border_mask.b, shadow_post_ao);
 		let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, shade_uv);
 		let shadow3_color = mix(base, shadow3_color_texel.rgb, clamp(shadow3_color_texel.a, 0.0, 1.0)) * drawu.shadow3_color.rgb;
-		let shadow3 = lil_tooning_scale_range(
+		let shadow3_raw = lil_tooning_scale_range(
 			shadow3_value,
 			clamp(drawu.shadow3_params.x, 0.0, 1.0),
-			clamp(drawu.shadow3_params.y, 0.0, 1.0),
+			clamp(drawu.shadow3_params.y * shadow_blur_mask.b, 0.0, 1.0),
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
+		let shadow3 = lil_shadow_apply_post_ao(shadow3_raw, shadow_border_mask.b, shadow_post_ao);
 		let shadow3_strength = clamp((1.0 - shadow3) * drawu.shadow3_color.a, 0.0, 1.0);
 		indirect_col = mix(indirect_col, shadow3_color * light_color, shadow3_strength);
 		indirect_col = mix(indirect_col, indirect_col * base, clamp(drawu.shadow_ext_params.y, 0.0, 1.0));
@@ -1185,12 +1282,13 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			clamp(max(max(frame.ambient_color.r, frame.ambient_color.g), frame.ambient_color.b) * frame.ambient_color.w * drawu.shadow_ext_params.z, 0.0, 1.0),
 		);
 		indirect_col = min(indirect_col, direct_col);
-		let border_mix = lil_tooning_scale_range(
-			dot(shadow_n, l) * 0.5 + 0.5,
+		let border_mix_raw = lil_tooning_scale_range(
+			lil_shadow_apply_pre_ao(dot(shadow_n, l) * 0.5 + 0.5, shadow_border_mask.r, shadow_post_ao),
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
-			clamp(drawu.shadow_params.w, 0.0, 1.0),
+			clamp(drawu.shadow_params.w * shadow_blur_mask.r, 0.0, 1.0),
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
 		);
+		let border_mix = lil_shadow_apply_post_ao(border_mix_raw, shadow_border_mask.r, shadow_post_ao);
 		indirect_col = mix(indirect_col, direct_col, border_mix * drawu.shadow_border_color.rgb);
 		lit = mix(indirect_col, direct_col, shading) * authored_occlusion(uv, dbg);
 	} else {
@@ -1469,12 +1567,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
 				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
-				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
+				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).rgb;
 				let matcap_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
 				let matcap_backface = lil_backface_visibility(drawu.matcap_ext_params.w, front_facing);
 				let matcap_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.x, 0.0, 1.0), 0.0, is_liltoon_refraction));
-				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
-				lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
+				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
+				lit = lil_blend_color3(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
 			}
 			if (drawu.matcap2_params.x > 0.0) {
 				let matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));
@@ -1485,12 +1583,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
 				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
-				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
+				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;
 				let matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
 				let matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);
 				let matcap2_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.y, 0.0, 1.0), 0.0, is_liltoon_refraction));
-				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
-				lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
+				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
+				lit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 			}
 		}
 		if (!is_liltoon_gem && drawu.rim_shade_params.x > 0.5) {
@@ -1534,12 +1632,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let lit_matcap = mix(matcap_raw, matcap_raw * frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap_params.z, 0.0, 1.0));
 				let albedo_matcap = mix(lit_matcap, lit_matcap * base, clamp(drawu.matcap_params.y, 0.0, 1.0));
 				let matcap_blend_mask_uv = uv * drawu.matcap_blend_mask_uv_offset_scale.zw + drawu.matcap_blend_mask_uv_offset_scale.xy;
-				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;
+				let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).rgb;
 				let matcap_shadow = mix(1.0, shading, clamp(drawu.matcap_ext_params.y, 0.0, 1.0));
 				let matcap_backface = lil_backface_visibility(drawu.matcap_ext_params.w, front_facing);
 				let matcap_transparency = mix(1.0, a, clamp(drawu.transparency_params.x, 0.0, 1.0));
-				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, 0.0, 1.0);
-				lit = lil_blend_color(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
+				let matcap_blend = clamp(drawu.matcap_params.x * matcap_tex_color.a * matcap_blend_mask * drawu.matcap_factor.w * matcap_shadow * matcap_backface * matcap_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
+				lit = lil_blend_color3(lit, albedo_matcap, matcap_blend, drawu.matcap_params.w);
 			} else {
 				lit = lit + matcap_raw * drawu.matcap_factor.w;
 			}
@@ -1552,12 +1650,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
 				let matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));
 				let matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;
-				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;
+				let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;
 				let matcap2_shadow = mix(1.0, shading, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));
 				let matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);
 				let matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));
-				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);
-				lit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
+				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
+				lit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 			}
 		}
 		lit = lit + specular + authored_reflection;
@@ -1568,6 +1666,19 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
 		let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
 		lit = lit + clamp(fur_shell, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
+	}
+
+	if (is_liltoon && drawu.glitter_control.x > 0.5) {
+		let glitter_n = normalize(mix(geometry_n, n, clamp(drawu.glitter_control.z, 0.0, 1.0)));
+		let glitter_proc = lil_calc_glitter(uv, glitter_n, v, v, l);
+		var glitter_color = drawu.glitter_color.rgb * glitter_proc;
+		glitter_color = mix(glitter_color, glitter_color * base, clamp(drawu.glitter_control.y, 0.0, 1.0));
+		var glitter_alpha = clamp(drawu.glitter_color.a, 0.0, 1.0);
+		glitter_alpha = mix(glitter_alpha, glitter_alpha * out_a, clamp(drawu.glitter_ext.w, 0.0, 1.0));
+		glitter_alpha = glitter_alpha * lil_backface_visibility(drawu.glitter_ext2.x, front_facing);
+		glitter_alpha = mix(glitter_alpha, glitter_alpha * lil_effect_shadowmix, clamp(drawu.glitter_ext.z, 0.0, 1.0));
+		let glitter_lit = mix(glitter_color, glitter_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.glitter_ext.y, 0.0, 1.0));
+		lit = lit + glitter_lit * glitter_alpha;
 	}
 
 	let disable_emissive = (dbg & DBG_DISABLE_EMISSIVE) != 0u;

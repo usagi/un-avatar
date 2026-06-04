@@ -2399,6 +2399,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	};
 	out.texture_uv_offset_scales = unavatar_material_uv_offset_scales(extras);
 	out.texture_uv_mode_factors = unavatar_material_uv_mode_factors(extras);
+	out.flip_backface_normal_factor = unavatar_material_float_param(extras, "_FlipNormal")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
 	out.rendering.render_queue_number = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue")));
 	if let Some(value) = mtoon.and_then(|m| {
 		json_vec4(
@@ -2627,6 +2630,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_color_param_rgb(extras, "_ShadowBorderColor") {
 		out.shadow.border_color_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ShadowPostAO") {
+		out.shadow.post_ao_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_ShadowAOShift") {
+		out.shadow.ao_shift_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_ShadowAOShift2") {
+		out.shadow.ao_shift2_factor = value;
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_ShadowNormalStrength") {
 		out.shadow.normal_strength_factor = value.clamp(0.0, 1.0);
@@ -3084,6 +3096,49 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_BacklightBackfaceMask") {
 		out.backlight.backface_mask_factor = value.clamp(0.0, 1.0);
+	}
+
+	out.glitter.enabled_factor = unavatar_material_float_param(extras, "_UseGlitter")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_color_param_rgba(extras, "_GlitterColor") {
+		out.glitter.color_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_GlitterParams1") {
+		out.glitter.params1_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_GlitterParams2") {
+		out.glitter.params2_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterMainStrength") {
+		out.glitter.main_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterNormalStrength") {
+		out.glitter.normal_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterPostContrast") {
+		out.glitter.post_contrast_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterSensitivity") {
+		out.glitter.sensitivity_factor = value.max(0.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterEnableLighting") {
+		out.glitter.enable_lighting_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterShadowMask") {
+		out.glitter.shadow_mask_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterApplyTransparency") {
+		out.glitter.apply_transparency_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterBackfaceMask") {
+		out.glitter.backface_mask_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterScaleRandomize") {
+		out.glitter.scale_randomize_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_GlitterUVMode") {
+		out.glitter.uv_mode_factor = value.clamp(0.0, 1.0);
 	}
 
 	out.emission.enabled_factor = unavatar_material_float_param(extras, "_UseEmission").unwrap_or(0.0).clamp(0.0, 1.0);
@@ -5026,6 +5081,7 @@ mod tests {
 					"_Bump2ndMap": 2.0
 				},
 				"floatParams": {
+					"_FlipNormal": 1.0,
 					"_UseShadow": 1.0,
 					"_UseMatCap": 1.0,
 					"_UseReflection": 1.0,
@@ -5038,6 +5094,7 @@ mod tests {
 					"_ShadowBorderRange": 0.08,
 					"_ShadowMainStrength": 0.35,
 					"_ShadowEnvStrength": 0.45,
+					"_ShadowPostAO": 1.0,
 					"_ShadowNormalStrength": 0.55,
 					"_ShadowReceive": 0.65,
 					"_Shadow2ndBorder": 0.31,
@@ -5132,6 +5189,17 @@ mod tests {
 					"_BacklightViewStrength": 0.62,
 					"_BacklightReceiveShadow": 0.52,
 					"_BacklightBackfaceMask": 0.42,
+					"_UseGlitter": 1.0,
+					"_GlitterMainStrength": 0.2,
+					"_GlitterNormalStrength": 0.8,
+					"_GlitterPostContrast": 1.4,
+					"_GlitterSensitivity": 0.35,
+					"_GlitterEnableLighting": 0.6,
+					"_GlitterShadowMask": 0.7,
+					"_GlitterApplyTransparency": 0.8,
+					"_GlitterBackfaceMask": 1.0,
+					"_GlitterScaleRandomize": 0.3,
+					"_GlitterUVMode": 1.0,
 					"_UseEmission": 1.0,
 					"_EmissionMainStrength": 0.45,
 					"_EmissionBlend": 0.55,
@@ -5216,12 +5284,17 @@ mod tests {
 					"_RimShadeColor": [0.6, 0.5, 0.4, 0.7],
 					"_FurRimColor": [0.21, 0.31, 0.41, 0.51],
 					"_BacklightColor": [1.1, 1.2, 1.3, 0.8],
+					"_GlitterColor": [0.8, 0.7, 0.6, 0.5],
 					"_EmissionColor": [0.5, 0.4, 0.3, 0.8],
 					"_Emission2ndColor": [0.15, 0.25, 0.35, 0.45],
 					"_OutlineColor": [0.01, 0.02, 0.03, 1.0],
 					"_OutlineLitColor": [1.0, 0.2, 0.0, 0.4]
 				},
 				"vectorParams": {
+					"_ShadowAOShift": [3.0, 0.1, 2.0, 0.2],
+					"_ShadowAOShift2": [1.5, 0.3, 0.0, 0.0],
+					"_GlitterParams1": [512.0, 513.0, 0.08, 2.0],
+					"_GlitterParams2": [0.6, 0.7, 0.8, 0.9],
 					"_FurVector": [0.1, 0.2, 0.3, 0.4]
 				},
 				"mtoon": {
@@ -5271,6 +5344,7 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
+		assert_eq!(liltoon_like.flip_backface_normal_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
@@ -5321,6 +5395,9 @@ mod tests {
 		assert_eq!(liltoon_like.shadow.main_strength_factor, 0.35);
 		assert_eq!(liltoon_like.shadow.env_strength_factor, 0.45);
 		assert_eq!(liltoon_like.shadow.border_color_factor, [0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.shadow.post_ao_factor, 1.0);
+		assert_eq!(liltoon_like.shadow.ao_shift_factor, [3.0, 0.1, 2.0, 0.2]);
+		assert_eq!(liltoon_like.shadow.ao_shift2_factor, [1.5, 0.3, 0.0, 0.0]);
 		assert_eq!(liltoon_like.shadow.normal_strength_factor, 0.55);
 		assert_eq!(liltoon_like.shadow.receive_factor, 0.65);
 		assert_eq!(liltoon_like.shadow.second_color_factor, [0.4, 0.5, 0.6, 0.7]);
@@ -5442,6 +5519,20 @@ mod tests {
 		assert_eq!(liltoon_like.backlight.view_strength_factor, 0.62);
 		assert_eq!(liltoon_like.backlight.receive_shadow_factor, 0.52);
 		assert_eq!(liltoon_like.backlight.backface_mask_factor, 0.42);
+		assert_eq!(liltoon_like.glitter.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.glitter.color_factor, [0.8, 0.7, 0.6, 0.5]);
+		assert_eq!(liltoon_like.glitter.params1_factor, [512.0, 513.0, 0.08, 2.0]);
+		assert_eq!(liltoon_like.glitter.params2_factor, [0.6, 0.7, 0.8, 0.9]);
+		assert_eq!(liltoon_like.glitter.main_strength_factor, 0.2);
+		assert_eq!(liltoon_like.glitter.normal_strength_factor, 0.8);
+		assert_eq!(liltoon_like.glitter.post_contrast_factor, 1.4);
+		assert_eq!(liltoon_like.glitter.sensitivity_factor, 0.35);
+		assert_eq!(liltoon_like.glitter.enable_lighting_factor, 0.6);
+		assert_eq!(liltoon_like.glitter.shadow_mask_factor, 0.7);
+		assert_eq!(liltoon_like.glitter.apply_transparency_factor, 0.8);
+		assert_eq!(liltoon_like.glitter.backface_mask_factor, 1.0);
+		assert_eq!(liltoon_like.glitter.scale_randomize_factor, 0.3);
+		assert_eq!(liltoon_like.glitter.uv_mode_factor, 1.0);
 		assert_eq!(liltoon_like.emission.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.emission.color_factor, [0.5, 0.4, 0.3, 0.8]);
 		assert_eq!(liltoon_like.emission.texture_index, Some(13));

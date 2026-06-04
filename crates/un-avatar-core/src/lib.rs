@@ -611,6 +611,12 @@ pub struct UnaLilToonLikeShadow {
 	pub env_strength_factor: f32,
 	#[serde(default = "default_liltoon_shadow_border_color")]
 	pub border_color_factor: [f32; 3],
+	#[serde(default)]
+	pub post_ao_factor: f32,
+	#[serde(default = "default_liltoon_shadow_ao_shift")]
+	pub ao_shift_factor: [f32; 4],
+	#[serde(default = "default_liltoon_shadow_ao_shift2")]
+	pub ao_shift2_factor: [f32; 4],
 	#[serde(default = "one_f32")]
 	pub normal_strength_factor: f32,
 	#[serde(default)]
@@ -1002,6 +1008,38 @@ pub struct UnaLilToonLikeBacklight {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeGlitter {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default = "one_vec4")]
+	pub color_factor: [f32; 4],
+	#[serde(default = "default_liltoon_glitter_params1")]
+	pub params1_factor: [f32; 4],
+	#[serde(default = "default_liltoon_glitter_params2")]
+	pub params2_factor: [f32; 4],
+	#[serde(default)]
+	pub main_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub normal_strength_factor: f32,
+	#[serde(default = "one_f32")]
+	pub post_contrast_factor: f32,
+	#[serde(default = "default_liltoon_glitter_sensitivity")]
+	pub sensitivity_factor: f32,
+	#[serde(default = "one_f32")]
+	pub enable_lighting_factor: f32,
+	#[serde(default)]
+	pub shadow_mask_factor: f32,
+	#[serde(default = "one_f32")]
+	pub apply_transparency_factor: f32,
+	#[serde(default)]
+	pub backface_mask_factor: f32,
+	#[serde(default)]
+	pub scale_randomize_factor: f32,
+	#[serde(default)]
+	pub uv_mode_factor: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeAlphaMask {
 	#[serde(default)]
 	pub mode_factor: f32,
@@ -1113,6 +1151,8 @@ pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
 	#[serde(default)]
+	pub flip_backface_normal_factor: f32,
+	#[serde(default)]
 	pub main_color: UnaLilToonLikeMainColor,
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub texture_uv_offset_scales: BTreeMap<String, [f32; 4]>,
@@ -1137,6 +1177,8 @@ pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub backlight: UnaLilToonLikeBacklight,
 	#[serde(default)]
+	pub glitter: UnaLilToonLikeGlitter,
+	#[serde(default)]
 	pub alpha_mask: UnaLilToonLikeAlphaMask,
 	#[serde(default)]
 	pub fur: UnaLilToonLikeFur,
@@ -1160,6 +1202,9 @@ impl Default for UnaLilToonLikeShadow {
 			main_strength_factor: default_liltoon_shadow_main_strength(),
 			env_strength_factor: default_liltoon_shadow_env_strength(),
 			border_color_factor: default_liltoon_shadow_border_color(),
+			post_ao_factor: 0.0,
+			ao_shift_factor: default_liltoon_shadow_ao_shift(),
+			ao_shift2_factor: default_liltoon_shadow_ao_shift2(),
 			normal_strength_factor: 1.0,
 			receive_factor: 0.0,
 			second_color_factor: [0.0, 0.0, 0.0, 0.0],
@@ -1418,6 +1463,27 @@ impl Default for UnaLilToonLikeBacklight {
 	}
 }
 
+impl Default for UnaLilToonLikeGlitter {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			color_factor: [1.0, 1.0, 1.0, 1.0],
+			params1_factor: default_liltoon_glitter_params1(),
+			params2_factor: default_liltoon_glitter_params2(),
+			main_strength_factor: 0.0,
+			normal_strength_factor: 1.0,
+			post_contrast_factor: 1.0,
+			sensitivity_factor: default_liltoon_glitter_sensitivity(),
+			enable_lighting_factor: 1.0,
+			shadow_mask_factor: 0.0,
+			apply_transparency_factor: 1.0,
+			backface_mask_factor: 0.0,
+			scale_randomize_factor: 0.0,
+			uv_mode_factor: 0.0,
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeAlphaMask {
 	fn default() -> Self {
 		Self {
@@ -1495,6 +1561,7 @@ impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			flip_backface_normal_factor: 0.0,
 			main_color: UnaLilToonLikeMainColor::default(),
 			texture_uv_offset_scales: BTreeMap::new(),
 			texture_uv_mode_factors: BTreeMap::new(),
@@ -1507,6 +1574,7 @@ impl Default for UnaLilToonLikeMaterial {
 			emission: UnaLilToonLikeEmission::default(),
 			outline: UnaLilToonLikeOutline::default(),
 			backlight: UnaLilToonLikeBacklight::default(),
+			glitter: UnaLilToonLikeGlitter::default(),
 			alpha_mask: UnaLilToonLikeAlphaMask::default(),
 			fur: UnaLilToonLikeFur::default(),
 			blend_state: UnaLilToonLikeBlendState::default(),
@@ -1650,6 +1718,26 @@ fn default_liltoon_shadow_env_strength() -> f32 {
 
 fn default_liltoon_shadow_border_color() -> [f32; 3] {
 	[1.0, 0.1, 0.0]
+}
+
+fn default_liltoon_shadow_ao_shift() -> [f32; 4] {
+	[1.0, 0.0, 1.0, 0.0]
+}
+
+fn default_liltoon_shadow_ao_shift2() -> [f32; 4] {
+	[1.0, 0.0, 0.0, 0.0]
+}
+
+fn default_liltoon_glitter_params1() -> [f32; 4] {
+	[256.0, 256.0, 0.16, 50.0]
+}
+
+fn default_liltoon_glitter_params2() -> [f32; 4] {
+	[0.25, 0.0, 0.0, 0.0]
+}
+
+fn default_liltoon_glitter_sensitivity() -> f32 {
+	0.25
 }
 
 fn default_liltoon_smoothness() -> f32 {

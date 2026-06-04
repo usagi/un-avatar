@@ -71,4 +71,106 @@ mod tests {
 			"lilToon computes lnIndir as saturate((1.0-lnRaw + _RimIndirRange) / (1.0 + _RimIndirRange))"
 		);
 	}
+
+	#[test]
+	fn liltoon_matcap_blend_mask_is_rgb() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let lines: Vec<_> = mesh.lines().map(str::trim).collect();
+		assert!(
+			mesh.contains("textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).rgb"),
+			"lilToon samples _MatCapBlendMask as rgb for per-channel blending"
+		);
+		assert!(
+			mesh.contains("textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb"),
+			"lilToon samples _MatCap2ndBlendMask as rgb for per-channel blending"
+		);
+		assert!(
+			!lines.contains(&"let matcap_blend_mask = textureSample(matcap_blend_mask_tex, matcap_blend_mask_samp, matcap_blend_mask_uv).r;"),
+			"MatCap blend mask must not collapse to the red channel"
+		);
+		assert!(
+			!lines.contains(&"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;"),
+			"MatCap 2nd blend mask must not collapse to the red channel"
+		);
+	}
+
+	#[test]
+	fn liltoon_shadow_masks_preserve_rgb_channels() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("textureSample(shadow_border_mask_tex, shadow_border_mask_samp, shadow_border_mask_uv).rgb"),
+			"lilToon uses _ShadowBorderMask rgb for first, second, and third shadow AO"
+		);
+		assert!(
+			mesh.contains("textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, shadow_blur_mask_uv).rgb"),
+			"lilToon uses _ShadowBlurMask rgb for first, second, and third shadow blur"
+		);
+		assert!(
+			mesh.contains("shadow_border_mask.g") && mesh.contains("shadow_border_mask.b"),
+			"second and third shadow borders must not collapse to the red channel"
+		);
+		assert!(
+			mesh.contains("shadow_blur_mask.g") && mesh.contains("shadow_blur_mask.b"),
+			"second and third shadow blur must not collapse to the red channel"
+		);
+	}
+
+	#[test]
+	fn liltoon_flip_normal_flips_backface_normals() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_flip_backface_normal"),
+			"lilToon _FlipNormal needs an explicit backface normal flip"
+		);
+		assert!(
+			mesh.contains("!front_facing && flip_backface_normal > 0.5"),
+			"_FlipNormal should only affect backfaces"
+		);
+		assert!(
+			mesh.contains("drawu.material_ext_params.x"),
+			"_FlipNormal must be driven from the material uniform"
+		);
+	}
+
+	#[test]
+	fn liltoon_shadow_post_ao_controls_border_mask_order() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_shadow_border_ao_mask"),
+			"lilToon shadow border masks must apply _ShadowAOShift/_ShadowAOShift2"
+		);
+		assert!(
+			mesh.contains("drawu.shadow_ao_params.x > 0.5"),
+			"_ShadowPostAO must control shadow border mask ordering"
+		);
+		assert!(
+			mesh.contains("lil_shadow_apply_pre_ao") && mesh.contains("lil_shadow_apply_post_ao"),
+			"shadow border AO must be applicable before or after tooning"
+		);
+	}
+
+	#[test]
+	fn liltoon_glitter_uses_procedural_liltoon_controls() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_calc_glitter"),
+			"lilToon Glitter needs a procedural glitter calculation path"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_control.x > 0.5"),
+			"_UseGlitter must gate glitter contribution"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_params1") && mesh.contains("drawu.glitter_params2"),
+			"_GlitterParams1/_GlitterParams2 must drive scale, size, contrast, speed, angle, and random color"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_ext.z") && mesh.contains("lil_effect_shadowmix"),
+			"_GlitterShadowMask must mix glitter alpha with lilToon shadow mix"
+		);
+		assert!(
+			mesh.contains("drawu.glitter_ext.w") && mesh.contains("drawu.glitter_ext2.x"),
+			"_GlitterApplyTransparency and _GlitterBackfaceMask must affect glitter alpha"
+		);
+	}
 }
