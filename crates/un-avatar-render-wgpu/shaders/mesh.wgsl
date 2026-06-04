@@ -919,23 +919,21 @@ fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 fn lil_tooning_scale(value: f32, border: f32, blur: f32) -> f32 {
-	let aa_blur = blur * max(drawu.alpha_ext_params.y, 0.0);
-	if (aa_blur <= 0.00001) {
-		return select(0.0, 1.0, value >= border);
-	}
+	let aa_scale = max(drawu.alpha_ext_params.y, 0.0);
+	let aa_blur = blur * aa_scale;
 	let border_min = clamp(border - aa_blur * 0.5, 0.0, 1.0);
 	let border_max = clamp(border + aa_blur * 0.5, 0.0, 1.0);
-	return linearstep(border_min, border_max, value);
+	let width = clamp(border_max - border_min + fwidth(value) * aa_scale, 0.0001, 1.0);
+	return clamp((value - border_min) / width, 0.0, 1.0);
 }
 
 fn lil_tooning_scale_range(value: f32, border: f32, blur: f32, border_range: f32) -> f32 {
-	let aa_blur = blur * max(drawu.alpha_ext_params.y, 0.0);
-	if (aa_blur <= 0.00001 && border_range <= 0.00001) {
-		return select(0.0, 1.0, value >= border);
-	}
+	let aa_scale = max(drawu.alpha_ext_params.y, 0.0);
+	let aa_blur = blur * aa_scale;
 	let border_min = clamp(border - aa_blur * 0.5 - border_range, 0.0, 1.0);
 	let border_max = clamp(border + aa_blur * 0.5, 0.0, 1.0);
-	return linearstep(border_min, border_max, value);
+	let width = clamp(border_max - border_min + fwidth(value) * aa_scale, 0.0001, 1.0);
+	return clamp((value - border_min) / width, 0.0, 1.0);
 }
 
 fn lil_blend_color(dst: vec3<f32>, src: vec3<f32>, src_a: f32, blend_mode: f32) -> vec3<f32> {

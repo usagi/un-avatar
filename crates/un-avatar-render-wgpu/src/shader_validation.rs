@@ -176,6 +176,19 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_tooning_scale_uses_derivative_antialiasing() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fwidth(value) * aa_scale"),
+			"lilToon tooning boundaries should include derivative AA like lilTooningScale"
+		);
+		assert!(
+			mesh.contains("border_max - border_min + fwidth(value) * aa_scale"),
+			"shadow border range tooning should widen by fwidth(value) and _AAStrength"
+		);
+	}
+
+	#[test]
 	fn liltoon_glitter_uses_procedural_liltoon_controls() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
