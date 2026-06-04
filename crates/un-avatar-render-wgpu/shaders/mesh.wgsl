@@ -2131,7 +2131,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	if (is_liltoon) {
 		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
-		let reflection_transparency = mix(1.0, a, select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, is_liltoon_refraction));
+		let reflection_apply_transparency = select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, is_liltoon_refraction || alpha_kind <= 1.5);
+		let reflection_transparency = mix(1.0, a, reflection_apply_transparency);
 		let reflection_color_alpha = clamp(drawu.reflection_color.a * reflection_color_texel.a * reflection_transparency, 0.0, 1.0);
 		lit = lit - reflection_metallic * lit;
 		let reflection_tint = drawu.reflection_color.rgb * reflection_color_texel.rgb;

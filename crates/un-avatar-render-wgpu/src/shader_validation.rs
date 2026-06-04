@@ -321,6 +321,21 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_reflection_apply_transparency_is_transparent_only() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains(
+				"let reflection_apply_transparency = select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, is_liltoon_refraction || alpha_kind <= 1.5);"
+			),
+			"lilToon applies _ReflectionApplyTransparency only in transparent render mode and not in refraction"
+		);
+		assert!(
+			mesh.contains("let reflection_transparency = mix(1.0, a, reflection_apply_transparency);"),
+			"reflection alpha should use the gated transparency factor"
+		);
+	}
+
+	#[test]
 	fn liltoon_dissolve_separates_noise_and_non_noise_directional_uv() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

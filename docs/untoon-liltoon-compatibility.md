@@ -473,7 +473,7 @@ Status legend:
 - `[~]` `_ReflectionColor`
   - done: source raw color params と `_ReflectionColorTex` reference を保持し、specular/reflection color と alpha strength に接続した。
   - done: Renderer は `_ReflectionColorTex` の slot 別 Tiling / Offset を sampling UV に使う。
-  - done: `_ReflectionApplyTransparency` を保持し、specular/reflection alpha strength へ fragment alpha を反映する。
+  - done: `_ReflectionApplyTransparency` を保持し、本家 `LIL_RENDER == 2 && !LIL_REFRACTION` と同じく transparent non-refraction material の specular/reflection alpha strength へだけ fragment alpha を反映する。
   - remaining: color space handling、HDR range を本家に合わせる。
 - `[~]` `_ReflectionCubeTex` source asset import
   - done: EXR / HDR など glTF core image で扱えない reflection source asset を `UN_avatar.textureAssets` から image index へ解決する。
