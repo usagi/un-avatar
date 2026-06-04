@@ -252,9 +252,14 @@ fn portable_mesh_shader_source() -> String {
 		"@group(1) @binding(72) var normal2nd_scale_mask_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;\n",
 		"@group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;\n",
+		"@group(1) @binding(75) var main_color_adjust_mask_tex: texture_2d<f32>;\n",
 	] {
 		shader = shader.replace(snippet, "");
 	}
+	shader = shader.replace(
+		"let main_color_adjust_mask = textureSample(main_color_adjust_mask_tex, base_samp, uv).r;",
+		"let main_color_adjust_mask = 1.0;",
+	);
 	shader = shader.replace(
 		"let glitter_color_texel = textureSample(glitter_color_tex, base_samp, glitter_color_uv);",
 		"let glitter_color_texel = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
@@ -1672,6 +1677,7 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 			texture_bind_group_layout_entry(72, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
+			texture_bind_group_layout_entry(75, wgpu::ShaderStages::FRAGMENT),
 		]);
 	}
 	entries
@@ -5053,6 +5059,7 @@ impl SceneMeshes {
 				texture_bind_group_layout_entry(72, wgpu::ShaderStages::FRAGMENT),
 				texture_bind_group_layout_entry(73, wgpu::ShaderStages::FRAGMENT),
 				texture_bind_group_layout_entry(74, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(75, wgpu::ShaderStages::FRAGMENT),
 			],
 		});
 		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
@@ -6275,6 +6282,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
 				let main_gradation_view = texture_view_or(&image_views, main_gradation_texture_index, &white_view);
+				let main_color_adjust_mask_texture_index = mat
+					.liltoon_like
+					.as_ref()
+					.and_then(|liltoon_like| liltoon_like.main_color.main_color_adjust_mask_texture_index);
+				let main_color_adjust_mask_view = texture_view_or(&image_views, main_color_adjust_mask_texture_index, &white_view);
 				let alpha_mask_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -6759,6 +6771,10 @@ impl SceneMeshes {
 						wgpu::BindGroupEntry {
 							binding: 74,
 							resource: wgpu::BindingResource::TextureView(matcap2_bump_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 75,
+							resource: wgpu::BindingResource::TextureView(main_color_adjust_mask_view),
 						},
 					]);
 				}
@@ -7608,6 +7624,7 @@ mod tests {
 			"@group(1) @binding(72)",
 			"@group(1) @binding(73)",
 			"@group(1) @binding(74)",
+			"@group(1) @binding(75)",
 		] {
 			assert!(!source.contains(binding), "portable shader still contains {binding}");
 		}
@@ -7620,7 +7637,7 @@ mod tests {
 	fn mesh_toon_pipeline_interfaces_match() {
 		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
 		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 52;
+		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 53;
 		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());

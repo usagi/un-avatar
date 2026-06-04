@@ -553,6 +553,8 @@ pub enum UnaLilToonLikeBlendMode {
 pub struct UnaLilToonLikeMainColor {
 	#[serde(default = "default_liltoon_main_texture_hsvg")]
 	pub main_texture_hsvg_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub main_color_adjust_mask_texture_index: Option<usize>,
 	#[serde(default)]
 	pub gradation_enabled_factor: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1381,6 +1383,7 @@ impl Default for UnaLilToonLikeMainColor {
 	fn default() -> Self {
 		Self {
 			main_texture_hsvg_factor: default_liltoon_main_texture_hsvg(),
+			main_color_adjust_mask_texture_index: None,
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
 			gradation_strength_factor: 0.0,

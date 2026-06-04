@@ -288,6 +288,7 @@ struct MorphU {
 @group(1) @binding(72) var normal2nd_scale_mask_tex: texture_2d<f32>;
 @group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;
 @group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;
+@group(1) @binding(75) var main_color_adjust_mask_tex: texture_2d<f32>;
 @group(2) @binding(0) var<storage, read> bones: array<mat4x4<f32>>;
 @group(3) @binding(0) var<uniform> morphu: MorphU;
 @group(3) @binding(1) var<storage, read> morph_weights: array<f32>;
@@ -1258,9 +1259,13 @@ fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
 	return c.z * mix(vec3<f32>(1.0), clamp(p - vec3<f32>(1.0), vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
 
-fn apply_main_hsvg(color: vec3<f32>) -> vec3<f32> {
+fn apply_main_hsvg(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
 	let p = drawu.main_color_adjust_params;
 	if (abs(p.x) + abs(p.y - 1.0) + abs(p.z - 1.0) + abs(p.w - 1.0) < 0.000001) {
+		return color;
+	}
+	let main_color_adjust_mask = textureSample(main_color_adjust_mask_tex, base_samp, uv).r;
+	if (main_color_adjust_mask <= 0.000001) {
 		return color;
 	}
 	var hsv = rgb_to_hsv(max(color, vec3<f32>(0.0)));
@@ -1268,7 +1273,8 @@ fn apply_main_hsvg(color: vec3<f32>) -> vec3<f32> {
 	hsv.y = clamp(hsv.y * p.y, 0.0, 1.0);
 	hsv.z = max(hsv.z * p.z, 0.0);
 	let rgb = hsv_to_rgb(hsv);
-	return pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / max(p.w, 0.0001)));
+	let adjusted = pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / max(p.w, 0.0001)));
+	return mix(color, adjusted, clamp(main_color_adjust_mask, 0.0, 1.0));
 }
 
 fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {
@@ -1659,7 +1665,7 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) v
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb, uv));
 	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, uv, i.wp, 1.0, false, front_facing, false);
 	let main_col = main_layers.col;
 	let a = apply_lil_alpha_mask(main_col.a, uv);
@@ -1685,7 +1691,7 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 	discard_by_cull_mode(front_facing, dbg);
 	let uv = animated_uv(i.uv);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb, uv));
 	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, uv, i.wp, 1.0, false, front_facing, false);
 	let main_col = main_layers.col;
 	let a = apply_lil_alpha_mask(main_col.a, uv);
@@ -1726,7 +1732,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	);
 	let layer_nv = clamp(dot(geometry_n_faced_pre, v), 0.0, 1.0);
 	let samp_tex = textureSample(tex, base_samp, uv);
-	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
+	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb, uv));
 	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, is_liltoon);
 	let main_col = main_layers.col;
 	var a = apply_lil_alpha_mask(main_col.a, uv);

@@ -483,6 +483,21 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_main_color_adjust_mask_limits_hsvg() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn apply_main_hsvg(color: vec3<f32>, uv: vec2<f32>) -> vec3<f32>")
+				&& mesh.contains("let main_color_adjust_mask = textureSample(main_color_adjust_mask_tex, base_samp, uv).r;")
+				&& mesh.contains("return mix(color, adjusted, clamp(main_color_adjust_mask, 0.0, 1.0));"),
+			"_MainColorAdjustMask must limit lilToon main HSV/Gamma adjustment using fd.uvMain"
+		);
+		assert!(
+			mesh.contains("apply_main_hsvg(samp_tex.rgb, uv)"),
+			"main texture HSV/Gamma adjustment should receive fd.uvMain for its mask"
+		);
+	}
+
+	#[test]
 	fn liltoon_emission_uv_modes_use_authored_uv_sets_and_rim_uv() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

@@ -632,6 +632,13 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.main_color
 				.second_texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "mainColorAdjustMaskTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.main_color
+				.main_color_adjust_mask_texture_index = Some(image_index);
+		}
 		if let Some(image_index) = texture_asset_ref(mtoon, "main2ndBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
@@ -2523,6 +2530,14 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
 	{
 		out.main_color.gradation_texture_index = Some(value);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("mainColorAdjustMaskTextureIndex")
+				.or_else(|| m.get("main_color_adjust_mask_texture_index")),
+		)
+	}) {
+		out.main_color.main_color_adjust_mask_texture_index = Some(value);
 	}
 	out.main_color.second_enabled_factor = unavatar_material_float_param(extras, "_UseMain2ndTex")
 		.unwrap_or(0.0)
@@ -5850,6 +5865,7 @@ mod tests {
 					"furLengthMaskTextureIndex": 62,
 					"furNoiseMaskTextureIndex": 63,
 					"furMaskTextureIndex": 64,
+					"mainColorAdjustMaskTextureIndex": 65,
 					"mainTexHsvgFactor": [0.12, 0.8, 1.2, 0.9]
 				}
 			}"#,
@@ -5863,6 +5879,7 @@ mod tests {
 		assert_eq!(liltoon_like.flip_backface_normal_factor, 1.0);
 		assert_eq!(liltoon_like.rendering.backface_color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.12, 0.8, 1.2, 0.9]);
+		assert_eq!(liltoon_like.main_color.main_color_adjust_mask_texture_index, Some(65));
 		assert_eq!(liltoon_like.main_color.gradation_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.main_color.gradation_texture_index, Some(25));
 		assert_eq!(liltoon_like.main_color.gradation_strength_factor, 0.6);
