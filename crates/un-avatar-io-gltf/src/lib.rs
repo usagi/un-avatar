@@ -3006,6 +3006,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCapVRParallaxStrength") {
 		out.matcap.vr_parallax_strength_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_MatCapBlendUV1") {
+		out.matcap.blend_uv1_factor = [value[0].clamp(0.0, 1.0), value[1].clamp(0.0, 1.0)];
+	}
 	out.matcap.second_enabled_factor = unavatar_material_float_param(extras, "_UseMatCap2nd")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
@@ -3072,6 +3075,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_MatCap2ndVRParallaxStrength") {
 		out.matcap.second_vr_parallax_strength_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_MatCap2ndBlendUV1") {
+		out.matcap.second_blend_uv1_factor = [value[0].clamp(0.0, 1.0), value[1].clamp(0.0, 1.0)];
 	}
 
 	out.reflection.enabled_factor = unavatar_material_float_param(extras, "_UseReflection")
@@ -5772,6 +5778,8 @@ mod tests {
 				"vectorParams": {
 					"_ShadowAOShift": [3.0, 0.1, 2.0, 0.2],
 					"_ShadowAOShift2": [1.5, 0.3, 0.0, 0.0],
+					"_MatCapBlendUV1": [0.12, 0.34, 0.0, 0.0],
+					"_MatCap2ndBlendUV1": [0.56, 0.78, 0.0, 0.0],
 					"_GlitterParams1": [512.0, 513.0, 0.08, 2.0],
 					"_GlitterParams2": [0.6, 0.7, 0.8, 0.9],
 					"_GlitterAtras": [3.0, 4.0, 0.0, 0.0],
@@ -5978,6 +5986,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.perspective_factor, 0.64);
 		assert_eq!(liltoon_like.matcap.z_rotation_cancel_factor, 0.74);
 		assert_eq!(liltoon_like.matcap.vr_parallax_strength_factor, 0.84);
+		assert_eq!(liltoon_like.matcap.blend_uv1_factor, [0.12, 0.34]);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.matcap.second_texture_index, Some(22));
 		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(23));
@@ -5997,6 +6006,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.second_perspective_factor, 0.54);
 		assert_eq!(liltoon_like.matcap.second_z_rotation_cancel_factor, 0.44);
 		assert_eq!(liltoon_like.matcap.second_vr_parallax_strength_factor, 0.34);
+		assert_eq!(liltoon_like.matcap.second_blend_uv1_factor, [0.56, 0.78]);
 		assert_eq!(liltoon_like.reflection.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.reflection.color_factor, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(liltoon_like.reflection.smoothness_factor, 0.6);

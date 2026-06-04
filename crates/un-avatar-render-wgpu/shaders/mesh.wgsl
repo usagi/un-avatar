@@ -44,6 +44,7 @@ struct DrawMaterial {
 	matcap2_ext_params: vec4<f32>,
 	matcap2_bump_params: vec4<f32>,
 	matcap_uv_params: vec4<f32>,
+	matcap_uv_ext_params: vec4<f32>,
 	reflection_color: vec4<f32>,
 	reflection_control: vec4<f32>,
 	reflection_params: vec4<f32>,
@@ -158,8 +159,10 @@ struct DrawMaterial {
 	shadow_border_mask_uv_offset_scale: vec4<f32>,
 	shadow_blur_mask_uv_offset_scale: vec4<f32>,
 	matcap_blend_mask_uv_offset_scale: vec4<f32>,
+	matcap_tex_uv_offset_scale: vec4<f32>,
 	matcap_bump_uv_offset_scale: vec4<f32>,
 	matcap2_blend_mask_uv_offset_scale: vec4<f32>,
+	matcap2_tex_uv_offset_scale: vec4<f32>,
 	matcap2_bump_uv_offset_scale: vec4<f32>,
 	alpha_mask_uv_offset_scale: vec4<f32>,
 	main_color_adjust_params: vec4<f32>,
@@ -871,7 +874,15 @@ fn lil_ortho_normalize(tangent: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
 	return select(vec3<f32>(0.0, 1.0, 0.0), projected / len, len > 0.0001);
 }
 
-fn toon_matcap_uv(n: vec3<f32>, v: vec3<f32>, perspective: f32, z_rot_cancel: f32) -> vec2<f32> {
+fn toon_matcap_uv(
+	uv1: vec2<f32>,
+	n: vec3<f32>,
+	v: vec3<f32>,
+	uv_offset_scale: vec4<f32>,
+	blend_uv1: vec2<f32>,
+	perspective: f32,
+	z_rot_cancel: f32,
+) -> vec2<f32> {
 	let camera_pos_len = length(frame.camera_pos.xyz);
 	let camera_dir = select(vec3<f32>(0.0, 0.0, 1.0), normalize(frame.camera_pos.xyz), camera_pos_len >= 0.0001);
 	let normal_vd = normalize(mix(camera_dir, v, clamp(perspective, 0.0, 1.0)));
@@ -882,7 +893,14 @@ fn toon_matcap_uv(n: vec3<f32>, v: vec3<f32>, perspective: f32, z_rot_cancel: f3
 	let old_bitangent = normalize(cross(normal_vd, old_tangent));
 	let bitangent = lil_ortho_normalize(mix(old_bitangent, camera_up, step(0.5, z_rot_cancel)), normal_vd);
 	let tangent = cross(normal_vd, bitangent);
-	return vec2<f32>(dot(tangent, n), dot(bitangent, n)) * 0.5 + vec2<f32>(0.5, 0.5);
+	var uv_mat = vec2<f32>(dot(tangent, n), dot(bitangent, n));
+	uv_mat = mix(
+		uv_mat,
+		clamp(uv1, vec2<f32>(0.0), vec2<f32>(1.0)) * 2.0 - vec2<f32>(1.0),
+		clamp(blend_uv1, vec2<f32>(0.0), vec2<f32>(1.0)),
+	);
+	uv_mat = uv_mat * uv_offset_scale.zw + uv_offset_scale.xy;
+	return uv_mat * 0.5 + vec2<f32>(0.5, 0.5);
 }
 
 fn toon_reflection_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
@@ -1681,7 +1699,15 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 	let geometry_n_faced_pre = face_normal(normalize(i.wn), front_facing, dbg);
 	let uv = lil_apply_parallax(animated_uv(i.uv), geometry_n_faced_pre, i.wt, v, is_liltoon);
-	let layer_uv_mat = toon_matcap_uv(geometry_n_faced_pre, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
+	let layer_uv_mat = toon_matcap_uv(
+		i.uv1,
+		geometry_n_faced_pre,
+		v,
+		vec4<f32>(0.0, 0.0, 1.0, 1.0),
+		vec2<f32>(0.0, 0.0),
+		drawu.matcap_uv_params.x,
+		drawu.matcap_uv_params.y,
+	);
 	let layer_nv = clamp(dot(geometry_n_faced_pre, v), 0.0, 1.0);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_gradation(apply_main_hsvg(samp_tex.rgb));
@@ -2170,7 +2196,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 					matcap_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap_bump_uv_offset_scale, drawu.matcap_bump_params.y, 0.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
 				}
 				let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
-				let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
+				let matcap_uv = toon_matcap_uv(i.uv1, matcap_n, v, drawu.matcap_tex_uv_offset_scale, drawu.matcap_uv_ext_params.xy, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
 				let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 				let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 				let lit_matcap = mix(matcap_raw, matcap_raw * effect_light_color, clamp(drawu.matcap_params.z, 0.0, 1.0));
@@ -2189,7 +2215,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 					matcap2_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap2_bump_uv_offset_scale, drawu.matcap2_bump_params.y, 1.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
 				}
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
-				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
+				let matcap2_uv = toon_matcap_uv(i.uv1, matcap2_n, v, drawu.matcap2_tex_uv_offset_scale, drawu.matcap_uv_ext_params.zw, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
 				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;
@@ -2211,7 +2237,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				matcap_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap_bump_uv_offset_scale, drawu.matcap_bump_params.y, 0.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
 			}
 			let matcap_n = normalize(mix(matcap_base_n, anisotropy_n, clamp(drawu.anisotropy_params.w * anisotropy_basis.enabled, 0.0, 1.0)));
-			let matcap_uv = toon_matcap_uv(matcap_n, v, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
+			let matcap_uv = toon_matcap_uv(i.uv1, matcap_n, v, drawu.matcap_tex_uv_offset_scale, drawu.matcap_uv_ext_params.xy, drawu.matcap_uv_params.x, drawu.matcap_uv_params.y);
 			let matcap_tex_color = textureSampleLevel(matcap_tex, matcap_samp, matcap_uv, max(drawu.matcap_ext_params.z, 0.0));
 			let matcap_raw = drawu.matcap_factor.rgb * matcap_tex_color.rgb;
 			if (drawu.matcap_params.x > 0.0) {
@@ -2233,7 +2259,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 					matcap2_base_n = liltoon_custom_matcap_normal(i.wn, i.wt, uv, drawu.matcap2_bump_uv_offset_scale, drawu.matcap2_bump_params.y, 1.0, front_facing, dbg, drawu.material_ext_params.x, gem_backface_normal, v);
 				}
 				let matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));
-				let matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
+				let matcap2_uv = toon_matcap_uv(i.uv1, matcap2_n, v, drawu.matcap2_tex_uv_offset_scale, drawu.matcap_uv_ext_params.zw, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);
 				let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));
 				let matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.matcap2_params.z, 0.0, 1.0));
 				let matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;

@@ -122,6 +122,22 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_matcap_uv_matches_source_controls() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn toon_matcap_uv(")
+				&& mesh.contains("clamp(uv1, vec2<f32>(0.0), vec2<f32>(1.0)) * 2.0 - vec2<f32>(1.0)")
+				&& mesh.contains("uv_mat = uv_mat * uv_offset_scale.zw + uv_offset_scale.xy;"),
+			"lilToon MatCap UV must apply _MatCapBlendUV1 and _MatCapTex_ST like lilCalcMatCapUV"
+		);
+		assert!(
+			mesh.contains("drawu.matcap_tex_uv_offset_scale, drawu.matcap_uv_ext_params.xy")
+				&& mesh.contains("drawu.matcap2_tex_uv_offset_scale, drawu.matcap_uv_ext_params.zw"),
+			"both MatCap slots must route their own ST and BlendUV1 controls"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_masks_preserve_rgb_channels() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
@@ -563,7 +579,9 @@ mod tests {
 			.expect("lilToon transparent premultiply flag");
 		let reflection = premultiply
 			+ mesh[premultiply..]
-				.find("let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;")
+				.find(
+					"let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;",
+				)
 				.expect("lilToon reflection blend block");
 		assert!(premultiply < reflection, "lilToon LIL_PREMULTIPLY runs before reflection");
 		assert!(
@@ -609,7 +627,9 @@ mod tests {
 			.expect("lilToon backlight block");
 		let reflection = backlight
 			+ mesh[backlight..]
-				.find("let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;")
+				.find(
+					"let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;",
+				)
 				.expect("lilToon reflection blend block");
 		let matcap = reflection
 			+ mesh[reflection..]

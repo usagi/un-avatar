@@ -422,7 +422,7 @@ fn portable_mesh_shader_source() -> String {
 		"let matcap2_blend_mask = vec3<f32>(1.0, 1.0, 1.0);",
 	);
 	shader = shader.replace(
-		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;\n\t\t\tlet matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));\n\t\t\tlit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
+		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(i.uv1, matcap2_n, v, drawu.matcap2_tex_uv_offset_scale, drawu.matcap_uv_ext_params.zw, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).rgb;\n\t\t\tlet matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));\n\t\t\tlit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
 		"",
 	);
 	shader
@@ -491,6 +491,7 @@ struct MeshDrawMaterialGpu {
 	matcap2_ext_params: [f32; 4],
 	matcap2_bump_params: [f32; 4],
 	matcap_uv_params: [f32; 4],
+	matcap_uv_ext_params: [f32; 4],
 	reflection_color: [f32; 4],
 	reflection_control: [f32; 4],
 	reflection_params: [f32; 4],
@@ -605,8 +606,10 @@ struct MeshDrawMaterialGpu {
 	shadow_border_mask_uv_offset_scale: [f32; 4],
 	shadow_blur_mask_uv_offset_scale: [f32; 4],
 	matcap_blend_mask_uv_offset_scale: [f32; 4],
+	matcap_tex_uv_offset_scale: [f32; 4],
 	matcap_bump_uv_offset_scale: [f32; 4],
 	matcap2_blend_mask_uv_offset_scale: [f32; 4],
+	matcap2_tex_uv_offset_scale: [f32; 4],
 	matcap2_bump_uv_offset_scale: [f32; 4],
 	alpha_mask_uv_offset_scale: [f32; 4],
 	main_color_adjust_params: [f32; 4],
@@ -657,7 +660,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2848);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2896);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1034,11 +1037,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 	)
 }
 
-fn transparent_forward_zwrite_enabled(
-	alpha_mode: UnaAlphaMode,
-	transparent_with_z_write: bool,
-	shading: UnaShadingModel,
-) -> bool {
+fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
 	alpha_mode == UnaAlphaMode::Blend
 		&& transparent_with_z_write
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
@@ -3124,11 +3123,17 @@ fn mesh_draw_material_gpu(
 	let matcap_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapBlendMask"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap_tex_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapTex", "_MatcapTex"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let matcap_bump_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCapBumpMap"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let matcap2_blend_mask_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndBlendMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let matcap2_tex_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndTex"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let matcap2_bump_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_MatCap2ndBumpMap"]))
@@ -3505,6 +3510,16 @@ fn mesh_draw_material_gpu(
 			]
 		})
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
+	let matcap_uv_ext_params = liltoon_like
+		.map(|u| {
+			[
+				u.matcap.blend_uv1_factor[0].clamp(0.0, 1.0),
+				u.matcap.blend_uv1_factor[1].clamp(0.0, 1.0),
+				u.matcap.second_blend_uv1_factor[0].clamp(0.0, 1.0),
+				u.matcap.second_blend_uv1_factor[1].clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let reflection_color = liltoon_like.map(|u| u.reflection.color_factor).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let mut reflection_control = liltoon_like
 		.map(|u| {
@@ -4179,6 +4194,7 @@ fn mesh_draw_material_gpu(
 		matcap2_ext_params,
 		matcap2_bump_params,
 		matcap_uv_params,
+		matcap_uv_ext_params,
 		reflection_color,
 		reflection_control,
 		reflection_params,
@@ -4321,8 +4337,10 @@ fn mesh_draw_material_gpu(
 		shadow_border_mask_uv_offset_scale,
 		shadow_blur_mask_uv_offset_scale,
 		matcap_blend_mask_uv_offset_scale,
+		matcap_tex_uv_offset_scale,
 		matcap_bump_uv_offset_scale,
 		matcap2_blend_mask_uv_offset_scale,
+		matcap2_tex_uv_offset_scale,
 		matcap2_bump_uv_offset_scale,
 		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
@@ -9344,6 +9362,14 @@ mod tests {
 		liltoon_like.matcap.z_rotation_cancel_factor = 0.2;
 		liltoon_like.matcap.second_perspective_factor = 0.3;
 		liltoon_like.matcap.second_z_rotation_cancel_factor = 0.4;
+		liltoon_like.matcap.blend_uv1_factor = [0.5, 0.6];
+		liltoon_like.matcap.second_blend_uv1_factor = [0.7, 0.8];
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCapTex".to_string(), [0.11, 0.12, 1.11, 1.12]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_MatCap2ndTex".to_string(), [0.21, 0.22, 1.21, 1.22]);
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -9352,6 +9378,9 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_uv_params, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(draw.matcap_uv_ext_params, [0.5, 0.6, 0.7, 0.8]);
+		assert_eq!(draw.matcap_tex_uv_offset_scale, [0.11, 0.12, 1.11, 1.12]);
+		assert_eq!(draw.matcap2_tex_uv_offset_scale, [0.21, 0.22, 1.21, 1.22]);
 	}
 
 	#[test]
