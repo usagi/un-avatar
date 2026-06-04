@@ -1287,6 +1287,8 @@ pub struct UnaLilToonLikeRendering {
 	#[serde(default)]
 	pub monochrome_lighting_factor: f32,
 	#[serde(default)]
+	pub as_unlit_factor: f32,
+	#[serde(default)]
 	pub vertex_light_strength_factor: f32,
 	#[serde(default = "one_f32")]
 	pub aa_strength_factor: f32,
@@ -1797,6 +1799,7 @@ impl Default for UnaLilToonLikeRendering {
 			light_min_limit_factor: default_liltoon_light_min_limit(),
 			light_max_limit_factor: 1.0,
 			monochrome_lighting_factor: 0.0,
+			as_unlit_factor: 0.0,
 			vertex_light_strength_factor: 0.0,
 			aa_strength_factor: 1.0,
 			gsaa_strength_factor: 0.0,

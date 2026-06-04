@@ -606,10 +606,11 @@ mod tests {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let limited = mesh.find("let limited = clamp(raw").unwrap();
 		let luminance = mesh.find("let luminance = dot(limited").unwrap();
-		let monochrome = mesh.find("return mix(limited").unwrap();
+		let monochrome = mesh.find("let monochrome = mix(limited").unwrap();
+		let as_unlit = mesh.find("return mix(monochrome, vec3<f32>(1.0)").unwrap();
 		assert!(
-			limited < luminance && luminance < monochrome,
-			"lilToon _LightMinLimit/_LightMaxLimit should apply before _MonochromeLighting"
+			limited < luminance && luminance < monochrome && monochrome < as_unlit,
+			"lilToon _LightMinLimit/_LightMaxLimit should apply before _MonochromeLighting and _AsUnlit"
 		);
 	}
 

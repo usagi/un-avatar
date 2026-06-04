@@ -3752,7 +3752,7 @@ fn mesh_draw_material_gpu(
 			[
 				u.rendering.gsaa_strength_factor.max(0.0),
 				if liltoon_reflection_texture_index(u).is_some() { 1.0 } else { 0.0 },
-				0.0,
+				u.rendering.as_unlit_factor.clamp(0.0, 1.0),
 				0.0,
 			]
 		})
@@ -9482,6 +9482,20 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params, [0.7, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_as_unlit_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.as_unlit_factor = 0.4;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.rendering_ext_params[2], 0.4);
 	}
 
 	#[test]

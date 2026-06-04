@@ -2734,6 +2734,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_MonochromeLighting") {
 		out.rendering.monochrome_lighting_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AsUnlit") {
+		out.rendering.as_unlit_factor = value.clamp(0.0, 1.0);
+	}
 	if let Some(value) = unavatar_material_float_param(extras, "_VertexLightStrength") {
 		out.rendering.vertex_light_strength_factor = value.clamp(0.0, 1.0);
 	}
@@ -5729,6 +5732,7 @@ mod tests {
 					"_LightMinLimit": 0.06,
 					"_LightMaxLimit": 0.9,
 					"_MonochromeLighting": 0.25,
+					"_AsUnlit": 0.4,
 					"_VertexLightStrength": 0.35,
 					"_AAStrength": 1.25,
 					"_GSAAStrength": 0.5,
@@ -5943,6 +5947,7 @@ mod tests {
 		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
 		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);
 		assert_eq!(liltoon_like.rendering.monochrome_lighting_factor, 0.25);
+		assert_eq!(liltoon_like.rendering.as_unlit_factor, 0.4);
 		assert_eq!(liltoon_like.rendering.vertex_light_strength_factor, 0.35);
 		assert_eq!(liltoon_like.rendering.aa_strength_factor, 1.25);
 		assert_eq!(liltoon_like.rendering.gsaa_strength_factor, 0.5);
