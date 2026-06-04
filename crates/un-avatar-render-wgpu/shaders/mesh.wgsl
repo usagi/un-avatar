@@ -1001,6 +1001,21 @@ fn lil_shadow_apply_post_ao(value: f32, mask: f32, post_ao: bool) -> f32 {
 	return select(value, value * mask, post_ao);
 }
 
+fn lil_apply_rim_shade(lit: vec3<f32>, geometry_n: vec3<f32>, n: vec3<f32>, v: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
+	if (drawu.rim_shade_params.x <= 0.5) {
+		return lit;
+	}
+	let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
+	let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
+	let rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;
+	let rim_shade = lil_tooning_scale(
+		rim_shade_raw,
+		clamp(drawu.rim_shade_params.y, 0.0, 1.0),
+		clamp(drawu.rim_shade_params.z, 0.0, 1.0)
+	) * rim_shade_mask * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
+	return mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
+}
+
 struct GlitterVoronoi {
 	near: vec4<f32>,
 	nearoffset: vec2<f32>,
@@ -1851,21 +1866,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	if (is_liltoon_gem) {
 		lit = base * clamp(abs(dot(n, v)), 0.0, 1.0) * 0.75;
 	}
+	lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && !is_liltoon_gem && !is_fur_pass);
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
 	if (is_fur_pass) {
-		if (is_liltoon && drawu.rim_shade_params.x > 0.5) {
-			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
-			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
-			let rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;
-			let rim_shade = lil_tooning_scale(
-				rim_shade_raw,
-				clamp(drawu.rim_shade_params.y, 0.0, 1.0),
-				clamp(drawu.rim_shade_params.z, 0.0, 1.0)
-			) * rim_shade_mask * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
-			lit = mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
-		}
+		lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon);
 		if (!disable_rim) {
 			let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.fur_rim_params.x, 0.00001));
 			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
@@ -2143,17 +2149,6 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, vec3<f32>(0.0), vec3<f32>(1.0));
 				lit = lil_blend_color3(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);
 			}
-		}
-		if (!is_liltoon_gem && drawu.rim_shade_params.x > 0.5) {
-			let rim_shade_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.w, 0.0, 1.0)));
-			let rim_shade_raw = pow(clamp(1.0 - abs(dot(rim_shade_n, v)), 0.0, 1.0), max(drawu.rim_shade_params.w, 0.00001));
-			let rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;
-			let rim_shade = lil_tooning_scale(
-				rim_shade_raw,
-				clamp(drawu.rim_shade_params.y, 0.0, 1.0),
-				clamp(drawu.rim_shade_params.z, 0.0, 1.0)
-			) * rim_shade_mask * clamp(drawu.rim_shade_color.a, 0.0, 1.0);
-			lit = mix(lit, lit * drawu.rim_shade_color.rgb, rim_shade);
 		}
 		if (!is_liltoon_gem && drawu.backlight_params.x > 0.5) {
 			let backlight_n = normalize(mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0)));

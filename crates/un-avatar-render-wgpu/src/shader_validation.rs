@@ -388,4 +388,20 @@ mod tests {
 			"Only the lilToon-like path should replace direct light with the lilToon lightColor approximation"
 		);
 	}
+
+	#[test]
+	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let rim_shade = mesh
+			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && !is_liltoon_gem && !is_fur_pass")
+			.expect("lilToon rim shade application");
+		let reflection = mesh
+			.find("if (!is_liltoon_gem && drawu.reflection_control.x > 0.5)")
+			.expect("lilToon reflection block");
+		let matcap = mesh.find("if (drawu.matcap_params.x > 0.0)").expect("lilToon matcap block");
+		assert!(
+			rim_shade < reflection && reflection < matcap,
+			"lilToon pass order is RimShade -> Reflection -> MatCap -> RimLight"
+		);
+	}
 }

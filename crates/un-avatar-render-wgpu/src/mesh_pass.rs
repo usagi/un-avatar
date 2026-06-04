@@ -350,6 +350,10 @@ fn portable_mesh_shader_source() -> String {
 		"\t\t\tlet rim_shade_mask = 1.0;\n",
 	);
 	shader = shader.replace(
+		"\tlet rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;\n",
+		"\tlet rim_shade_mask = 1.0;\n",
+	);
+	shader = shader.replace(
 		"\t\t\tlet backlight_color_uv = uv * drawu.backlight_color_uv_offset_scale.zw + drawu.backlight_color_uv_offset_scale.xy;\n\t\t\tlet backlight_color_sample = textureSample(backlight_color_tex, base_samp, backlight_color_uv);\n\t\t\tlet authored_backlight_color = drawu.backlight_color * backlight_color_sample;\n",
 		"\t\t\tlet authored_backlight_color = drawu.backlight_color;\n",
 	);
