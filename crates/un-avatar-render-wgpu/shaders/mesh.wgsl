@@ -1259,6 +1259,18 @@ fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
 	return c.z * mix(vec3<f32>(1.0), clamp(p - vec3<f32>(1.0), vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
 
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+	let low = c * 12.92;
+	let high = 1.055 * pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
+	return select(high, low, c <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+	let low = c / 12.92;
+	let high = pow(max((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(0.0)), vec3<f32>(2.4));
+	return select(high, low, c <= vec3<f32>(0.04045));
+}
+
 fn apply_main_hsvg(color: vec3<f32>) -> vec3<f32> {
 	let p = drawu.main_color_adjust_params;
 	if (abs(p.x) + abs(p.y - 1.0) + abs(p.z - 1.0) + abs(p.w - 1.0) < 0.000001) {
@@ -1285,12 +1297,13 @@ fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {
 	if (strength <= 0.000001) {
 		return color;
 	}
-	let c = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-	let mapped = vec3<f32>(
+	let c = linear_to_srgb(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));
+	let mapped_srgb = vec3<f32>(
 		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.r, 0.5)).r,
 		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.g, 0.5)).g,
 		textureSample(main_gradation_tex, base_samp, vec2<f32>(c.b, 0.5)).b
 	);
+	let mapped = srgb_to_linear(mapped_srgb);
 	return mix(color, mapped, strength);
 }
 

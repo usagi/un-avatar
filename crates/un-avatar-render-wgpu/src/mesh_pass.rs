@@ -403,7 +403,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {\n\tlet strength = clamp(drawu.main_gradation_params.x * drawu.main_gradation_params.y, 0.0, 1.0);\n\tif (strength <= 0.000001) {\n\t\treturn color;\n\t}\n\tlet c = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));\n\tlet mapped = vec3<f32>(\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.r, 0.5)).r,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.g, 0.5)).g,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.b, 0.5)).b\n\t);\n\treturn mix(color, mapped, strength);\n}\n",
+		"fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {\n\tlet strength = clamp(drawu.main_gradation_params.x * drawu.main_gradation_params.y, 0.0, 1.0);\n\tif (strength <= 0.000001) {\n\t\treturn color;\n\t}\n\tlet c = linear_to_srgb(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));\n\tlet mapped_srgb = vec3<f32>(\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.r, 0.5)).r,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.g, 0.5)).g,\n\t\ttextureSample(main_gradation_tex, base_samp, vec2<f32>(c.b, 0.5)).b\n\t);\n\tlet mapped = srgb_to_linear(mapped_srgb);\n\treturn mix(color, mapped, strength);\n}\n",
 		"fn apply_main_gradation(color: vec3<f32>) -> vec3<f32> {\n\treturn color;\n}\n",
 	);
 	shader = shader.replace(

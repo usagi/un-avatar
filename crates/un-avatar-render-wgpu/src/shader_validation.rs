@@ -493,6 +493,11 @@ mod tests {
 			"_MainColorAdjustMask must limit lilToon main HSV/Gamma and gradation adjustments using fd.uvMain"
 		);
 		assert!(
+			mesh.contains("let c = linear_to_srgb(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));")
+				&& mesh.contains("let mapped = srgb_to_linear(mapped_srgb);"),
+			"Main gradation map must use lilToon linear-space sRGB lookup and output conversion"
+		);
+		assert!(
 			mesh.contains("var hsv = rgb_to_hsv(pow(abs(color), vec3<f32>(p.w)));")
 				&& mesh.contains("hsv.x = hsv.x + p.x;")
 				&& mesh.contains("hsv.z = clamp(hsv.z * p.z, 0.0, 1.0);"),
