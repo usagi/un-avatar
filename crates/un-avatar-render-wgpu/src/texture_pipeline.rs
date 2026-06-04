@@ -711,6 +711,21 @@ fn build_rgba_mips_from_base(
 	mips
 }
 
+fn renormalize_normal_mips(mips: &mut [(u32, u32, Vec<u8>)]) {
+	for (_, _, mip) in mips.iter_mut().skip(1) {
+		for pixel in mip.chunks_exact_mut(4) {
+			let x = f32::from(pixel[0]) / 255.0 * 2.0 - 1.0;
+			let y = f32::from(pixel[1]) / 255.0 * 2.0 - 1.0;
+			let z = f32::from(pixel[2]) / 255.0 * 2.0 - 1.0;
+			let len = (x * x + y * y + z * z).sqrt();
+			let (nx, ny, nz) = if len > 0.01 { (x / len, y / len, z / len) } else { (0.0, 0.0, 1.0) };
+			pixel[0] = ((nx * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+			pixel[1] = ((ny * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+			pixel[2] = ((nz * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+		}
+	}
+}
+
 pub(crate) fn texture_role_uses_mips(role: TextureRole) -> bool {
 	!matches!(role, TextureRole::Clothing)
 }
@@ -737,7 +752,7 @@ fn resize_rgba_to_max_dimension(rgba: &[u8], width: u32, height: u32, max_dimens
 }
 
 const PROCESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATXC1\0";
-const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 6;
+const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 7;
 // v2 (2026-05-14): 圧縮 mip の width/height を block 整列 (4 の倍数) サイズで記録するよう変更。
 // 旧 v1 では width=1023 等を保存していたが、wgpu の `write_texture` validation が block 整列値を要求するため、
 // magic を bump して旧キャッシュを使わせない（自動的に再エンコードしてキャッシュを書き直す）。
@@ -745,6 +760,7 @@ const PROCESSED_TEXTURE_CACHE_VERSION: u64 = 6;
 // v4 (2026-05-22): mipmap_filter is part of the processed texture cache key.
 // v5 (2026-06-01): transparent base-color RGB is alpha-bleed filled before upload/mips.
 // v6 (2026-06-03): low-alpha atlas padding RGB is also alpha-bleed filled for opaque/cutout clothing islands.
+// v7 (2026-06-04): generated normal-map mips are renormalized after downsampling.
 const COMPRESSED_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNATBC2\0";
 const COMPRESSED_TEXTURE_CACHE_VERSION: u64 = 5;
 // v3 (2026-05-27): compressed cache keys are derived from the source texture key and processing settings.
@@ -1019,7 +1035,11 @@ fn build_processed_texture(
 		.unwrap_or((src_width, src_height, base));
 	let mips = if texture_role_uses_mips(role) {
 		let alpha_weighted_rgb = texture_role_needs_alpha_weighted_rgb_mips(role, &rgba);
-		build_rgba_mips_from_base(rgba, width, height, mipmap_filter, alpha_weighted_rgb)
+		let mut mips = build_rgba_mips_from_base(rgba, width, height, mipmap_filter, alpha_weighted_rgb);
+		if role == TextureRole::Normal {
+			renormalize_normal_mips(&mut mips);
+		}
+		mips
 	} else {
 		vec![(width, height, rgba)]
 	};
@@ -1740,13 +1760,13 @@ mod tests {
 	}
 
 	#[test]
-	fn normal_role_mips_keep_unweighted_rgba_average() {
+	fn normal_role_mips_renormalize_after_downsample() {
 		let rgba = vec![
 			0, 0, 0, 255, 255, 255, 255, 0, //
 			255, 255, 255, 0, 255, 255, 255, 0,
 		];
 		let processed = build_processed_texture(&rgba, 2, 2, None, TextureRole::Normal, TextureMipmapFilter::Box2x2);
-		assert_eq!(processed.mips[1].2, vec![191, 191, 191, 63]);
+		assert_eq!(processed.mips[1].2, vec![201, 201, 201, 63]);
 	}
 
 	#[test]
@@ -1972,7 +1992,7 @@ mod tests {
 		let loaded = read_processed_texture_cache(&path, key).expect("cache should load");
 		assert_eq!((loaded.width, loaded.height), (2, 2));
 		assert_eq!(loaded.mips.len(), 2);
-		assert_eq!(loaded.mips[1].2, vec![127, 127, 127, 255]);
+		assert_eq!(loaded.mips[1].2, vec![128, 128, 255, 255]);
 
 		let _ = fs::remove_file(path);
 	}

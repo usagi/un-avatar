@@ -25,6 +25,7 @@ namespace UNAvatar.UnityExporter
                 public long SourceByteLength;
                 public string ExportMode;
                 public string FallbackReason;
+                public string SourceLayoutOverride;
 
                 public EncodedTexture(byte[] bytes, string mimeType)
                 {
@@ -86,6 +87,11 @@ namespace UNAvatar.UnityExporter
             {
                 fallbackReason = "";
                 var source = GetTextureSourceInfo(texture);
+                if (TextureNeedsGeneratedCubemapBake(texture))
+                {
+                    fallbackReason = "unity_generated_cubemap_requires_baked_faces";
+                    return null;
+                }
                 if (string.IsNullOrEmpty(source.AssetPath))
                 {
                     fallbackReason = "generated_or_runtime_texture";
@@ -128,6 +134,24 @@ namespace UNAvatar.UnityExporter
                     fallbackReason = "source_read_failed";
                     return null;
                 }
+            }
+
+            private bool TextureNeedsGeneratedCubemapBake(Texture texture)
+            {
+                var source = GetTextureSourceInfo(texture);
+                var shape = source.Importer != null ? source.Importer.textureShape.ToString() : TextureShapeFromTexture(texture);
+                return IsCubeTextureShape(shape) && !string.IsNullOrEmpty(UnityGenerateCubemap(source.Importer));
+            }
+
+            private bool TextureNeedsGeneratedCubemapAsset(Texture texture)
+            {
+                if (!TextureNeedsGeneratedCubemapBake(texture) || !(texture is Cubemap cubemap))
+                {
+                    return false;
+                }
+                var source = GetTextureSourceInfo(texture);
+                var metadata = TextureAssetMetadata.FromTexture(texture, source.AssetPath, null, source.Importer);
+                return CubemapShouldExportAsExr(cubemap, source, metadata);
             }
 
             private static string MimeTypeFromPath(string path)

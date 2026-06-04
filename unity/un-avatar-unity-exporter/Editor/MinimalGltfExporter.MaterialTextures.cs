@@ -47,7 +47,13 @@ namespace UNAvatar.UnityExporter
 
                 string fallbackReason;
                 var encoded = TryReadSourceTextureBytes(texture, out fallbackReason);
-                if (encoded == null && IsUnavatarTextureAssetMime(GetTextureSourceInfo(texture).MimeType))
+                if (encoded == null && TextureNeedsGeneratedCubemapAsset(texture))
+                {
+                    return -1;
+                }
+                if (encoded == null &&
+                    IsUnavatarTextureAssetMime(GetTextureSourceInfo(texture).MimeType) &&
+                    !TextureNeedsGeneratedCubemapBake(texture))
                 {
                     return -1;
                 }
@@ -68,7 +74,7 @@ namespace UNAvatar.UnityExporter
                     ["mimeType"] = encoded.MimeType,
                     ["extras"] = new Dictionary<string, object>
                     {
-                        ["UN_avatar_image"] = BuildImageMetadataJson(texture)
+                        ["UN_avatar_image"] = BuildImageMetadataJson(texture, encoded)
                     }
                 });
                 exportedTextures.Add(new ExportedTextureRecord
@@ -135,7 +141,7 @@ namespace UNAvatar.UnityExporter
                 };
             }
 
-            private Dictionary<string, object> BuildImageMetadataJson(Texture texture)
+            private Dictionary<string, object> BuildImageMetadataJson(Texture texture, EncodedTexture encoded = null)
             {
                 var source = GetTextureSourceInfo(texture);
                 var metadata = TextureAssetMetadata.FromTexture(texture, source.AssetPath, null, source.Importer);
@@ -153,9 +159,12 @@ namespace UNAvatar.UnityExporter
                 {
                     json["channels"] = metadata.Channels;
                 }
-                if (!string.IsNullOrEmpty(metadata.SourceLayout))
+                var sourceLayout = encoded != null && !string.IsNullOrEmpty(encoded.SourceLayoutOverride)
+                    ? encoded.SourceLayoutOverride
+                    : metadata.SourceLayout;
+                if (!string.IsNullOrEmpty(sourceLayout))
                 {
-                    json["sourceLayout"] = metadata.SourceLayout;
+                    json["sourceLayout"] = sourceLayout;
                 }
                 if (!string.IsNullOrEmpty(metadata.UnityGenerateCubemap))
                 {

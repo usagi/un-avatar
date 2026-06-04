@@ -21,6 +21,10 @@ namespace UNAvatar.UnityExporter
                 {
                     return existing;
                 }
+                if (TextureNeedsGeneratedCubemapAsset(texture) && texture is Cubemap cubemap)
+                {
+                    return ExportGeneratedCubemapTextureAsset(cubemap);
+                }
                 var source = GetTextureSourceInfo(texture);
                 if (string.IsNullOrEmpty(source.AssetPath))
                 {
@@ -84,6 +88,53 @@ namespace UNAvatar.UnityExporter
                     Debug.LogWarning("[U.N. Avatar] Source texture asset read failed for " + texture.name + ": " + ex.Message);
                     return null;
                 }
+            }
+
+            private UnavatarTextureAssetRecord ExportGeneratedCubemapTextureAsset(Cubemap cubemap)
+            {
+                var source = GetTextureSourceInfo(cubemap);
+                var metadata = TextureAssetMetadata.FromTexture(cubemap, source.AssetPath, null, source.Importer);
+                var encoded = EncodeCubemapHorizontalStrip(cubemap, source, "unity_generated_cubemap_requires_baked_faces", metadata);
+                if (encoded == null || encoded.Bytes == null || encoded.Bytes.Length == 0 || encoded.MimeType != "image/exr")
+                {
+                    return null;
+                }
+
+                var asset = new UnavatarTextureAssetRecord
+                {
+                    Id = "texture-asset-" + textureAssets.Count.ToString(CultureInfo.InvariantCulture),
+                    Name = cubemap.name,
+                    AssetPath = source.AssetPath,
+                    MimeType = encoded.MimeType,
+                    SourceExtension = source.SourceExtension,
+                    SourcePixelFormat = "RGBA16F",
+                    ColorSpace = "linear",
+                    Channels = "rgba",
+                    TextureType = metadata.TextureType,
+                    TextureShape = metadata.TextureShape,
+                    SourceLayout = string.IsNullOrEmpty(encoded.SourceLayoutOverride) ? metadata.SourceLayout : encoded.SourceLayoutOverride,
+                    UnityGenerateCubemap = metadata.UnityGenerateCubemap,
+                    SRgb = false,
+                    Sampler = BuildSamplerJson(cubemap),
+                    Width = cubemap.width * 6,
+                    Height = cubemap.width,
+                    Bytes = encoded.Bytes
+                };
+                textureAssets.Add(asset);
+                textureAssetIndices[cubemap] = asset;
+                exportedTextures.Add(new ExportedTextureRecord
+                {
+                    Name = cubemap.name,
+                    AssetPath = source.AssetPath,
+                    SourceExtension = asset.SourceExtension,
+                    SourceMimeType = source.MimeType,
+                    SourceByteLength = source.SourceByteLength,
+                    OutputMimeType = encoded.MimeType,
+                    OutputByteLength = encoded.Bytes.Length,
+                    ExportMode = "generated_cubemap_horizontal_strip_asset",
+                    FallbackReason = encoded.FallbackReason
+                });
+                return asset;
             }
         }
     }

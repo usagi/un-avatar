@@ -336,6 +336,14 @@ fn portable_mesh_shader_source() -> String {
 		"let shadow_border_mask = 1.0;\n\t\tlet shadow_blur_mask = 1.0;",
 	);
 	shader = shader.replace(
+		"let matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));",
+		"let matcap2_tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);",
+	);
+	shader = shader.replace(
+		"let matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;",
+		"let matcap2_blend_mask = 1.0;",
+	);
+	shader = shader.replace(
 		"\t\tif (drawu.matcap2_params.x > 0.0) {\n\t\t\tlet matcap2_base_n = normalize(mix(geometry_n, n, clamp(drawu.matcap2_ext_params.x, 0.0, 1.0)));\n\t\t\tlet matcap2_n = normalize(mix(matcap2_base_n, anisotropy_n, clamp(drawu.anisotropy_ext_params.x * anisotropy_basis.enabled, 0.0, 1.0)));\n\t\t\tlet matcap2_uv = toon_matcap_uv(matcap2_n, v, drawu.matcap_uv_params.z, drawu.matcap_uv_params.w);\n\t\t\tlet matcap2_tex_color = textureSampleLevel(matcap2_tex, matcap_samp, matcap2_uv, max(drawu.matcap2_ext_params.z, 0.0));\n\t\t\tlet matcap2_lighting = mix(vec3<f32>(1.0, 1.0, 1.0), frame.light_color.rgb * frame.light_color.w, clamp(drawu.matcap2_params.z, 0.0, 1.0));\n\t\t\tlet matcap2_raw = drawu.matcap2_factor.rgb * matcap2_tex_color.rgb * matcap2_lighting;\n\t\t\tlet matcap2_albedo = mix(matcap2_raw, matcap2_raw * base, clamp(drawu.matcap2_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend_mask_uv = uv * drawu.matcap2_blend_mask_uv_offset_scale.zw + drawu.matcap2_blend_mask_uv_offset_scale.xy;\n\t\t\tlet matcap2_blend_mask = textureSample(matcap2_blend_mask_tex, matcap_blend_mask_samp, matcap2_blend_mask_uv).r;\n\t\t\tlet matcap2_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.matcap2_ext_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_backface = lil_backface_visibility(drawu.matcap2_ext_params.w, front_facing);\n\t\t\tlet matcap2_transparency = mix(1.0, a, clamp(drawu.transparency_params.y, 0.0, 1.0));\n\t\t\tlet matcap2_blend = clamp(drawu.matcap2_params.x * drawu.matcap2_factor.a * matcap2_tex_color.a * matcap2_blend_mask * matcap2_shadow * matcap2_backface * matcap2_transparency, 0.0, 1.0);\n\t\t\tlit = lil_blend_color(lit, matcap2_albedo, matcap2_blend, drawu.matcap2_params.w);\n\t\t}\n",
 		"",
 	);
@@ -616,6 +624,8 @@ enum DrawPipelineKind {
 	BlendToonZWrite,
 	BlendToonAdd,
 	BlendToonAddZWrite,
+	TransparentToonBackpass,
+	TransparentToonBackpassNoZWrite,
 	LilToonGemPre,
 }
 
@@ -642,6 +652,27 @@ fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelin
 	let mut batch = draw_batch(pipeline, batch_capacity);
 	batch.draw_indices.push(draw_index);
 	batches.push(batch);
+}
+
+fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
+	let zwrite = draw
+		.material
+		.liltoon_like
+		.as_ref()
+		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	if zwrite {
+		DrawPipelineKind::TransparentToonBackpass
+	} else {
+		DrawPipelineKind::TransparentToonBackpassNoZWrite
+	}
+}
+
+fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
+	match pipeline {
+		DrawPipelineKind::TransparentToonBackpass | DrawPipelineKind::TransparentToonBackpassNoZWrite => 0,
+		DrawPipelineKind::LilToonGemPre => 1,
+		_ => 2,
+	}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -877,7 +908,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
 			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading) => {
-				transparent_backpass_draw_indices.push(draw_index);
+				blended_draws.push((transparent_backpass_pipeline_for_draw(draw), draw_index));
 				if draw_uses_liltoon_gem_prepass(draw) {
 					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
 				}
@@ -891,7 +922,10 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 			}
 		}
 	}
-	blended_draws.sort_by_key(|&(_, draw_index)| draw_render_order_key(draws, draw_index));
+	blended_draws.sort_by_key(|&(pipeline, draw_index)| {
+		let (render_queue, draw_index) = draw_render_order_key(draws, draw_index);
+		(render_queue, draw_index, blended_pipeline_pass_order(pipeline))
+	});
 	for (pipeline, draw_index) in blended_draws {
 		append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
 	}
@@ -1456,6 +1490,20 @@ fn create_mesh_sampler(device: &wgpu::Device, label: &'static str, sampler: &Una
 	})
 }
 
+fn liltoon_reflection_cube_sampler_descriptor(label: &'static str) -> wgpu::SamplerDescriptor<'static> {
+	wgpu::SamplerDescriptor {
+		label: Some(label),
+		address_mode_u: wgpu::AddressMode::Repeat,
+		address_mode_v: wgpu::AddressMode::Repeat,
+		address_mode_w: wgpu::AddressMode::Repeat,
+		mag_filter: wgpu::FilterMode::Linear,
+		min_filter: wgpu::FilterMode::Linear,
+		mipmap_filter: wgpu::MipmapFilterMode::Linear,
+		anisotropy_clamp: 4,
+		..Default::default()
+	}
+}
+
 fn wgpu_address_mode(mode: UnaTextureWrapMode) -> wgpu::AddressMode {
 	match mode {
 		UnaTextureWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
@@ -1684,8 +1732,6 @@ fn build_cube_mips_rgba16f(face_size: u32, base_rgba: Vec<[f32; 4]>) -> Vec<Cube
 	let mut mips = Vec::new();
 	let mut current_size = face_size.max(1);
 	let mut current = base_rgba;
-	let max_mip = current_size.ilog2().max(1);
-	let mut mip_level = 0u32;
 	loop {
 		mips.push(CubeMipUpload {
 			face_size: current_size,
@@ -1696,8 +1742,6 @@ fn build_cube_mips_rgba16f(face_size: u32, base_rgba: Vec<[f32; 4]>) -> Vec<Cube
 		}
 		let next_size = (current_size / 2).max(1);
 		current = downsample_cube_faces(&current, current_size, next_size);
-		mip_level += 1;
-		current = blur_cube_faces_for_roughness_mip(&current, next_size, mip_level, max_mip);
 		current_size = next_size;
 	}
 	mips
@@ -1745,43 +1789,6 @@ fn downsample_cube_faces(source: &[[f32; 4]], source_size: u32, next_size: u32) 
 	next
 }
 
-fn blur_cube_faces_for_roughness_mip(source: &[[f32; 4]], face_size: u32, mip_level: u32, max_mip: u32) -> Vec<[f32; 4]> {
-	let face_size = face_size.max(1) as usize;
-	if face_size <= 1 || mip_level == 0 {
-		return source.to_vec();
-	}
-	let roughness = mip_level as f32 / max_mip.max(1) as f32;
-	let radius = ((roughness * roughness * 4.0).ceil() as i32).clamp(1, 4);
-	let sigma = (radius as f32 * 0.5).max(0.5);
-	let mut out = vec![[0.0; 4]; source.len()];
-	for face in 0..6usize {
-		for y in 0..face_size {
-			for x in 0..face_size {
-				let mut sum = [0.0; 4];
-				let mut weight_sum = 0.0;
-				for oy in -radius..=radius {
-					for ox in -radius..=radius {
-						let sx = (x as i32 + ox).clamp(0, face_size as i32 - 1) as usize;
-						let sy = (y as i32 + oy).clamp(0, face_size as i32 - 1) as usize;
-						let d2 = (ox * ox + oy * oy) as f32;
-						let weight = (-d2 / (2.0 * sigma * sigma)).exp();
-						let sample = source[face * face_size * face_size + sy * face_size + sx];
-						for channel in 0..4 {
-							sum[channel] += sample[channel] * weight;
-						}
-						weight_sum += weight;
-					}
-				}
-				for channel in 0..4 {
-					sum[channel] /= weight_sum.max(0.000001);
-				}
-				out[face * face_size * face_size + y * face_size + x] = sum;
-			}
-		}
-	}
-	out
-}
-
 fn cube_face_direction(face: u32, u: f32, v: f32) -> Vec3 {
 	let dir = match face {
 		0 => Vec3::new(1.0, -v, -u),
@@ -1804,7 +1811,19 @@ fn sample_latlong(image: &UnaImageRgba, dir: Vec3, srgb: bool) -> [f32; 4] {
 fn sample_sphere_map(image: &UnaImageRgba, dir: Vec3, srgb: bool) -> [f32; 4] {
 	let denom = 2.0 * (dir.x * dir.x + dir.y * dir.y + (dir.z + 1.0) * (dir.z + 1.0)).sqrt();
 	if denom <= 0.000001 {
-		return [0.0, 0.0, 0.0, 1.0];
+		let samples = [
+			sample_image_bilinear(image, 1.0, 0.5, false, srgb),
+			sample_image_bilinear(image, 0.0, 0.5, false, srgb),
+			sample_image_bilinear(image, 0.5, 0.0, false, srgb),
+			sample_image_bilinear(image, 0.5, 1.0, false, srgb),
+		];
+		let mut avg = [0.0; 4];
+		for sample in samples {
+			for channel in 0..4 {
+				avg[channel] += sample[channel] * 0.25;
+			}
+		}
+		return avg;
 	}
 	let u = dir.x / denom + 0.5;
 	let v = -dir.y / denom + 0.5;
@@ -3369,8 +3388,8 @@ fn mesh_draw_material_gpu(
 		.map(|u| {
 			[
 				u.rim.directional_strength_factor.clamp(0.0, 1.0),
-				u.rim.directional_range_factor.clamp(0.0, 1.0),
-				u.rim.indirect_range_factor.clamp(0.0, 1.0),
+				u.rim.directional_range_factor.clamp(-1.0, 1.0),
+				u.rim.indirect_range_factor.clamp(-1.0, 1.0),
 				u.rim.indirect_border_factor.clamp(0.0, 1.0),
 			]
 		})
@@ -4841,6 +4860,8 @@ impl SceneMeshes {
 		});
 
 		let mut samplers = vec![create_mesh_sampler(device, "mesh_sampler_default", &UnaTextureSampler::default())];
+		let reflection_cube_sampler =
+			device.create_sampler(&liltoon_reflection_cube_sampler_descriptor("mesh_liltoon_reflection_cube_sampler"));
 		let mut image_sampler_indices = Vec::with_capacity(scene.image_sources.len());
 		for source in &scene.image_sources {
 			let Some(sampler) = source.as_ref().and_then(|source| source.sampler.as_ref()) else {
@@ -5481,7 +5502,7 @@ impl SceneMeshes {
 				let reflection_view = reflection_texture_index
 					.and_then(|index| cube_image_views.get(index).and_then(Option::as_ref))
 					.unwrap_or(&black_cube_view);
-				let reflection_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_texture_index, 0);
+				let reflection_sampler = &reflection_cube_sampler;
 				let reflection_color_texture_index = mat
 					.liltoon_like
 					.as_ref()
@@ -6308,6 +6329,8 @@ impl SceneMeshes {
 			DrawPipelineKind::BlendToonZWrite => &self.pipeline_blend_toon_zwrite,
 			DrawPipelineKind::BlendToonAdd => &self.pipeline_blend_toon_add,
 			DrawPipelineKind::BlendToonAddZWrite => &self.pipeline_blend_toon_add_zwrite,
+			DrawPipelineKind::TransparentToonBackpass => &self.pipeline_transparent_toon_backpass,
+			DrawPipelineKind::TransparentToonBackpassNoZWrite => &self.pipeline_transparent_toon_backpass_no_zwrite,
 			DrawPipelineKind::LilToonGemPre => &self.pipeline_liltoon_gem_pre_toon,
 		}
 	}
@@ -6605,6 +6628,18 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn liltoon_reflection_cube_sampler_matches_linear_repeat() {
+		let desc = liltoon_reflection_cube_sampler_descriptor("test");
+
+		assert_eq!(desc.address_mode_u, wgpu::AddressMode::Repeat);
+		assert_eq!(desc.address_mode_v, wgpu::AddressMode::Repeat);
+		assert_eq!(desc.address_mode_w, wgpu::AddressMode::Repeat);
+		assert_eq!(desc.mag_filter, wgpu::FilterMode::Linear);
+		assert_eq!(desc.min_filter, wgpu::FilterMode::Linear);
+		assert_eq!(desc.mipmap_filter, wgpu::MipmapFilterMode::Linear);
 	}
 
 	#[test]
@@ -7067,6 +7102,37 @@ mod tests {
 	}
 
 	#[test]
+	fn sphere_map_back_direction_uses_edge_average_instead_of_black() {
+		let width = 4usize;
+		let height = 4usize;
+		let mut pixels = vec![0u8; width * height * 4];
+		for pixel in pixels.chunks_exact_mut(4) {
+			pixel[3] = 255;
+		}
+		let mut put_pixel = |x: usize, y: usize, rgba: [u8; 4]| {
+			let offset = (y * width + x) * 4;
+			pixels[offset..offset + 4].copy_from_slice(&rgba);
+		};
+		put_pixel(width - 1, height / 2, [255, 0, 0, 255]);
+		put_pixel(0, height / 2, [0, 255, 0, 255]);
+		put_pixel(width / 2, 0, [0, 0, 255, 255]);
+		put_pixel(width / 2, height - 1, [255, 255, 0, 255]);
+		let image = UnaImageRgba {
+			width: width as u32,
+			height: height as u32,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels,
+		};
+
+		let sampled = sample_sphere_map(&image, Vec3::new(0.0, 0.0, -1.0), false);
+
+		assert!(sampled[0] > 0.0);
+		assert!(sampled[1] > 0.0);
+		assert!(sampled[2] > 0.0);
+		assert_eq!(sampled[3], 1.0);
+	}
+
+	#[test]
 	fn cubemap_upload_builds_rgba16f_mip_chain() {
 		let source = vec![[1.0, 0.5, 0.25, 1.0]; 6 * 2 * 2];
 		let mips = build_cube_mips_rgba16f(2, source);
@@ -7078,13 +7144,19 @@ mod tests {
 	}
 
 	#[test]
-	fn roughness_mip_blur_spreads_highlights_within_face() {
+	fn cubemap_mips_use_plain_downsample_without_extra_roughness_blur() {
 		let mut source = vec![[0.0, 0.0, 0.0, 1.0]; 6 * 4 * 4];
-		source[4 * 4 + 1 * 4 + 1] = [1.0, 1.0, 1.0, 1.0];
-		let blurred = blur_cube_faces_for_roughness_mip(&source, 4, 2, 3);
-		assert!(blurred[4 * 4 + 1 * 4 + 1][0] < 1.0);
-		assert!(blurred[4 * 4 + 1 * 4 + 2][0] > 0.0);
-		assert_eq!(blurred[0][3], 1.0);
+		source[1] = [1.0, 1.0, 1.0, 1.0];
+		let mips = build_cube_mips_rgba16f(4, source);
+		let mip1 = &mips[1].data_rgba16f;
+		let read = |pixel: usize, channel: usize| {
+			let offset = (pixel * 4 + channel) * 2;
+			f16::from_bits(u16::from_le_bytes([mip1[offset], mip1[offset + 1]])).to_f32()
+		};
+
+		assert!((read(0, 0) - 0.25).abs() < 0.001);
+		assert_eq!(read(1, 0), 0.0);
+		assert_eq!(read(0, 3), 1.0);
 	}
 
 	#[test]
@@ -7228,6 +7300,32 @@ mod tests {
 	}
 
 	#[test]
+	fn transparent_backpass_orders_with_its_source_draw() {
+		let mut draws = vec![
+			(DrawPipelineKind::LilToonGemPre, 0usize),
+			(DrawPipelineKind::BlendToonAdd, 0usize),
+			(DrawPipelineKind::TransparentToonBackpass, 1usize),
+			(DrawPipelineKind::BlendToonZWrite, 1usize),
+		];
+
+		draws.sort_by_key(|&(pipeline, draw_index)| (3000, draw_index, blended_pipeline_pass_order(pipeline)));
+
+		assert_eq!(
+			draws,
+			vec![
+				(DrawPipelineKind::LilToonGemPre, 0),
+				(DrawPipelineKind::BlendToonAdd, 0),
+				(DrawPipelineKind::TransparentToonBackpass, 1),
+				(DrawPipelineKind::BlendToonZWrite, 1),
+			]
+		);
+		assert!(
+			blended_pipeline_pass_order(DrawPipelineKind::TransparentToonBackpass)
+				< blended_pipeline_pass_order(DrawPipelineKind::BlendToonZWrite)
+		);
+	}
+
+	#[test]
 	fn transparent_zwrite_toon_uses_backpass_before_forward_pass() {
 		assert!(draw_uses_transparent_backpass(
 			UnaAlphaMode::Blend,
@@ -7346,6 +7444,24 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
+	}
+
+	#[test]
+	fn liltoon_rim_signed_direction_ranges_reach_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rim.directional_strength_factor = 0.5;
+		liltoon_like.rim.directional_range_factor = -0.75;
+		liltoon_like.rim.indirect_range_factor = -0.25;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.rim_indirect_params[0], 0.5);
+		assert_eq!(draw.rim_indirect_params[1], -0.75);
+		assert_eq!(draw.rim_indirect_params[2], -0.25);
 	}
 
 	#[test]

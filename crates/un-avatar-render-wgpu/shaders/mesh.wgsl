@@ -674,22 +674,28 @@ fn toon_reflection_uv(n: vec3<f32>, v: vec3<f32>) -> vec2<f32> {
 	return vec2<f32>(u, vv);
 }
 
-fn screen_uv(clip: vec4<f32>) -> vec2<f32> {
+fn clip_to_screen_uv(clip: vec4<f32>) -> vec2<f32> {
 	let ndc = clip.xy / max(clip.w, 0.000001);
 	return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
+fn screen_uv(fragment_position: vec4<f32>) -> vec2<f32> {
+	let dims = max(vec2<f32>(textureDimensions(screen_tex, 0)), vec2<f32>(1.0));
+	return clamp(fragment_position.xy / dims, vec2<f32>(0.0), vec2<f32>(1.0));
+}
+
 fn screen_normal_offset(world_pos: vec3<f32>, normal: vec3<f32>, base_uv: vec2<f32>) -> vec2<f32> {
 	let shifted_clip = frame.view_proj * vec4<f32>(world_pos + normalize(normal) * 0.05, 1.0);
-	let projected = screen_uv(shifted_clip) - base_uv;
+	let projected = clip_to_screen_uv(shifted_clip) - base_uv;
 	let fallback = vec2<f32>(normal.x, -normal.y) * 0.02;
 	let use_fallback = length(projected) < 0.000001 || !all(projected == projected);
 	return clamp(select(projected, fallback, use_fallback), vec2<f32>(-0.08), vec2<f32>(0.08));
 }
 
 fn liltoon_refraction_offset(normal: vec3<f32>) -> vec2<f32> {
+	// lilToon Gem uses mul((float3x3)LIL_MATRIX_V, fd.N).xy for screen refraction.
 	let view_normal = normalize((frame.view * vec4<f32>(normalize(normal), 0.0)).xyz);
-	return vec2<f32>(view_normal.x, -view_normal.y);
+	return view_normal.xy;
 }
 
 fn linearstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -1372,7 +1378,12 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			rim_color = mix(rim_color, rim_color * base, clamp(drawu.rim_control.y, 0.0, 1.0));
 			let rim_n = normalize(mix(geometry_n, n, clamp(drawu.rim_ext_params.y, 0.0, 1.0)));
 			let rim_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001));
-			let rim_factor = lil_tooning_scale(rim_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
+			let ln_raw = clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0);
+			let rim_dir_strength = clamp(drawu.rim_indirect_params.x, 0.0, 1.0);
+			let dir_range = clamp(drawu.rim_indirect_params.y, -1.0, 1.0);
+			let ln_dir = clamp((ln_raw + dir_range) / max(1.0 + dir_range, 0.00001), 0.0, 1.0);
+			let rim_dir_raw = mix(rim_raw, rim_raw * ln_dir, rim_dir_strength);
+			let rim_factor = lil_tooning_scale(rim_dir_raw, clamp(drawu.rim_params.x, 0.0, 1.0), clamp(drawu.rim_params.y, 0.0, 1.0));
 			let lit_rim_color = mix(rim_color, rim_color * frame.light_color.rgb * frame.light_color.w, clamp(drawu.rim_control.z, 0.0, 1.0));
 			let rim_alpha = clamp(drawu.rim_control.x * rim_tex_color.a, 0.0, 1.0);
 			let rim_shadow = mix(1.0, lil_effect_shadowmix, clamp(drawu.rim_ext_params.x, 0.0, 1.0));
@@ -1381,13 +1392,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let rim_direct_blend = clamp(rim_factor * rim_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
 			rim = lit_rim_color * rim_direct_blend;
 			rim_blend = max(rim_blend, rim_direct_blend);
-			let rim_dir = pow(clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0), mix(1.0, 8.0, clamp(drawu.rim_indirect_params.y, 0.0, 1.0)));
-			let rim_dir_factor = clamp(drawu.rim_indirect_params.x * rim_dir, 0.0, 1.0);
-			rim = mix(rim, rim * rim_dir, rim_dir_factor);
-			let ln_raw = clamp(dot(rim_n, l) * 0.5 + 0.5, 0.0, 1.0);
-			let indir_range = clamp(drawu.rim_indirect_params.z, 0.0, 1.0);
-			let ln_indir = clamp((1.0 - ln_raw + indir_range) / (1.0 + indir_range), 0.0, 1.0);
-			let indir_raw = pow(clamp(1.0 - abs(dot(rim_n, v)), 0.0, 1.0), max(drawu.rim_params.z, 0.00001)) * ln_indir * clamp(drawu.rim_indirect_params.x, 0.0, 1.0);
+			let indir_range = clamp(drawu.rim_indirect_params.z, -1.0, 1.0);
+			let ln_indir = clamp((1.0 - ln_raw + indir_range) / max(1.0 + indir_range, 0.00001), 0.0, 1.0);
+			let indir_raw = rim_raw * ln_indir * rim_dir_strength;
 			let indir_factor = lil_tooning_scale(
 				indir_raw,
 				clamp(drawu.rim_indirect_params.w, 0.0, 1.0),

@@ -3014,13 +3014,13 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.rim.directional_strength_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimDirRange") {
-		out.rim.directional_range_factor = value.clamp(0.0, 1.0);
+		out.rim.directional_range_factor = value.clamp(-1.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_RimIndirColor") {
 		out.rim.indirect_color_factor = value;
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimIndirRange") {
-		out.rim.indirect_range_factor = value.clamp(0.0, 1.0);
+		out.rim.indirect_range_factor = value.clamp(-1.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimIndirBorder") {
 		out.rim.indirect_border_factor = value.clamp(0.0, 1.0);
@@ -4989,6 +4989,24 @@ mod tests {
 		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
 		assert!(!mtoon.transparent_with_z_write);
+	}
+
+	#[test]
+	fn liltoon_rim_direction_ranges_preserve_signed_values() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "lilToon",
+			"floatParams": {
+				"_UseRim": 1.0,
+				"_RimDirRange": -0.75,
+				"_RimIndirRange": -0.25
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
+
+		assert_eq!(liltoon_like.rim.directional_range_factor, -0.75);
+		assert_eq!(liltoon_like.rim.indirect_range_factor, -0.25);
 	}
 
 	#[test]
