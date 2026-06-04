@@ -7,7 +7,7 @@ use crate::{
 		AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlinePolicy, AvatarRimPolicy, AvatarSpecularOptions,
 	},
 	options::{
-		AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
+		AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
 		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
@@ -34,6 +34,7 @@ pub(crate) struct RendererManifest {
 	pub vmc_address: Option<SocketAddr>,
 	pub vmc_port: Option<u16>,
 	pub motion: Option<MotionManifest>,
+	pub audio_link: Option<AudioLinkManifest>,
 	pub physics: Option<PhysicsManifest>,
 	pub spring_bones: Option<bool>,
 	pub aa: Option<AaMode>,
@@ -282,6 +283,14 @@ pub(crate) struct MotionManifest {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
+pub(crate) struct AudioLinkManifest {
+	pub source: Option<AudioLinkSource>,
+	pub input_device_id: Option<String>,
+	pub input_device_name_hint: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
 pub(crate) struct PhysicsManifest {
 	pub bone_colliders: Option<BoneCollidersManifest>,
 	pub spring_bone: Option<SpringBonePhysicsConfig>,
@@ -464,6 +473,9 @@ impl RendererManifest {
 		}
 		if let Some(motion) = self.motion {
 			motion.apply_to(opts);
+		}
+		if let Some(audio_link) = self.audio_link {
+			audio_link.apply_to(opts);
 		}
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
@@ -985,6 +997,22 @@ impl MotionManifest {
 	}
 }
 
+impl AudioLinkManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(source) = self.source {
+			opts.audio_link.source = source;
+		}
+		if let Some(device_id) = self.input_device_id {
+			let trimmed = device_id.trim();
+			opts.audio_link.input_device_id = (!trimmed.is_empty()).then(|| trimmed.to_string());
+		}
+		if let Some(name_hint) = self.input_device_name_hint {
+			let trimmed = name_hint.trim();
+			opts.audio_link.input_device_name_hint = (!trimmed.is_empty()).then(|| trimmed.to_string());
+		}
+	}
+}
+
 impl PhysicsManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
 		if let Some(bone_colliders) = self.bone_colliders {
@@ -1226,6 +1254,11 @@ enabled = true
 port = 39540
 address = "0.0.0.0:39541"
 
+[audio_link]
+source = "input_device"
+input_device_id = "cpal:device-1"
+input_device_name_hint = "Main Mix"
+
 [spout]
 enabled = false
 name = "UN Avatar Spout"
@@ -1335,6 +1368,9 @@ constraint_iterations = 6
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
 		);
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
+		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
+		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));
+		assert_eq!(opts.audio_link.input_device_name_hint.as_deref(), Some("Main Mix"));
 		assert!(opts.transparent);
 		assert!(opts.input_passthrough);
 		assert_eq!(opts.clear_color.a, 0.0);

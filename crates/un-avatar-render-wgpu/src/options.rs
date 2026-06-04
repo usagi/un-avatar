@@ -18,6 +18,39 @@ pub enum PrimaryMotionSource {
 	UnmotionZenoh,
 }
 
+/// AudioLink GPU texture source policy.
+///
+/// `None` keeps lilToon-compatible shader fallback waveforms only. `InputDevice`
+/// allows the renderer/supervisor audio service to capture an OS audio input
+/// device and generate a VRChat AudioLink-compatible texture, but the worker
+/// should still start lazily only when the active wardrobe actually uses
+/// AudioLink.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioLinkSource {
+	#[default]
+	None,
+	InputDevice,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct AudioLinkOptions {
+	pub source: AudioLinkSource,
+	pub input_device_id: Option<String>,
+	pub input_device_name_hint: Option<String>,
+}
+
+impl Default for AudioLinkOptions {
+	fn default() -> Self {
+		Self {
+			source: AudioLinkSource::None,
+			input_device_id: None,
+			input_device_name_hint: None,
+		}
+	}
+}
+
 /// UNMotion/Zenoh 受信の設定。`[motion.unmotion_zenoh]` 由来。
 #[derive(Clone, Debug)]
 pub struct UnmotionZenohOptions {
@@ -499,6 +532,8 @@ pub struct AvatarWindowOptions {
 	pub vmc_address: Option<SocketAddr>,
 	/// UNMotion/Zenoh 経由でのモーションフレーム受信設定 (Phase 2)。
 	pub unmotion_zenoh: UnmotionZenohOptions,
+	/// AudioLink texture generation source. `None` keeps shader fallback only.
+	pub audio_link: AudioLinkOptions,
 	/// 旧 manifest / CLI 互換の primary source。現在の姿勢適用は key 単位の後着優先。
 	pub primary_motion_source: PrimaryMotionSource,
 	/// Spout2 送出（Windows）。`--spout` で有効。
@@ -638,6 +673,7 @@ impl Default for AvatarWindowOptions {
 			show_fps_in_title: true,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),
+			audio_link: AudioLinkOptions::default(),
 			primary_motion_source: PrimaryMotionSource::default(),
 			spout: SpoutWindowOptions::default(),
 			environment_color: EnvironmentColorOptions::default(),

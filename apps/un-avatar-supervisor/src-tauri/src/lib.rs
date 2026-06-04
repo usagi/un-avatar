@@ -856,6 +856,9 @@ struct AvatarSetting {
 	motion_vmc_enabled: bool,
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
+	audio_link_source: String,
+	audio_link_input_device_id: Option<String>,
+	audio_link_input_device_name_hint: Option<String>,
 	look_at_enabled: bool,
 	look_at_clamp_deg: Option<f32>,
 	/// VMC と UNMF/Z の両方を受信可能な構成で primary 側として実際にアバターに反映する
@@ -1119,6 +1122,12 @@ struct MotionSettings {
 	primary_motion_source: String,
 }
 
+struct AudioLinkSettings {
+	source: String,
+	input_device_id: Option<String>,
+	input_device_name_hint: Option<String>,
+}
+
 struct WindowSettings {
 	icon_path: Option<String>,
 	transparent: bool,
@@ -1253,6 +1262,14 @@ struct ManifestMotion {
 	/// VMC と UNMF/Z 両方を受信可能なときに、どちらをアバターに反映させるか。
 	/// 旧 manifest 互換の primary source。現在の renderer は姿勢入力を key 単位で後着優先マージする。
 	primary_source: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAudioLink {
+	source: Option<String>,
+	input_device_id: Option<String>,
+	input_device_name_hint: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1584,6 +1601,7 @@ struct AvatarManifestSummary {
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion: Option<ManifestMotion>,
+	audio_link: Option<ManifestAudioLink>,
 	physics: Option<ManifestPhysics>,
 	output: Option<ManifestOutput>,
 	aa: Option<String>,
@@ -3663,6 +3681,9 @@ fn apply_avatar_setting_value(
 		field if field.starts_with("motion.") => {
 			apply_motion_setting_value(manifest, setting, field, value)?;
 		}
+		field if field.starts_with("audio_link.") => {
+			apply_audio_link_setting_value(manifest, field, value)?;
+		}
 		field if field.starts_with("render_quality.") => {
 			apply_render_quality_setting_value(manifest, field, value)?;
 		}
@@ -3815,6 +3836,26 @@ fn apply_environment_setting_value(manifest: &mut toml::Value, field: &str, valu
 			&value,
 			field,
 		),
+		_ => Err(format!("unsupported setting field: {field}")),
+	}
+}
+
+fn apply_audio_link_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"audio_link.source" => {
+			let source = match json_string(&value, field)?.trim().to_ascii_lowercase().as_str() {
+				"none" => "none".to_string(),
+				"input_device" => "input_device".to_string(),
+				other => return Err(format!("invalid {field}: {other}; expected none or input_device")),
+			};
+			set_nested_string(manifest, &["audio_link", "source"], source)
+		}
+		"audio_link.input_device_id" => {
+			set_optional_nested_string(manifest, &["audio_link", "input_device_id"], json_string(&value, field)?)
+		}
+		"audio_link.input_device_name_hint" => {
+			set_optional_nested_string(manifest, &["audio_link", "input_device_name_hint"], json_string(&value, field)?)
+		}
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
 }
@@ -6219,6 +6260,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let profile = manifest.profile.unwrap_or_default();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
 	let motion = motion_settings(manifest.motion.unwrap_or_default(), manifest.vmc_address, manifest.vmc_port);
+	let audio_link = audio_link_settings(manifest.audio_link.unwrap_or_default());
 	let output = output_settings(manifest.output, manifest.spout);
 	let avatar_path_for_spring_bones = manifest.avatar_path.clone();
 	let window = window_settings(
@@ -6257,6 +6299,9 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		motion_vmc_enabled: motion.motion_vmc_enabled,
 		motion_unmotion_enabled: motion.motion_unmotion_enabled,
 		unmotion_zenoh_key: motion.unmotion_zenoh_key,
+		audio_link_source: audio_link.source,
+		audio_link_input_device_id: audio_link.input_device_id,
+		audio_link_input_device_name_hint: audio_link.input_device_name_hint,
 		look_at_enabled: motion.look_at_enabled,
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
@@ -7500,6 +7545,22 @@ fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, l
 		look_at_clamp_deg: Some(clamped_f32_or(look_at.clamp_deg, 30.0, 0.0, 90.0)),
 		apply_vmc_root_translation: motion.apply_vmc_root_translation.unwrap_or(false),
 		primary_motion_source,
+	}
+}
+
+fn audio_link_settings(audio_link: ManifestAudioLink) -> AudioLinkSettings {
+	let source = match audio_link.source.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+		Some("input_device") => "input_device".to_string(),
+		_ => "none".to_string(),
+	};
+	AudioLinkSettings {
+		source,
+		input_device_id: audio_link
+			.input_device_id
+			.and_then(|value| (!value.trim().is_empty()).then(|| value.trim().to_string())),
+		input_device_name_hint: audio_link
+			.input_device_name_hint
+			.and_then(|value| (!value.trim().is_empty()).then(|| value.trim().to_string())),
 	}
 }
 
@@ -8881,6 +8942,9 @@ mod tests {
 		assert_eq!(setting.block_compression_encoder, "gpu");
 		assert_eq!(setting.block_compression_cpu_threads, 4);
 		assert!(setting.processed_texture_cache);
+		assert_eq!(setting.audio_link_source, "none");
+		assert_eq!(setting.audio_link_input_device_id, None);
+		assert_eq!(setting.audio_link_input_device_name_hint, None);
 		assert!(setting.transparent);
 		assert!(!setting.input_passthrough);
 	}
@@ -8944,6 +9008,54 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn audio_link_setting_updates_write_expected_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "audio_link.source", serde_json::json!("input_device")).unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"audio_link.input_device_id",
+			serde_json::json!("cpal:device-1"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"audio_link.input_device_name_hint",
+			serde_json::json!("Main Mix"),
+		)
+		.unwrap();
+
+		let audio_link = manifest
+			.get("audio_link")
+			.and_then(toml::Value::as_table)
+			.expect("audio_link table");
+		assert_eq!(audio_link.get("source").and_then(toml::Value::as_str), Some("input_device"));
+		assert_eq!(
+			audio_link.get("input_device_id").and_then(toml::Value::as_str),
+			Some("cpal:device-1")
+		);
+		assert_eq!(
+			audio_link.get("input_device_name_hint").and_then(toml::Value::as_str),
+			Some("Main Mix")
+		);
+
+		let invalid =
+			apply_avatar_setting_value(&mut manifest, &setting, "audio_link.source", serde_json::json!("system_mix")).unwrap_err();
+		assert!(invalid.contains("expected none or input_device"));
 	}
 
 	#[test]

@@ -209,6 +209,7 @@ Advanced Controls:
 - Primary motion source
 - VMC address / port
 - UNMotion / Zenoh key
+- AudioLink source (`none` / `input_device`) and input device id/name hint. Detailed runtime policy is fixed in `docs/unavatar-v2-audiolink.md`.
 - Root translation
 - Spring bones は Avatar 側に置くか Motion 側に置くかを実装時に決める。一般ユーザー視点では Avatar 側の方が見つけやすい。
 

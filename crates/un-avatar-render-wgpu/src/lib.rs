@@ -3585,6 +3585,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
 		},
+		audio_link: Default::default(),
 		primary_motion_source: cli.primary_motion_source.unwrap_or_default(),
 		spout: SpoutWindowOptions {
 			enabled: cli.spout,

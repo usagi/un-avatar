@@ -52,6 +52,7 @@ export type LookRecommendation = "natural" | "clear" | "pop" | "soft";
 export type CameraTargetPreset = "face" | "neck" | "chest";
 export type CameraLensPreset = 10 | 16 | 35 | 70 | 200;
 export type SpoutResolutionPreset = "720p" | "1080p" | "1440p" | "4k";
+export type AudioLinkSource = "none" | "input_device";
 
 export type QualitySetting = {
   aa: string;
@@ -116,6 +117,12 @@ export type AvatarSetting = ProfileLaunchSetting & {
   storage: "seed" | "user";
   manifest_path: string;
   wardrobe_set: string | null;
+  motion_vmc_enabled: boolean;
+  motion_unmotion_enabled: boolean;
+  unmotion_zenoh_key: string | null;
+  audio_link_source: AudioLinkSource;
+  audio_link_input_device_id: string | null;
+  audio_link_input_device_name_hint: string | null;
   look_at_enabled: boolean;
   look_at_clamp_deg: number | null;
   primary_motion_source: PrimaryMotionSource;
@@ -271,6 +278,9 @@ export type MotionSetting = Pick<
   | "motion_unmotion_enabled"
   | "unmotion_zenoh_key"
   | "motion_vmc_enabled"
+  | "audio_link_source"
+  | "audio_link_input_device_id"
+  | "audio_link_input_device_name_hint"
   | "vmc_address"
   | "vmc_port"
   | "look_at_enabled"
