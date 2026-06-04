@@ -406,7 +406,7 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
 	);
 	shader = shader.replace(
@@ -591,6 +591,7 @@ struct MeshDrawMaterialGpu {
 	uv_offset_scale: [f32; 4],
 	normal_uv_offset_scale: [f32; 4],
 	normal2nd_uv_offset_scale: [f32; 4],
+	normal2nd_scale_mask_uv_offset_scale: [f32; 4],
 	normal2nd_params: [f32; 4],
 	shade_uv_offset_scale: [f32; 4],
 	rim_uv_offset_scale: [f32; 4],
@@ -660,7 +661,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2896);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2912);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -3059,6 +3060,9 @@ fn mesh_draw_material_gpu(
 	let normal2nd_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Bump2ndMap", "_BumpMap2nd", "_NormalMap2nd"]))
 		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+	let normal2nd_scale_mask_uv_offset_scale = liltoon_like
+		.and_then(|u| texture_slot_uv_offset_scale(u, &["_Bump2ndScaleMask"]))
+		.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 	let normal2nd_params = liltoon_like
 		.map(|u| {
 			[
@@ -4322,6 +4326,7 @@ fn mesh_draw_material_gpu(
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
 		normal2nd_uv_offset_scale,
+		normal2nd_scale_mask_uv_offset_scale,
 		normal2nd_params,
 		shade_uv_offset_scale,
 		rim_uv_offset_scale,
@@ -8343,6 +8348,9 @@ mod tests {
 		liltoon_like
 			.texture_uv_offset_scales
 			.insert("_Bump2ndMap".to_string(), [0.3, 0.4, 1.25, 1.75]);
+		liltoon_like
+			.texture_uv_offset_scales
+			.insert("_Bump2ndScaleMask".to_string(), [0.5, 0.6, 1.5, 1.6]);
 		liltoon_like.texture_uv_mode_factors.insert("_Bump2ndMap".to_string(), 2.0);
 		liltoon_like.normal.second_enabled_factor = 1.0;
 		liltoon_like.normal.second_scale_factor = 0.6;
@@ -8356,6 +8364,7 @@ mod tests {
 
 		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
 		assert_eq!(draw.normal2nd_uv_offset_scale, [0.3, 0.4, 1.25, 1.75]);
+		assert_eq!(draw.normal2nd_scale_mask_uv_offset_scale, [0.5, 0.6, 1.5, 1.6]);
 		assert_eq!(draw.normal2nd_params, [1.0, 0.6, 2.0, 0.0]);
 	}
 

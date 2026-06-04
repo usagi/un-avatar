@@ -144,6 +144,7 @@ struct DrawMaterial {
 	uv_offset_scale: vec4<f32>,
 	normal_uv_offset_scale: vec4<f32>,
 	normal2nd_uv_offset_scale: vec4<f32>,
+	normal2nd_scale_mask_uv_offset_scale: vec4<f32>,
 	normal2nd_params: vec4<f32>,
 	shade_uv_offset_scale: vec4<f32>,
 	rim_uv_offset_scale: vec4<f32>,
@@ -1530,7 +1531,8 @@ fn normal_mapped(n_in: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, uv1: vec
 	if (drawu.normal2nd_params.x > 0.5) {
 		let normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);
 		let normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;
-		let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;
+		let normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;
+		let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;
 		let tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);
 		tn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);
 	}

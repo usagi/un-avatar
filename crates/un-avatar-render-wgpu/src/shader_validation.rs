@@ -497,11 +497,16 @@ mod tests {
 			"_Bump2ndMap_ST must be applied after the authored UV mode selection"
 		);
 		assert!(
-			mesh.contains("let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, uv).r;")
+			mesh.contains(
+				"let normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;"
+			)
+				&& mesh.contains(
+					"let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;"
+				)
 				&& mesh.contains(
 					"lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask)"
 				),
-			"_Bump2ndScaleMask must multiply _BumpScale2nd using fd.uvMain"
+			"_Bump2ndScaleMask must use fd.uvMain with its slot ST and multiply _BumpScale2nd"
 		);
 	}
 
