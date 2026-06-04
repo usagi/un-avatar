@@ -40,6 +40,15 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 
 `UnaLilToonLikeMaterial` の内部 parameter は、できるだけ単位・次元の整合性を持つ値にする。長さは meters、角度は radians、色は linear RGB、強度や blend weight は原則 `[0..1]` の無次元量として扱う。lilToon の Unity material property は source profile であり、互換 import layer が v2 parameter へ変換する。
 
+## Current Snapshot (2026-06-05)
+
+- High-tier `FullOnePass` が lilToon-compatible path の正本。Portable16 は adapter 制約用 fallback であり、標準品質目標ではない。
+- 大きな描画破綻は screen UV / render state / reflection / MatCap / transparency / Fur / Glitter / Gem/refraction の既知問題修正で解消済み。`Mat_Stockings` 周辺の暗色化・強い艶は、今後は broad checklist blocker ではなく数値 trace で追う。
+- Fur は Geometry Shader 互換の Compute Fur Cards 実装へ整理済み。旧 shell fallback は削除済みで、`mizuki-split` 目視試験では不具合なし。
+- Glitter は本家 source params と基本挙動を実装済み。ただし full material coverage は検証素材不足のため、VR parallax など一部は継続確認扱い。
+- Gem/refraction は screen-grab background refraction、roughness LOD、backface chromatic environment sampling まで実装済み。full Gem pass の cubemap / PMREM / HDR decode / stereo parity は未完了。
+- 明確な未実装優先候補は AudioLink、Shadow LUT / receive attenuation / 2nd-3rd exact order、Outline exact variants、reflection cubemap の PMREM / HDR / face rotation、UV4-7 / UDIM vertex discard。
+
 ## Feature Order
 
 ### 1. Main Color / Alpha / Cull / Render Queue
@@ -125,7 +134,9 @@ Notes:
 
 ## Near-Term Target
 
-まず `Main Shadow` までを安定させる。Base / original で肌と髪が過度に白飛びせず、noble1 / noble13 で服の shadow tone が Unity に近づくことを合格条件にする。
+旧目標の `Main Shadow` までの安定化は完了扱い。以後は目視 tuning より、本家で可能だが UNA で未実装または近似の機能を優先する。
+
+推奨順は AudioLink / Emission integration、Shadow LUT / receive attenuation、Outline exact variants、reflection cubemap PMREM / HDR / face rotation、IDMask / UDIM の残り。`Mat_Stockings` のような残差は、実装差分が見つかった場合だけ本家 source と数値 trace を根拠に修正する。
 
 ## Compatibility Checklist
 
@@ -137,6 +148,7 @@ Status legend:
 `[defer]`: intentionally deferred with reason
 
 `[~]` の項目は必ず sub-level に `done` と `remaining` を書く。何ができていて、何が残っているかが曖昧な `[~]` は使わない。
+`remaining` は `unimplemented` / `approximation` / `validation` / `portable` のどれに近いかが読める粒度で書く。
 
 ### Material Identity / Render State
 
@@ -420,7 +432,7 @@ Status legend:
 - `[~]` `_UseReflection`
   - done: source raw params と reflection texture asset ref を保持し、lilToon-like shader branch の specular / reflection 有効判定へ接続した。
   - done: lilToon source material flag を renderer uniform に保持し、reflection path は `_UseShadow` に依存せず `_UseReflection` で選択する。
-  - remaining: Unity の environment reflection、roughness mip、normal strength、forward add 条件を本家に合わせる。
+  - remaining: Unity の environment reflection と forward add 条件を本家に合わせる。roughness mip と effect normal strength は実装済みだが、Unity reference との追加検証は継続。
 - `[~]` `_Smoothness`
   - done: source raw params を保持し、lilToon-like specular power と reflection の perceptual roughness / surface reduction へ接続した。
   - done: smoothness / anisotropy 由来の perceptual roughness は本家 `lilReflection` と同じく 0..1 saturate 相当にし、GGX specular の `max(fd.roughness, 0.002)` だけを specular 計算側に残す。
@@ -449,7 +461,7 @@ Status legend:
 - `[~]` `_SpecularToon`
   - done: v2 reflection parameter として保持し、enabled 時は specular highlight を toon scale path へ分岐する。
   - done: FullOnePass の anisotropy path では本家 `lilCalcSpecular` と同じく GGX anisotropic specularTerm を作ってから toon scale を適用する。
-  - remaining: normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。
+  - remaining: forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。effect normal strength は本家同様、通常 specular では raw lerp length を保持する。
 - `[~]` `_SpecularBorder`
 	- done: v2 reflection parameter として保持し、toon specular border に接続する。
 	- remaining: roughness 変換を含めて本家係数域を検証する。
@@ -458,9 +470,11 @@ Status legend:
 	- remaining: 本家の `lilTooningScale` 係数域と一致するか検証する。
 - `[~]` `_SpecularNormalStrength`
   - done: source raw params を保持し、specular highlight 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - done: 通常 specular path は本家 `lilCalcSpecular` 呼び出しと同じく、effect normal strength の raw lerp を再正規化しない。
   - remaining: lilToon の `fd.N` と完全一致する tangent / view-space 入力、GSAA、backface behavior を検証する。
 - `[~]` `_ReflectionNormalStrength`
   - done: source raw params を保持し、environment reflection lookup 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - done: reflection lookup 用 normal は本家 `lilReflection` 呼び出しと同じく、effect normal strength の raw lerp を再正規化しない。
   - done: authored cube source upload では roughness blur 付き RGBA16F mip chain を生成し、roughness LOD sampling が mip 0 固定にならないようにした。
   - done: environment reflection の lookup direction は reflection normal を使うが、Fresnel の `nv` は本家 `fd.nv` と同じく base normal / view dot を使う。
   - remaining: lilToon の `fd.reflectionN`、seam-aware PMREM convolution、true cubemap face rotation、backface behavior と合わせて検証する。
@@ -571,12 +585,13 @@ Status legend:
 - `[~]` `_UseRimShade`
   - done: v2 rim shade parameter として保持し、有効時は本家 `lilGetRimShade` と同じく rim shade factor で `lit -> lit * color` へ補間する。
   - done: `_RimShadeMask` を v2 material に保持し、FullOnePass renderer の RimShade 係数へ乗算する。Portable16 は texture budget 維持のため mask sampling を落とす。
-  - remaining: normal strength、AO/lighting との順序を本家へ合わせる。
+  - remaining: AO/lighting との順序を本家へ合わせる。effect normal strength は本家同様、RimShade factor では raw lerp length を保持する。
 - `[~]` `_RimShadeColor`
   - done: source raw color params を保持し、rim shade darkening color と alpha strength に接続する。
   - remaining: HDR/color space を本家へ合わせる。
 - `[~]` `_RimShadeNormalStrength`
   - done: source raw params を保持し、RimShade factor 用 normal を geometry normal と normal-mapped normal の補間へ接続した。
+  - done: RimShade factor 用 normal は本家 `lilGetRimShade` 呼び出しと同じく、effect normal strength の raw lerp を再正規化しない。
   - remaining: 2nd normal map、backface behavior との順序を本家へ合わせる。
 - `[~]` backlight raw params
   - done: `_UseBacklight`、`_BacklightColor`、`_BacklightMainStrength`、`_BacklightNormalStrength`、`_BacklightBorder`、`_BacklightBlur`、`_BacklightDirectivity`、`_BacklightViewStrength`、`_BacklightReceiveShadow`、`_BacklightBackfaceMask` を v2 material に保持する。
