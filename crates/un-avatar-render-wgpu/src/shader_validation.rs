@@ -694,9 +694,26 @@ mod tests {
 			"lilToon transparent non-refraction emission blend must use fd.col.a"
 		);
 		assert!(
-			mesh.contains("drawu.emission_color.a * emission_tex_color.a * emission_transparency")
-				&& mesh.contains("emission2nd_blink * emission2nd_sample.a * emission_transparency"),
+			mesh.contains("drawu.emission_color.a * emission_tex_color.a * emission_audio * emission_transparency",)
+				&& mesh.contains("emission2nd_blink * emission2nd_sample.a * emission2nd_audio * emission_transparency"),
 			"both lilToon emission layers must apply transparent alpha to their blend"
+		);
+	}
+
+	#[test]
+	fn liltoon_audio_link_drives_emission_like_upstream() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, wp: vec3<f32>) -> f32")
+				&& mesh.contains("if (drawu.audio_link_params.x <= 0.5) {\n\t\treturn 1.0;"),
+			"AudioLink disabled path must preserve lilToon fd.audioLinkValue default"
+		);
+		assert!(
+			mesh.contains("audio_link_value * drawu.audio_link_params.w")
+				&& mesh.contains("audio_link_value * drawu.audio_link_ext.y")
+				&& mesh.contains("mix(1.0, audio_link_value, clamp(drawu.audio_link_params.z, 0.0, 1.0))")
+				&& mesh.contains("mix(1.0, audio_link_value, clamp(drawu.audio_link_ext.x, 0.0, 1.0))"),
+			"AudioLink must affect emission alpha and gradation offsets in the lilToon order"
 		);
 	}
 

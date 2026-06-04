@@ -831,6 +831,20 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.emission
 				.second_gradation_texture_index = Some(image_index);
 		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "audioLinkMaskTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.audio_link
+				.mask_texture_index = Some(image_index);
+		}
+		if let Some(image_index) = texture_asset_ref(mtoon, "audioLinkLocalMapTextureIndexAsset", asset_map) {
+			scene_material
+				.liltoon_like
+				.get_or_insert_with(Default::default)
+				.audio_link
+				.local_map_texture_index = Some(image_index);
+		}
 		if let Some(image_index) = texture_asset_ref(mtoon, "reflectionCubeTextureIndexAsset", asset_map) {
 			scene_material
 				.mtoon
@@ -3668,6 +3682,83 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.emission.second_gradation_speed_factor = value;
 	}
 
+	out.audio_link.enabled_factor = unavatar_material_float_param(extras, "_UseAudioLink")
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0);
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkDefaultValue") {
+		out.audio_link.default_value_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLinkUVMode") {
+		out.audio_link.uv_mode_factor = value.clamp(0.0, 5.0);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkUVParams") {
+		out.audio_link.uv_params_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkStart") {
+		out.audio_link.start_factor = value;
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("audioLinkMaskTextureIndex")
+				.or_else(|| m.get("audio_link_mask_texture_index")),
+		)
+	}) {
+		out.audio_link.mask_texture_index = Some(value);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkMask_ScrollRotate") {
+		out.audio_link.mask_uv_scroll_rotate_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLinkMask_UVMode") {
+		out.audio_link.mask_uv_mode_factor = value.clamp(0.0, 3.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Main2nd") {
+		out.audio_link.to_main_second_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Main3rd") {
+		out.audio_link.to_main_third_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Emission") {
+		out.audio_link.to_emission_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2EmissionGrad") {
+		out.audio_link.to_emission_gradation_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Emission2nd") {
+		out.audio_link.to_emission_second_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Emission2ndGrad") {
+		out.audio_link.to_emission_second_gradation_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLink2Vertex") {
+		out.audio_link.to_vertex_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLinkVertexUVMode") {
+		out.audio_link.vertex_uv_mode_factor = value.clamp(0.0, 3.0);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkVertexUVParams") {
+		out.audio_link.vertex_uv_params_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkVertexStart") {
+		out.audio_link.vertex_start_factor = value;
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkVertexStrength") {
+		out.audio_link.vertex_strength_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_AudioLinkAsLocal") {
+		out.audio_link.as_local_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = mtoon.and_then(|m| {
+		json_usize(
+			m.get("audioLinkLocalMapTextureIndex")
+				.or_else(|| m.get("audio_link_local_map_texture_index")),
+		)
+	}) {
+		out.audio_link.local_map_texture_index = Some(value);
+	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkLocalMapParams") {
+		out.audio_link.local_map_params_factor = value;
+	}
+
 	out.outline.enabled_factor = unavatar_material_float_param(extras, "_UseOutline")
 		.unwrap_or_else(|| {
 			if source_shader.to_ascii_lowercase().contains("outline") {
@@ -5493,6 +5584,64 @@ mod tests {
 
 		assert_eq!(liltoon_like.rim.directional_range_factor, -0.75);
 		assert_eq!(liltoon_like.rim.indirect_range_factor, -0.25);
+	}
+
+	#[test]
+	fn imports_liltoon_audio_link_params() {
+		let extras: Value = serde_json::from_str(
+			r#"{
+				"family": "liltoon",
+				"sourceShader": "lilToon",
+				"floatParams": {
+					"_UseAudioLink": 1.0,
+					"_AudioLinkUVMode": 2.0,
+					"_AudioLinkMask_UVMode": 3.0,
+					"_AudioLink2Main2nd": 1.0,
+					"_AudioLink2Main3rd": 1.0,
+					"_AudioLink2Emission": 1.0,
+					"_AudioLink2EmissionGrad": 1.0,
+					"_AudioLink2Emission2nd": 1.0,
+					"_AudioLink2Emission2ndGrad": 1.0,
+					"_AudioLink2Vertex": 1.0,
+					"_AudioLinkVertexUVMode": 3.0,
+					"_AudioLinkAsLocal": 1.0
+				},
+				"vectorParams": {
+					"_AudioLinkDefaultValue": [0.4, 0.5, 3.0, 0.2],
+					"_AudioLinkUVParams": [0.6, 0.1, 0.25, 0.75],
+					"_AudioLinkStart": [1.0, 2.0, 3.0, 0.0],
+					"_AudioLinkMask_ScrollRotate": [0.01, 0.02, 0.03, 0.04],
+					"_AudioLinkVertexUVParams": [0.7, 0.2, 0.3, 0.4],
+					"_AudioLinkVertexStart": [4.0, 5.0, 6.0, 0.0],
+					"_AudioLinkVertexStrength": [0.1, 0.2, 0.3, 0.4],
+					"_AudioLinkLocalMapParams": [128.0, 2.0, 0.5, 0.0]
+				}
+			}"#,
+		)
+		.unwrap();
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("lilToon material");
+
+		assert_eq!(liltoon_like.audio_link.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.default_value_factor, [0.4, 0.5, 3.0, 0.2]);
+		assert_eq!(liltoon_like.audio_link.uv_mode_factor, 2.0);
+		assert_eq!(liltoon_like.audio_link.uv_params_factor, [0.6, 0.1, 0.25, 0.75]);
+		assert_eq!(liltoon_like.audio_link.start_factor, [1.0, 2.0, 3.0, 0.0]);
+		assert_eq!(liltoon_like.audio_link.mask_uv_scroll_rotate_factor, [0.01, 0.02, 0.03, 0.04]);
+		assert_eq!(liltoon_like.audio_link.mask_uv_mode_factor, 3.0);
+		assert_eq!(liltoon_like.audio_link.to_main_second_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_main_third_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_emission_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_emission_gradation_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_emission_second_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_emission_second_gradation_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.to_vertex_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.vertex_uv_mode_factor, 3.0);
+		assert_eq!(liltoon_like.audio_link.vertex_uv_params_factor, [0.7, 0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.audio_link.vertex_start_factor, [4.0, 5.0, 6.0, 0.0]);
+		assert_eq!(liltoon_like.audio_link.vertex_strength_factor, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.audio_link.as_local_factor, 1.0);
+		assert_eq!(liltoon_like.audio_link.local_map_params_factor, [128.0, 2.0, 0.5, 0.0]);
 	}
 
 	#[test]

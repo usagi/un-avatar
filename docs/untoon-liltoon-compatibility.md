@@ -685,7 +685,10 @@ Status legend:
   - done: Renderer は本家 `lilParallax()` 相当の height-map offset を main UV に適用し、main / normal / shadow / emission など後続 sampling に共有する。Portable16 tier は parallax map を height 0.5 fallback に落とす。
   - done: POM は tangent-space view ray による bounded ray march と linear interpolation を実装する。
   - remaining: POM step count は GPU 安定性のため上限 64 の近似。本家の `LIL_POM_DETAIL 200` と完全一致する高負荷 path ではない。
-- `[defer]` AudioLink
+- `[~]` AudioLink
+  - done: glTF importer / `UnaLilToonLikeMaterial` が `_UseAudioLink`、default value、UV params、mask/local map source slots、Main2nd/Main3rd/Emission/Emission2nd/Vertex 連動 toggle を保持する。
+  - done: FullOnePass renderer は本家 `fd.audioLinkValue = 1.0` 初期値と、AudioLink package 未接続時の `_AudioLinkDefaultValue` fallback 波形を実装し、`_AudioLink2Emission` / `_AudioLink2EmissionGrad` / `_AudioLink2Emission2nd` / `_AudioLink2Emission2ndGrad` を emission alpha と gradation UV offset へ接続する。
+  - remaining: external `_AudioTexture` 入力、`_AudioLinkMask` / `_AudioLinkLocalMap` sampling、Main2nd/Main3rd alpha 連動、vertex displacement、mode 3/4 spectrum mask、mode 5 object-space position の厳密化は未実装。現状の mode 5 は fragment world position 近似。
 - `[~]` Distance fade
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_DistanceFade` / `_DistanceFadeColor` / `_DistanceFadeMode` / `_DistanceFadeRimColor` / `_DistanceFadeRimFresnelPower` を保持する。
   - done: Renderer は本家 `lilDistanceFade()` の distance ramp、facing gate、negative-alpha fade、rim fresnel color を final color/alpha へ接続する。

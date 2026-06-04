@@ -122,6 +122,11 @@ struct DrawMaterial {
 	emission_blend_mask_uv_anim_params: vec4<f32>,
 	emission2nd_blend_mask_uv_offset_scale: vec4<f32>,
 	emission2nd_blend_mask_uv_anim_params: vec4<f32>,
+	audio_link_params: vec4<f32>,
+	audio_link_default: vec4<f32>,
+	audio_link_uv_params: vec4<f32>,
+	audio_link_start: vec4<f32>,
+	audio_link_ext: vec4<f32>,
 	outline_color: vec4<f32>,
 	outline_params: vec4<f32>,
 	outline_lit_color: vec4<f32>,
@@ -1477,6 +1482,24 @@ fn lil_calc_blink(blink: vec4<f32>) -> f32 {
 	return mix(1.0, out_blink, clamp(blink.x, 0.0, 1.0));
 }
 
+fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, wp: vec3<f32>) -> f32 {
+	if (drawu.audio_link_params.x <= 0.5) {
+		return 1.0;
+	}
+	let mode = drawu.audio_link_params.y;
+	var audio_link_x = drawu.audio_link_uv_params.y;
+	if (mode >= 0.5 && mode < 1.5) {
+		audio_link_x = drawu.audio_link_uv_params.x - nv * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
+	} else if (mode >= 1.5 && mode < 2.5) {
+		let rotated = lil_rotate_uv(uv0, drawu.audio_link_uv_params.z);
+		audio_link_x = rotated.x * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
+	} else if (mode >= 4.5 && mode < 5.5) {
+		audio_link_x = distance(wp, drawu.audio_link_start.xyz) * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
+	}
+	let value = drawu.audio_link_default.x - clamp(fract(frame.time_params.x * drawu.audio_link_default.z - audio_link_x) + drawu.audio_link_default.w, 0.0, 1.0) * drawu.audio_link_default.y * drawu.audio_link_default.x;
+	return clamp(value, 0.0, 1.0);
+}
+
 fn lil_parallax_offset(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> vec2<f32> {
 	let tangent_ortho = tangent_in.xyz - n * dot(n, tangent_in.xyz);
 	let t = normalize(tangent_ortho);
@@ -2349,13 +2372,14 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let emission_uv_base = lil_select_emission_uv(drawu.emission_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);
 	let emission_uv = lil_calc_uv_scroll_rotate(emission_uv_base, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
 	let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
+	let audio_link_value = lil_calc_audio_link_value(abs(dot(n, v)), uv, i.wp);
 	if (!disable_emissive) {
 		if (is_liltoon) {
 			var emission_color = drawu.emission_color.rgb * emission_tex_color.rgb;
 			let emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);
 			let emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;
 			if (drawu.emission_grad_params.x > 0.5) {
-				let grad_u = fract(drawu.emission_grad_params.y * frame.time_params.x);
+				let grad_u = fract(drawu.emission_grad_params.y * frame.time_params.x + audio_link_value * drawu.audio_link_params.w);
 				emission_color = emission_color * textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;
 			}
 			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
@@ -2363,7 +2387,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			emission_color = mix(emission_color, emission_color * base, clamp(drawu.emission_params.y, 0.0, 1.0));
 			let emission_transparency = select(1.0, out_a, liltoon_apply_effect_transparency);
 			let emission_blink = lil_calc_blink(drawu.emission_blink_params);
-			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * emission_blink * emission_mask * drawu.emission_color.a * emission_tex_color.a * emission_transparency, 0.0, 1.0);
+			let emission_audio = mix(1.0, audio_link_value, clamp(drawu.audio_link_params.z, 0.0, 1.0));
+			let emission_blend = clamp(drawu.emission_params.x * drawu.emission_params.z * emission_blink * emission_mask * drawu.emission_color.a * emission_tex_color.a * emission_audio * emission_transparency, 0.0, 1.0);
 			lit = lil_blend_color(lit, emission_color, emission_blend, drawu.emission_params.w);
 			if (drawu.emission2nd_params.x > 0.5) {
 				let emission2nd_uv_base = lil_select_emission_uv(drawu.emission2nd_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);
@@ -2372,13 +2397,14 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				let emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);
 				var emission2nd_rgb_work = emission2nd_sample.rgb;
 				if (drawu.emission2nd_grad_params.x > 0.5) {
-					let grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);
+					let grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x + audio_link_value * drawu.audio_link_ext.y);
 					emission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;
 				}
 				emission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));
 				let emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));
 				let emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);
-				let emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a * emission_transparency, 0.0, 1.0);
+				let emission2nd_audio = mix(1.0, audio_link_value, clamp(drawu.audio_link_ext.x, 0.0, 1.0));
+				let emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a * emission2nd_audio * emission_transparency, 0.0, 1.0);
 				lit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);
 			}
 		} else {

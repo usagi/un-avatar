@@ -1006,6 +1006,54 @@ pub struct UnaLilToonLikeEmission {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeAudioLink {
+	#[serde(default)]
+	pub enabled_factor: f32,
+	#[serde(default = "default_liltoon_audio_link_default_value")]
+	pub default_value_factor: [f32; 4],
+	#[serde(default = "one_f32")]
+	pub uv_mode_factor: f32,
+	#[serde(default = "default_liltoon_audio_link_uv_params")]
+	pub uv_params_factor: [f32; 4],
+	#[serde(default)]
+	pub start_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mask_texture_index: Option<usize>,
+	#[serde(default)]
+	pub mask_uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default)]
+	pub mask_uv_mode_factor: f32,
+	#[serde(default)]
+	pub to_main_second_factor: f32,
+	#[serde(default)]
+	pub to_main_third_factor: f32,
+	#[serde(default)]
+	pub to_emission_factor: f32,
+	#[serde(default)]
+	pub to_emission_gradation_factor: f32,
+	#[serde(default)]
+	pub to_emission_second_factor: f32,
+	#[serde(default)]
+	pub to_emission_second_gradation_factor: f32,
+	#[serde(default)]
+	pub to_vertex_factor: f32,
+	#[serde(default = "one_f32")]
+	pub vertex_uv_mode_factor: f32,
+	#[serde(default = "default_liltoon_audio_link_uv_params")]
+	pub vertex_uv_params_factor: [f32; 4],
+	#[serde(default)]
+	pub vertex_start_factor: [f32; 4],
+	#[serde(default = "default_liltoon_audio_link_vertex_strength")]
+	pub vertex_strength_factor: [f32; 4],
+	#[serde(default)]
+	pub as_local_factor: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub local_map_texture_index: Option<usize>,
+	#[serde(default = "default_liltoon_audio_link_local_map_params")]
+	pub local_map_params_factor: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeOutline {
 	#[serde(default)]
 	pub enabled_factor: f32,
@@ -1323,6 +1371,8 @@ pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub emission: UnaLilToonLikeEmission,
 	#[serde(default)]
+	pub audio_link: UnaLilToonLikeAudioLink,
+	#[serde(default)]
 	pub outline: UnaLilToonLikeOutline,
 	#[serde(default)]
 	pub backlight: UnaLilToonLikeBacklight,
@@ -1607,6 +1657,35 @@ impl Default for UnaLilToonLikeEmission {
 	}
 }
 
+impl Default for UnaLilToonLikeAudioLink {
+	fn default() -> Self {
+		Self {
+			enabled_factor: 0.0,
+			default_value_factor: default_liltoon_audio_link_default_value(),
+			uv_mode_factor: 1.0,
+			uv_params_factor: default_liltoon_audio_link_uv_params(),
+			start_factor: [0.0, 0.0, 0.0, 0.0],
+			mask_texture_index: None,
+			mask_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			mask_uv_mode_factor: 0.0,
+			to_main_second_factor: 0.0,
+			to_main_third_factor: 0.0,
+			to_emission_factor: 0.0,
+			to_emission_gradation_factor: 0.0,
+			to_emission_second_factor: 0.0,
+			to_emission_second_gradation_factor: 0.0,
+			to_vertex_factor: 0.0,
+			vertex_uv_mode_factor: 1.0,
+			vertex_uv_params_factor: default_liltoon_audio_link_uv_params(),
+			vertex_start_factor: [0.0, 0.0, 0.0, 0.0],
+			vertex_strength_factor: default_liltoon_audio_link_vertex_strength(),
+			as_local_factor: 0.0,
+			local_map_texture_index: None,
+			local_map_params_factor: default_liltoon_audio_link_local_map_params(),
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeOutline {
 	fn default() -> Self {
 		Self {
@@ -1822,6 +1901,7 @@ impl Default for UnaLilToonLikeMaterial {
 			reflection: UnaLilToonLikeReflection::default(),
 			rim: UnaLilToonLikeRim::default(),
 			emission: UnaLilToonLikeEmission::default(),
+			audio_link: UnaLilToonLikeAudioLink::default(),
 			outline: UnaLilToonLikeOutline::default(),
 			backlight: UnaLilToonLikeBacklight::default(),
 			glitter: UnaLilToonLikeGlitter::default(),
@@ -2056,6 +2136,22 @@ fn default_liltoon_specular_border() -> f32 {
 
 fn default_liltoon_emission_blink() -> [f32; 4] {
 	[0.0, 0.0, std::f32::consts::PI, 0.0]
+}
+
+fn default_liltoon_audio_link_default_value() -> [f32; 4] {
+	[0.0, 0.0, 2.0, 0.75]
+}
+
+fn default_liltoon_audio_link_uv_params() -> [f32; 4] {
+	[0.25, 0.0, 0.0, 0.125]
+}
+
+fn default_liltoon_audio_link_vertex_strength() -> [f32; 4] {
+	[0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_liltoon_audio_link_local_map_params() -> [f32; 4] {
+	[120.0, 1.0, 0.0, 0.0]
 }
 
 fn default_liltoon_rim_border() -> f32 {

@@ -411,6 +411,14 @@ fn portable_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
+		"\t\t\tif (drawu.emission_grad_params.x > 0.5) {\n\t\t\t\tlet grad_u = fract(drawu.emission_grad_params.y * frame.time_params.x + audio_link_value * drawu.audio_link_params.w);\n\t\t\t\temission_color = emission_color * textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
+		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv_base = lil_select_emission_uv(drawu.emission2nd_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(emission2nd_uv_base, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params) + parallax_offset * drawu.emission2nd_ext_params.x;\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tlet emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tvar emission2nd_rgb_work = emission2nd_sample.rgb;\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x + audio_link_value * drawu.audio_link_ext.y);\n\t\t\t\t\temission2nd_rgb_work = emission2nd_rgb_work * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_rgb_work = mix(emission2nd_rgb_work, emission2nd_rgb_work * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_rgb_work, emission2nd_rgb_work * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_audio = mix(1.0, audio_link_value, clamp(drawu.audio_link_ext.x, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a * emission2nd_audio * emission_transparency, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
+		"",
+	);
+	shader = shader.replace(
 		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
 	);
@@ -574,6 +582,11 @@ struct MeshDrawMaterialGpu {
 	emission_blend_mask_uv_anim_params: [f32; 4],
 	emission2nd_blend_mask_uv_offset_scale: [f32; 4],
 	emission2nd_blend_mask_uv_anim_params: [f32; 4],
+	audio_link_params: [f32; 4],
+	audio_link_default: [f32; 4],
+	audio_link_uv_params: [f32; 4],
+	audio_link_start: [f32; 4],
+	audio_link_ext: [f32; 4],
 	outline_color: [f32; 4],
 	outline_params: [f32; 4],
 	outline_lit_color: [f32; 4],
@@ -666,7 +679,7 @@ struct MorphMetaGpu {
 
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2912);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 2992);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -4160,6 +4173,33 @@ fn mesh_draw_material_gpu(
 	let emission2nd_blend_mask_uv_anim_params = liltoon_like
 		.map(|u| u.emission.second_blend_mask_uv_scroll_rotate_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let audio_link_params = liltoon_like
+		.map(|u| {
+			[
+				u.audio_link.enabled_factor.clamp(0.0, 1.0),
+				u.audio_link.uv_mode_factor.clamp(0.0, 5.0),
+				u.audio_link.to_emission_factor.clamp(0.0, 1.0),
+				u.audio_link.to_emission_gradation_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 1.0, 0.0, 0.0]);
+	let audio_link_default = liltoon_like
+		.map(|u| u.audio_link.default_value_factor)
+		.unwrap_or([0.0, 0.0, 2.0, 0.75]);
+	let audio_link_uv_params = liltoon_like
+		.map(|u| u.audio_link.uv_params_factor)
+		.unwrap_or([0.25, 0.0, 0.0, 0.125]);
+	let audio_link_start = liltoon_like.map(|u| u.audio_link.start_factor).unwrap_or([0.0; 4]);
+	let audio_link_ext = liltoon_like
+		.map(|u| {
+			[
+				u.audio_link.to_emission_second_factor.clamp(0.0, 1.0),
+				u.audio_link.to_emission_second_gradation_factor.clamp(0.0, 1.0),
+				u.audio_link.to_main_second_factor.clamp(0.0, 1.0),
+				u.audio_link.to_main_third_factor.clamp(0.0, 1.0),
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
 		backface_color,
@@ -4287,6 +4327,11 @@ fn mesh_draw_material_gpu(
 		emission_blend_mask_uv_anim_params,
 		emission2nd_blend_mask_uv_offset_scale,
 		emission2nd_blend_mask_uv_anim_params,
+		audio_link_params,
+		audio_link_default,
+		audio_link_uv_params,
+		audio_link_start,
+		audio_link_ext,
 		outline_color,
 		outline_params: [
 			outline_mode_gpu(outline_mode),
@@ -9484,6 +9529,34 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params, [0.7, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_audio_link_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.audio_link.enabled_factor = 1.0;
+		liltoon_like.audio_link.uv_mode_factor = 2.0;
+		liltoon_like.audio_link.to_emission_factor = 1.0;
+		liltoon_like.audio_link.to_emission_gradation_factor = 0.75;
+		liltoon_like.audio_link.default_value_factor = [0.4, 0.5, 3.0, 0.2];
+		liltoon_like.audio_link.uv_params_factor = [0.6, 0.1, 0.25, 0.75];
+		liltoon_like.audio_link.start_factor = [1.0, 2.0, 3.0, 0.0];
+		liltoon_like.audio_link.to_emission_second_factor = 0.5;
+		liltoon_like.audio_link.to_emission_second_gradation_factor = 0.25;
+		liltoon_like.audio_link.to_main_second_factor = 1.0;
+		liltoon_like.audio_link.to_main_third_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.audio_link_params, [1.0, 2.0, 1.0, 0.75]);
+		assert_eq!(draw.audio_link_default, [0.4, 0.5, 3.0, 0.2]);
+		assert_eq!(draw.audio_link_uv_params, [0.6, 0.1, 0.25, 0.75]);
+		assert_eq!(draw.audio_link_start, [1.0, 2.0, 3.0, 0.0]);
+		assert_eq!(draw.audio_link_ext, [0.5, 0.25, 1.0, 1.0]);
 	}
 
 	#[test]
