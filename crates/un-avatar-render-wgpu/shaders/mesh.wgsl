@@ -1552,6 +1552,7 @@ fn liltoon_custom_matcap_normal(
 struct AnisotropyBasis {
 	normal: vec3<f32>,
 	tangent: vec3<f32>,
+	bitangent: vec3<f32>,
 	amount: f32,
 	shift_noise: f32,
 	enabled: f32,
@@ -1560,7 +1561,7 @@ struct AnisotropyBasis {
 fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {
 	let enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);
 	if (enabled <= 0.000001) {
-		return AnisotropyBasis(n, n, 0.0, 0.0, 0.0);
+		return AnisotropyBasis(n, n, n, 0.0, 0.0, 0.0);
 	}
 	let base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));
 	let base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;
@@ -1575,23 +1576,12 @@ fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: v
 	let scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;
 	let scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;
 	let anisotropy = drawu.anisotropy_params.y * scale_mask;
-	let shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);
-	let aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));
+	let aniso_direction = select(aniso_t, aniso_b, anisotropy > 0.0);
+	let aniso_direction_ortho = lil_ortho_normalize(aniso_direction, v);
+	let aniso_n = normalize(mix(n, aniso_direction_ortho, clamp(abs(anisotropy), 0.0, 1.0)));
 	let noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;
 	let shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;
-	return AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);
-}
-
-fn lil_anisotropic_specular_shape(n: vec3<f32>, t: vec3<f32>, half_vec: vec3<f32>, tangent_width: f32, bitangent_width: f32, shift: f32, roughness: f32) -> f32 {
-	let shifted_t = normalize(t + n * shift);
-	let shifted_b = normalize(cross(n, shifted_t));
-	let rough = max(roughness, 0.02);
-	let tw = max(tangent_width * rough, 0.02);
-	let bw = max(bitangent_width * rough, 0.02);
-	let t_term = dot(shifted_t, half_vec) / tw;
-	let b_term = dot(shifted_b, half_vec) / bw;
-	let nh = max(dot(n, half_vec), 0.0);
-	return exp(-clamp(t_term * t_term + b_term * b_term, 0.0, 80.0)) * nh;
+	return AnisotropyBasis(aniso_n, aniso_t, aniso_b, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);
 }
 
 fn authored_occlusion(uv: vec2<f32>, dbg: u32) -> f32 {
@@ -1932,7 +1922,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let nl_spec = max(dot(specular_n, l), 0.0);
 		let lh = max(dot(l, half_vec), 0.0);
 		var specular_reflect = vec3<f32>(0.0);
-		if (drawu.specular_toon_params.x > 0.5) {
+		let is_anisotropy_specular = anisotropy_basis.enabled > 0.5 && drawu.anisotropy_params.z > 0.5;
+		if (drawu.specular_toon_params.x > 0.5 && !is_anisotropy_specular) {
 			let toon_specular = pow(nh, 1.0 / max(roughness, 0.0004));
 			let specular_shape = lil_tooning_scale(
 				toon_specular,
@@ -1940,29 +1931,43 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 				clamp(drawu.specular_toon_params.z, 0.0, 1.0)
 			);
 			specular_reflect = vec3<f32>(specular_shape);
-		} else if (anisotropy_basis.enabled > 0.5 && drawu.anisotropy_params.z > 0.5) {
+		} else if (is_anisotropy_specular) {
 			let shift1 = anisotropy_basis.shift_noise * drawu.anisotropy_ext_params.z + drawu.anisotropy_ext_params.y;
 			let shift2 = anisotropy_basis.shift_noise * drawu.anisotropy2_params.y + drawu.anisotropy2_params.x;
-			let aniso1 = lil_anisotropic_specular_shape(
-				specular_n,
-				anisotropy_basis.tangent,
-				half_vec,
-				drawu.anisotropy_width_params.x,
-				drawu.anisotropy_width_params.y,
-				shift1,
-				roughness
-			) * drawu.anisotropy_ext_params.w;
-			let aniso2 = lil_anisotropic_specular_shape(
-				specular_n,
-				anisotropy_basis.tangent,
-				half_vec,
-				drawu.anisotropy_width_params.z,
-				drawu.anisotropy_width_params.w,
-				shift2,
-				roughness
-			) * drawu.anisotropy2_params.z;
-			let specular_shape = max(aniso1, aniso2) * nl_spec;
-			specular_reflect = specular_shape * fresnel_term(specular_color, lh);
+			let roughness_t = max(roughness * (1.0 + anisotropy_basis.amount), 0.002);
+			let roughness_b = max(roughness * (1.0 - anisotropy_basis.amount), 0.002);
+			let tv = dot(anisotropy_basis.tangent, v);
+			let bv = dot(anisotropy_basis.bitangent, v);
+			let tl = dot(anisotropy_basis.tangent, l);
+			let bl = dot(anisotropy_basis.bitangent, l);
+			let lambda_v = nl_spec * length(vec3<f32>(roughness_t * tv, roughness_b * bv, nv_spec));
+			let lambda_l = nv_spec * length(vec3<f32>(roughness_t * tl, roughness_b * bl, nl_spec));
+			let roughness_t1 = roughness_t * drawu.anisotropy_width_params.x;
+			let roughness_b1 = roughness_b * drawu.anisotropy_width_params.y;
+			let roughness_t2 = roughness_t * drawu.anisotropy_width_params.z;
+			let roughness_b2 = roughness_b * drawu.anisotropy_width_params.w;
+			let t1 = normalize(anisotropy_basis.tangent - specular_n * shift1);
+			let b1 = normalize(anisotropy_basis.bitangent - specular_n * shift1);
+			let t2 = normalize(anisotropy_basis.tangent - specular_n * shift2);
+			let b2 = normalize(anisotropy_basis.bitangent - specular_n * shift2);
+			let th1 = dot(t1, half_vec);
+			let bh1 = dot(b1, half_vec);
+			let th2 = dot(t2, half_vec);
+			let bh2 = dot(b2, half_vec);
+			let r1 = roughness_t1 * roughness_b1;
+			let r2 = roughness_t2 * roughness_b2;
+			let v1 = vec3<f32>(th1 * roughness_b1, bh1 * roughness_t1, nh * r1);
+			let v2 = vec3<f32>(th2 * roughness_b2, bh2 * roughness_t2, nh * r2);
+			let w1 = r1 / max(dot(v1, v1), 0.0000001);
+			let w2 = r2 / max(dot(v2, v2), 0.0000001);
+			let ggx = r1 * w1 * w1 * drawu.anisotropy_ext_params.w + r2 * w2 * w2 * drawu.anisotropy2_params.z;
+			let smith_joint_ggx = 0.5 / (lambda_v + lambda_l + 0.00001);
+			let specular_term = smith_joint_ggx * ggx * nl_spec;
+			if (drawu.specular_toon_params.x > 0.5) {
+				specular_reflect = vec3<f32>(lil_tooning_scale(specular_term, 0.5, 0.0));
+			} else {
+				specular_reflect = specular_term * fresnel_term(specular_color, lh);
+			}
 		} else {
 			let roughness2 = max(roughness, 0.002);
 			let lambda_v = nl_spec * (nv_spec * (1.0 - roughness2) + roughness2);

@@ -360,8 +360,10 @@ Status legend:
   - remaining: green channel convention を lilToon 本家へ合わせる。
 - `[~]` anisotropy normal interactions
   - done: `_UseAnisotropy` / `_Anisotropy*` 係数と tangent / scale mask / shift noise mask texture reference を `UnaLilToonLikeMaterial.reflection` に保持する。
-  - done: FullOnePass WGSL が anisotropy tangent / scale mask / shift noise mask を bind し、anisotropy normal を MatCap / 2nd MatCap / Reflection / specular normal へ反映する。1st/2nd anisotropy specular は tangent/bitangent width と shift noise を使う近似 highlight として接続した。Portable16 は texture budget 維持のため anisotropy sampling を落とす。
-  - remaining: 本家 `lilGetAnisotropyNormalWS` / `lilCalcSpecular` の GGX anisotropic 形状、normal strength との厳密な合成順、green channel convention を検証する。
+  - done: FullOnePass WGSL が anisotropy tangent / scale mask / shift noise mask を bind し、anisotropy normal を MatCap / 2nd MatCap / Reflection / specular normal へ反映する。Portable16 は texture budget 維持のため anisotropy sampling を落とす。
+  - done: anisotropy normal は本家 `lilGetAnisotropyNormalWS` と同じく正の anisotropy で bitangent を選び、view direction に対して ortho-normalize した方向へ補間する。
+  - done: anisotropy specular は本家 `lilCalcSpecular` の tangent/bitangent roughness と 1st/2nd anisotropic GGX 形状へ合わせ、anisotropy 有効時の `_SpecularToon` は specularTerm 後段で toon 化する。
+  - remaining: normal strength との厳密な合成順、green channel convention を検証する。
 
 ### MatCap
 
@@ -446,7 +448,7 @@ Status legend:
 	- remaining: forward-add lighting path、shadowmix / attenuation との合成順を本家に合わせる。
 - `[~]` `_SpecularToon`
   - done: v2 reflection parameter として保持し、enabled 時は specular highlight を toon scale path へ分岐する。
-  - done: FullOnePass の anisotropy path では shift / shift noise / tangent width / bitangent width を使う 1st/2nd highlight を specular shape へ加算する。
+  - done: FullOnePass の anisotropy path では本家 `lilCalcSpecular` と同じく GGX anisotropic specularTerm を作ってから toon scale を適用する。
   - remaining: normal strength、forward-add attenuation と合わせた本家 `lilCalcSpecular` 互換へ近づける。
 - `[~]` `_SpecularBorder`
 	- done: v2 reflection parameter として保持し、toon specular border に接続する。

@@ -282,6 +282,28 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_anisotropy_uses_upstream_normal_and_ggx_shape() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let aniso_direction = select(aniso_t, aniso_b, anisotropy > 0.0);")
+				&& mesh.contains("let aniso_direction_ortho = lil_ortho_normalize(aniso_direction, v);")
+				&& mesh.contains("let aniso_n = normalize(mix(n, aniso_direction_ortho, clamp(abs(anisotropy), 0.0, 1.0)));"),
+			"lilToon lilGetAnisotropyNormalWS chooses bitangent for positive anisotropy and ortho-normalizes against the view direction"
+		);
+		assert!(
+			mesh.contains("let roughness_t = max(roughness * (1.0 + anisotropy_basis.amount), 0.002);")
+				&& mesh.contains("let roughness_b = max(roughness * (1.0 - anisotropy_basis.amount), 0.002);")
+				&& mesh.contains("let ggx = r1 * w1 * w1 * drawu.anisotropy_ext_params.w + r2 * w2 * w2 * drawu.anisotropy2_params.z;"),
+			"lilToon anisotropic specular should use the upstream tangent/bitangent GGX formula"
+		);
+		assert!(
+			mesh.contains("if (drawu.specular_toon_params.x > 0.5 && !is_anisotropy_specular)")
+				&& mesh.contains("specular_reflect = vec3<f32>(lil_tooning_scale(specular_term, 0.5, 0.0));"),
+			"when anisotropy is active, lilToon applies toon scaling after anisotropic GGX rather than using nh power"
+		);
+	}
+
+	#[test]
 	fn liltoon_dissolve_separates_noise_and_non_noise_directional_uv() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

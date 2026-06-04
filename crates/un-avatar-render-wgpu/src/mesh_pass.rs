@@ -339,7 +339,19 @@ fn portable_mesh_shader_source() -> String {
 	);
 	shader = shader.replace(
 		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\tlet enabled = clamp(drawu.anisotropy_params.x, 0.0, 1.0);\n\tif (enabled <= 0.000001) {\n\t\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n\t}\n\tlet base_tangent = normalize(tangent_in.xyz - n * dot(n, tangent_in.xyz));\n\tlet base_bitangent = normalize(cross(n, base_tangent)) * tangent_in.w;\n\tlet tangent_uv = uv * drawu.anisotropy_tangent_uv_offset_scale.zw + drawu.anisotropy_tangent_uv_offset_scale.xy;\n\tvar tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);\n\tif (dot(tangent_sample, tangent_sample) < 0.000001) {\n\t\ttangent_sample = vec3<f32>(1.0, 0.0, 0.0);\n\t}\n\tvar aniso_t = normalize(base_tangent * tangent_sample.x + base_bitangent * tangent_sample.y + n * tangent_sample.z);\n\taniso_t = normalize(aniso_t - n * dot(n, aniso_t));\n\tlet aniso_b = normalize(cross(n, aniso_t)) * tangent_in.w;\n\tlet scale_uv = uv * drawu.anisotropy_scale_mask_uv_offset_scale.zw + drawu.anisotropy_scale_mask_uv_offset_scale.xy;\n\tlet scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;\n\tlet anisotropy = drawu.anisotropy_params.y * scale_mask;\n\tlet shift_axis = select(aniso_b, aniso_t, anisotropy >= 0.0);\n\tlet aniso_n = normalize(n + shift_axis * clamp(abs(anisotropy), 0.0, 1.0) * max(0.15, 1.0 - abs(dot(n, v))));\n\tlet noise_uv = uv * drawu.anisotropy_shift_noise_uv_offset_scale.zw + drawu.anisotropy_shift_noise_uv_offset_scale.xy;\n\tlet shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;\n\treturn AnisotropyBasis(aniso_n, aniso_t, clamp(anisotropy, -1.0, 1.0), shift_noise, enabled);\n}\n",
-		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\treturn AnisotropyBasis(n, n, 0.0, 0.0, 0.0);\n}\n",
+		"fn lil_anisotropy_basis(n: vec3<f32>, tangent_in: vec4<f32>, uv: vec2<f32>, v: vec3<f32>) -> AnisotropyBasis {\n\treturn AnisotropyBasis(n, n, n, 0.0, 0.0, 0.0);\n}\n",
+	);
+	shader = shader.replace(
+		"var tangent_sample = textureSample(anisotropy_tangent_tex, normal_samp, tangent_uv).xyz * 2.0 - vec3<f32>(1.0, 1.0, 1.0);",
+		"var tangent_sample = vec3<f32>(1.0, 0.0, 0.0);",
+	);
+	shader = shader.replace(
+		"let scale_mask = textureSample(anisotropy_scale_mask_tex, base_samp, scale_uv).r;",
+		"let scale_mask = 1.0;",
+	);
+	shader = shader.replace(
+		"let shift_noise = textureSample(anisotropy_shift_noise_tex, base_samp, noise_uv).r - 0.5;",
+		"let shift_noise = 0.0;",
 	);
 	shader = shader.replace(
 		"\t\t\tlet emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);\n\t\t\tlet emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;\n",
