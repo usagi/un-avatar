@@ -29,17 +29,18 @@ namespace UNAvatar.UnityExporter
             ApplyWardrobeOperations(CurrentBaseOperations());
             baseSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
             hasBaseSnapshot = true;
+            var baseOperations = CurrentBaseOperations();
 
             var built = 0;
             for (var i = 0; i < capturedWardrobeSets.Count; i++)
             {
-                ApplyWardrobeOperations(CurrentBaseOperations());
+                ApplyWardrobeOperations(baseOperations);
                 ApplyWardrobeOperations(capturedWardrobeSets[i].operations);
                 capturedWardrobeSets[i].capturedSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
                 built++;
             }
 
-            ApplyWardrobeOperations(CurrentBaseOperations());
+            ApplyWardrobeOperations(baseOperations);
             lastSummary = $"Built wardrobe snapshots from current sets: {built}.";
             SceneView.RepaintAll();
         }
