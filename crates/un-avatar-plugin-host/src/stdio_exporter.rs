@@ -172,7 +172,7 @@ fn export_err_handshake(e: HandshakeError) -> ExportError {
 /// 既に同じ `FormatId` の exporter がある状態でさらに登録するとき、**stderr に警告**を出す（レジストリの `exporter_by_id` は先に登録された方だけを返す）。
 pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegistry, dir: &Path) -> io::Result<usize> {
 	let mut n = 0;
-	for p in crate::manifest::discover_manifests_in_dir(dir)? {
+	if let Some(p) = crate::manifest::discover_manifest_in_dir(dir)? {
 		if let Ok(exp) = StdioJsonRpcExporter::from_manifest_file(&p) {
 			let new_desc = exp.format_descriptor();
 			if let Some(existing) = reg.exporter_by_id(&new_desc.id) {
