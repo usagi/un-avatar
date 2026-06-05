@@ -243,20 +243,23 @@ impl IoRegistry {
 	}
 
 	pub fn importer_descriptors(&self) -> Vec<FormatDescriptor> {
-		self.importers.iter().map(|i| i.descriptor()).collect()
+		let mut descriptors = Vec::with_capacity(self.importers.len());
+		descriptors.extend(self.importers.iter().map(|i| i.descriptor()));
+		descriptors
 	}
 
 	pub fn exporter_descriptors(&self) -> Vec<FormatDescriptor> {
-		self.exporters.iter().map(|e| e.descriptor()).collect()
+		let mut descriptors = Vec::with_capacity(self.exporters.len());
+		descriptors.extend(self.exporters.iter().map(|e| e.descriptor()));
+		descriptors
 	}
 	pub fn probe_importers(&self, probe: &ImportProbe) -> Vec<(FormatId, ImportProbeResult)> {
-		self.importers
-			.iter()
-			.map(|i| {
-				let desc = i.descriptor();
-				(desc.id, i.probe(probe))
-			})
-			.collect()
+		let mut results = Vec::with_capacity(self.importers.len());
+		results.extend(self.importers.iter().map(|i| {
+			let desc = i.descriptor();
+			(desc.id, i.probe(probe))
+		}));
+		results
 	}
 
 	/// `confidence` が最大の importer。0 のみなら `None`。同点では**先に登録**されたものを残す。
