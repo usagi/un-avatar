@@ -127,6 +127,7 @@ fn spawn_audio_link_fft_worker(
 			let mut fft_buffer = vec![Complex::new(0.0, 0.0); AUDIO_LINK_SAMPLE_WINDOW];
 			let mut pixels = vec![0; (AUDIO_LINK_TEXTURE_WIDTH * AUDIO_LINK_TEXTURE_HEIGHT * 4) as usize];
 			let mut samples = VecDeque::with_capacity(AUDIO_LINK_MAX_CAPTURE_SAMPLES);
+			let mut snapshot = Vec::with_capacity(AUDIO_LINK_SAMPLE_WINDOW);
 			let mut sequence = 0u64;
 			let mut last_tail = 0.0f32;
 			while !stop.load(Ordering::Acquire) {
@@ -138,15 +139,9 @@ fn spawn_audio_link_fft_worker(
 				while samples.len() > AUDIO_LINK_MAX_CAPTURE_SAMPLES {
 					let _ = samples.pop_front();
 				}
-				let snapshot: Vec<f32> = samples
-					.iter()
-					.rev()
-					.take(AUDIO_LINK_SAMPLE_WINDOW)
-					.copied()
-					.collect::<Vec<_>>()
-					.into_iter()
-					.rev()
-					.collect();
+				snapshot.clear();
+				snapshot.extend(samples.iter().rev().take(AUDIO_LINK_SAMPLE_WINDOW).copied());
+				snapshot.reverse();
 				if snapshot.len() < 64 {
 					thread::sleep(Duration::from_millis(16));
 					continue;
