@@ -47,6 +47,7 @@ namespace UNAvatar.UnityExporter
             private readonly Dictionary<Texture, int> textureIndices = new Dictionary<Texture, int>();
             private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
             private readonly Dictionary<Texture, TextureSourceInfo> textureSourceInfos = new Dictionary<Texture, TextureSourceInfo>();
+            private readonly Dictionary<string, byte[]> textureSourceBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
             private readonly Dictionary<MaterialPropertyKey, Texture> materialTextureCache = new Dictionary<MaterialPropertyKey, Texture>();
             private readonly Dictionary<MaterialPropertyKey, bool> materialPropertyCache = new Dictionary<MaterialPropertyKey, bool>();
             private readonly Dictionary<string, int> samplerIndices = new Dictionary<string, int>(StringComparer.Ordinal);

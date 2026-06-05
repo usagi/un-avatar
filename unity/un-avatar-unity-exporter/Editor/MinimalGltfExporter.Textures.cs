@@ -110,28 +110,50 @@ namespace UNAvatar.UnityExporter
                     return null;
                 }
 
+                var bytes = ReadSourceTextureBytes(texture, source, "Source texture read failed for", out fallbackReason);
+                if (bytes == null)
+                {
+                    return null;
+                }
+                return new EncodedTexture(bytes, source.GltfMimeType)
+                {
+                    AssetPath = source.AssetPath,
+                    SourceExtension = source.SourceExtension,
+                    SourceMimeType = source.GltfMimeType,
+                    SourceByteLength = bytes.Length,
+                    ExportMode = "source",
+                    FallbackReason = ""
+                };
+            }
+
+            private byte[] ReadSourceTextureBytes(Texture texture, TextureSourceInfo source, string warningPrefix, out string failureReason)
+            {
+                failureReason = "";
+                if (source == null || string.IsNullOrEmpty(source.FullPath))
+                {
+                    failureReason = "source_file_not_found";
+                    return null;
+                }
+                if (textureSourceBytes.TryGetValue(source.FullPath, out var cached))
+                {
+                    return cached;
+                }
+
                 try
                 {
                     var bytes = File.ReadAllBytes(source.FullPath);
                     if (bytes.Length <= 0)
                     {
-                        fallbackReason = "empty_source_file";
+                        failureReason = "empty_source_file";
                         return null;
                     }
-                    return new EncodedTexture(bytes, source.GltfMimeType)
-                    {
-                        AssetPath = source.AssetPath,
-                        SourceExtension = source.SourceExtension,
-                        SourceMimeType = source.GltfMimeType,
-                        SourceByteLength = bytes.Length,
-                        ExportMode = "source",
-                        FallbackReason = ""
-                    };
+                    textureSourceBytes[source.FullPath] = bytes;
+                    return bytes;
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning("[U.N. Avatar] Source texture read failed for " + texture.name + ": " + ex.Message);
-                    fallbackReason = "source_read_failed";
+                    Debug.LogWarning("[U.N. Avatar] " + warningPrefix + " " + texture.name + ": " + ex.Message);
+                    failureReason = "source_read_failed";
                     return null;
                 }
             }
