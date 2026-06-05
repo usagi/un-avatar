@@ -125,6 +125,13 @@ pub enum ExportOutput {
 	Path(PathBuf),
 }
 
+pub fn path_has_format_extension(path: &str, extension: &str) -> bool {
+	if extension.is_empty() {
+		return path.ends_with('.');
+	}
+	path.len() > extension.len() && path.as_bytes().get(path.len() - extension.len() - 1) == Some(&b'.') && path.ends_with(extension)
+}
+
 pub struct ImportContext {
 	pub asset_root: PathBuf,
 	pub temp_dir: PathBuf,
@@ -309,8 +316,7 @@ impl IoRegistry {
 			}
 			let desc = e.descriptor();
 			for ext in &desc.extensions {
-				let suffix = format!(".{ext}");
-				if path_str.ends_with(&suffix) {
+				if path_has_format_extension(&path_str, ext) {
 					return Some(e.as_ref());
 				}
 			}
@@ -398,6 +404,14 @@ mod tests {
 		assert!(reg.importer_by_id(&id).is_some());
 		assert!(reg.exporter_by_id(&id).is_some());
 		assert!(reg.importer_by_id(&FormatId::new("io.none")).is_none());
+	}
+
+	#[test]
+	fn path_extension_match_requires_dot_boundary() {
+		assert!(path_has_format_extension("out.dummy", "dummy"));
+		assert!(path_has_format_extension("out.una.d", "una.d"));
+		assert!(!path_has_format_extension("out.notdummy", "dummy"));
+		assert!(!path_has_format_extension("dummy", "dummy"));
 	}
 
 	#[test]

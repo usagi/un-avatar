@@ -15,8 +15,8 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaImagePixelFormat, UnaMaterialPbr, UnaSceneSnapshot, UnaShadingModel};
 use un_avatar_io::{
-	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
-	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
+	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
+	FormatDescriptor, FormatId, ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
 };
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer, WardrobeApplyReport};
 use un_avatar_io_una::{io_registry_with_una, read_una_any, UnaFileV0};
@@ -531,8 +531,7 @@ fn build_formats_probe_json(reg: &IoRegistry, path: &Path) -> FormatsProbeJson {
 			if e.can_export(&doc, &opts) == ExportCapability::Supported {
 				confidence = 60;
 				for ext in &desc.extensions {
-					let suffix = format!(".{ext}");
-					if path_str_lossy.ends_with(&suffix) {
+					if path_has_format_extension(&path_str_lossy, ext) {
 						confidence = 120;
 						break;
 					}
