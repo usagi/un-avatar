@@ -779,7 +779,7 @@ fn run_formats_list(plugin_dirs: &[PathBuf], json: bool) -> Result<(), String> {
 			importers: reg.importer_descriptors(),
 			exporters: reg.exporter_descriptors(),
 		};
-		println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
+		write_json_stdout(&out)?;
 		return Ok(());
 	}
 	println!("importers:");
@@ -799,7 +799,7 @@ fn run_formats_probe(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Resu
 	let reg = io_registry_for_cli(plugin_dirs)?;
 	if json {
 		let out = build_formats_probe_json(&reg, &path);
-		println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
+		write_json_stdout(&out)?;
 		return Ok(());
 	}
 	let out = build_formats_probe_json(&reg, &path);
@@ -837,12 +837,16 @@ fn run_formats_probe(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Resu
 	Ok(())
 }
 
+fn write_json_stdout<T: Serialize>(value: &T) -> Result<(), String> {
+	let stdout = io::stdout();
+	let mut lock = stdout.lock();
+	serde_json::to_writer_pretty(&mut lock, value).map_err(|e| e.to_string())?;
+	writeln!(lock).map_err(|e| e.to_string())
+}
+
 fn write_convert_json_report(path: &Path, bundle: &ConvertJsonReport) -> Result<(), String> {
 	if path.as_os_str() == "-" {
-		let stdout = io::stdout();
-		let mut lock = stdout.lock();
-		serde_json::to_writer_pretty(&mut lock, bundle).map_err(|e| e.to_string())?;
-		writeln!(lock).map_err(|e| e.to_string())?;
+		write_json_stdout(bundle)?;
 		return Ok(());
 	}
 	if let Some(parent) = path.parent() {
@@ -858,8 +862,7 @@ fn write_convert_json_report(path: &Path, bundle: &ConvertJsonReport) -> Result<
 }
 
 fn write_validate_stdout(report: &ValidateReport) -> Result<(), String> {
-	println!("{}", serde_json::to_string_pretty(report).map_err(|e| e.to_string())?);
-	Ok(())
+	write_json_stdout(report)
 }
 
 fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<String>, json: bool) -> Result<(), String> {
@@ -951,7 +954,7 @@ fn run_inspect(path: PathBuf, json: bool) -> Result<(), String> {
 	let file = read_una_any(&path).map_err(|e| e.to_string())?;
 	if json {
 		let out = InspectReport { path: path_str, una: file };
-		println!("{}", serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?);
+		write_json_stdout(&out)?;
 		return Ok(());
 	}
 	println!("path: {}", path.display());
@@ -2086,7 +2089,7 @@ fn run_diagnose(
 		..report
 	};
 	if json {
-		println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+		write_json_stdout(&report)?;
 		return Ok(());
 	}
 	println!("path: {}", report.path);
