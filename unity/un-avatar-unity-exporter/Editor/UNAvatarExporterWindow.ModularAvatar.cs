@@ -11,7 +11,8 @@ namespace UNAvatar.UnityExporter
     {
         private Dictionary<string, object> BuildModularAvatarPayload(GameObject root)
         {
-            var components = new List<object>();
+            var componentObjects = root != null ? root.GetComponentsInChildren<Component>(true) : null;
+            var components = new List<object>(componentObjects != null ? componentObjects.Length : 0);
             if (root == null)
             {
                 return new Dictionary<string, object>
@@ -23,7 +24,7 @@ namespace UNAvatar.UnityExporter
                 };
             }
 
-            foreach (var component in root.GetComponentsInChildren<Component>(true))
+            foreach (var component in componentObjects)
             {
                 if (!IsModularAvatarComponent(component))
                 {
@@ -81,8 +82,8 @@ namespace UNAvatar.UnityExporter
 
         private Dictionary<string, object> BuildModularAvatarComponentFields(Transform root, Component component)
         {
-            var json = new Dictionary<string, object>();
             var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
+            var json = new Dictionary<string, object>(fields.Length);
             foreach (var field in fields)
             {
                 if (field.IsStatic)

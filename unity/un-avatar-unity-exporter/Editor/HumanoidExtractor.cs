@@ -15,7 +15,7 @@ namespace UNAvatar.UnityExporter
     {
         public static Dictionary<string, string> Extract(GameObject root)
         {
-            var result = new Dictionary<string, string>();
+            var result = new Dictionary<string, string>((int)HumanBodyBones.LastBone);
             if (root == null)
             {
                 return result;

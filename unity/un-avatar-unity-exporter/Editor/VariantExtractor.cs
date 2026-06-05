@@ -44,7 +44,7 @@ namespace UNAvatar.UnityExporter
     {
         public static List<VariantRecord> Extract(GameObject root, UNAvatarExportMode mode)
         {
-            var variants = new List<VariantRecord>();
+            var variants = new List<VariantRecord>(1);
             if (root == null)
             {
                 return variants;
@@ -57,20 +57,23 @@ namespace UNAvatar.UnityExporter
                 return variants;
             }
 
-            variants.AddRange(ExtractModularAvatarObjectToggles(root));
-            variants.AddRange(ExtractModularAvatarMenuItems(root));
+            var components = root.GetComponentsInChildren<Component>(true);
+            variants.AddRange(ExtractModularAvatarObjectToggles(root, components));
+            variants.AddRange(ExtractModularAvatarMenuItems(root, components));
             return variants;
         }
 
         private static VariantRecord MakeCurrentStateVariant(GameObject root)
         {
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
             var variant = new VariantRecord
             {
                 Id = "current-state",
                 Name = "Current State",
                 Source = "unity-active-state"
             };
-            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+            variant.Operations.Capacity = renderers.Length;
+            foreach (var renderer in renderers)
             {
                 variant.Operations.Add(new Dictionary<string, object>
                 {
@@ -82,10 +85,10 @@ namespace UNAvatar.UnityExporter
             return variant;
         }
 
-        private static IEnumerable<VariantRecord> ExtractModularAvatarObjectToggles(GameObject root)
+        private static IEnumerable<VariantRecord> ExtractModularAvatarObjectToggles(GameObject root, Component[] components)
         {
             var records = new List<VariantRecord>();
-            foreach (var component in root.GetComponentsInChildren<Component>(true))
+            foreach (var component in components)
             {
                 if (component == null || component.GetType().FullName != "nadena.dev.modular_avatar.core.ModularAvatarObjectToggle")
                 {
@@ -128,10 +131,10 @@ namespace UNAvatar.UnityExporter
             return records;
         }
 
-        private static IEnumerable<VariantRecord> ExtractModularAvatarMenuItems(GameObject root)
+        private static IEnumerable<VariantRecord> ExtractModularAvatarMenuItems(GameObject root, Component[] components)
         {
             var records = new List<VariantRecord>();
-            foreach (var component in root.GetComponentsInChildren<Component>(true))
+            foreach (var component in components)
             {
                 if (component == null || component.GetType().FullName != "nadena.dev.modular_avatar.core.ModularAvatarMenuItem")
                 {
@@ -193,14 +196,31 @@ namespace UNAvatar.UnityExporter
             {
                 return "";
             }
-            var parts = new Stack<string>();
+            var parts = new List<string>();
             var current = target;
+            var length = 0;
             while (current != null && current != root)
             {
-                parts.Push(current.name);
+                var name = current.name;
+                parts.Add(name);
+                length += (name != null ? name.Length : 0) + 1;
                 current = current.parent;
             }
-            return string.Join("/", parts.ToArray());
+            if (parts.Count == 0)
+            {
+                return "";
+            }
+
+            var builder = new StringBuilder(Math.Max(0, length - 1));
+            for (var i = parts.Count - 1; i >= 0; i--)
+            {
+                if (builder.Length > 0)
+                {
+                    builder.Append('/');
+                }
+                builder.Append(parts[i]);
+            }
+            return builder.ToString();
         }
 
         private static object ReadAny(Type type, object instance, string name)

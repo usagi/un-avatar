@@ -496,11 +496,12 @@ namespace UNAvatar.UnityExporter
         private Dictionary<string, object> BuildModularAvatarReportSummary(GameObject root)
         {
             var typeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-            var samples = new List<object>();
+            var samples = new List<object>(32);
             var componentCount = 0;
             if (root != null)
             {
-                foreach (var component in root.GetComponentsInChildren<Component>(true))
+                var components = root.GetComponentsInChildren<Component>(true);
+                foreach (var component in components)
                 {
                     if (!IsModularAvatarComponent(component))
                     {
