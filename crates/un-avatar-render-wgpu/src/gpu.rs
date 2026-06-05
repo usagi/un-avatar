@@ -111,6 +111,25 @@ fn expression_presets_match_catalog(current: &[String], catalog: Option<&UnaExpr
 			.all(|(current, preset)| current == &preset.name)
 }
 
+fn active_expression_weights_for_doc(disable_expression_morphs: bool, doc: &UnaDocument) -> Option<&un_avatar_core::UnaExpressionWeights> {
+	if disable_expression_morphs {
+		None
+	} else {
+		doc.expression_weights.as_ref()
+	}
+}
+
+fn active_expression_overrides<'a>(
+	disable_expression_morphs: bool,
+	overrides: &'a std::collections::BTreeMap<String, f32>,
+) -> Option<&'a std::collections::BTreeMap<String, f32>> {
+	if disable_expression_morphs || overrides.is_empty() {
+		None
+	} else {
+		Some(overrides)
+	}
+}
+
 fn append_hand_finger_target_keys(keys: &mut Vec<String>, hand: Option<&un_motion_frame::HandMotion>, side_prefix: &str) {
 	let Some(hand) = hand else {
 		return;
@@ -1284,7 +1303,11 @@ impl GpuState {
 			return;
 		}
 		let w = weight.clamp(0.0, 1.0);
-		if self.expression_overrides.get(name).is_some_and(|current| *current == w) {
+		if self
+			.expression_overrides
+			.get(name)
+			.is_some_and(|current| (*current - w).abs() <= f32::EPSILON)
+		{
 			return;
 		}
 		self.expression_overrides.insert(name.to_string(), w);
@@ -1763,12 +1786,8 @@ impl GpuState {
 			if let Ok(doc) = doc_arc.read() {
 				if let Some(sc) = &doc.scene {
 					crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
-					let expr_weights = if self.disable_expression_morphs {
-						None
-					} else {
-						doc.expression_weights.as_ref()
-					};
-					let expression_overrides = (!self.expression_overrides.is_empty()).then_some(&self.expression_overrides);
+					let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
+					let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 					sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
 				}
 			}
@@ -2924,7 +2943,6 @@ impl GpuState {
 		let draw_contact_shadow = draw_scene && self.contact_shadow.is_enabled();
 		let draw_contact_shadow_in_main = draw_contact_shadow && !use_avatar_outline;
 		let document_revision = self.document_revision.load(Ordering::Acquire);
-		let overrides_active = !self.expression_overrides.is_empty();
 		let expression_overrides_changed = self.expression_overrides_revision != self.applied_expression_overrides_revision;
 		let scene_pose_may_change =
 			self.spring_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
@@ -2944,13 +2962,8 @@ impl GpuState {
 									.unwrap_or_default();
 							}
 						}
-						let expr_weights = if self.disable_expression_morphs {
-							None
-						} else {
-							doc.expression_weights.as_ref()
-						};
-						let expression_overrides =
-							(overrides_active && !self.disable_expression_morphs).then_some(&self.expression_overrides);
+						let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
+						let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 						sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
 						self.applied_document_revision = document_revision;
 						self.applied_expression_overrides_revision = self.expression_overrides_revision;
