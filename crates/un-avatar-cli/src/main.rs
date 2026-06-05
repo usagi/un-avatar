@@ -522,28 +522,25 @@ fn build_formats_probe_json(reg: &IoRegistry, path: &Path) -> FormatsProbeJson {
 	let doc = UnaDocument::default();
 	let opts = ExportOptions;
 	let path_str_lossy = path.as_os_str().to_string_lossy();
-	let exporters: Vec<ExporterProbeRow> = reg
-		.exporters()
-		.iter()
-		.map(|e| {
-			let desc = e.descriptor();
-			let mut confidence = 0u8;
-			if e.can_export(&doc, &opts) == ExportCapability::Supported {
-				confidence = 60;
-				for ext in &desc.extensions {
-					if path_has_format_extension(&path_str_lossy, ext) {
-						confidence = 120;
-						break;
-					}
+	let mut exporters = Vec::with_capacity(reg.exporters().len());
+	exporters.extend(reg.exporters().iter().map(|e| {
+		let desc = e.descriptor();
+		let mut confidence = 0u8;
+		if e.can_export(&doc, &opts) == ExportCapability::Supported {
+			confidence = 60;
+			for ext in &desc.extensions {
+				if path_has_format_extension(&path_str_lossy, ext) {
+					confidence = 120;
+					break;
 				}
 			}
-			ExporterProbeRow {
-				format_id: desc.id.0.clone(),
-				confidence,
-				provider_plugin_id: desc.provider_plugin_id.clone(),
-			}
-		})
-		.collect();
+		}
+		ExporterProbeRow {
+			format_id: desc.id.0.clone(),
+			confidence,
+			provider_plugin_id: desc.provider_plugin_id.clone(),
+		}
+	}));
 	let best_exp = reg.best_exporter_for(&doc, path);
 	let best_exporter = best_exp.map(|e| e.descriptor().id.0.clone());
 	let best_exporter_provider_plugin_id = best_exp.and_then(|e| e.descriptor().provider_plugin_id.clone());
