@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -837,9 +838,11 @@ fn run_formats_probe(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Resu
 }
 
 fn write_convert_json_report(path: &Path, bundle: &ConvertJsonReport) -> Result<(), String> {
-	let json = serde_json::to_string_pretty(bundle).map_err(|e| e.to_string())?;
 	if path.as_os_str() == "-" {
-		println!("{json}");
+		let stdout = io::stdout();
+		let mut lock = stdout.lock();
+		serde_json::to_writer_pretty(&mut lock, bundle).map_err(|e| e.to_string())?;
+		writeln!(lock).map_err(|e| e.to_string())?;
 		return Ok(());
 	}
 	if let Some(parent) = path.parent() {
@@ -847,7 +850,10 @@ fn write_convert_json_report(path: &Path, bundle: &ConvertJsonReport) -> Result<
 			fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 		}
 	}
-	fs::write(path, json).map_err(|e| e.to_string())?;
+	let file = fs::File::create(path).map_err(|e| e.to_string())?;
+	let mut writer = BufWriter::new(file);
+	serde_json::to_writer_pretty(&mut writer, bundle).map_err(|e| e.to_string())?;
+	writeln!(writer).map_err(|e| e.to_string())?;
 	Ok(())
 }
 
