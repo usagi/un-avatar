@@ -211,6 +211,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - node visibility binding を renderer に反映する。
 - material color / emission binding を最小実装する。
 - Supervisor から expression / toggle を操作できる runtime control を広げる。
+- AudioLink 初期対応後の短期作業順は [`v2-near-term-plan.md`](v2-near-term-plan.md) を参照する。まず現状実装のほどほどのリファクタリングと最適化を行い、その後 renderer 再起動なしの Wardrobe hot switch を最初の実用ターゲットにする。
 
 ### Milestone 5: UNToon v2 / lilToon major parameters
 
