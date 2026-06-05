@@ -873,6 +873,7 @@ struct SkinPalette {
 	static_identity: bool,
 	raw: Vec<f32>,
 	uploaded: Vec<f32>,
+	uploaded_changed: bool,
 }
 
 struct MeshDraw {
@@ -6325,6 +6326,7 @@ impl SceneMeshes {
 						static_identity,
 						raw,
 						uploaded,
+						uploaded_changed: false,
 					});
 					skin_palette_indices.insert(skin_palette_key, index);
 					index
@@ -7201,6 +7203,7 @@ impl SceneMeshes {
 		world: &[Mat4],
 		legacy_no_inv_mesh: bool,
 	) {
+		palette.uploaded_changed = false;
 		if palette.static_identity {
 			return;
 		}
@@ -7226,6 +7229,7 @@ impl SceneMeshes {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
 			palette.uploaded.clear();
 			palette.uploaded.extend_from_slice(&palette.raw);
+			palette.uploaded_changed = true;
 		}
 	}
 
@@ -7377,6 +7381,9 @@ impl SceneMeshes {
 				continue;
 			};
 			if palette.static_identity {
+				continue;
+			}
+			if !palette.uploaded_changed {
 				continue;
 			}
 			compute_fur_cards_skinned_source_vertices_from_mesh(
