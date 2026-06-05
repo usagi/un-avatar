@@ -2765,7 +2765,7 @@ fn compute_fur_cards_card_sources_from_triangles(
 	if segment_count == 0 || fur_length <= 0.000001 {
 		return None;
 	}
-	let mut card_sources = Vec::new();
+	let mut card_sources = Vec::with_capacity(triangles.len().saturating_mul(segment_count as usize));
 	for &triangle in triangles {
 		let metrics = compute_fur_cards_triangle_metrics_from_source(verts, triangle, fur_length, cpu_maps)?;
 		if metrics.average_fur_mask <= 0.0001 || metrics.average_length_mask <= 0.0001 {
