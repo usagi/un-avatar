@@ -2153,7 +2153,7 @@ fn ibm_cols_to_una(m: [[f32; 4]; 4]) -> [f32; 16] {
 }
 
 fn build_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Result<Vec<UnaSkin>, ImportError> {
-	let mut out = Vec::new();
+	let mut out = Vec::with_capacity(document.skins().len());
 	for skin in document.skins() {
 		let joint_nodes: Vec<usize> = skin.joints().map(|n| n.index()).collect();
 		if joint_nodes.is_empty() {
@@ -4450,7 +4450,7 @@ pub fn scene_snapshot_from_gltf(
 
 	let skins = build_skins(document, buffers)?;
 
-	let mut meshes: Vec<Vec<UnaMeshBuffers>> = vec![Vec::new(); document.meshes().len()];
+	let mut meshes: Vec<Vec<UnaMeshBuffers>> = document.meshes().map(|mesh| Vec::with_capacity(mesh.primitives().len())).collect();
 	for mesh in document.meshes() {
 		let mid = mesh.index();
 		let mw = mesh.weights();
@@ -4464,7 +4464,7 @@ pub fn scene_snapshot_from_gltf(
 		}
 	}
 
-	let mut nodes = Vec::new();
+	let mut nodes = Vec::with_capacity(document.nodes().len());
 	for node in document.nodes() {
 		let children: Vec<usize> = node.children().map(|c| c.index()).collect();
 		nodes.push(UnaSceneNode {
