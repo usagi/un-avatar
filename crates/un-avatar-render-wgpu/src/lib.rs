@@ -1636,30 +1636,37 @@ impl AvatarApp {
 
 	fn title_diagnostic_suffix(&self) -> String {
 		let opts = self.scene_mesh_load_opts();
-		let mut active = Vec::new();
+		let mut suffix = String::new();
+		let mut push_diagnostic = |label: &str| {
+			if suffix.is_empty() {
+				suffix.push_str(" [diagnostics: ");
+			} else {
+				suffix.push_str(", ");
+			}
+			suffix.push_str(label);
+		};
 		if opts.disable_fur {
-			active.push("fur OFF");
+			push_diagnostic("fur OFF");
 		}
 		if opts.debug_disable_reflection {
-			active.push("reflection OFF");
+			push_diagnostic("reflection OFF");
 		}
 		if opts.debug_base_texture_only {
-			active.push("base only");
+			push_diagnostic("base only");
 		}
 		if opts.debug_zero_morphs {
-			active.push("zero morphs");
+			push_diagnostic("zero morphs");
 		}
 		if opts.debug_bind_pose {
-			active.push("bind pose");
+			push_diagnostic("bind pose");
 		}
 		if opts.debug_skin_legacy_no_inv_mesh {
-			active.push("legacy skin");
+			push_diagnostic("legacy skin");
 		}
-		if active.is_empty() {
-			String::new()
-		} else {
-			format!(" [diagnostics: {}]", active.join(", "))
+		if !suffix.is_empty() {
+			suffix.push(']');
 		}
+		suffix
 	}
 
 	fn start_async_model_load(&mut self, proxy: EventLoopProxy<RendererControlEvent>) {
