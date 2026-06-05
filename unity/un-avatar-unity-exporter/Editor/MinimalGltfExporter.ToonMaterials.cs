@@ -15,6 +15,20 @@ namespace UNAvatar.UnityExporter
     {
         private sealed partial class Writer
         {
+            private static readonly string[] ToonTexturePropertyNames =
+            {
+                "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main2ndDissolveMask", "_Main2ndDissolveNoiseMask", "_Main3rdTex", "_Main3rdBlendMask", "_Main3rdDissolveMask", "_Main3rdDissolveNoiseMask",
+                "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap", "_Bump2ndScaleMask",
+                "_ShadowColorTex", "_Shadow2ndColorTex", "_Shadow3rdColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
+                "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCapBumpMap", "_MatCap2ndTex", "_MatCap2ndBlendMask", "_MatCap2ndBumpMap",
+                "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
+                "_GlitterColorTex", "_GlitterShapeTex", "_DissolveMask", "_DissolveNoiseMask", "_ParallaxMap",
+                "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
+                "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_MainGradationTex", "_GradationMap",
+                "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask",
+                "_FurVectorTex", "_FurLengthMask", "_FurNoiseMask", "_FurMask"
+            };
+
             private bool IsMaterialFeatureEnabled(Material material, string property, bool fallback)
             {
                 return HasProperty(material, property) ? ReadFloat(material, property, fallback ? 1.0f : 0.0f) > 0.5f : fallback;
@@ -218,7 +232,7 @@ namespace UNAvatar.UnityExporter
             private Dictionary<string, object> BuildTextureUvOffsetScales(Material material)
             {
                 var values = new Dictionary<string, object>();
-                foreach (var property in ToonTextureProperties())
+                foreach (var property in ToonTexturePropertyNames)
                 {
                     if (!HasProperty(material, property) || ReadTexture(material, property) == null)
                     {
@@ -241,7 +255,7 @@ namespace UNAvatar.UnityExporter
             private Dictionary<string, object> BuildTextureUvModeFactors(Material material)
             {
                 var values = new Dictionary<string, object>();
-                foreach (var property in ToonTextureProperties())
+                foreach (var property in ToonTexturePropertyNames)
                 {
                     var uvModeProperty = property + "_UVMode";
                     if (HasProperty(material, uvModeProperty))
@@ -252,32 +266,15 @@ namespace UNAvatar.UnityExporter
                 return values;
             }
 
-            private static string[] ToonTextureProperties()
-            {
-                return new[]
-                {
-                    "_MainTex", "_BaseMap", "_Main2ndTex", "_Main2ndBlendMask", "_Main2ndDissolveMask", "_Main2ndDissolveNoiseMask", "_Main3rdTex", "_Main3rdBlendMask", "_Main3rdDissolveMask", "_Main3rdDissolveNoiseMask",
-                    "_BumpMap", "_BumpMap2nd", "_NormalMap2nd", "_Bump2ndMap", "_Bump2ndScaleMask",
-                    "_ShadowColorTex", "_Shadow2ndColorTex", "_Shadow3rdColorTex", "_ShadowStrengthMask", "_ShadowBorderMask", "_ShadowBlurMask", "_ShadeTex", "_1st_ShadeMap",
-                    "_MatCapTex", "_MatcapTex", "_MatCapBlendMask", "_MatCapBumpMap", "_MatCap2ndTex", "_MatCap2ndBlendMask", "_MatCap2ndBumpMap",
-                    "_RimColorTex", "_RimShadeMask", "_BacklightColorTex", "_EmissionMap", "_EmissionTex", "_EmissionBlendMask", "_EmissionGradTex", "_Emission2ndMap", "_Emission2ndBlendMask", "_Emission2ndGradTex",
-                    "_GlitterColorTex", "_GlitterShapeTex", "_DissolveMask", "_DissolveNoiseMask", "_ParallaxMap",
-                    "_ReflectionColorTex", "_SmoothnessTex", "_MetallicGlossMap", "_ReflectionCubeTex",
-                    "_OutlineTex", "_OutlineWidthMask", "_AlphaMask", "_MainGradationTex", "_GradationMap",
-                    "_AnisotropyTangentMap", "_AnisotropyScaleMask", "_AnisotropyShiftNoiseMask",
-                    "_FurVectorTex", "_FurLengthMask", "_FurNoiseMask", "_FurMask"
-                };
-            }
-
             private Dictionary<string, object> BuildMaterialFloatParams(Material material)
             {
-                var values = new Dictionary<string, object>();
                 var shader = material.shader;
                 if (shader == null)
                 {
-                    return values;
+                    return new Dictionary<string, object>();
                 }
                 var count = shader.GetPropertyCount();
+                var values = new Dictionary<string, object>(count);
                 for (var i = 0; i < count; i++)
                 {
                     var type = shader.GetPropertyType(i);
@@ -298,13 +295,13 @@ namespace UNAvatar.UnityExporter
 
             private Dictionary<string, object> BuildMaterialColorParams(Material material)
             {
-                var values = new Dictionary<string, object>();
                 var shader = material.shader;
                 if (shader == null)
                 {
-                    return values;
+                    return new Dictionary<string, object>();
                 }
                 var count = shader.GetPropertyCount();
+                var values = new Dictionary<string, object>(count);
                 for (var i = 0; i < count; i++)
                 {
                     if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Color)
@@ -324,13 +321,13 @@ namespace UNAvatar.UnityExporter
 
             private Dictionary<string, object> BuildMaterialVectorParams(Material material)
             {
-                var values = new Dictionary<string, object>();
                 var shader = material.shader;
                 if (shader == null)
                 {
-                    return values;
+                    return new Dictionary<string, object>();
                 }
                 var count = shader.GetPropertyCount();
+                var values = new Dictionary<string, object>(count);
                 for (var i = 0; i < count; i++)
                 {
                     if (shader.GetPropertyType(i) != UnityEngine.Rendering.ShaderPropertyType.Vector)
