@@ -15,6 +15,10 @@ namespace UNAvatar.UnityExporter
     {
         private static List<GlbChunk> ReadChunks(byte[] bytes)
         {
+            if (bytes.Length < 20)
+            {
+                throw new InvalidDataException("GLB is too small.");
+            }
             var magic = ReadUInt32(bytes, 0);
             var version = ReadUInt32(bytes, 4);
             if (magic != GlbMagic || version != 2)
@@ -22,7 +26,7 @@ namespace UNAvatar.UnityExporter
                 throw new InvalidDataException("Expected GLB version 2.");
             }
 
-            var chunks = new List<GlbChunk>();
+            var chunks = new List<GlbChunk>(3);
             var offset = 12;
             while (offset + 8 <= bytes.Length)
             {

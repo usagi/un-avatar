@@ -20,8 +20,11 @@ namespace UNAvatar.UnityExporter
                 return json;
             }
 
-            var bin = new List<byte>(binChunk.Data ?? Array.Empty<byte>());
-            var viewJson = new List<string>();
+            var sourceBytes = binChunk.Data ?? Array.Empty<byte>();
+            var appendableCount = CountAppendableTextureAssets(textureAssets);
+            var bin = new List<byte>(sourceBytes.Length + EstimatePaddedTextureAssetBytes(sourceBytes.Length, textureAssets));
+            bin.AddRange(sourceBytes);
+            var viewJson = new List<string>(appendableCount);
             var firstBufferViewIndex = ExistingArrayLength(json, "bufferViews");
             foreach (var asset in textureAssets)
             {
@@ -59,8 +62,11 @@ namespace UNAvatar.UnityExporter
                 return json;
             }
 
-            var bin = new List<byte>(binChunk.Data ?? Array.Empty<byte>());
-            var viewJson = new List<string>();
+            var sourceBytes = binChunk.Data ?? Array.Empty<byte>();
+            var appendableCount = CountAppendablePreviewImages(previewImages);
+            var bin = new List<byte>(sourceBytes.Length + EstimatePaddedPreviewImageBytes(sourceBytes.Length, previewImages));
+            bin.AddRange(sourceBytes);
+            var viewJson = new List<string>(appendableCount);
             var firstBufferViewIndex = ExistingArrayLength(json, "bufferViews");
             foreach (var image in previewImages)
             {
@@ -146,6 +152,69 @@ namespace UNAvatar.UnityExporter
                 }
                 set["previewImages"] = retainedPreviews;
             }
+        }
+
+        private static int CountAppendableTextureAssets(List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            var count = 0;
+            foreach (var asset in textureAssets)
+            {
+                if (asset != null && asset.Bytes != null && asset.Bytes.Length > 0)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static int EstimatePaddedTextureAssetBytes(int startLength, List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            var length = startLength;
+            foreach (var asset in textureAssets)
+            {
+                if (asset == null || asset.Bytes == null || asset.Bytes.Length == 0)
+                {
+                    continue;
+                }
+                length = Align4(length);
+                length += asset.Bytes.Length;
+                length = Align4(length);
+            }
+            return length - startLength;
+        }
+
+        private static int CountAppendablePreviewImages(List<WardrobePreviewImageDraft> previewImages)
+        {
+            var count = 0;
+            foreach (var image in previewImages)
+            {
+                if (image != null && image.pngBytes != null && image.pngBytes.Count > 0)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static int EstimatePaddedPreviewImageBytes(int startLength, List<WardrobePreviewImageDraft> previewImages)
+        {
+            var length = startLength;
+            foreach (var image in previewImages)
+            {
+                if (image == null || image.pngBytes == null || image.pngBytes.Count == 0)
+                {
+                    continue;
+                }
+                length = Align4(length);
+                length += image.pngBytes.Count;
+                length = Align4(length);
+            }
+            return length - startLength;
+        }
+
+        private static int Align4(int value)
+        {
+            return (value + 3) & ~3;
         }
     }
 }

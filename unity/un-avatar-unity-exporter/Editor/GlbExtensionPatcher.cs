@@ -81,33 +81,7 @@ namespace UNAvatar.UnityExporter
             List<WardrobePreviewImageDraft> wardrobePreviewImages = null)
         {
             var bytes = File.ReadAllBytes(sourceGlb);
-            if (bytes.Length < 20)
-            {
-                throw new InvalidDataException("GLB is too small.");
-            }
-            var magic = ReadUInt32(bytes, 0);
-            var version = ReadUInt32(bytes, 4);
-            if (magic != GlbMagic || version != 2)
-            {
-                throw new InvalidDataException("Expected GLB version 2.");
-            }
-
-            var chunks = new List<GlbChunk>();
-            var offset = 12;
-            while (offset + 8 <= bytes.Length)
-            {
-                var length = checked((int)ReadUInt32(bytes, offset));
-                var type = ReadUInt32(bytes, offset + 4);
-                offset += 8;
-                if (offset + length > bytes.Length)
-                {
-                    throw new InvalidDataException("GLB chunk exceeds file size.");
-                }
-                var data = new byte[length];
-                Buffer.BlockCopy(bytes, offset, data, 0, length);
-                chunks.Add(new GlbChunk { Type = type, Data = data });
-                offset += length;
-            }
+            var chunks = ReadChunks(bytes);
 
             var jsonChunk = FindChunk(chunks, JsonChunkType);
             if (jsonChunk == null)
