@@ -903,7 +903,7 @@ fn build_expression_catalog(source: &Value, flavor: VrmFlavor, node_mesh: &[Opti
 fn expand_expression_binds_per_primitive(scene: &UnaSceneSnapshot, cat: &mut UnaExpressionCatalog) {
 	for preset in &mut cat.presets {
 		let old = std::mem::take(&mut preset.binds);
-		let mut new_binds = Vec::new();
+		let mut new_binds = Vec::with_capacity(old.len());
 		for b in old {
 			let Some(mesh_prims) = scene.meshes.get(b.mesh_index) else {
 				continue;
@@ -974,7 +974,11 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 		let bone_roots: Vec<usize> = bg
 			.get("bones")
 			.and_then(|b| b.as_array())
-			.map(|a| a.iter().filter_map(|v| v.as_u64().map(|u| u as usize)).collect())
+			.map(|a| {
+				let mut roots = Vec::with_capacity(a.len());
+				roots.extend(a.iter().filter_map(|v| v.as_u64().map(|u| u as usize)));
+				roots
+			})
 			.unwrap_or_default();
 		if bone_roots.is_empty() {
 			continue;
