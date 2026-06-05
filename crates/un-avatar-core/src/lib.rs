@@ -2325,21 +2325,21 @@ impl UnaImageRgba {
 		match self.pixel_format {
 			UnaImagePixelFormat::R8G8B8A8 => Cow::Borrowed(&self.pixels),
 			UnaImagePixelFormat::R8 => {
-				let mut rgba = Vec::with_capacity(self.pixels.len() * 4);
+				let mut rgba = Vec::with_capacity(rgba8_capacity(self.pixels.len(), 1));
 				for &r in &self.pixels {
 					rgba.extend_from_slice(&[r, r, r, 255]);
 				}
 				Cow::Owned(rgba)
 			}
 			UnaImagePixelFormat::R8G8 => {
-				let mut rgba = Vec::with_capacity(self.pixels.len() / 2 * 4);
+				let mut rgba = Vec::with_capacity(rgba8_capacity(self.pixels.len(), 2));
 				for chunk in self.pixels.chunks_exact(2) {
 					rgba.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
 				}
 				Cow::Owned(rgba)
 			}
 			UnaImagePixelFormat::R8G8B8 => {
-				let mut rgba = Vec::with_capacity(self.pixels.len() / 3 * 4);
+				let mut rgba = Vec::with_capacity(rgba8_capacity(self.pixels.len(), 3));
 				for chunk in self.pixels.chunks_exact(3) {
 					rgba.extend_from_slice(chunk);
 					rgba.push(255);
@@ -2358,12 +2358,16 @@ impl UnaImageRgba {
 	}
 }
 
+fn rgba8_capacity(pixel_bytes: usize, stride: usize) -> usize {
+	pixel_bytes / stride.max(1) * 4
+}
+
 fn rgba8_from_f16_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
 	let stride = channels * 2;
 	if stride == 0 {
 		return Vec::new();
 	}
-	let mut rgba = Vec::with_capacity(pixels.len() / stride * 4);
+	let mut rgba = Vec::with_capacity(rgba8_capacity(pixels.len(), stride));
 	for chunk in pixels.chunks_exact(stride) {
 		let channel = |index: usize| -> f32 {
 			if index >= channels {
@@ -2391,7 +2395,7 @@ fn rgba8_from_f16_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
 
 fn rgba8_from_u16_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
 	let stride = channels * 2;
-	let mut rgba = Vec::with_capacity(pixels.len() / stride.max(1) * 4);
+	let mut rgba = Vec::with_capacity(rgba8_capacity(pixels.len(), stride));
 	for pixel in pixels.chunks_exact(stride) {
 		let channel = |index: usize| -> u8 {
 			if index >= channels {
@@ -2421,7 +2425,7 @@ fn float_to_u8(value: f32) -> u8 {
 
 fn rgba8_from_f32_channels(pixels: &[u8], channels: usize) -> Vec<u8> {
 	let stride = channels * 4;
-	let mut rgba = Vec::with_capacity(pixels.len() / stride.max(1) * 4);
+	let mut rgba = Vec::with_capacity(rgba8_capacity(pixels.len(), stride));
 	for pixel in pixels.chunks_exact(stride) {
 		let channel = |index: usize| -> u8 {
 			if index >= channels {
