@@ -2,6 +2,7 @@
 
 use std::{
 	borrow::Cow,
+	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
 		atomic::{AtomicU64, AtomicU8, Ordering},
@@ -115,6 +116,20 @@ fn expression_preset_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String
 	catalog
 		.map(|catalog| catalog.presets.iter().map(|preset| preset.name.clone()).collect())
 		.unwrap_or_default()
+}
+
+fn humanoid_profile_keys_csv(profile: Option<&un_avatar_skeleton::HumanoidProfile>) -> String {
+	let Some(profile) = profile else {
+		return String::new();
+	};
+	let mut keys = String::new();
+	for key in profile.bone_node_indices.keys() {
+		if !keys.is_empty() {
+			keys.push(',');
+		}
+		keys.push_str(key);
+	}
+	keys
 }
 
 fn active_expression_weights_for_doc(disable_expression_morphs: bool, doc: &UnaDocument) -> Option<&un_avatar_core::UnaExpressionWeights> {
@@ -2453,13 +2468,10 @@ impl GpuState {
 		);
 		self.motion_rest_nodes = Some(Arc::clone(&rest_nodes));
 		if let Some(addr) = vmc_address {
-			let humanoid_keys_csv = doc_arc
-				.read()
-				.map_err(|_| "document: RwLock poisoned".to_string())?
-				.humanoid_profile
-				.as_ref()
-				.map(|p| p.bone_node_indices.keys().cloned().collect::<Vec<_>>().join(","))
-				.unwrap_or_default();
+			let humanoid_keys_csv = {
+				let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+				humanoid_profile_keys_csv(d.humanoid_profile.as_ref())
+			};
 			if humanoid_ok {
 				let log = self.debug_log.clone();
 				let motion_buffer_for_vmc = Arc::clone(&self.motion_buffer);
@@ -2832,11 +2844,7 @@ impl GpuState {
 					.as_ref()
 					.map(|s| format!("{:?}", s.roots))
 					.unwrap_or_else(|| "none".to_string());
-				let keys = g
-					.humanoid_profile
-					.as_ref()
-					.map(|p| p.bone_node_indices.keys().cloned().collect::<Vec<_>>().join(","))
-					.unwrap_or_default();
+				let keys = humanoid_profile_keys_csv(g.humanoid_profile.as_ref());
 				self.debug_log.line(
 					"scene",
 					format!(
@@ -2855,14 +2863,20 @@ impl GpuState {
 				if let Some(ew) = g.expression_weights.as_ref() {
 					let mut pairs: Vec<(&str, f32)> = ew.preset_weights.iter().map(|(k, w)| (k.as_str(), *w)).collect();
 					pairs.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal));
-					let top: Vec<String> = pairs.iter().take(16).map(|(k, w)| format!("{}={:.3}", k, w)).collect();
+					let mut top = String::new();
+					for (key, weight) in pairs.iter().take(16) {
+						if !top.is_empty() {
+							top.push_str(", ");
+						}
+						top.push_str(key);
+						top.push('=');
+						let _ = write!(top, "{weight:.3}");
+					}
 					self.debug_log.line(
 						"morph",
 						format!(
 							"frame seq={} catalog_presets={} top_weights=[{}]",
-							self.debug_frame_seq,
-							n_presets,
-							top.join(", ")
+							self.debug_frame_seq, n_presets, top
 						),
 					);
 				} else {
