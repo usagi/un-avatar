@@ -502,22 +502,22 @@ fn import_input_for_path(path: &Path, format_id: &FormatId, bytes: Option<Arc<[u
 fn build_formats_probe_json(reg: &IoRegistry, path: &Path) -> FormatsProbeJson {
 	let path_str = path.to_string_lossy().to_string();
 	let probe = import_probe_for_path(path, cached_binary_import_bytes(path));
-	let importers: Vec<ImporterProbeRow> = reg
-		.importers()
-		.iter()
-		.map(|i| {
-			let desc = i.descriptor();
-			let r = i.probe(&probe);
-			ImporterProbeRow {
-				format_id: desc.id.0.clone(),
-				confidence: r.confidence,
-				provider_plugin_id: desc.provider_plugin_id.clone(),
-			}
-		})
-		.collect();
-	let best_imp = reg.best_importer_for(&probe);
-	let best_importer = best_imp.map(|i| i.descriptor().id.0.clone());
-	let best_importer_provider_plugin_id = best_imp.and_then(|i| i.descriptor().provider_plugin_id.clone());
+	let mut importers = Vec::with_capacity(reg.importers().len());
+	importers.extend(reg.importers().iter().map(|i| {
+		let desc = i.descriptor();
+		let r = i.probe(&probe);
+		ImporterProbeRow {
+			format_id: desc.id.0.clone(),
+			confidence: r.confidence,
+			provider_plugin_id: desc.provider_plugin_id.clone(),
+		}
+	}));
+	let (best_importer, best_importer_provider_plugin_id) = if let Some(i) = reg.best_importer_for(&probe) {
+		let desc = i.descriptor();
+		(Some(desc.id.0), desc.provider_plugin_id)
+	} else {
+		(None, None)
+	};
 
 	let doc = UnaDocument::default();
 	let opts = ExportOptions;
@@ -541,9 +541,12 @@ fn build_formats_probe_json(reg: &IoRegistry, path: &Path) -> FormatsProbeJson {
 			provider_plugin_id: desc.provider_plugin_id.clone(),
 		}
 	}));
-	let best_exp = reg.best_exporter_for(&doc, path);
-	let best_exporter = best_exp.map(|e| e.descriptor().id.0.clone());
-	let best_exporter_provider_plugin_id = best_exp.and_then(|e| e.descriptor().provider_plugin_id.clone());
+	let (best_exporter, best_exporter_provider_plugin_id) = if let Some(e) = reg.best_exporter_for(&doc, path) {
+		let desc = e.descriptor();
+		(Some(desc.id.0), desc.provider_plugin_id)
+	} else {
+		(None, None)
+	};
 
 	FormatsProbeJson {
 		path: path_str,
@@ -2393,6 +2396,7 @@ fn run_convert(
 			"出力に使える exporter が見つかりません（`.una` または `.una.d` のパスを指定、または --output-format）".to_string()
 		})?
 	};
+	let export_desc = exporter.descriptor();
 	let mut ectx = ExportContext {
 		output_root: output.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
@@ -2401,13 +2405,11 @@ fn run_convert(
 		.export(&mut ectx, &imported.document, ExportOutput::Path(output), ExportOptions)
 		.map_err(|e| e.to_string())?;
 	if let Some(ref path) = json_report {
-		let imp_desc = importer.descriptor();
-		let exp_desc = exporter.descriptor();
 		let bundle = ConvertJsonReport {
-			import_format_id: imp_desc.id.0.clone(),
-			export_format_id: exp_desc.id.0.clone(),
-			import_provider_plugin_id: imp_desc.provider_plugin_id.clone(),
-			export_provider_plugin_id: exp_desc.provider_plugin_id.clone(),
+			import_format_id: import_desc.id.0.clone(),
+			export_format_id: export_desc.id.0.clone(),
+			import_provider_plugin_id: import_desc.provider_plugin_id.clone(),
+			export_provider_plugin_id: export_desc.provider_plugin_id.clone(),
 			import_report: imported.report,
 			export_report: export_result.report,
 		};
