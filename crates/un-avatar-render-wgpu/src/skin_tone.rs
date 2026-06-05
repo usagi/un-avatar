@@ -469,8 +469,10 @@ pub(crate) fn build_skin_tone_matched_images(
 		body_seam_uv_count,
 		..Default::default()
 	};
-	let mut face_samples = Vec::new();
-	let mut body_samples = Vec::new();
+	let face_sample_capacity = kinds.iter().filter(|kind| matches!(kind, Some(SkinToneTextureKind::Face))).count();
+	let body_sample_capacity = kinds.iter().filter(|kind| matches!(kind, Some(SkinToneTextureKind::Body))).count();
+	let mut face_samples = Vec::with_capacity(face_sample_capacity);
+	let mut body_samples = Vec::with_capacity(body_sample_capacity);
 	for (index, im) in scene.images.iter().enumerate() {
 		let rgba = im.rgba8_compat_pixels();
 		match kinds.get(index).copied().flatten() {
