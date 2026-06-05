@@ -48,7 +48,7 @@ impl AudioLinkInputRuntime {
 		let err_fn = |err| eprintln!("un-avatar-renderer: AudioLink input stream error: {err}");
 		let stream = match supported.sample_format() {
 			cpal::SampleFormat::F32 => {
-				let tx = sample_tx.clone();
+				let tx = sample_tx;
 				device.build_input_stream(
 					&config,
 					move |data: &[f32], _| push_sample_chunk(&tx, data.iter().copied()),
@@ -57,7 +57,7 @@ impl AudioLinkInputRuntime {
 				)
 			}
 			cpal::SampleFormat::I16 => {
-				let tx = sample_tx.clone();
+				let tx = sample_tx;
 				device.build_input_stream(
 					&config,
 					move |data: &[i16], _| push_sample_chunk(&tx, data.iter().map(|sample| *sample as f32 / i16::MAX as f32)),
@@ -66,7 +66,7 @@ impl AudioLinkInputRuntime {
 				)
 			}
 			cpal::SampleFormat::U16 => {
-				let tx = sample_tx.clone();
+				let tx = sample_tx;
 				device.build_input_stream(
 					&config,
 					move |data: &[u16], _| push_sample_chunk(&tx, data.iter().map(|sample| (*sample as f32 - 32768.0) / 32768.0)),
