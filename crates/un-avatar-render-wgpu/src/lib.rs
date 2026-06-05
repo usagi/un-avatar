@@ -1141,16 +1141,23 @@ fn startup_message(message: impl AsRef<str>, started_at: Instant) -> String {
 }
 
 fn compact_window_title_status(status: impl AsRef<str>) -> String {
-	let mut compact = String::new();
-	for part in status.as_ref().split_whitespace() {
+	let status = status.as_ref();
+	let mut compact = String::with_capacity(status.len().min(WINDOW_TITLE_STATUS_MAX_CHARS));
+	for part in status.split_whitespace() {
 		if !compact.is_empty() {
 			compact.push(' ');
 		}
 		compact.push_str(part);
 	}
-	if compact.chars().count() > WINDOW_TITLE_STATUS_MAX_CHARS {
-		compact = compact.chars().take(WINDOW_TITLE_STATUS_MAX_CHARS.saturating_sub(1)).collect();
-		compact.push('…');
+	if compact.len() > WINDOW_TITLE_STATUS_MAX_CHARS {
+		let mut char_indices = compact.char_indices();
+		let truncate_at = char_indices
+			.nth(WINDOW_TITLE_STATUS_MAX_CHARS.saturating_sub(1))
+			.and_then(|(index, _)| char_indices.next().map(|_| index));
+		if let Some(index) = truncate_at {
+			compact.truncate(index);
+			compact.push('…');
+		}
 	}
 	compact
 }
