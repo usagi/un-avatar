@@ -203,9 +203,13 @@ fn una_io_to_export(e: UnaIoError) -> ExportError {
 	ExportError::Message(e.to_string())
 }
 
+fn una_format_id() -> FormatId {
+	FormatId::new("io.un-avatar.una")
+}
+
 fn una_descriptor(direction: FormatDirection) -> FormatDescriptor {
 	FormatDescriptor {
-		id: FormatId::new("io.un-avatar.una"),
+		id: una_format_id(),
 		display_name: "UNA (v0)".to_owned(),
 		extensions: vec!["una".to_owned(), "una.d".to_owned()],
 		media_types: Vec::new(),
@@ -224,6 +228,21 @@ fn una_descriptor(direction: FormatDirection) -> FormatDescriptor {
 		},
 		stability: PluginStability::Experimental,
 		provider_plugin_id: None,
+	}
+}
+
+fn push_una_v0_export_loss_warnings(report: &mut ExportReport, document: &UnaDocument) {
+	if document.scene.is_some() {
+		report.push_info("注意: UnaDocument にシーンデータがありますが UNA v0 では空シーン TOML のみ出力します（シーンは失われます）");
+	}
+	if document.vrm.is_some() {
+		report.push_info("注意: VRM 拡張メタデータは UNA v0 には書き出されません");
+	}
+	if document.humanoid_profile.is_some() {
+		report.push_info("注意: Humanoid プロファイルは UNA v0 には書き出されません");
+	}
+	if document.expression_catalog.is_some() || document.expression_weights.is_some() {
+		report.push_info("注意: 表情カタログ／ウェイトは UNA v0 には書き出されません");
 	}
 }
 
@@ -248,7 +267,7 @@ impl AvatarImporter for UnaFormatImporter {
 		let file = read_una_any(&path).map_err(una_io_to_import)?;
 		let document = file.to_una_document().map_err(una_io_to_import)?;
 		let mut report = ImportReport {
-			source_format: Some(self.descriptor().id.clone()),
+			source_format: Some(una_format_id()),
 			status: ReportStatus::Success,
 			..Default::default()
 		};
@@ -283,21 +302,10 @@ impl AvatarExporter for UnaFormatExporter {
 	) -> Result<ExportResult, ExportError> {
 		let ExportOutput::Path(path) = output;
 		let mut report = ExportReport::default();
-		if document.scene.is_some() {
-			report.push_info("注意: UnaDocument にシーンデータがありますが UNA v0 では空シーン TOML のみ出力します（シーンは失われます）");
-		}
-		if document.vrm.is_some() {
-			report.push_info("注意: VRM 拡張メタデータは UNA v0 には書き出されません");
-		}
-		if document.humanoid_profile.is_some() {
-			report.push_info("注意: Humanoid プロファイルは UNA v0 には書き出されません");
-		}
-		if document.expression_catalog.is_some() || document.expression_weights.is_some() {
-			report.push_info("注意: 表情カタログ／ウェイトは UNA v0 には書き出されません");
-		}
+		push_una_v0_export_loss_warnings(&mut report, document);
 		let file = UnaFileV0::from_una_document(document);
 		write_una_output(&path, &file).map_err(una_io_to_export)?;
-		report.target_format = Some(self.descriptor().id.clone());
+		report.target_format = Some(una_format_id());
 		report.status = ReportStatus::Success;
 		report.push_info(format!(
 			"UNA v0: format_version={}, scene.empty={}",
