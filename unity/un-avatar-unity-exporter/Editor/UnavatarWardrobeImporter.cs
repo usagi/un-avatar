@@ -37,6 +37,8 @@ namespace UNAvatar.UnityExporter
             {
                 return result;
             }
+            result.importedSetIds = new List<string>(sets.Count);
+            result.sets = new List<WardrobeSetDraft>(sets.Count);
             var baseSetId = ReadString(wardrobe, "baseSet", "base");
 
             foreach (var item in sets)
@@ -76,6 +78,7 @@ namespace UNAvatar.UnityExporter
 
             if (TryGetList(map, "assetGroups", out var assetGroups))
             {
+                set.assetGroups = new List<string>(assetGroups.Count);
                 foreach (var group in assetGroups)
                 {
                     var text = group as string;
@@ -88,6 +91,7 @@ namespace UNAvatar.UnityExporter
 
             if (TryGetList(map, "operations", out var operations))
             {
+                set.operations = new List<WardrobeOperationDraft>(operations.Count);
                 foreach (var item in operations)
                 {
                     var opMap = item as Dictionary<string, object>;
@@ -101,6 +105,7 @@ namespace UNAvatar.UnityExporter
 
             if (TryGetList(map, "previewImages", out var previewImages))
             {
+                set.previewImages = new List<WardrobePreviewImageDraft>(previewImages.Count);
                 foreach (var item in previewImages)
                 {
                     var imageMap = item as Dictionary<string, object>;
