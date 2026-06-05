@@ -45,7 +45,7 @@ namespace UNAvatar.UnityExporter
 
         public static List<WardrobePreviewImageDraft> Capture(GameObject root, Bounds bounds, WardrobePreviewCaptureOptions options)
         {
-            var result = new List<WardrobePreviewImageDraft>();
+            var result = new List<WardrobePreviewImageDraft>(5);
             if (root == null)
             {
                 return result;
@@ -91,7 +91,7 @@ namespace UNAvatar.UnityExporter
                 renderMode = source.renderMode,
                 antiAliasingSamples = source.antiAliasingSamples,
                 stateDigest = source.stateDigest,
-                stateDetails = source.stateDetails != null ? new List<string>(source.stateDetails) : new List<string>(),
+                stateDetails = source.stateDetails != null ? new List<string>(source.stateDetails) : new List<string>(0),
                 fovYDegrees = source.fovYDegrees,
                 nearClip = source.nearClip,
                 farClip = source.farClip,
@@ -99,7 +99,7 @@ namespace UNAvatar.UnityExporter
                 cameraRotationEuler = source.cameraRotationEuler,
                 target = source.target,
                 bufferView = source.bufferView,
-                pngBytes = source.pngBytes != null ? new List<byte>(source.pngBytes) : new List<byte>()
+                pngBytes = source.pngBytes != null ? new List<byte>(source.pngBytes) : new List<byte>(0)
             };
         }
 

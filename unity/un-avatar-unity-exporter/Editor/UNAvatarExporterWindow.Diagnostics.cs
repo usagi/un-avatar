@@ -58,10 +58,18 @@ namespace UNAvatar.UnityExporter
 
         private static List<Material> DistinctRendererMaterials(Renderer[] renderers)
         {
-            var materials = new List<Material>();
+            var materials = new List<Material>(renderers != null ? renderers.Length : 0);
             var seen = new HashSet<Material>();
+            if (renderers == null)
+            {
+                return materials;
+            }
             foreach (var renderer in renderers)
             {
+                if (renderer == null)
+                {
+                    continue;
+                }
                 foreach (var material in renderer.sharedMaterials)
                 {
                     if (material != null && seen.Add(material))
@@ -174,7 +182,7 @@ namespace UNAvatar.UnityExporter
                 probeClone.hideFlags = HideFlags.HideAndDontSave;
                 probeClone.SetActive(true);
 
-                var lines = new List<string>
+                var lines = new List<string>(3 + capturedWardrobeSets.Count)
                 {
                     $"hasBaseSnapshot: {hasBaseSnapshot}, base nodes: {(baseSnapshot != null ? baseSnapshot.nodes.Count : 0)}, base blendshapes: {(baseSnapshot != null ? baseSnapshot.blendShapes.Count : 0)}",
                     $"importedBaseOperations: {importedBaseOperations.Count}, captured sets: {capturedWardrobeSets.Count}",
@@ -211,21 +219,24 @@ namespace UNAvatar.UnityExporter
             }
 
             var activeRenderers = CountActiveRenderers(probeRoot);
-            var probes = new[]
-            {
-                "Color  1",
-                "Color  13",
-                "add-belt",
-                "Maid",
-                "Outer"
-            };
+            var probes = WardrobePreviewProbePaths;
+            var pathLookup = BuildProbePathLookup(probeRoot);
             var states = new List<string>(probes.Length);
             foreach (var path in probes)
             {
-                states.Add(path + "=" + ProbePathState(probeRoot, path));
+                states.Add(path + "=" + ProbePathState(pathLookup, path));
             }
             return $"{label}: snapshot={(set == null ? hasBaseSnapshot : set.capturedSnapshot != null && set.capturedSnapshot.nodes.Count > 0)}, ops={(set != null ? set.operations.Count : CurrentBaseOperations().Count)}, activeRenderers={activeRenderers}; {string.Join(", ", states)}";
         }
+
+        private static readonly string[] WardrobePreviewProbePaths =
+        {
+            "Color  1",
+            "Color  13",
+            "add-belt",
+            "Maid",
+            "Outer"
+        };
 
         private static int CountActiveRenderers(GameObject root)
         {
@@ -240,18 +251,24 @@ namespace UNAvatar.UnityExporter
             return count;
         }
 
-        private static string ProbePathState(GameObject root, string path)
+        private static Dictionary<string, Transform> BuildProbePathLookup(GameObject root)
         {
-            var transform = default(Transform);
-            foreach (var candidate in root.GetComponentsInChildren<Transform>(true))
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            var lookup = new Dictionary<string, Transform>(transforms.Length, StringComparer.Ordinal);
+            foreach (var candidate in transforms)
             {
-                if (VariantExtractor.TransformPath(root.transform, candidate) == path)
+                var path = VariantExtractor.TransformPath(root.transform, candidate);
+                if (!lookup.ContainsKey(path))
                 {
-                    transform = candidate;
-                    break;
+                    lookup[path] = candidate;
                 }
             }
-            if (transform == null)
+            return lookup;
+        }
+
+        private static string ProbePathState(Dictionary<string, Transform> pathLookup, string path)
+        {
+            if (!pathLookup.TryGetValue(path, out var transform) || transform == null)
             {
                 return "missing";
             }
