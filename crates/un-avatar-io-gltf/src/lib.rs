@@ -4286,7 +4286,11 @@ fn mesh_target_names(mesh: gltf::Mesh<'_>) -> Vec<String> {
 	value
 		.get("targetNames")
 		.and_then(|v| v.as_array())
-		.map(|names| names.iter().filter_map(|name| name.as_str().map(str::to_owned)).collect())
+		.map(|names| {
+			let mut target_names = Vec::with_capacity(names.len());
+			target_names.extend(names.iter().filter_map(|name| name.as_str().map(str::to_owned)));
+			target_names
+		})
 		.unwrap_or_default()
 }
 
@@ -4362,8 +4366,10 @@ fn read_primitive(
 	let material_index = prim.material().index();
 	let (joints, weights) = joints_weights;
 
-	let mut morph_targets: Vec<UnaMorphTargetDeltas> = Vec::new();
-	for (pos_d, norm_d, _tan_d) in reader.read_morph_targets() {
+	let morph_target_iter = reader.read_morph_targets();
+	let (morph_target_lower, morph_target_upper) = morph_target_iter.size_hint();
+	let mut morph_targets: Vec<UnaMorphTargetDeltas> = Vec::with_capacity(morph_target_upper.unwrap_or(morph_target_lower));
+	for (pos_d, norm_d, _tan_d) in morph_target_iter {
 		let position_deltas: Vec<[f32; 3]> = if let Some(iter) = pos_d {
 			let v: Vec<[f32; 3]> = iter.collect();
 			if v.len() != positions.len() {
