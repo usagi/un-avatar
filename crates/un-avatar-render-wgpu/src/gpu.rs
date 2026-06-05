@@ -88,11 +88,9 @@ fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document:
 		.humanoid_profile
 		.as_ref()
 		.map(|profile| {
-			let mut targets = Vec::new();
-			append_hand_finger_target_keys(&mut targets, frame.left_hand.as_ref(), "left");
-			append_hand_finger_target_keys(&mut targets, frame.right_hand.as_ref(), "right");
-			let matched = targets.iter().filter(|target| profile_has_key(profile, target)).count();
-			(targets.len(), matched)
+			let left = count_hand_finger_target_matches(profile, frame.left_hand.as_ref(), "left");
+			let right = count_hand_finger_target_matches(profile, frame.right_hand.as_ref(), "right");
+			(left.0 + right.0, left.1 + right.1)
 		})
 		.unwrap_or((0, 0));
 	format!(
@@ -151,10 +149,17 @@ fn active_expression_overrides<'a>(
 	}
 }
 
-fn append_hand_finger_target_keys(keys: &mut Vec<String>, hand: Option<&un_motion_frame::HandMotion>, side_prefix: &str) {
+fn count_hand_finger_target_matches(
+	profile: &un_avatar_skeleton::HumanoidProfile,
+	hand: Option<&un_motion_frame::HandMotion>,
+	side_prefix: &str,
+) -> (usize, usize) {
 	let Some(hand) = hand else {
-		return;
+		return (0, 0);
 	};
+	let mut targets = 0usize;
+	let mut matched = 0usize;
+	let mut key = String::new();
 	for finger in &hand.fingers {
 		let finger_key = match finger.finger {
 			un_motion_frame::Finger::Thumb => "thumb",
@@ -170,9 +175,17 @@ fn append_hand_finger_target_keys(keys: &mut Vec<String>, hand: Option<&un_motio
 				2 => "distal",
 				_ => continue,
 			};
-			keys.push(format!("{side_prefix}{finger_key}{segment}"));
+			key.clear();
+			key.push_str(side_prefix);
+			key.push_str(finger_key);
+			key.push_str(segment);
+			targets += 1;
+			if profile_has_key(profile, &key) {
+				matched += 1;
+			}
 		}
 	}
+	(targets, matched)
 }
 
 fn profile_has_key(profile: &un_avatar_skeleton::HumanoidProfile, key: &str) -> bool {
