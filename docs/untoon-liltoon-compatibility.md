@@ -693,7 +693,8 @@ Status legend:
   - done: `source = "input_device"` かつ可視 material が AudioLink を必要とする場合だけ `cpal` capture と `rustfft` worker を起動し、renderer thread は lock-free queue から最新 frame を nonblocking で取得して upload する。FFT と audio IO は renderer/main thread では実行しない。
   - done: generated external `_AudioTexture`-style input を emission / main layer / vertex AudioLink value へ接続し、Main2nd/Main3rd alpha 連動と vertex displacement を実装する。
   - done: 本家 `lilAudioLinkFrag` / `lil_vert_audiolink.hlsl` に基づき、`_AudioLinkMask` の mode 3/4 mask/spectrum mask、mask UV mode/scroll/rotate、`_AudioLinkLocalMap`、vertex moving vector + normal strength を接続する。
-  - remaining: VRChat AudioLink texture layout の厳密 parity は未実装。mode 5 の fragment path は world position 近似。
+  - done: fragment AudioLink mode 5 は vertex から渡した object-space position を使い、本家 `fd.positionOS` ベースの distance formula に合わせる。
+  - remaining: VRChat AudioLink texture layout の厳密 parity は未実装。
 - `[~]` Distance fade
   - done: Unity Exporter / glTF importer / `UnaLilToonLikeMaterial` が `_DistanceFade` / `_DistanceFadeColor` / `_DistanceFadeMode` / `_DistanceFadeRimColor` / `_DistanceFadeRimFresnelPower` を保持する。
   - done: Renderer は本家 `lilDistanceFade()` の distance ramp、facing gate、negative-alpha fade、rim fresnel color を final color/alpha へ接続する。

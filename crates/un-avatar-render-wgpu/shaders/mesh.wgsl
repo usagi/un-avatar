@@ -334,6 +334,7 @@ struct VsOut {
 	@location(5) uv2: vec2<f32>,
 	@location(6) uv3: vec2<f32>,
 	@location(7) @interpolate(flat) id_mask: vec4<f32>,
+	@location(8) op: vec3<f32>,
 }
 
 struct FurVsOut {
@@ -346,10 +347,11 @@ struct FurVsOut {
 	@location(5) uv2: vec2<f32>,
 	@location(6) uv3: vec2<f32>,
 	@location(7) @interpolate(flat) id_mask: vec4<f32>,
-	@location(8) fur_layer: f32,
-	@location(9) fur_alpha: f32,
-	@location(10) fur_card_side: f32,
-	@location(11) fur_uv0: vec2<f32>,
+	@location(8) op: vec3<f32>,
+	@location(9) fur_layer: f32,
+	@location(10) fur_alpha: f32,
+	@location(11) fur_card_side: f32,
+	@location(12) fur_uv0: vec2<f32>,
 }
 
 struct ComputeFurCardsVsIn {
@@ -467,12 +469,14 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let j3 = v.joints.w;
 	let dbg = bitcast<u32>(drawu.params.w);
 	if (dbg & DBG_BIND_POSE_RIGID) != 0u {
+		var op = pos;
 		var wp = drawt.model * vec4<f32>(pos, 1.0);
 		let mn = normal_matrix(drawt.model) * norm;
 		let audio_link_vertex = lil_calc_audio_link_vertex_value(v.uv, v.uv1, v.uv2, v.uv3, pos);
 		if (audio_link_vertex[0] != 0.0 && audio_link_vertex[1] != 0.0) {
 			let offset_os = norm * drawu.audio_link_vertex_strength.w + drawu.audio_link_vertex_strength.xyz;
 			let offset_ws = mat3_upper(drawt.model) * offset_os;
+			op = op + offset_os * audio_link_vertex[0] * audio_link_vertex[1];
 			wp = vec4<f32>(wp.xyz + offset_ws * audio_link_vertex[0] * audio_link_vertex[1], wp.w);
 		}
 		let mt = mat3_upper(drawt.model) * tangent;
@@ -482,6 +486,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 		o.uv2 = v.uv2;
 		o.uv3 = v.uv3;
 		o.id_mask = lil_id_mask_vertex_state(v, vertex_index);
+		o.op = op;
 		o.wp = wp.xyz;
 		o.wt = vec4<f32>(mt, tangent_sign);
 		o.clip = frame.view_proj * wp;
@@ -496,6 +501,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	let p2 = m2 * vec4<f32>(pos, 1.0);
 	let p3 = m3 * vec4<f32>(pos, 1.0);
 	let local_p = v.weights.x * p0 + v.weights.y * p1 + v.weights.z * p2 + v.weights.w * p3;
+	var op = local_p.xyz;
 	var wp = drawt.model * local_p;
 
 	let n0 = mat3_upper(m0) * norm;
@@ -509,6 +515,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 		let offset_os = norm * drawu.audio_link_vertex_strength.w + drawu.audio_link_vertex_strength.xyz;
 		let offset_local = v.weights.x * (mat3_upper(m0) * offset_os) + v.weights.y * (mat3_upper(m1) * offset_os) + v.weights.z * (mat3_upper(m2) * offset_os) + v.weights.w * (mat3_upper(m3) * offset_os);
 		let offset_ws = mat3_upper(drawt.model) * offset_local;
+		op = op + offset_local * audio_link_vertex[0] * audio_link_vertex[1];
 		wp = vec4<f32>(wp.xyz + offset_ws * audio_link_vertex[0] * audio_link_vertex[1], wp.w);
 	}
 	let t0 = mat3_upper(m0) * tangent;
@@ -524,6 +531,7 @@ fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	o.uv2 = v.uv2;
 	o.uv3 = v.uv3;
 	o.id_mask = lil_id_mask_vertex_state(v, vertex_index);
+	o.op = op;
 	o.wp = wp.xyz;
 	o.wt = vec4<f32>(wt, tangent_sign);
 	o.clip = frame.view_proj * wp;
@@ -539,6 +547,7 @@ fn fur_vs_out_from_base(o: VsOut) -> FurVsOut {
 	out.uv2 = o.uv2;
 	out.uv3 = o.uv3;
 	out.id_mask = o.id_mask;
+	out.op = o.op;
 	out.wp = o.wp;
 	out.wt = o.wt;
 	out.fur_layer = 0.0;
@@ -683,6 +692,7 @@ fn compute_fur_cards_vs(v: ComputeFurCardsVsIn, cutout_pre: bool) -> FurVsOut {
 	o.uv2 = v.uv;
 	o.uv3 = v.uv;
 	o.id_mask = vec4<f32>(1.0, 1.0, 0.0, 0.0);
+	o.op = local_position;
 	o.wp = world_pos;
 	o.wt = vec4<f32>(1.0, 0.0, 0.0, 1.0);
 	o.fur_layer = clamp(v.position_layer.w, 0.0, 1.0);
@@ -1564,7 +1574,7 @@ fn lil_calc_blink(blink: vec4<f32>) -> f32 {
 	return mix(1.0, out_blink, clamp(blink.x, 0.0, 1.0));
 }
 
-fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, wp: vec3<f32>) -> f32 {
+fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, op: vec3<f32>) -> f32 {
 	if (drawu.audio_link_params.x <= 0.5) {
 		return 1.0;
 	}
@@ -1588,7 +1598,7 @@ fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<
 			audio_link_y = 4.5 / 4.0 + floor(audio_link_mask.g * 2.0) / 4.0;
 		}
 	} else if (mode >= 4.5 && mode < 5.5) {
-		audio_link_x = distance(wp, drawu.audio_link_start.xyz) * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
+		audio_link_x = distance(op, drawu.audio_link_start.xyz) * drawu.audio_link_uv_params.x + drawu.audio_link_uv_params.y;
 	}
 	var value = 1.0;
 	if (mode >= 3.5 && mode < 4.5) {
@@ -1885,7 +1895,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let layer_nv = clamp(dot(geometry_n_faced_pre, v), 0.0, 1.0);
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_color_adjustments(samp_tex.rgb, uv);
-	let audio_link_value = lil_calc_audio_link_value(layer_nv, uv, i.uv1, i.uv2, i.uv3, i.wp);
+	let audio_link_value = lil_calc_audio_link_value(layer_nv, uv, i.uv1, i.uv2, i.uv3, i.op);
 	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, is_liltoon, audio_link_value);
 	let main_col = main_layers.col;
 	var a = apply_lil_alpha_mask(main_col.a, uv);
@@ -2561,6 +2571,7 @@ fn fs_fur_toon(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @locat
 	base.uv2 = i.uv2;
 	base.uv3 = i.uv3;
 	base.id_mask = i.id_mask;
+	base.op = i.op;
 	base.wp = i.wp;
 	base.wt = i.wt;
 	return toon_fragment(base, front_facing, false, i.fur_layer, i.fur_alpha, i.fur_card_side, false, i.fur_uv0);
@@ -2576,6 +2587,7 @@ fn fs_fur_toon_pre(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @l
 	base.uv2 = i.uv2;
 	base.uv3 = i.uv3;
 	base.id_mask = i.id_mask;
+	base.op = i.op;
 	base.wp = i.wp;
 	base.wt = i.wt;
 	return toon_fragment(base, front_facing, false, i.fur_layer, i.fur_alpha, i.fur_card_side, true, i.fur_uv0);

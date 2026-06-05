@@ -704,7 +704,7 @@ mod tests {
 	fn liltoon_audio_link_drives_emission_like_upstream() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, wp: vec3<f32>) -> f32")
+			mesh.contains("fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, op: vec3<f32>) -> f32")
 				&& mesh.contains("if (drawu.audio_link_params.x <= 0.5) {\n\t\treturn 1.0;"),
 			"AudioLink disabled path must preserve lilToon fd.audioLinkValue default"
 		);
