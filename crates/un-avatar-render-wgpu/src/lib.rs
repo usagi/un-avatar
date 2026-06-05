@@ -1674,11 +1674,14 @@ impl AvatarApp {
 				total: 0,
 				message: startup_message("Loading model", startup_started),
 			});
-			let Some(document) = model_loader::load_document(&path, wardrobe_set.as_deref()) else {
-				let _ = proxy.send_event(RendererControlEvent::StartupFailed {
-					message: format!("Failed to load model {}", path.display()),
-				});
-				return;
+			let document = match model_loader::load_document(&path, wardrobe_set.as_deref()) {
+				Ok(document) => document,
+				Err(e) => {
+					let _ = proxy.send_event(RendererControlEvent::StartupFailed {
+						message: format!("Failed to load model {}: {e}", path.display()),
+					});
+					return;
+				}
 			};
 			let _ = proxy.send_event(RendererControlEvent::StartupProgress {
 				phase: StartupPhase::Model,
@@ -3744,7 +3747,7 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		}
 		model_loader::load_document(path, opts.wardrobe_set.as_deref())
 			.map(|_| ())
-			.ok_or_else(|| format!("startup validation: model import failed: {}", path.display()))
+			.map_err(|e| format!("startup validation: model import failed: {}: {e}", path.display()))
 	} else {
 		Ok(())
 	}
@@ -3754,9 +3757,8 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err("skin tone matching dump: --gltf or manifest avatar_path is required".to_string());
 	};
-	let Some(document) = model_loader::load_document(path, opts.wardrobe_set.as_deref()) else {
-		return Err(format!("skin tone matching dump: model import failed: {}", path.display()));
-	};
+	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref())
+		.map_err(|e| format!("skin tone matching dump: model import failed: {}: {e}", path.display()))?;
 	let Some(scene) = document.scene.as_ref() else {
 		return Err(format!("skin tone matching dump: model has no scene: {}", path.display()));
 	};
