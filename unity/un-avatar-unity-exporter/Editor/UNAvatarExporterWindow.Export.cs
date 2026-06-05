@@ -64,11 +64,11 @@ namespace UNAvatar.UnityExporter
                         Debug.LogWarning("[U.N. Avatar] Modular Avatar bake failed: " + bakeError);
                     }
                 }
-                var bakedBaseSnapshot = WardrobeSnapshotCapture.Capture(clone);
                 // Per-set Modular Avatar baking is too risky for the preview exporter: some VRC avatar
                 // projects can crash Unity during repeated bake/active-state mutation. Keep the exported
                 // model baked, but store wardrobe sets as authored capture diffs until the bake path is hardened.
                 List<WardrobeSetDraft> bakedWardrobeSets = null;
+                var bakedBaseSnapshot = bakedWardrobeSets != null ? WardrobeSnapshotCapture.Capture(clone) : null;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Exporting GLB", 0.55f);
                 var glbName = SanitizeFileName(avatarRoot.name);
