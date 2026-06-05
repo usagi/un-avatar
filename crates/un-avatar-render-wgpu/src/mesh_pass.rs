@@ -1102,8 +1102,8 @@ fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
 	let mut outline_draw_indices = Vec::with_capacity(draws.len());
-	let mut fur_draw_indices = Vec::new();
-	let mut transparent_backpass_draw_indices = Vec::new();
+	let mut fur_draw_indices = Vec::with_capacity(draws.len());
+	let mut transparent_backpass_draw_indices = Vec::with_capacity(draws.len());
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -1115,8 +1115,8 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
 	];
-	let mut blended_draws = Vec::new();
-	let mut blended_batches = Vec::new();
+	let mut blended_draws = Vec::with_capacity(draws.len());
+	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
 	for (draw_index, draw) in draws.iter().enumerate() {
 		let shading = effective_mesh_shading(draw, opts);
