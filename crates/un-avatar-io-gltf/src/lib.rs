@@ -1148,7 +1148,14 @@ fn scene_node_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
 }
 
 fn normalize_unavatar_path(path: &str) -> String {
-	path.split('/').map(normalize_unavatar_path_segment).collect::<Vec<_>>().join("/")
+	let mut out = String::with_capacity(path.len());
+	for segment in path.split('/') {
+		if !out.is_empty() {
+			out.push('/');
+		}
+		out.push_str(&normalize_unavatar_path_segment(segment));
+	}
+	out
 }
 
 fn normalize_unavatar_path_segment(segment: &str) -> String {
