@@ -7364,11 +7364,16 @@ impl SceneMeshes {
 	}
 
 	fn update_compute_fur_cards_source_vertices(&mut self, queue: &wgpu::Queue) {
-		for draw in &mut self.draws {
+		let draws = &mut self.draws;
+		let skin_palettes = &self.skin_palettes;
+		for &draw_index in &self.fur_draw_indices {
+			let Some(draw) = draws.get_mut(draw_index) else {
+				continue;
+			};
 			let Some(compute_fur_cards) = draw._compute_fur_cards.as_mut() else {
 				continue;
 			};
-			let Some(palette) = self.skin_palettes.get(draw.skin_palette_index) else {
+			let Some(palette) = skin_palettes.get(draw.skin_palette_index) else {
 				continue;
 			};
 			if palette.static_identity {
