@@ -24,6 +24,16 @@ The exporter includes a built-in minimal GLB writer. UnityGLTF is not required o
 11. Use `Import From .unavatar` to restore Base operations and captured wardrobe sets from an existing `.unavatar`.
 12. Run `Validate`, then `Export`.
 
+## Developer Mode
+
+Developer mode is off by default. Turn it on at the bottom of the exporter
+window only when diagnostic output or release-gated benchmark tools are needed.
+
+PNG encoder benchmarking is also off by default. Enable `PNG Encoder Benchmark`
+inside Developer mode to activate `Tools > U.N. Avatar > Benchmark PNG Encoders`
+and the matching in-window run button. The benchmark writes
+`un-avatar-png-encoder-benchmark.csv` under the system temp directory.
+
 The exporter writes:
 
 - `avatar.unavatar`

@@ -17,6 +17,7 @@ namespace UNAvatar.UnityExporter
         private const string SpecVersion = "0.1-preview";
         private const string ExporterBuildMarker = "2026-06-02-modular-avatar-payload";
         private const int BaseSelectionIndex = -2;
+        internal const string DeveloperModePrefKey = "UNAvatar.UnityExporter.DeveloperMode";
 
         [SerializeField] private GameObject avatarRoot;
         [SerializeField] private string exportPath = "";
@@ -33,10 +34,18 @@ namespace UNAvatar.UnityExporter
         [SerializeField] private bool useHighQualitySampleRender = true;
         [SerializeField] private bool useAntiAliasingForSampleImage = false;
         [SerializeField] private bool developerMode = false;
+        [SerializeField] private bool showDeveloperDiagnostics = false;
 
         private Vector2 scroll;
         private string lastSummary = "";
         private string developerDiagnosticsText = "";
+
+        internal static bool IsDeveloperModeEnabled => EditorPrefs.GetBool(DeveloperModePrefKey, false);
+
+        private void OnEnable()
+        {
+            developerMode = IsDeveloperModeEnabled;
+        }
 
         [MenuItem("Tools/U.N. Avatar/Export .unavatar")]
         public static void Open()
@@ -108,23 +117,31 @@ namespace UNAvatar.UnityExporter
 
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("---");
-            developerMode = EditorGUILayout.ToggleLeft("Developer mode", developerMode);
+            var nextDeveloperMode = EditorGUILayout.ToggleLeft("Developer mode", developerMode);
+            if (nextDeveloperMode != developerMode)
+            {
+                developerMode = nextDeveloperMode;
+                EditorPrefs.SetBool(DeveloperModePrefKey, developerMode);
+            }
             if (developerMode)
             {
-                EditorGUILayout.HelpBox(
-                    "Developer mode enables diagnostic logs and experimental tools while the exporter is under development.",
-                    MessageType.Warning);
-                using (new EditorGUI.DisabledScope(true))
+                EditorGUILayout.HelpBox("Developer mode is for release-gated diagnostics and benchmarks.", MessageType.Info);
+
+                DrawPngBenchmarkDeveloperControls();
+
+                showDeveloperDiagnostics = EditorGUILayout.Foldout(showDeveloperDiagnostics, "Diagnostics", true);
+                if (showDeveloperDiagnostics)
                 {
-                    EditorGUILayout.Toggle("Force Enable All Before Bake", true);
+                    EditorGUILayout.LabelField("Exporter build marker", ExporterBuildMarker);
+                    if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)))
+                    {
+                        developerDiagnosticsText = BuildDeveloperDiagnostics();
+                    }
+                    if (!string.IsNullOrEmpty(developerDiagnosticsText))
+                    {
+                        EditorGUILayout.TextArea(developerDiagnosticsText, GUILayout.MinHeight(180));
+                    }
                 }
-                EditorGUILayout.LabelField("Debug Hints", EditorStyles.boldLabel);
-                EditorGUILayout.LabelField("Exporter build marker", ExporterBuildMarker);
-                if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)) || !developerDiagnosticsText.Contains(ExporterBuildMarker))
-                {
-                    developerDiagnosticsText = BuildDeveloperDiagnostics();
-                }
-                EditorGUILayout.TextArea(developerDiagnosticsText, GUILayout.MinHeight(180));
             }
             EditorGUILayout.EndScrollView();
         }

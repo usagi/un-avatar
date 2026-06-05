@@ -13,16 +13,37 @@ namespace UNAvatar.UnityExporter
 {
     internal static class PngEncoderBenchmark
     {
+        private const string EnabledPrefKey = "UNAvatar.UnityExporter.PngEncoderBenchmarkEnabled";
         private const int WarmupIterations = 2;
         private const int TimedIterations = 8;
+
+        public static bool IsEnabled
+        {
+            get => EditorPrefs.GetBool(EnabledPrefKey, false);
+            set => EditorPrefs.SetBool(EnabledPrefKey, value);
+        }
+
+        private static bool CanRun => UNAvatarExporterWindow.IsDeveloperModeEnabled && IsEnabled;
 
         [MenuItem("Tools/U.N. Avatar/Benchmark PNG Encoders")]
         public static void RunMenu()
         {
+            if (!CanRun)
+            {
+                UnityEngine.Debug.LogWarning("[U.N. Avatar] PNG encoder benchmark is disabled. Enable Developer mode in the exporter window first.");
+                return;
+            }
+
             var report = Run();
             var path = Path.Combine(Path.GetTempPath(), "un-avatar-png-encoder-benchmark.csv");
             File.WriteAllText(path, report, new UTF8Encoding(false));
             UnityEngine.Debug.Log("[U.N. Avatar] PNG encoder benchmark written to " + path + "\n" + report);
+        }
+
+        [MenuItem("Tools/U.N. Avatar/Benchmark PNG Encoders", true)]
+        public static bool ValidateRunMenu()
+        {
+            return CanRun;
         }
 
         public static string Run()
