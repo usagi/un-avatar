@@ -5852,6 +5852,7 @@ impl SceneMeshes {
 		let blue_texture = create_solid_texture_1x1(device, queue, "blue1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 255, 255]);
 		textures.push(blue_texture);
 		let blue_view = textures[4].create_view(&wgpu::TextureViewDescriptor::default());
+		let scene_texture_base = textures.len();
 		report("gpu-upload", "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
 			limit_max_dimension: texture_max_dimension,
@@ -6175,7 +6176,7 @@ impl SceneMeshes {
 
 		let image_views: Vec<wgpu::TextureView> = textures
 			.iter()
-			.skip(4)
+			.skip(scene_texture_base)
 			.map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
 			.collect();
 		assert_eq!(
