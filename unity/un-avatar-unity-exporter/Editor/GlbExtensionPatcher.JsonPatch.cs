@@ -77,18 +77,19 @@ namespace UNAvatar.UnityExporter
             {
                 return json;
             }
+            var joinedItems = string.Join(",", items);
             var keyIndex = json.IndexOf("\"" + propertyName + "\"", StringComparison.Ordinal);
             if (keyIndex < 0)
             {
-                return InsertRootProperty(json, "\"" + propertyName + "\":[" + string.Join(",", items) + "]");
+                return InsertRootProperty(json, "\"" + propertyName + "\":[" + joinedItems + "]");
             }
             var colon = json.IndexOf(':', keyIndex);
             var arrayStart = json.IndexOf('[', colon);
             var arrayEnd = FindMatchingBracket(json, arrayStart);
             var existing = json.Substring(arrayStart + 1, arrayEnd - arrayStart - 1).Trim();
             var replacement = existing.Length == 0
-                ? "[" + string.Join(",", items) + "]"
-                : "[" + existing + "," + string.Join(",", items) + "]";
+                ? "[" + joinedItems + "]"
+                : "[" + existing + "," + joinedItems + "]";
             return json.Substring(0, arrayStart) + replacement + json.Substring(arrayEnd + 1);
         }
 

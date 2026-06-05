@@ -46,7 +46,7 @@ namespace UNAvatar.UnityExporter
                 return value;
             }
 
-            var sb = new StringBuilder();
+            var sb = new StringBuilder(value.Length + 8);
             if (firstEscaped > 0)
             {
                 sb.Append(value, 0, firstEscaped);
