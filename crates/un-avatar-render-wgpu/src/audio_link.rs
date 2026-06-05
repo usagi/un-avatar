@@ -233,6 +233,9 @@ fn normalize_device_match(value: &str) -> String {
 }
 
 fn push_sample_chunk(tx: &Sender<Vec<f32>>, input: impl Iterator<Item = f32>) {
+	if tx.is_full() {
+		return;
+	}
 	let chunk: Vec<f32> = input.map(|sample| sample.clamp(-1.0, 1.0)).collect();
 	let _ = tx.try_send(chunk);
 }
