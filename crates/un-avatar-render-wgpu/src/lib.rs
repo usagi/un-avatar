@@ -1141,7 +1141,13 @@ fn startup_message(message: impl AsRef<str>, started_at: Instant) -> String {
 }
 
 fn compact_window_title_status(status: impl AsRef<str>) -> String {
-	let mut compact = status.as_ref().split_whitespace().collect::<Vec<_>>().join(" ");
+	let mut compact = String::new();
+	for part in status.as_ref().split_whitespace() {
+		if !compact.is_empty() {
+			compact.push(' ');
+		}
+		compact.push_str(part);
+	}
 	if compact.chars().count() > WINDOW_TITLE_STATUS_MAX_CHARS {
 		compact = compact.chars().take(WINDOW_TITLE_STATUS_MAX_CHARS.saturating_sub(1)).collect();
 		compact.push('…');
@@ -3979,8 +3985,9 @@ mod tests {
 	};
 
 	use super::{
-		parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode,
-		CloseHotkey, RendererControlCommand, SCENE_STATE_SPLASH,
+		compact_window_title_status, parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions,
+		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, SCENE_STATE_SPLASH,
+		WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -4000,6 +4007,19 @@ mod tests {
 				Err(error) => panic!("connect runtime status {address}: {error}"),
 			}
 		}
+	}
+
+	#[test]
+	fn compact_window_title_status_collapses_whitespace_and_truncates() {
+		assert_eq!(
+			compact_window_title_status("  Loading\tmodel\n textures  "),
+			"Loading model textures"
+		);
+
+		let long = "x".repeat(WINDOW_TITLE_STATUS_MAX_CHARS + 8);
+		let compact = compact_window_title_status(long);
+		assert_eq!(compact.chars().count(), WINDOW_TITLE_STATUS_MAX_CHARS);
+		assert!(compact.ends_with('…'));
 	}
 
 	#[test]
