@@ -621,7 +621,7 @@ namespace UNAvatar.UnityExporter
                 json.Add(new Dictionary<string, object>
                 {
                     ["view"] = image.view ?? "",
-                    ["byteLength"] = image.pngBytes != null ? image.pngBytes.Count : 0,
+                    ["byteLength"] = image.pngBytes != null ? image.pngBytes.Length : 0,
                     ["stateDigest"] = image.stateDigest ?? "",
                     ["stateDetails"] = StringListToObjectList(image.stateDetails),
                     ["sha256"] = Sha256Hex(image.pngBytes)
@@ -644,15 +644,15 @@ namespace UNAvatar.UnityExporter
             return json;
         }
 
-        private static string Sha256Hex(List<byte> bytes)
+        private static string Sha256Hex(byte[] bytes)
         {
-            if (bytes == null || bytes.Count == 0)
+            if (bytes == null || bytes.Length == 0)
             {
                 return "";
             }
             using (var sha = SHA256.Create())
             {
-                var hash = sha.ComputeHash(bytes.ToArray());
+                var hash = sha.ComputeHash(bytes);
                 var sb = new StringBuilder(hash.Length * 2);
                 foreach (var b in hash)
                 {

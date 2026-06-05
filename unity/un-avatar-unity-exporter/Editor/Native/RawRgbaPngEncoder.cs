@@ -6,7 +6,7 @@ using UnityEngine;
 
 namespace UNAvatar.UnityExporter
 {
-    public static class RawRgbaPngEncoder
+    internal static class RawRgbaPngEncoder
     {
         public static byte[] Encode(Texture2D texture)
         {
@@ -83,46 +83,12 @@ namespace UNAvatar.UnityExporter
             {
                 throw new ArgumentNullException(nameof(unityOrderRgba));
             }
-            if (width <= 0 || height <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(width), "Invalid RAW RGBA PNG encode dimensions.");
-            }
-            var expectedLength = checked(width * height * 4);
-            if (unityOrderRgba.Length != expectedLength)
-            {
-                throw new ArgumentException("Invalid RAW RGBA PNG encode input.", nameof(unityOrderRgba));
-            }
+            ValidateInput(unityOrderRgba.Length, width, height, nameof(unityOrderRgba));
 
             var handle = GCHandle.Alloc(unityOrderRgba, GCHandleType.Pinned);
             try
             {
-                IntPtr data;
-                int size;
-                var result = unavatar_fpng_encode_rgba32(
-                    handle.AddrOfPinnedObject(),
-                    width,
-                    height,
-                    out data,
-                    out size);
-                if (result != 0)
-                {
-                    throw new FpngEncodeException("fpng native encoder failed: " + result);
-                }
-                if (data == IntPtr.Zero || size <= 0)
-                {
-                    throw new FpngEncodeException("fpng native encoder returned no data.");
-                }
-
-                try
-                {
-                    var bytes = new byte[size];
-                    Marshal.Copy(data, bytes, 0, size);
-                    return bytes;
-                }
-                finally
-                {
-                    unavatar_fpng_free(data);
-                }
+                return EncodeNative(handle.AddrOfPinnedObject(), width, height);
             }
             finally
             {
@@ -132,20 +98,38 @@ namespace UNAvatar.UnityExporter
 
         private static unsafe byte[] EncodeFpng(NativeArray<byte> unityOrderRgba, int width, int height)
         {
-            if (width <= 0 || height <= 0)
+            ValidateInput(unityOrderRgba.IsCreated ? unityOrderRgba.Length : -1, width, height, nameof(unityOrderRgba));
+            return EncodeNative((IntPtr)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(unityOrderRgba), width, height);
+        }
+
+        private static void ValidateInput(int byteLength, int width, int height, string inputName)
+        {
+            if (width <= 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(width), "Invalid RAW RGBA PNG encode dimensions.");
+                throw new ArgumentOutOfRangeException(nameof(width), "Invalid RAW RGBA PNG encode width.");
+            }
+            if (height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(height), "Invalid RAW RGBA PNG encode height.");
             }
             var expectedLength = checked(width * height * 4);
-            if (!unityOrderRgba.IsCreated || unityOrderRgba.Length != expectedLength)
+            if (byteLength != expectedLength)
             {
-                throw new ArgumentException("Invalid RAW RGBA PNG encode input.", nameof(unityOrderRgba));
+                throw new ArgumentException("Invalid RAW RGBA PNG encode input.", inputName);
+            }
+        }
+
+        private static byte[] EncodeNative(IntPtr rgba, int width, int height)
+        {
+            if (rgba == IntPtr.Zero)
+            {
+                throw new ArgumentException("Invalid RAW RGBA PNG encode pointer.", nameof(rgba));
             }
 
             IntPtr data;
             int size;
             var result = unavatar_fpng_encode_rgba32(
-                (IntPtr)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(unityOrderRgba),
+                rgba,
                 width,
                 height,
                 out data,

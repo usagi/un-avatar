@@ -180,7 +180,7 @@ namespace UNAvatar.UnityExporter
         public Vector3 cameraRotationEuler;
         public Vector3 target;
         public int bufferView = -1;
-        public List<byte> pngBytes = new List<byte>();
+        public byte[] pngBytes = Array.Empty<byte>();
 
         public Dictionary<string, object> ToJson()
         {

@@ -84,3 +84,11 @@ RawRgbaPngEncoder
 ```
 
 Only call this boundary after the exporter has already decided it has generated RAW RGBA that must become PNG. Do not call it from source byte preservation paths.
+
+## Platform Scope
+
+The native fpng plugin is currently validated for the Windows Unity Editor /
+VCC development path. `xtask` has platform-specific library name handling for
+future macOS/Linux Editor builds, but the Unity importer metadata and package
+layout are treated as Windows-focused until those platforms are explicitly
+tested.

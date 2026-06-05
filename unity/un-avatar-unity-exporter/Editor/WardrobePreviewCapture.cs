@@ -99,7 +99,7 @@ namespace UNAvatar.UnityExporter
                 cameraRotationEuler = source.cameraRotationEuler,
                 target = source.target,
                 bufferView = source.bufferView,
-                pngBytes = source.pngBytes != null ? new List<byte>(source.pngBytes) : new List<byte>(0)
+                pngBytes = source.pngBytes != null ? (byte[])source.pngBytes.Clone() : Array.Empty<byte>()
             };
         }
 
@@ -164,7 +164,7 @@ namespace UNAvatar.UnityExporter
                         cameraPosition = camera.transform.position,
                         cameraRotationEuler = camera.transform.rotation.eulerAngles,
                         target = target,
-                        pngBytes = new List<byte>(RawRgbaPngEncoder.Encode(texture))
+                        pngBytes = RawRgbaPngEncoder.Encode(texture)
                     };
                 }
                 finally

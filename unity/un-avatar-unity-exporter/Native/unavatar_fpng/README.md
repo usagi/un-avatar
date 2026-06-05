@@ -24,6 +24,10 @@ the platform native library (`unavatar_fpng.dll` on Windows) and its Unity plugi
 
 The development copy is ignored by git.
 
+Windows Unity Editor / VCC usage is the validated path. The build helper keeps
+library-name handling for macOS/Linux, but those Editor package importer settings
+are not treated as release-ready until tested on those platforms.
+
 For only refreshing the development native plugin:
 
 ```powershell

@@ -6,6 +6,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using Unity.Collections;
 using UnityEditor;
 using UnityEngine;
 
@@ -32,19 +33,25 @@ namespace UNAvatar.UnityExporter
                     Graphics.Blit(texture, temporary);
                     RenderTexture.active = temporary;
                     var readable = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
-                    readable.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
-                    readable.Apply();
-                    var png = RawRgbaPngEncoder.Encode(readable);
-                    UnityEngine.Object.DestroyImmediate(readable);
-                    return new EncodedTexture(png, "image/png")
+                    try
                     {
-                        AssetPath = source.AssetPath,
-                        SourceExtension = source.SourceExtension,
-                        SourceMimeType = source.MimeType,
-                        SourceByteLength = source.SourceByteLength,
-                        ExportMode = "png_fallback",
-                        FallbackReason = string.IsNullOrEmpty(fallbackReason) ? "source_bytes_unavailable" : fallbackReason
-                    };
+                        readable.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+                        readable.Apply();
+                        var png = RawRgbaPngEncoder.Encode(readable);
+                        return new EncodedTexture(png, "image/png")
+                        {
+                            AssetPath = source.AssetPath,
+                            SourceExtension = source.SourceExtension,
+                            SourceMimeType = source.MimeType,
+                            SourceByteLength = source.SourceByteLength,
+                            ExportMode = "png_fallback",
+                            FallbackReason = string.IsNullOrEmpty(fallbackReason) ? "source_bytes_unavailable" : fallbackReason
+                        };
+                    }
+                    finally
+                    {
+                        UnityEngine.Object.DestroyImmediate(readable);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -80,7 +87,14 @@ namespace UNAvatar.UnityExporter
                         RenderTexture.active = temporary;
                         faceTexture.ReadPixels(new Rect(0, 0, faceSize, faceSize), 0, 0);
                         faceTexture.Apply();
-                        strip.SetPixels(face * faceSize, 0, faceSize, faceSize, faceTexture.GetPixels());
+                        if (exportExr)
+                        {
+                            strip.SetPixels(face * faceSize, 0, faceSize, faceSize, faceTexture.GetPixels());
+                        }
+                        else
+                        {
+                            CopyRgba32FaceToHorizontalStrip(faceTexture, strip, face, faceSize);
+                        }
                     }
                     strip.Apply();
                     var bytes = exportExr
@@ -122,6 +136,24 @@ namespace UNAvatar.UnityExporter
                 }
                 var graphicsFormat = cubemap != null ? cubemap.graphicsFormat.ToString() : "";
                 return IsFloatGraphicsFormat(graphicsFormat);
+            }
+
+            private static void CopyRgba32FaceToHorizontalStrip(Texture2D faceTexture, Texture2D strip, int faceIndex, int faceSize)
+            {
+                var faceBytes = faceTexture.GetRawTextureData<byte>();
+                var stripBytes = strip.GetRawTextureData<byte>();
+                var faceRowBytes = faceSize * 4;
+                var stripRowBytes = faceSize * 6 * 4;
+                var stripColumnOffset = faceIndex * faceRowBytes;
+                for (var y = 0; y < faceSize; y++)
+                {
+                    NativeArray<byte>.Copy(
+                        faceBytes,
+                        y * faceRowBytes,
+                        stripBytes,
+                        y * stripRowBytes + stripColumnOffset,
+                        faceRowBytes);
+                }
             }
 
             private static bool IsFloatGraphicsFormat(string graphicsFormat)

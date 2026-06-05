@@ -70,7 +70,7 @@ namespace UNAvatar.UnityExporter
             var firstBufferViewIndex = ExistingArrayLength(json, "bufferViews");
             foreach (var image in previewImages)
             {
-                if (image == null || image.pngBytes == null || image.pngBytes.Count == 0)
+                if (image == null || image.pngBytes == null || image.pngBytes.Length == 0)
                 {
                     if (image != null)
                     {
@@ -89,7 +89,7 @@ namespace UNAvatar.UnityExporter
                     bin.Add(0);
                 }
                 image.bufferView = firstBufferViewIndex + viewJson.Count;
-                viewJson.Add("{\"buffer\":0,\"byteOffset\":" + byteOffset.ToString(CultureInfo.InvariantCulture) + ",\"byteLength\":" + image.pngBytes.Count.ToString(CultureInfo.InvariantCulture) + "}");
+                viewJson.Add("{\"buffer\":0,\"byteOffset\":" + byteOffset.ToString(CultureInfo.InvariantCulture) + ",\"byteLength\":" + image.pngBytes.Length.ToString(CultureInfo.InvariantCulture) + "}");
             }
             binChunk.Data = Pad(bin.ToArray(), 0x00);
             if (viewJson.Count == 0)
@@ -188,7 +188,7 @@ namespace UNAvatar.UnityExporter
             var count = 0;
             foreach (var image in previewImages)
             {
-                if (image != null && image.pngBytes != null && image.pngBytes.Count > 0)
+                if (image != null && image.pngBytes != null && image.pngBytes.Length > 0)
                 {
                     count++;
                 }
@@ -201,12 +201,12 @@ namespace UNAvatar.UnityExporter
             var length = startLength;
             foreach (var image in previewImages)
             {
-                if (image == null || image.pngBytes == null || image.pngBytes.Count == 0)
+                if (image == null || image.pngBytes == null || image.pngBytes.Length == 0)
                 {
                     continue;
                 }
                 length = Align4(length);
-                length += image.pngBytes.Count;
+                length += image.pngBytes.Length;
                 length = Align4(length);
             }
             return length - startLength;

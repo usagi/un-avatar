@@ -150,7 +150,7 @@ namespace UNAvatar.UnityExporter
             if (image.bufferView >= 0)
             {
                 var bytes = GlbExtensionPatcher.ReadBufferViewBytes(glbPath, image.bufferView);
-                image.pngBytes = bytes != null ? new List<byte>(bytes) : new List<byte>();
+                image.pngBytes = bytes ?? Array.Empty<byte>();
             }
             return image;
         }

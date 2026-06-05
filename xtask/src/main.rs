@@ -1441,18 +1441,31 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> bool {
 }
 
 fn copy_unity_exporter_source_package(src: &Path, dst: &Path) -> bool {
-	fn should_skip_unity_exporter_file(path: &Path) -> bool {
-		path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+	fn should_skip_unity_exporter_file(package_root: &Path, path: &Path) -> bool {
+		let is_fpng_plugin = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
 			name == "unavatar_fpng.dll"
 				|| name == "unavatar_fpng.dll.meta"
 				|| name == "libunavatar_fpng.so"
 				|| name == "libunavatar_fpng.so.meta"
 				|| name == "libunavatar_fpng.dylib"
 				|| name == "libunavatar_fpng.dylib.meta"
+		});
+		if !is_fpng_plugin {
+			return false;
+		}
+		let Some(parent) = path.parent() else {
+			return false;
+		};
+		parent.strip_prefix(package_root).ok().is_some_and(|relative_parent| {
+			let components = relative_parent
+				.components()
+				.map(|component| component.as_os_str().to_string_lossy())
+				.collect::<Vec<_>>();
+			components.as_slice() == ["Editor", "Plugins", "x86_64"]
 		})
 	}
 
-	fn visit(src: &Path, dst: &Path) -> bool {
+	fn visit(package_root: &Path, src: &Path, dst: &Path) -> bool {
 		let entries = match fs::read_dir(src) {
 			Ok(entries) => entries,
 			Err(err) => {
@@ -1466,12 +1479,12 @@ fn copy_unity_exporter_source_package(src: &Path, dst: &Path) -> bool {
 		}
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if should_skip_unity_exporter_file(&path) {
+			if should_skip_unity_exporter_file(package_root, &path) {
 				continue;
 			}
 			let target = dst.join(entry.file_name());
 			if path.is_dir() {
-				if !visit(&path, &target) {
+				if !visit(package_root, &path, &target) {
 					return false;
 				}
 			} else if path.is_file() && !copy_file_to(&path, &target) {
@@ -1481,7 +1494,7 @@ fn copy_unity_exporter_source_package(src: &Path, dst: &Path) -> bool {
 		true
 	}
 
-	visit(src, dst)
+	visit(src, src, dst)
 }
 
 fn zip_entry_name(staging_root: &Path, path: &Path) -> Option<String> {
