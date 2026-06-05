@@ -357,9 +357,9 @@ fn vmc_finger_bone_route(name: &str) -> Option<(VmcHandSide, Finger, usize)> {
 }
 
 fn hand_motion_from_vmc_finger_bones(bones: &BTreeMap<String, BonePoseLocal>, side: VmcHandSide) -> Option<HandMotion> {
-	let mut finger_poses = Vec::new();
+	let mut finger_poses = Vec::with_capacity(5);
 	for finger in [Finger::Thumb, Finger::Index, Finger::Middle, Finger::Ring, Finger::Little] {
-		let mut joints: Vec<Option<TransformSample>> = vec![None, None, None];
+		let mut joints = [None, None, None];
 		for (name, pose) in bones {
 			let Some((bone_side, bone_finger, joint_index)) = vmc_finger_bone_route(name) else {
 				continue;
