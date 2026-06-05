@@ -164,7 +164,7 @@ namespace UNAvatar.UnityExporter
                         cameraPosition = camera.transform.position,
                         cameraRotationEuler = camera.transform.rotation.eulerAngles,
                         target = target,
-                        pngBytes = new List<byte>(texture.EncodeToPNG())
+                        pngBytes = new List<byte>(RawRgbaPngEncoder.Encode(texture))
                     };
                 }
                 finally

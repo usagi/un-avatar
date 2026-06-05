@@ -34,7 +34,7 @@ namespace UNAvatar.UnityExporter
                     var readable = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
                     readable.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
                     readable.Apply();
-                    var png = readable.EncodeToPNG();
+                    var png = RawRgbaPngEncoder.Encode(readable);
                     UnityEngine.Object.DestroyImmediate(readable);
                     return new EncodedTexture(png, "image/png")
                     {
@@ -85,7 +85,7 @@ namespace UNAvatar.UnityExporter
                     strip.Apply();
                     var bytes = exportExr
                         ? strip.EncodeToEXR(Texture2D.EXRFlags.CompressZIP)
-                        : strip.EncodeToPNG();
+                        : RawRgbaPngEncoder.Encode(strip);
                     return new EncodedTexture(bytes, exportExr ? "image/exr" : "image/png")
                     {
                         AssetPath = source.AssetPath,

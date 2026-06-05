@@ -192,7 +192,7 @@ namespace UNAvatar.UnityExporter
             }
         }
 
-        [DllImport("unavatar_fpng_benchmark", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
         private static extern int unavatar_fpng_encode_rgba32(
             IntPtr rgba,
             int width,
@@ -200,7 +200,7 @@ namespace UNAvatar.UnityExporter
             out IntPtr png,
             out int pngSize);
 
-        [DllImport("unavatar_fpng_benchmark", CallingConvention = CallingConvention.Cdecl)]
+        [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
         private static extern void unavatar_fpng_free(IntPtr png);
 
         private static DecodeVerification VerifyDecodedRgba(BenchmarkInput input, byte[] png)
