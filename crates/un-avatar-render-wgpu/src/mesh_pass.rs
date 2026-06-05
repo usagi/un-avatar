@@ -5855,7 +5855,12 @@ impl SceneMeshes {
 			wgpu::TextureFormat::Rgba8UnormSrgb,
 			[0, 0, 0, 255],
 		);
-		let mut cube_textures: Vec<wgpu::Texture> = Vec::new();
+		let cube_texture_capacity = 1 + scene
+			.image_sources
+			.iter()
+			.filter(|source| texture_source_is_cube(source.as_ref()))
+			.count();
+		let mut cube_textures: Vec<wgpu::Texture> = Vec::with_capacity(cube_texture_capacity);
 		let black_cube_texture =
 			create_solid_cube_texture_1x1(device, queue, "black_cube1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 255]);
 		let black_cube_view = black_cube_texture.create_view(&wgpu::TextureViewDescriptor {
