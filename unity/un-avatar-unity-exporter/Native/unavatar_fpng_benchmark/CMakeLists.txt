@@ -15,7 +15,10 @@ else()
     target_compile_options(unavatar_fpng_benchmark PRIVATE -O3 -fno-strict-aliasing)
 endif()
 
-set(unavatar_fpng_output_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../Editor/Plugins/x86_64")
+set(UNAVATAR_FPNG_OUTPUT_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../Editor/Plugins/x86_64"
+    CACHE PATH "Output directory for the Unity fpng benchmark plugin")
+set(unavatar_fpng_output_dir "${UNAVATAR_FPNG_OUTPUT_DIR}")
 set_target_properties(unavatar_fpng_benchmark PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${unavatar_fpng_output_dir}"
     LIBRARY_OUTPUT_DIRECTORY "${unavatar_fpng_output_dir}")
