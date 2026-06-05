@@ -1409,6 +1409,17 @@ impl GpuState {
 		self.audio_link_texture_needed
 	}
 
+	fn apply_runtime_requirements(&mut self, requirements: SceneMeshRuntimeRequirements, audio_link_options: AudioLinkOptions) {
+		let audio_link_texture_needed = audio_link_options.source == AudioLinkSource::InputDevice && requirements.audio_link_texture;
+		let audio_link_config_changed = self.audio_link_options != audio_link_options;
+		let audio_link_need_changed = self.audio_link_texture_needed != audio_link_texture_needed;
+		self.audio_link_options = audio_link_options;
+		self.audio_link_texture_needed = audio_link_texture_needed;
+		if audio_link_config_changed || audio_link_need_changed {
+			self.reconfigure_audio_link_runtime();
+		}
+	}
+
 	fn reconfigure_audio_link_runtime(&mut self) {
 		if self.audio_link_texture_needed {
 			if self.audio_link_runtime.is_none() {
@@ -2271,10 +2282,7 @@ impl GpuState {
 		self.bone_colliders = prepared.bone_colliders;
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
-		self.audio_link_texture_needed =
-			options.audio_link.source == AudioLinkSource::InputDevice && prepared.runtime_requirements.audio_link_texture;
-		self.audio_link_options = options.audio_link.clone();
-		self.reconfigure_audio_link_runtime();
+		self.apply_runtime_requirements(prepared.runtime_requirements, options.audio_link.clone());
 		self.reconfigure_motion_receivers(options.vmc_address, options.unmotion_zenoh, options.debug_vmc)?;
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
