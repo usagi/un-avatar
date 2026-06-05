@@ -931,6 +931,11 @@ struct DrawBindState {
 	skin_palette_index: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SceneMeshRuntimeRequirements {
+	pub(crate) audio_link_texture: bool,
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -1845,6 +1850,20 @@ fn create_solid_texture_1x1(
 		},
 	);
 	texture
+}
+
+fn push_solid_texture_1x1_view(
+	textures: &mut Vec<wgpu::Texture>,
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	label: &'static str,
+	format: wgpu::TextureFormat,
+	rgba: [u8; 4],
+) -> wgpu::TextureView {
+	let texture = create_solid_texture_1x1(device, queue, label, format, rgba);
+	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+	textures.push(texture);
+	view
 }
 
 fn create_solid_cube_texture_1x1(
@@ -5816,12 +5835,22 @@ impl SceneMeshes {
 
 		let mut textures: Vec<wgpu::Texture> = Vec::with_capacity(scene.images.len() + 6);
 
-		let white_texture = create_solid_texture_1x1(device, queue, "white1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [255, 255, 255, 255]);
-		textures.push(white_texture);
-		let white_view = textures[0].create_view(&wgpu::TextureViewDescriptor::default());
-		let black_texture = create_solid_texture_1x1(device, queue, "black1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 255]);
-		textures.push(black_texture);
-		let black_view = textures[1].create_view(&wgpu::TextureViewDescriptor::default());
+		let white_view = push_solid_texture_1x1_view(
+			&mut textures,
+			device,
+			queue,
+			"white1x1",
+			wgpu::TextureFormat::Rgba8UnormSrgb,
+			[255, 255, 255, 255],
+		);
+		let black_view = push_solid_texture_1x1_view(
+			&mut textures,
+			device,
+			queue,
+			"black1x1",
+			wgpu::TextureFormat::Rgba8UnormSrgb,
+			[0, 0, 0, 255],
+		);
 		let mut cube_textures: Vec<wgpu::Texture> = Vec::new();
 		let black_cube_texture =
 			create_solid_cube_texture_1x1(device, queue, "black_cube1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 0, 255]);
@@ -5831,27 +5860,30 @@ impl SceneMeshes {
 			..Default::default()
 		});
 		cube_textures.push(black_cube_texture);
-		let neutral_normal_texture = create_solid_texture_1x1(
+		let neutral_normal_view = push_solid_texture_1x1_view(
+			&mut textures,
 			device,
 			queue,
 			"neutral_normal1x1",
 			wgpu::TextureFormat::Rgba8Unorm,
 			[128, 128, 255, 255],
 		);
-		textures.push(neutral_normal_texture);
-		let neutral_normal_view = textures[2].create_view(&wgpu::TextureViewDescriptor::default());
-		let transparent_black_texture = create_solid_texture_1x1(
+		let transparent_black_view = push_solid_texture_1x1_view(
+			&mut textures,
 			device,
 			queue,
 			"transparent_black1x1",
 			wgpu::TextureFormat::Rgba8UnormSrgb,
 			[0, 0, 0, 0],
 		);
-		textures.push(transparent_black_texture);
-		let transparent_black_view = textures[3].create_view(&wgpu::TextureViewDescriptor::default());
-		let blue_texture = create_solid_texture_1x1(device, queue, "blue1x1", wgpu::TextureFormat::Rgba8UnormSrgb, [0, 0, 255, 255]);
-		textures.push(blue_texture);
-		let blue_view = textures[4].create_view(&wgpu::TextureViewDescriptor::default());
+		let blue_view = push_solid_texture_1x1_view(
+			&mut textures,
+			device,
+			queue,
+			"blue1x1",
+			wgpu::TextureFormat::Rgba8UnormSrgb,
+			[0, 0, 255, 255],
+		);
 		let scene_texture_base = textures.len();
 		report("gpu-upload", "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
@@ -7649,10 +7681,13 @@ impl SceneMeshes {
 		self.draws.iter().any(|draw| material_needs_screen_refraction(&draw.material))
 	}
 
-	pub fn needs_audio_link_texture(&self) -> bool {
-		self.draws
-			.iter()
-			.any(|draw| material_needs_audio_link_texture(&draw.material, draw.shading))
+	pub(crate) fn runtime_requirements(&self) -> SceneMeshRuntimeRequirements {
+		SceneMeshRuntimeRequirements {
+			audio_link_texture: self
+				.draws
+				.iter()
+				.any(|draw| material_needs_audio_link_texture(&draw.material, draw.shading)),
+		}
 	}
 
 	pub fn set_screen_grab_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {

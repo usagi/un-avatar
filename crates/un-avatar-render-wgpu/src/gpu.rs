@@ -23,8 +23,8 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, MaterialTier, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshes,
-		TextureUploadSummary,
+		AvatarOutlineOptions, AvatarOutlinePolicy, MaterialTier, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements,
+		SceneMeshes, TextureUploadSummary,
 	},
 	options::{
 		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
@@ -224,7 +224,7 @@ pub(crate) struct PreparedDocumentScene {
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	bone_collider_count: u32,
 	bone_collider_source: BoneColliderSource,
-	audio_link_texture_needed: bool,
+	runtime_requirements: SceneMeshRuntimeRequirements,
 	expression_presets: Vec<String>,
 }
 
@@ -2228,7 +2228,8 @@ impl GpuState {
 		self.bone_colliders = prepared.bone_colliders;
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
-		self.audio_link_texture_needed = options.audio_link.source == AudioLinkSource::InputDevice && prepared.audio_link_texture_needed;
+		self.audio_link_texture_needed =
+			options.audio_link.source == AudioLinkSource::InputDevice && prepared.runtime_requirements.audio_link_texture;
 		self.audio_link_options = options.audio_link.clone();
 		self.reconfigure_audio_link_runtime();
 		self.reconfigure_motion_receivers(options.vmc_address, options.unmotion_zenoh, options.debug_vmc)?;
@@ -2260,7 +2261,7 @@ impl GpuSceneBuildContext {
 		let document_wrapped = Arc::new(RwLock::new(document));
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
-		let mut audio_link_texture_needed = false;
+		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
 		{
 			let guard = document_wrapped.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			if let Some(sc) = &guard.scene {
@@ -2302,8 +2303,8 @@ impl GpuSceneBuildContext {
 					texture_summary = Some(sm.texture_summary());
 					let world = crate::scene_transform::scene_world_matrices(sc);
 					sm.update_draw_transforms(&queue, sc, &world, guard.expression_weights.as_ref(), None);
-					audio_link_texture_needed = sm.needs_audio_link_texture();
-					if audio_link_texture_needed && options.audio_link.source == AudioLinkSource::InputDevice {
+					runtime_requirements = sm.runtime_requirements();
+					if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 						eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
 					}
 					scene_meshes = Some(sm);
@@ -2347,7 +2348,7 @@ impl GpuSceneBuildContext {
 			bone_colliders,
 			bone_collider_count: bone_collider_stats.count,
 			bone_collider_source: bone_collider_stats.source,
-			audio_link_texture_needed,
+			runtime_requirements,
 			expression_presets,
 		})
 	}
