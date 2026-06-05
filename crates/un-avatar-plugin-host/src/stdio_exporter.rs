@@ -2,7 +2,7 @@
 
 use std::{
 	collections::VecDeque,
-	fmt, fs, io,
+	fmt, io,
 	path::{Path, PathBuf},
 	process::Command,
 };
@@ -14,8 +14,8 @@ use un_avatar_io::{
 
 use crate::manifest::{load_manifest, PluginManifest};
 use crate::stdio_importer::{
-	bundle_dir_from_manifest, check_protocol, plugin_child_uses_bundle_cwd_from_env, plugin_discovery_max_depth_from_env,
-	registration_origin_label, resolve_plugin_executable, should_skip_plugin_search_dir,
+	bundle_dir_from_manifest, check_protocol, enqueue_plugin_search_children, plugin_child_uses_bundle_cwd_from_env,
+	plugin_discovery_max_depth_from_env, registration_origin_label, resolve_plugin_executable,
 };
 use crate::stdio_rpc::{rpc_handshake_timeout_from_env, rpc_import_timeout_from_env, HandshakeError, PluginChild};
 
@@ -205,16 +205,7 @@ pub fn register_stdio_exporters_from_plugin_root(reg: &mut un_avatar_io::IoRegis
 	}
 	let max_depth = plugin_discovery_max_depth_from_env();
 	let mut q = VecDeque::new();
-	for entry in fs::read_dir(root)? {
-		let path = entry?.path();
-		if path.is_dir() {
-			let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-			if should_skip_plugin_search_dir(name) {
-				continue;
-			}
-			q.push_back((path, 1usize));
-		}
-	}
+	enqueue_plugin_search_children(&mut q, root, 1)?;
 	while let Some((dir, depth)) = q.pop_front() {
 		if depth > max_depth {
 			continue;
@@ -224,16 +215,7 @@ pub fn register_stdio_exporters_from_plugin_root(reg: &mut un_avatar_io::IoRegis
 		if added > 0 {
 			continue;
 		}
-		for entry in fs::read_dir(&dir)? {
-			let path = entry?.path();
-			if path.is_dir() {
-				let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-				if should_skip_plugin_search_dir(name) {
-					continue;
-				}
-				q.push_back((path, depth + 1));
-			}
-		}
+		enqueue_plugin_search_children(&mut q, &dir, depth + 1)?;
 	}
 	Ok(n)
 }

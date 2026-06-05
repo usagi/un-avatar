@@ -271,6 +271,20 @@ pub fn register_stdio_importers_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 	Ok(n)
 }
 
+pub(crate) fn enqueue_plugin_search_children(q: &mut VecDeque<(PathBuf, usize)>, dir: &Path, child_depth: usize) -> io::Result<()> {
+	for entry in fs::read_dir(dir)? {
+		let path = entry?.path();
+		if path.is_dir() {
+			let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+			if should_skip_plugin_search_dir(name) {
+				continue;
+			}
+			q.push_back((path, child_depth));
+		}
+	}
+	Ok(())
+}
+
 /// 単一 bundle（`dir/manifest.toml`）か、**複数 bundle の親**（`dir/foo/manifest.toml`、`dir/a/b/…`）に対応する。
 ///
 /// まず `root` 直下を [`register_stdio_importers_from_manifest_dir`] と同様に試す。1 件も登録できなければ、`root` 以下を幅優先で歩き、各ディレクトリで manifest を試す。**manifest から importer を登録できたディレクトリはその下に降りない**（bundle の内部を誤って列挙しない）。`target` / `node_modules` 等はスキップ。最大深さは [`plugin_discovery_max_depth_from_env`]。
@@ -284,16 +298,7 @@ pub fn register_stdio_importers_from_plugin_root(reg: &mut un_avatar_io::IoRegis
 	}
 	let max_depth = plugin_discovery_max_depth_from_env();
 	let mut q = VecDeque::new();
-	for entry in fs::read_dir(root)? {
-		let path = entry?.path();
-		if path.is_dir() {
-			let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-			if should_skip_plugin_search_dir(name) {
-				continue;
-			}
-			q.push_back((path, 1usize));
-		}
-	}
+	enqueue_plugin_search_children(&mut q, root, 1)?;
 	while let Some((dir, depth)) = q.pop_front() {
 		if depth > max_depth {
 			continue;
@@ -303,16 +308,7 @@ pub fn register_stdio_importers_from_plugin_root(reg: &mut un_avatar_io::IoRegis
 		if added > 0 {
 			continue;
 		}
-		for entry in fs::read_dir(&dir)? {
-			let path = entry?.path();
-			if path.is_dir() {
-				let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-				if should_skip_plugin_search_dir(name) {
-					continue;
-				}
-				q.push_back((path, depth + 1));
-			}
-		}
+		enqueue_plugin_search_children(&mut q, &dir, depth + 1)?;
 	}
 	Ok(n)
 }
