@@ -142,18 +142,12 @@ namespace UNAvatar.UnityExporter
             }
 
             var active = ActiveRendererPaths(root);
-            var probes = new[]
-            {
-                "Color  1",
-                "Color  13",
-                "add-belt",
-                "Maid",
-                "Outer"
-            };
+            var probes = WardrobePreviewProbePaths;
+            var pathLookup = BuildProbePathLookup(root);
             var states = new List<string>(probes.Length);
             foreach (var path in probes)
             {
-                states.Add(path + "=" + ProbePathState(root, path));
+                states.Add(path + "=" + ProbePathState(pathLookup, path));
             }
             using (var sha = SHA256.Create())
             {
