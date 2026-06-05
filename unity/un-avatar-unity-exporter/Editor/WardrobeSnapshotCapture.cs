@@ -35,11 +35,12 @@ namespace UNAvatar.UnityExporter
                         path = path,
                         enabled = renderer.enabled
                     });
-                }
 
-                var skinnedRenderers = transform.GetComponents<SkinnedMeshRenderer>();
-                foreach (var skinned in skinnedRenderers)
-                {
+                    var skinned = renderer as SkinnedMeshRenderer;
+                    if (skinned == null)
+                    {
+                        continue;
+                    }
                     var mesh = skinned.sharedMesh;
                     if (mesh == null)
                     {
@@ -135,11 +136,12 @@ namespace UNAvatar.UnityExporter
             var lookup = new SnapshotNodeLookup(transforms.Length);
             foreach (var transform in transforms)
             {
+                var renderers = transform.GetComponents<Renderer>();
                 var node = new SnapshotNode
                 {
                     Transform = transform,
-                    Renderers = transform.GetComponents<Renderer>(),
-                    SkinnedRenderers = transform.GetComponents<SkinnedMeshRenderer>()
+                    Renderers = renderers,
+                    SkinnedRenderers = SkinnedRenderersFrom(renderers)
                 };
                 var id = NodeIdFor(root.transform, transform);
                 if (!lookup.ById.ContainsKey(id))
@@ -153,6 +155,36 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return lookup;
+        }
+
+        private static SkinnedMeshRenderer[] SkinnedRenderersFrom(Renderer[] renderers)
+        {
+            if (renderers == null || renderers.Length == 0)
+            {
+                return Array.Empty<SkinnedMeshRenderer>();
+            }
+            var count = 0;
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] is SkinnedMeshRenderer)
+                {
+                    count++;
+                }
+            }
+            if (count == 0)
+            {
+                return Array.Empty<SkinnedMeshRenderer>();
+            }
+            var skinned = new SkinnedMeshRenderer[count];
+            var index = 0;
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] is SkinnedMeshRenderer renderer)
+                {
+                    skinned[index++] = renderer;
+                }
+            }
+            return skinned;
         }
 
         private static SnapshotNode ResolveNode(
