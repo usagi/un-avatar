@@ -783,12 +783,14 @@ fn run_formats_list(plugin_dirs: &[PathBuf], json: bool) -> Result<(), String> {
 		return Ok(());
 	}
 	println!("importers:");
-	for d in reg.importer_descriptors() {
+	for importer in reg.importers() {
+		let d = importer.descriptor();
 		let plug = d.provider_plugin_id.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
 		println!("  {} — {} — [{}]{plug}", d.id.0, d.display_name, d.extensions.join(", "));
 	}
 	println!("exporters:");
-	for d in reg.exporter_descriptors() {
+	for exporter in reg.exporters() {
+		let d = exporter.descriptor();
 		let plug = d.provider_plugin_id.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
 		println!("  {} — {} — [{}]{plug}", d.id.0, d.display_name, d.extensions.join(", "));
 	}
