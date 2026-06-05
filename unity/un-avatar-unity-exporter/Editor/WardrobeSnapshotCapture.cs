@@ -131,8 +131,9 @@ namespace UNAvatar.UnityExporter
 
         private static SnapshotNodeLookup BuildNodeLookup(GameObject root)
         {
-            var lookup = new SnapshotNodeLookup();
-            foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            var lookup = new SnapshotNodeLookup(transforms.Length);
+            foreach (var transform in transforms)
             {
                 var node = new SnapshotNode
                 {
@@ -173,8 +174,14 @@ namespace UNAvatar.UnityExporter
 
         private sealed class SnapshotNodeLookup
         {
-            public readonly Dictionary<string, SnapshotNode> ById = new Dictionary<string, SnapshotNode>(StringComparer.Ordinal);
-            public readonly Dictionary<string, SnapshotNode> ByPath = new Dictionary<string, SnapshotNode>(StringComparer.Ordinal);
+            public readonly Dictionary<string, SnapshotNode> ById;
+            public readonly Dictionary<string, SnapshotNode> ByPath;
+
+            public SnapshotNodeLookup(int capacity)
+            {
+                ById = new Dictionary<string, SnapshotNode>(capacity, StringComparer.Ordinal);
+                ByPath = new Dictionary<string, SnapshotNode>(capacity, StringComparer.Ordinal);
+            }
         }
 
         private sealed class SnapshotNode
@@ -691,19 +698,38 @@ namespace UNAvatar.UnityExporter
             {
                 return "$root[0]";
             }
-            var parts = new Stack<string>();
+            var parts = new List<string>();
             var current = target;
+            var length = 0;
             while (current != null)
             {
                 if (current == root)
                 {
-                    parts.Push("$root[0]");
+                    const string rootPart = "$root[0]";
+                    parts.Add(rootPart);
+                    length += rootPart.Length + 1;
                     break;
                 }
-                parts.Push(current.name + "[" + SiblingIndex(current).ToString(CultureInfo.InvariantCulture) + "]");
+                var part = current.name + "[" + SiblingIndex(current).ToString(CultureInfo.InvariantCulture) + "]";
+                parts.Add(part);
+                length += part.Length + 1;
                 current = current.parent;
             }
-            return string.Join("/", parts.ToArray());
+            if (parts.Count == 0)
+            {
+                return "";
+            }
+
+            var builder = new StringBuilder(Math.Max(0, length - 1));
+            for (var i = parts.Count - 1; i >= 0; i--)
+            {
+                if (builder.Length > 0)
+                {
+                    builder.Append('/');
+                }
+                builder.Append(parts[i]);
+            }
+            return builder.ToString();
         }
 
         private static int SiblingIndex(Transform transform)
