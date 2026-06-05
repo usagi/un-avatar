@@ -89,6 +89,7 @@ namespace UNAvatar.UnityExporter
                     elapsed[i] = sw.Elapsed.TotalMilliseconds;
                 }
                 Array.Sort(elapsed);
+                var decodeResult = VerifyDecodedRgba(input, last);
 
                 return new BenchmarkRow
                 {
@@ -103,6 +104,8 @@ namespace UNAvatar.UnityExporter
                     MaxMs = elapsed[elapsed.Length - 1],
                     PngBytes = last != null ? last.Length : 0,
                     Gen0Collections = GC.CollectionCount(0) - gcBefore,
+                    DecodeMatches = decodeResult.Matches,
+                    DecodeError = decodeResult.Error,
                     Error = ""
                 };
             }
@@ -115,6 +118,7 @@ namespace UNAvatar.UnityExporter
                     Height = input.Height,
                     Pattern = input.Pattern,
                     Iterations = 0,
+                    DecodeMatches = false,
                     Error = ex.GetType().Name + ": " + ex.Message
                 };
             }
@@ -199,6 +203,65 @@ namespace UNAvatar.UnityExporter
         [DllImport("unavatar_fpng_benchmark", CallingConvention = CallingConvention.Cdecl)]
         private static extern void unavatar_fpng_free(IntPtr png);
 
+        private static DecodeVerification VerifyDecodedRgba(BenchmarkInput input, byte[] png)
+        {
+            if (png == null || png.Length == 0)
+            {
+                return new DecodeVerification { Matches = false, Error = "encoder returned no PNG bytes" };
+            }
+
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false, false);
+            try
+            {
+                if (!ImageConversion.LoadImage(texture, png, false))
+                {
+                    return new DecodeVerification { Matches = false, Error = "Unity PNG decoder rejected output" };
+                }
+                if (texture.width != input.Width || texture.height != input.Height)
+                {
+                    return new DecodeVerification
+                    {
+                        Matches = false,
+                        Error = "decoded size " + texture.width.ToString(CultureInfo.InvariantCulture) + "x" + texture.height.ToString(CultureInfo.InvariantCulture)
+                    };
+                }
+
+                var pixels = texture.GetPixels32();
+                var expectedLength = checked(input.Width * input.Height);
+                if (pixels.Length != expectedLength)
+                {
+                    return new DecodeVerification { Matches = false, Error = "decoded pixel count " + pixels.Length.ToString(CultureInfo.InvariantCulture) };
+                }
+
+                for (var pixelIndex = 0; pixelIndex < pixels.Length; pixelIndex++)
+                {
+                    var byteIndex = pixelIndex * 4;
+                    var pixel = pixels[pixelIndex];
+                    if (pixel.r != input.Rgba[byteIndex] ||
+                        pixel.g != input.Rgba[byteIndex + 1] ||
+                        pixel.b != input.Rgba[byteIndex + 2] ||
+                        pixel.a != input.Rgba[byteIndex + 3])
+                    {
+                        return new DecodeVerification
+                        {
+                            Matches = false,
+                            Error = "first mismatch at pixel " + pixelIndex.ToString(CultureInfo.InvariantCulture)
+                        };
+                    }
+                }
+
+                return new DecodeVerification { Matches = true, Error = "" };
+            }
+            catch (Exception ex)
+            {
+                return new DecodeVerification { Matches = false, Error = ex.GetType().Name + ": " + ex.Message };
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
         private static double Percentile(double[] sorted, double p)
         {
             if (sorted == null || sorted.Length == 0)
@@ -213,7 +276,7 @@ namespace UNAvatar.UnityExporter
         private static string ToCsv(List<BenchmarkRow> rows)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("encoder,width,height,pattern,iterations,p50_ms,p90_ms,min_ms,max_ms,png_bytes,gen0_collections,error");
+            sb.AppendLine("encoder,width,height,pattern,iterations,p50_ms,p90_ms,min_ms,max_ms,png_bytes,gen0_collections,decode_matches,decode_error,error");
             foreach (var row in rows)
             {
                 sb.Append(Escape(row.Encoder)).Append(',')
@@ -227,6 +290,8 @@ namespace UNAvatar.UnityExporter
                     .Append(row.MaxMs.ToString("F3", CultureInfo.InvariantCulture)).Append(',')
                     .Append(row.PngBytes.ToString(CultureInfo.InvariantCulture)).Append(',')
                     .Append(row.Gen0Collections.ToString(CultureInfo.InvariantCulture)).Append(',')
+                    .Append(row.DecodeMatches ? "true" : "false").Append(',')
+                    .Append(Escape(row.DecodeError)).Append(',')
                     .Append(Escape(row.Error)).AppendLine();
             }
             return sb.ToString();
@@ -309,6 +374,14 @@ namespace UNAvatar.UnityExporter
             public double MaxMs;
             public int PngBytes;
             public int Gen0Collections;
+            public bool DecodeMatches;
+            public string DecodeError;
+            public string Error;
+        }
+
+        private sealed class DecodeVerification
+        {
+            public bool Matches;
             public string Error;
         }
     }

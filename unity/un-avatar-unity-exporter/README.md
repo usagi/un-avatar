@@ -32,7 +32,9 @@ window only when diagnostic output or release-gated benchmark tools are needed.
 PNG encoder benchmarking is also off by default. Enable `PNG Encoder Benchmark`
 inside Developer mode to activate `Tools > U.N. Avatar > Benchmark PNG Encoders`
 and the matching in-window run button. The benchmark writes
-`un-avatar-png-encoder-benchmark.csv` under the system temp directory.
+`un-avatar-png-encoder-benchmark.csv` under the system temp directory. Each row
+also decodes the generated PNG and checks that the resulting RGBA pixels match
+the benchmark input exactly.
 
 The exporter writes:
 
