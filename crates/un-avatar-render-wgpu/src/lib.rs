@@ -1718,6 +1718,12 @@ impl AvatarApp {
 
 	fn scene_mesh_load_opts(&self) -> SceneMeshLoadOpts {
 		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
+		self.apply_common_mesh_diagnostic_overrides(&mut mesh_diagnostics);
+		mesh_diagnostics.skin_tone_matching |= self.opts.skin_tone_matching;
+		mesh_diagnostics
+	}
+
+	fn apply_common_mesh_diagnostic_overrides(&self, mesh_diagnostics: &mut SceneMeshLoadOpts) {
 		mesh_diagnostics.force_simple_basecolor |= self.opts.simple_basecolor_only;
 		mesh_diagnostics.disable_mtoon_outlines |= self.opts.disable_mtoon_outlines;
 		mesh_diagnostics.debug_disable_rim_lighting |= self.opts.debug_disable_rim_lighting;
@@ -1727,8 +1733,6 @@ impl AvatarApp {
 		mesh_diagnostics.debug_disable_shade_color |= self.opts.debug_disable_shade_color;
 		mesh_diagnostics.debug_disable_normal_map |= self.opts.debug_disable_normal_map;
 		mesh_diagnostics.debug_base_texture_only |= self.opts.debug_base_texture_only;
-		mesh_diagnostics.skin_tone_matching |= self.opts.skin_tone_matching;
-		mesh_diagnostics
 	}
 
 	fn startup_texture_target_size(&self) -> (u32, u32) {
@@ -2032,15 +2036,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		win.set_visible(true);
 
 		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
-		mesh_diagnostics.force_simple_basecolor |= self.opts.simple_basecolor_only;
-		mesh_diagnostics.disable_mtoon_outlines |= self.opts.disable_mtoon_outlines;
-		mesh_diagnostics.debug_disable_rim_lighting |= self.opts.debug_disable_rim_lighting;
-		mesh_diagnostics.debug_force_shading_shift_zero |= self.opts.debug_force_shading_shift_zero;
-		mesh_diagnostics.debug_disable_matcap |= self.opts.debug_disable_matcap;
-		mesh_diagnostics.debug_disable_emissive |= self.opts.debug_disable_emissive;
-		mesh_diagnostics.debug_disable_shade_color |= self.opts.debug_disable_shade_color;
-		mesh_diagnostics.debug_disable_normal_map |= self.opts.debug_disable_normal_map;
-		mesh_diagnostics.debug_base_texture_only |= self.opts.debug_base_texture_only;
+		self.apply_common_mesh_diagnostic_overrides(&mut mesh_diagnostics);
 		match GpuState::new_shell(
 			win.clone(),
 			self.opts.transparent,
