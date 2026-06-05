@@ -164,14 +164,9 @@ pub fn morph_weights_for_primitive(
 	if n == 0 {
 		return Vec::new();
 	}
-	let mut w = if mesh_bufs.default_morph_weights.len() == n {
-		mesh_bufs.default_morph_weights.clone()
-	} else {
-		let mut v = mesh_bufs.default_morph_weights.clone();
-		v.resize(n, 0.0);
-		v.truncate(n);
-		v
-	};
+	let mut w = Vec::with_capacity(n);
+	w.extend(mesh_bufs.default_morph_weights.iter().take(n).copied());
+	w.resize(n, 0.0);
 	let Some(cat) = catalog else { return w };
 	let Some(ew) = w_expr else { return w };
 	for preset in &cat.presets {
