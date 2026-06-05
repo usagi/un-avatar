@@ -123,7 +123,13 @@ fn humanoid_profile_keys_csv(profile: Option<&un_avatar_skeleton::HumanoidProfil
 	let Some(profile) = profile else {
 		return String::new();
 	};
-	let mut keys = String::new();
+	let capacity = profile
+		.bone_node_indices
+		.keys()
+		.map(String::len)
+		.sum::<usize>()
+		.saturating_add(profile.bone_node_indices.len().saturating_sub(1));
+	let mut keys = String::with_capacity(capacity);
 	for key in profile.bone_node_indices.keys() {
 		if !keys.is_empty() {
 			keys.push(',');
@@ -162,7 +168,7 @@ fn count_hand_finger_target_matches(
 	};
 	let mut targets = 0usize;
 	let mut matched = 0usize;
-	let mut key = String::new();
+	let mut key = String::with_capacity("rightintermediatedistal".len());
 	for finger in &hand.fingers {
 		let finger_key = match finger.finger {
 			un_motion_frame::Finger::Thumb => "thumb",
@@ -202,10 +208,13 @@ fn profile_has_key(profile: &un_avatar_skeleton::HumanoidProfile, key: &str) -> 
 }
 
 fn normalize_profile_match_key(name: &str) -> String {
-	name.chars()
-		.filter(|ch| ch.is_ascii_alphanumeric())
-		.map(|ch| ch.to_ascii_lowercase())
-		.collect()
+	let mut normalized = String::with_capacity(name.len());
+	normalized.extend(
+		name.chars()
+			.filter(|ch| ch.is_ascii_alphanumeric())
+			.map(|ch| ch.to_ascii_lowercase()),
+	);
+	normalized
 }
 
 /// GPU とシェーダに渡すグローバル（WGSL `Globals` と一致。末尾パディングで 256 バイトに揃える）。
