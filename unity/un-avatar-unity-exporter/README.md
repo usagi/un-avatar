@@ -36,6 +36,11 @@ and the matching in-window run button. The benchmark writes
 also decodes the generated PNG and checks that the resulting RGBA pixels match
 the benchmark input exactly.
 
+The encoder policy is documented in
+`docs/unity-exporter-png-encoding.md`. The native fpng path is only for generated
+RAW RGBA that must become PNG; source-backed PNG/JPEG assets are preserved and
+not re-encoded.
+
 The exporter writes:
 
 - `avatar.unavatar`

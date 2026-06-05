@@ -21,6 +21,7 @@ v1 公開時点で残す文書の索引。
 | [`v2-near-term-plan.md`](v2-near-term-plan.md) | AudioLink 初期対応後の短期作業順、リファクタリング、Wardrobe hot switch 方針 |
 | [`unavatar-format-v0.1.md`](unavatar-format-v0.1.md) | `.unavatar` GLB extension preview spec |
 | [`unity-exporter-v0.1.md`](unity-exporter-v0.1.md) | Unity Editor Exporter の境界、配置、MVP |
+| [`unity-exporter-png-encoding.md`](unity-exporter-png-encoding.md) | Unity Exporter の RAW RGBA PNG encoding 方針と fpng benchmark |
 | [`compute-fur-cards-design.md`](compute-fur-cards-design.md) | lilToon Fur の Geometry Shader 互換を Compute で実現する設計 |
 | [`liltoon-fur-technical-target.md`](liltoon-fur-technical-target.md) | lilToon Fur の本家挙動と UNAvatar 側の技術目標 |
 | [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) | Modular Avatar bake 相当 resolver の対応計画 |
