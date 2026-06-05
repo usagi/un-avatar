@@ -4,7 +4,7 @@ use glam::Mat4;
 use un_avatar_core::UnaSceneSnapshot;
 
 pub(crate) fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
-	let mut world = Vec::new();
+	let mut world = Vec::with_capacity(scene.nodes.len().max(1));
 	write_world_from_nodes(scene, &mut world);
 	world
 }

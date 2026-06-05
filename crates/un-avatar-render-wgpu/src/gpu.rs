@@ -1485,15 +1485,17 @@ impl GpuState {
 		self.bone_collider_vertex_capacity = 0;
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
-		self.bone_colliders = colliders.clone();
 		self.spring_sim = if enabled {
 			match (doc.scene.as_ref(), doc.spring_bones.as_ref()) {
-				(Some(scene), Some(settings)) => SpringBoneSimulator::new_with_config(scene, settings, colliders, spring_bone_physics),
+				(Some(scene), Some(settings)) => {
+					SpringBoneSimulator::new_with_config(scene, settings, colliders.clone(), spring_bone_physics)
+				}
 				_ => None,
 			}
 		} else {
 			None
 		};
+		self.bone_colliders = colliders;
 	}
 
 	fn reset_spring_bone_nodes_to_rest(&mut self) {
