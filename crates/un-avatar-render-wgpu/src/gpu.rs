@@ -111,9 +111,12 @@ fn expression_presets_match_catalog(current: &[String], catalog: Option<&UnaExpr
 }
 
 fn expression_preset_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
-	catalog
-		.map(|catalog| catalog.presets.iter().map(|preset| preset.name.clone()).collect())
-		.unwrap_or_default()
+	let Some(catalog) = catalog else {
+		return Vec::new();
+	};
+	let mut names = Vec::with_capacity(catalog.presets.len());
+	names.extend(catalog.presets.iter().map(|preset| preset.name.clone()));
+	names
 }
 
 fn humanoid_profile_keys_csv(profile: Option<&un_avatar_skeleton::HumanoidProfile>) -> String {

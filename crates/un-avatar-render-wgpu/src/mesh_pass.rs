@@ -1483,9 +1483,12 @@ fn skin_palette_capacity(scene: &UnaSceneSnapshot) -> usize {
 }
 
 fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
-	catalog
-		.map(|catalog| catalog.presets.iter().map(|preset| preset.name.clone()).collect())
-		.unwrap_or_default()
+	let Some(catalog) = catalog else {
+		return Vec::new();
+	};
+	let mut names = Vec::with_capacity(catalog.presets.len());
+	names.extend(catalog.presets.iter().map(|preset| preset.name.clone()));
+	names
 }
 
 fn fill_morph_weights_for_draw(
