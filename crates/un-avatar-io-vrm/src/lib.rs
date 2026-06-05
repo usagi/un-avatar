@@ -134,7 +134,7 @@ fn mtoon_materials_v0(vrm: &Value) -> Vec<UnaVrm0MtoonMaterialEntry> {
 	let Some(arr) = vrm.get("materialProperties").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	let mut out = Vec::new();
+	let mut out = Vec::with_capacity(arr.len());
 	for (i, item) in arr.iter().enumerate() {
 		// 旧 UniVRM: `material` 整数。省かれている書き出しは **materialProperties の並び = materials[] と同順** とみなす。
 		let mi = item.get("material").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(i);
@@ -152,10 +152,13 @@ fn mtoon_material_indices_v1(root: &Value) -> Vec<usize> {
 	let Some(mats) = root.get("materials").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	mats.iter()
-		.enumerate()
-		.filter_map(|(i, m)| m.get("extensions").and_then(|e| e.get("VRMC_materials_mtoon")).map(|_| i))
-		.collect()
+	let mut indices = Vec::with_capacity(mats.len());
+	indices.extend(
+		mats.iter()
+			.enumerate()
+			.filter_map(|(i, m)| m.get("extensions").and_then(|e| e.get("VRMC_materials_mtoon")).map(|_| i)),
+	);
+	indices
 }
 
 fn normalize_scene_basis_for_vrm(scene: &mut UnaSceneSnapshot, flavor: VrmFlavor) {
@@ -208,7 +211,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 	let Some(nodes) = root.get("nodes").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	let mut out = Vec::new();
+	let mut out = Vec::with_capacity(nodes.len());
 	for (target_node, node) in nodes.iter().enumerate() {
 		let Some(c) = node
 			.get("extensions")
@@ -1026,7 +1029,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 	let ext = root.get("extensions")?.as_object()?;
 	let sb = ext.get("VRMC_springBone")?;
 	let springs = sb.get("springs")?.as_array()?;
-	let mut out_groups = Vec::new();
+	let mut out_groups = Vec::with_capacity(springs.len());
 	for sp in springs {
 		let joints = sp.get("joints")?.as_array()?;
 		if joints.len() < 2 {
