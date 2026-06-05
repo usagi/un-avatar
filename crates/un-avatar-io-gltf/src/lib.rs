@@ -1058,7 +1058,8 @@ fn extract_glb_buffer_views(root: &Value, bin: &[u8]) -> Result<Vec<GltfBufferVi
 }
 
 fn rebuild_glb(root: &mut Value, views: &[GltfBufferViewBytes]) -> Result<Vec<u8>, ImportError> {
-	let mut bin = Vec::new();
+	let bin_capacity = views.iter().map(|view| view.bytes.len().saturating_add(3)).sum();
+	let mut bin = Vec::with_capacity(bin_capacity);
 	let mut buffer_views = Vec::with_capacity(views.len());
 	for view in views {
 		align_to_4(&mut bin, 0);
