@@ -1372,6 +1372,39 @@ impl GpuState {
 		self.motion_applied_frames.load(Ordering::Relaxed)
 	}
 
+	fn refresh_scene_draw_state(&mut self, mark_revisions_applied: bool) -> bool {
+		let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) else {
+			return false;
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return false;
+		};
+		let Some(sc) = &doc.scene else {
+			return false;
+		};
+		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
+		if mark_revisions_applied {
+			let document_revision = self.document_revision.load(Ordering::Acquire);
+			if document_revision != self.applied_document_revision
+				&& !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref())
+			{
+				self.expression_presets = doc
+					.expression_catalog
+					.as_ref()
+					.map(|c| c.presets.iter().map(|p| p.name.clone()).collect())
+					.unwrap_or_default();
+			}
+		}
+		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
+		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
+		sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
+		if mark_revisions_applied {
+			self.applied_document_revision = self.document_revision.load(Ordering::Acquire);
+			self.applied_expression_overrides_revision = self.expression_overrides_revision;
+		}
+		true
+	}
+
 	pub fn audio_link_texture_needed(&self) -> bool {
 		self.audio_link_texture_needed
 	}
@@ -1782,16 +1815,7 @@ impl GpuState {
 		let aa_sample_count = aa_sample_count(self.aa);
 
 		// シーンノードがある場合は現在の pose を再アップロードしておく（前フレーム未提出の可能性に備える）。
-		if let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) {
-			if let Ok(doc) = doc_arc.read() {
-				if let Some(sc) = &doc.scene {
-					crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
-					let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
-					let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
-					sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
-				}
-			}
-		}
+		self.refresh_scene_draw_state(false);
 		self.write_globals(w, h);
 
 		let target_tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -2948,28 +2972,7 @@ impl GpuState {
 			self.spring_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
 		let mut world_scratch_current = false;
 		if draw_scene && scene_pose_may_change {
-			if let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) {
-				if let Ok(doc) = doc_arc.read() {
-					if let Some(sc) = &doc.scene {
-						crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
-						world_scratch_current = true;
-						if document_revision != self.applied_document_revision {
-							if !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref()) {
-								self.expression_presets = doc
-									.expression_catalog
-									.as_ref()
-									.map(|c| c.presets.iter().map(|p| p.name.clone()).collect())
-									.unwrap_or_default();
-							}
-						}
-						let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
-						let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
-						sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
-						self.applied_document_revision = document_revision;
-						self.applied_expression_overrides_revision = self.expression_overrides_revision;
-					}
-				}
-			}
+			world_scratch_current = self.refresh_scene_draw_state(true);
 		}
 		if self.show_bone_colliders && draw_scene {
 			if world_scratch_current {
