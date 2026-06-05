@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -155,53 +154,8 @@ namespace UNAvatar.UnityExporter
 
         private static byte[] EncodeWithFpngNative(BenchmarkInput input)
         {
-            var handle = GCHandle.Alloc(input.Rgba, GCHandleType.Pinned);
-            try
-            {
-                IntPtr data;
-                int size;
-                var result = unavatar_fpng_encode_rgba32(
-                    handle.AddrOfPinnedObject(),
-                    input.Width,
-                    input.Height,
-                    out data,
-                    out size);
-                if (result != 0)
-                {
-                    throw new InvalidOperationException("fpng native encoder failed: " + result);
-                }
-                if (data == IntPtr.Zero || size <= 0)
-                {
-                    throw new InvalidOperationException("fpng native encoder returned no data.");
-                }
-
-                try
-                {
-                    var bytes = new byte[size];
-                    Marshal.Copy(data, bytes, 0, size);
-                    return bytes;
-                }
-                finally
-                {
-                    unavatar_fpng_free(data);
-                }
-            }
-            finally
-            {
-                handle.Free();
-            }
+            return RawRgbaPngEncoder.EncodeNativeFpngOnly(input.Rgba, input.Width, input.Height);
         }
-
-        [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int unavatar_fpng_encode_rgba32(
-            IntPtr rgba,
-            int width,
-            int height,
-            out IntPtr png,
-            out int pngSize);
-
-        [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void unavatar_fpng_free(IntPtr png);
 
         private static DecodeVerification VerifyDecodedRgba(BenchmarkInput input, byte[] png)
         {

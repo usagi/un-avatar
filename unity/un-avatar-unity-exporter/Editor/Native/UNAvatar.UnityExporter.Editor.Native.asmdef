@@ -1,14 +1,12 @@
 {
-  "name": "UNAvatar.UnityExporter.Editor",
+  "name": "UNAvatar.UnityExporter.Editor.Native",
   "rootNamespace": "UNAvatar.UnityExporter",
-  "references": [
-    "UNAvatar.UnityExporter.Editor.Native"
-  ],
+  "references": [],
   "includePlatforms": [
     "Editor"
   ],
   "excludePlatforms": [],
-  "allowUnsafeCode": false,
+  "allowUnsafeCode": true,
   "overrideReferences": false,
   "precompiledReferences": [],
   "autoReferenced": true,

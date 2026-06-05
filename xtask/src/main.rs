@@ -967,14 +967,14 @@ fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
 fn copy_file_to(src: &Path, dst: &Path) -> bool {
 	if let Some(parent) = dst.parent() {
 		if let Err(e) = fs::create_dir_all(parent) {
-			eprintln!("spout2: mkdir {}: {e}", parent.display());
+			eprintln!("copy: mkdir {}: {e}", parent.display());
 			return false;
 		}
 	}
 	match fs::copy(src, dst) {
 		Ok(_) => true,
 		Err(e) => {
-			eprintln!("spout2: copy {} -> {}: {e}", src.display(), dst.display());
+			eprintln!("copy: {} -> {}: {e}", src.display(), dst.display());
 			false
 		}
 	}
@@ -1014,10 +1014,146 @@ fn unity_exporter_source_dir(repo: &Path) -> PathBuf {
 	repo.join("unity").join(UNITY_EXPORTER_PACKAGE)
 }
 
+fn unity_fpng_source_dir(repo: &Path) -> PathBuf {
+	unity_exporter_source_dir(repo).join("Native").join("unavatar_fpng")
+}
+
+fn unity_fpng_build_dir(repo: &Path) -> PathBuf {
+	repo.join("target").join("unity-fpng").join("build")
+}
+
+fn unity_fpng_output_dir(repo: &Path) -> PathBuf {
+	repo.join("target").join("unity-fpng").join("plugin")
+}
+
+fn unity_fpng_library_file_name() -> &'static str {
+	if cfg!(windows) {
+		"unavatar_fpng.dll"
+	} else if cfg!(target_os = "macos") {
+		"libunavatar_fpng.dylib"
+	} else {
+		"libunavatar_fpng.so"
+	}
+}
+
+fn unity_fpng_meta_template(repo: &Path) -> PathBuf {
+	unity_fpng_source_dir(repo).join("unavatar_fpng.plugin.meta.template")
+}
+
+fn build_unity_fpng(repo: &Path) -> bool {
+	let source = unity_fpng_source_dir(repo);
+	let build = unity_fpng_build_dir(repo);
+	let output = unity_fpng_output_dir(repo);
+	if !source.join("CMakeLists.txt").is_file() {
+		eprintln!("unity-fpng: source missing CMakeLists.txt: {}", source.display());
+		return false;
+	}
+	if let Err(e) = fs::create_dir_all(&build) {
+		eprintln!("unity-fpng: mkdir {}: {e}", build.display());
+		return false;
+	}
+	if let Err(e) = fs::create_dir_all(&output) {
+		eprintln!("unity-fpng: mkdir {}: {e}", output.display());
+		return false;
+	}
+	println!("unity-fpng: cmake configure -> {}", build.display());
+	let output_arg = format!("-DUNAVATAR_FPNG_OUTPUT_DIR={}", output.display());
+	let mut configure_args = vec!["-S", path_str(&source), "-B", path_str(&build)];
+	let generator = env::var("UN_AVATAR_CMAKE_GENERATOR").ok().or_else(|| {
+		if cfg!(windows) {
+			Some("Visual Studio 17 2022".to_string())
+		} else {
+			None
+		}
+	});
+	if let Some(generator) = generator.as_deref() {
+		configure_args.extend(["-G", generator]);
+	}
+	let arch = env::var("UN_AVATAR_CMAKE_ARCH")
+		.ok()
+		.or_else(|| if cfg!(windows) { Some("x64".to_string()) } else { None });
+	if let Some(arch) = arch.as_deref() {
+		configure_args.extend(["-A", arch]);
+	}
+	configure_args.push(&output_arg);
+	let configured = run_tool(repo, "cmake", &configure_args).success();
+	if !configured {
+		return false;
+	}
+	println!("unity-fpng: cmake build Release");
+	run_tool(repo, "cmake", &["--build", path_str(&build), "--config", "Release"]).success()
+}
+
+fn copy_unity_fpng_to_package(repo: &Path, library: &Path, unity_package_dir: &Path) -> bool {
+	if !library.is_file() {
+		eprintln!("unity-fpng: native library not found: {}", library.display());
+		return false;
+	}
+	let file_name = unity_fpng_library_file_name();
+	let plugin_dir = unity_package_dir.join("Editor").join("Plugins").join("x86_64");
+	let plugin = plugin_dir.join(file_name);
+	let meta = plugin_dir.join(format!("{file_name}.meta"));
+	if !copy_file_to(library, &plugin) {
+		return false;
+	}
+	if let Some(parent) = meta.parent() {
+		if let Err(e) = fs::create_dir_all(parent) {
+			eprintln!("unity-fpng: mkdir {}: {e}", parent.display());
+			return false;
+		}
+	}
+	let meta_template = unity_fpng_meta_template(repo);
+	if !copy_file_to(&meta_template, &meta) {
+		return false;
+	}
+	println!("unity-fpng: staged {}", plugin.display());
+	true
+}
+
+fn stage_unity_fpng(repo: &Path, unity_package_dir: &Path) -> bool {
+	let library = unity_fpng_output_dir(repo).join(unity_fpng_library_file_name());
+	copy_unity_fpng_to_package(repo, &library, unity_package_dir)
+}
+
+fn stage_unity_fpng_for_development(repo: &Path, required: bool) -> bool {
+	let library = unity_fpng_output_dir(repo).join(unity_fpng_library_file_name());
+	let source_package = unity_exporter_source_dir(repo);
+	if copy_unity_fpng_to_package(repo, &library, &source_package) {
+		return true;
+	}
+	if required {
+		return false;
+	}
+	eprintln!(
+		"unity-fpng: development package copy failed; continuing because staged package output is still valid. Close Unity Editor and run `cargo xtask unity-fpng` to refresh the development copy."
+	);
+	true
+}
+
+fn run_unity_fpng(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	for arg in args {
+		match arg.as_str() {
+			"help" | "--help" | "-h" => {
+				print_unity_fpng_usage();
+				return true;
+			}
+			other => {
+				eprintln!("unity-fpng: 不明な option: {other}");
+				print_unity_fpng_usage();
+				return false;
+			}
+		}
+	}
+	build_unity_fpng(repo) && stage_unity_fpng_for_development(repo, true)
+}
+
 fn stage_unity_exporter_package(repo: &Path, dst: &Path) -> bool {
 	let source = unity_exporter_source_dir(repo);
 	if !source.is_dir() {
 		eprintln!("unity-exporter-package: source directory not found: {}", source.display());
+		return false;
+	}
+	if !build_unity_fpng(repo) {
 		return false;
 	}
 	if dst.exists() {
@@ -1026,7 +1162,10 @@ fn stage_unity_exporter_package(repo: &Path, dst: &Path) -> bool {
 			return false;
 		}
 	}
-	if !copy_dir_contents(&source, dst) {
+	if !copy_unity_exporter_source_package(&source, dst) {
+		return false;
+	}
+	if !stage_unity_fpng(repo, dst) || !stage_unity_fpng_for_development(repo, false) {
 		return false;
 	}
 	println!("unity-exporter-package: staged {}", dst.display());
@@ -1299,6 +1438,50 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> bool {
 		}
 	}
 	true
+}
+
+fn copy_unity_exporter_source_package(src: &Path, dst: &Path) -> bool {
+	fn should_skip_unity_exporter_file(path: &Path) -> bool {
+		path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+			name == "unavatar_fpng.dll"
+				|| name == "unavatar_fpng.dll.meta"
+				|| name == "libunavatar_fpng.so"
+				|| name == "libunavatar_fpng.so.meta"
+				|| name == "libunavatar_fpng.dylib"
+				|| name == "libunavatar_fpng.dylib.meta"
+		})
+	}
+
+	fn visit(src: &Path, dst: &Path) -> bool {
+		let entries = match fs::read_dir(src) {
+			Ok(entries) => entries,
+			Err(err) => {
+				eprintln!("unity-exporter-package: read {}: {err}", src.display());
+				return false;
+			}
+		};
+		if let Err(err) = fs::create_dir_all(dst) {
+			eprintln!("unity-exporter-package: mkdir {}: {err}", dst.display());
+			return false;
+		}
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if should_skip_unity_exporter_file(&path) {
+				continue;
+			}
+			let target = dst.join(entry.file_name());
+			if path.is_dir() {
+				if !visit(&path, &target) {
+					return false;
+				}
+			} else if path.is_file() && !copy_file_to(&path, &target) {
+				return false;
+			}
+		}
+		true
+	}
+
+	visit(src, dst)
 }
 
 fn zip_entry_name(staging_root: &Path, path: &Path) -> Option<String> {
@@ -1620,8 +1803,17 @@ fn print_unity_exporter_package_usage() {
 	eprintln!(
 		"cargo xtask unity-exporter-package [--output-dir <path>]\n\
 	\n\
-	unity/un-avatar-unity-exporter を UPM package layout としてコピーする。\n\
+	unity/un-avatar-unity-exporter を UPM package layout としてコピーし、native fpng plugin をビルドして同梱する。\n\
+	ビルド済み fpng plugin は開発用 local package にも配置するが、gitignore 対象とする。\n\
 	既定出力先は target/unity/un-avatar-unity-exporter。Unity Editor の compile は実行しない。"
+	);
+}
+
+fn print_unity_fpng_usage() {
+	eprintln!(
+		"cargo xtask unity-fpng\n\
+	\n\
+	Unity Exporter の native fpng plugin をビルドし、開発用 local package の Editor/Plugins/x86_64 に配置する。"
 	);
 }
 
@@ -1683,6 +1875,7 @@ commands:\n\
 	acceptance-preflight MVP acceptance の実機確認前に必要な高速preflightを実行\n\
 	acceptance-prepare   MVP acceptance の証跡テンプレートと実測用manifestを生成\n\
   spout2       Spout2 を取得・CMake Release ビルドし、配布物へ配置\n\
+  unity-fpng   Unity Exporter の native fpng plugin をビルドし、開発用 package へ配置\n\
   unity-exporter-package Unity Editor exporter の UPM package layout を作る\n\
   package      Releaseビルドし、target/package/un-avatar に最小配布レイアウトを作る\n\
 	release-package target/package/un-avatar を release-packages/un-avatar-<version>.zip に固める\n\
@@ -1710,6 +1903,7 @@ fn main() {
 		"acceptance-preflight" => run_acceptance_preflight(repo),
 		"acceptance-prepare" => run_acceptance_prepare(repo),
 		"spout2" => run_spout2(repo, args),
+		"unity-fpng" => run_unity_fpng(repo, args),
 		"unity-exporter-package" => run_unity_exporter_package(repo, args),
 		"package" => run_package(repo, args),
 		"release-package" | "make-release-package" => run_release_package(repo, args),

@@ -1,10 +1,12 @@
 using System;
 using System.Runtime.InteropServices;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine;
 
 namespace UNAvatar.UnityExporter
 {
-    internal static class RawRgbaPngEncoder
+    public static class RawRgbaPngEncoder
     {
         public static byte[] Encode(Texture2D texture)
         {
@@ -19,7 +21,7 @@ namespace UNAvatar.UnityExporter
 
             try
             {
-                return EncodeFpng(texture.GetRawTextureData<byte>().ToArray(), texture.width, texture.height);
+                return EncodeFpng(texture.GetRawTextureData<byte>(), texture.width, texture.height);
             }
             catch (DllNotFoundException)
             {
@@ -29,7 +31,7 @@ namespace UNAvatar.UnityExporter
             {
                 return texture.EncodeToPNG();
             }
-            catch (InvalidOperationException)
+            catch (FpngEncodeException)
             {
                 return texture.EncodeToPNG();
             }
@@ -39,7 +41,7 @@ namespace UNAvatar.UnityExporter
         {
             try
             {
-                return EncodeFpng(unityOrderRgba, width, height);
+                return EncodeNativeFpngOnly(unityOrderRgba, width, height);
             }
             catch (DllNotFoundException)
             {
@@ -49,10 +51,15 @@ namespace UNAvatar.UnityExporter
             {
                 return EncodeUnity(unityOrderRgba, width, height);
             }
-            catch (InvalidOperationException)
+            catch (FpngEncodeException)
             {
                 return EncodeUnity(unityOrderRgba, width, height);
             }
+        }
+
+        public static byte[] EncodeNativeFpngOnly(byte[] unityOrderRgba, int width, int height)
+        {
+            return EncodeFpng(unityOrderRgba, width, height);
         }
 
         private static byte[] EncodeUnity(byte[] unityOrderRgba, int width, int height)
@@ -78,12 +85,12 @@ namespace UNAvatar.UnityExporter
             }
             if (width <= 0 || height <= 0)
             {
-                throw new InvalidOperationException("Invalid RAW RGBA PNG encode dimensions.");
+                throw new ArgumentOutOfRangeException(nameof(width), "Invalid RAW RGBA PNG encode dimensions.");
             }
             var expectedLength = checked(width * height * 4);
             if (unityOrderRgba.Length != expectedLength)
             {
-                throw new InvalidOperationException("Invalid RAW RGBA PNG encode input.");
+                throw new ArgumentException("Invalid RAW RGBA PNG encode input.", nameof(unityOrderRgba));
             }
 
             var handle = GCHandle.Alloc(unityOrderRgba, GCHandleType.Pinned);
@@ -99,11 +106,11 @@ namespace UNAvatar.UnityExporter
                     out size);
                 if (result != 0)
                 {
-                    throw new InvalidOperationException("fpng native encoder failed: " + result);
+                    throw new FpngEncodeException("fpng native encoder failed: " + result);
                 }
                 if (data == IntPtr.Zero || size <= 0)
                 {
-                    throw new InvalidOperationException("fpng native encoder returned no data.");
+                    throw new FpngEncodeException("fpng native encoder returned no data.");
                 }
 
                 try
@@ -123,6 +130,47 @@ namespace UNAvatar.UnityExporter
             }
         }
 
+        private static unsafe byte[] EncodeFpng(NativeArray<byte> unityOrderRgba, int width, int height)
+        {
+            if (width <= 0 || height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width), "Invalid RAW RGBA PNG encode dimensions.");
+            }
+            var expectedLength = checked(width * height * 4);
+            if (!unityOrderRgba.IsCreated || unityOrderRgba.Length != expectedLength)
+            {
+                throw new ArgumentException("Invalid RAW RGBA PNG encode input.", nameof(unityOrderRgba));
+            }
+
+            IntPtr data;
+            int size;
+            var result = unavatar_fpng_encode_rgba32(
+                (IntPtr)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(unityOrderRgba),
+                width,
+                height,
+                out data,
+                out size);
+            if (result != 0)
+            {
+                throw new FpngEncodeException("fpng native encoder failed: " + result);
+            }
+            if (data == IntPtr.Zero || size <= 0)
+            {
+                throw new FpngEncodeException("fpng native encoder returned no data.");
+            }
+
+            try
+            {
+                var bytes = new byte[size];
+                Marshal.Copy(data, bytes, 0, size);
+                return bytes;
+            }
+            finally
+            {
+                unavatar_fpng_free(data);
+            }
+        }
+
         [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
         private static extern int unavatar_fpng_encode_rgba32(
             IntPtr rgba,
@@ -133,5 +181,13 @@ namespace UNAvatar.UnityExporter
 
         [DllImport("unavatar_fpng", CallingConvention = CallingConvention.Cdecl)]
         private static extern void unavatar_fpng_free(IntPtr png);
+
+        private sealed class FpngEncodeException : Exception
+        {
+            public FpngEncodeException(string message)
+                : base(message)
+            {
+            }
+        }
     }
 }
