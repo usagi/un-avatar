@@ -87,6 +87,10 @@ pub struct StdioJsonRpcExporter {
 }
 
 impl StdioJsonRpcExporter {
+	pub fn format_descriptor(&self) -> &FormatDescriptor {
+		&self.descriptor
+	}
+
 	/// manifest ファイルのパスから構築する。
 	pub fn from_manifest_file(manifest_path: &Path) -> Result<Self, StdioExporterError> {
 		let m = load_manifest(manifest_path)?;
@@ -171,7 +175,7 @@ pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 	let mut n = 0;
 	for p in crate::manifest::discover_manifests_in_dir(dir)? {
 		if let Ok(exp) = StdioJsonRpcExporter::from_manifest_file(&p) {
-			let new_desc = exp.descriptor();
+			let new_desc = exp.format_descriptor();
 			if let Some(existing) = reg.exporter_by_id(&new_desc.id) {
 				eprintln!(
 					"un-avatar-plugin-host: warning: duplicate exporter FormatId `{}` \
@@ -179,7 +183,7 @@ pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 					 `exporter_by_id` / first-match tie-breaks use the earlier registration only.",
 					new_desc.id.0,
 					registration_origin_label(&existing.descriptor()),
-					registration_origin_label(&new_desc),
+					registration_origin_label(new_desc),
 					p.display()
 				);
 			}
