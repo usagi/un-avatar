@@ -799,7 +799,7 @@ fn expression_catalog_v0(vrm: &Value) -> UnaExpressionCatalog {
 	let Some(groups) = groups else {
 		return UnaExpressionCatalog::default();
 	};
-	let mut presets = Vec::new();
+	let mut presets = Vec::with_capacity(groups.len());
 	for g in groups {
 		// VRM0 BlendShapeGroup の名前選択:
 		// - PerfectSync 対応モデルでは ARKit 52 個分の BlendShape が `presetName = "unknown"`、
@@ -819,7 +819,7 @@ fn expression_catalog_v0(vrm: &Value) -> UnaExpressionCatalog {
 		let Some(vals) = vrm0_blend_shape_binds(g) else {
 			continue;
 		};
-		let mut binds = Vec::new();
+		let mut binds = Vec::with_capacity(vals.len());
 		for v in vals {
 			let mesh = v.get("mesh").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
 			let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
@@ -842,7 +842,12 @@ fn expression_catalog_v1(vrm: &Value, node_mesh: &[Option<usize>]) -> UnaExpress
 	let Some(expr_root) = vrm.get("expressions") else {
 		return UnaExpressionCatalog::default();
 	};
-	let mut presets = Vec::new();
+	let preset_count = ["preset", "custom"]
+		.iter()
+		.filter_map(|cat_key| expr_root.get(cat_key).and_then(|x| x.as_object()))
+		.map(|cat| cat.len())
+		.sum();
+	let mut presets = Vec::with_capacity(preset_count);
 	for cat_key in ["preset", "custom"] {
 		let Some(cat) = expr_root.get(cat_key).and_then(|x| x.as_object()) else {
 			continue;
@@ -851,7 +856,7 @@ fn expression_catalog_v1(vrm: &Value, node_mesh: &[Option<usize>]) -> UnaExpress
 			let Some(binds_arr) = expr_val.get("morphTargetBinds").and_then(|x| x.as_array()) else {
 				continue;
 			};
-			let mut binds = Vec::new();
+			let mut binds = Vec::with_capacity(binds_arr.len());
 			for b in binds_arr {
 				let node_idx = b
 					.get("node")
@@ -961,7 +966,7 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 	let groups = sa.get("boneGroups")?.as_array()?;
 	let empty: Vec<Value> = Vec::new();
 	let nodes = root.get("nodes").and_then(|x| x.as_array()).unwrap_or(&empty);
-	let mut out_groups = Vec::new();
+	let mut out_groups = Vec::with_capacity(groups.len());
 	for bg in groups {
 		let bone_roots: Vec<usize> = bg
 			.get("bones")
@@ -2131,6 +2136,9 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
 			colors_0: None,
 			joints: None,
 			weights: None,
@@ -2188,6 +2196,9 @@ mod tests {
 			normals: None,
 			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
 			colors_0: None,
 			joints: None,
 			weights: None,
