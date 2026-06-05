@@ -542,16 +542,18 @@ namespace UNAvatar.UnityExporter
 
         private Dictionary<string, object> BuildWardrobePreviewDiagnostics(List<WardrobeSetDraft> exportWardrobeSets)
         {
-            var sets = new List<WardrobeSetDraft>
+            var nonBaseSets = exportWardrobeSets ?? WardrobeSetsForExport();
+            var sets = new List<WardrobeSetDraft>(1 + (nonBaseSets != null ? nonBaseSets.Count : 0));
+            sets.Add(new WardrobeSetDraft
             {
-                new WardrobeSetDraft
-                {
-                    id = "base",
-                    displayName = "Base",
-                    previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()
-                }
-            };
-            sets.AddRange(exportWardrobeSets ?? WardrobeSetsForExport());
+                id = "base",
+                displayName = "Base",
+                previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()
+            });
+            if (nonBaseSets != null)
+            {
+                sets.AddRange(nonBaseSets);
+            }
 
             return new Dictionary<string, object>
             {

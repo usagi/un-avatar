@@ -42,7 +42,7 @@ namespace UNAvatar.UnityExporter
             private readonly GameObject root;
             private readonly BinaryBuffer buffer = new BinaryBuffer();
             private readonly HashSet<string> morphTargetNames;
-            private readonly Dictionary<Transform, int> nodeIndices = new Dictionary<Transform, int>();
+            private readonly Dictionary<Transform, int> nodeIndices;
             private readonly Dictionary<Material, int> materialIndices = new Dictionary<Material, int>();
             private readonly Dictionary<Texture, int> textureIndices = new Dictionary<Texture, int>();
             private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
@@ -51,7 +51,7 @@ namespace UNAvatar.UnityExporter
             private readonly Dictionary<MaterialPropertyKey, bool> materialPropertyCache = new Dictionary<MaterialPropertyKey, bool>();
             private readonly Dictionary<string, int> samplerIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             private int defaultMaterialIndex = -1;
-            private readonly List<object> nodes = new List<object>();
+            private readonly List<object> nodes;
             private readonly List<object> meshes = new List<object>();
             private readonly List<object> skins = new List<object>();
             private readonly List<object> accessors = new List<object>();
@@ -101,6 +101,23 @@ namespace UNAvatar.UnityExporter
             {
                 this.root = root;
                 this.morphTargetNames = morphTargetNames ?? new HashSet<string>(StringComparer.Ordinal);
+                var transformCount = CountTransforms(root != null ? root.transform : null);
+                nodeIndices = new Dictionary<Transform, int>(transformCount);
+                nodes = new List<object>(transformCount);
+            }
+
+            private static int CountTransforms(Transform transform)
+            {
+                if (transform == null)
+                {
+                    return 0;
+                }
+                var count = 1;
+                for (var i = 0; i < transform.childCount; i++)
+                {
+                    count += CountTransforms(transform.GetChild(i));
+                }
+                return count;
             }
 
             public void Export(string path)
@@ -183,7 +200,7 @@ namespace UNAvatar.UnityExporter
                 };
                 nodes.Add(node);
 
-                var children = new List<object>();
+                var children = new List<object>(transform.childCount);
                 for (var i = 0; i < transform.childCount; i++)
                 {
                     var child = transform.GetChild(i);
@@ -198,7 +215,8 @@ namespace UNAvatar.UnityExporter
 
             private void AttachRenderers(Transform transform)
             {
-                foreach (var meshRenderer in transform.GetComponents<MeshRenderer>())
+                var meshRenderer = transform.GetComponent<MeshRenderer>();
+                if (meshRenderer != null)
                 {
                     var filter = transform.GetComponent<MeshFilter>();
                     if (filter != null && filter.sharedMesh != null)
@@ -209,19 +227,19 @@ namespace UNAvatar.UnityExporter
                     }
                 }
 
-                foreach (var skinned in transform.GetComponents<SkinnedMeshRenderer>())
+                var skinned = transform.GetComponent<SkinnedMeshRenderer>();
+                if (skinned != null)
                 {
-                    if (skinned.sharedMesh == null)
+                    if (skinned.sharedMesh != null)
                     {
-                        continue;
-                    }
-                    var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
-                    var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned);
-                    if (mesh >= 0) node["mesh"] = mesh;
-                    var skin = ExportSkin(skinned);
-                    if (skin >= 0)
-                    {
-                        node["skin"] = skin;
+                        var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
+                        var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned);
+                        if (mesh >= 0) node["mesh"] = mesh;
+                        var skin = ExportSkin(skinned);
+                        if (skin >= 0)
+                        {
+                            node["skin"] = skin;
+                        }
                     }
                 }
 
@@ -253,9 +271,9 @@ namespace UNAvatar.UnityExporter
                 var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddJointsAccessor(boneWeights) : -1;
                 var weightsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddWeightsAccessor(boneWeights) : -1;
                 var morphTargets = BuildMorphTargets(mesh, vertices.Length);
-                var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>();
+                var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>(0);
 
-                var primitives = new List<object>();
+                var primitives = new List<object>(mesh.subMeshCount);
                 for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
                 {
                     var indices = mesh.GetIndices(submesh);
@@ -274,7 +292,7 @@ namespace UNAvatar.UnityExporter
                         attributes["JOINTS_0"] = jointsAccessor;
                         attributes["WEIGHTS_0"] = weightsAccessor;
                     }
-                    var targets = new List<object>();
+                    var targets = new List<object>(morphTargets.Count);
                     foreach (var target in morphTargets)
                     {
                         targets.Add(target.ToJson());

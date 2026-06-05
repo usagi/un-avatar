@@ -15,7 +15,8 @@ namespace UNAvatar.UnityExporter
     {
         private List<WardrobePreviewImageDraft> PreviewImagesForExport(List<WardrobeSetDraft> exportWardrobeSets = null)
         {
-            var previews = new List<WardrobePreviewImageDraft>();
+            var sets = exportWardrobeSets ?? WardrobeSetsForExport();
+            var previews = new List<WardrobePreviewImageDraft>(CountPreviewImages(basePreviewImages, sets));
             if (basePreviewImages != null)
             {
                 foreach (var image in basePreviewImages)
@@ -26,7 +27,6 @@ namespace UNAvatar.UnityExporter
                     }
                 }
             }
-            var sets = exportWardrobeSets ?? WardrobeSetsForExport();
             foreach (var set in sets)
             {
                 if (set.previewImages == null)
@@ -42,6 +42,23 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return previews;
+        }
+
+        private static int CountPreviewImages(List<WardrobePreviewImageDraft> baseImages, List<WardrobeSetDraft> sets)
+        {
+            var count = baseImages != null ? baseImages.Count : 0;
+            if (sets == null)
+            {
+                return count;
+            }
+            foreach (var set in sets)
+            {
+                if (set != null && set.previewImages != null)
+                {
+                    count += set.previewImages.Count;
+                }
+            }
+            return count;
         }
 
         private void RegenerateWardrobePreviewImagesForExport()
@@ -294,7 +311,7 @@ namespace UNAvatar.UnityExporter
                 id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(source.id, source.displayName),
                 displayName = source.displayName,
                 source = source.source,
-                assetGroups = new List<string>(source.assetGroups ?? new List<string>()),
+                assetGroups = source.assetGroups != null ? new List<string>(source.assetGroups) : new List<string>(),
                 operations = CloneWardrobeSetOperations(source.operations),
                 previewImages = ClonePreviewImages(source.previewImages),
                 capturedSnapshot = source.capturedSnapshot
