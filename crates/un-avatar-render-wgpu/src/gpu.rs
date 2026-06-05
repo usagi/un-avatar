@@ -570,6 +570,12 @@ struct MotionFrameBucket {
 
 impl MotionFrameBucket {
 	fn from_frame_space(frame: &un_motion_frame::UNMotionFrame) -> Self {
+		let body_bone_capacity = frame
+			.body
+			.as_ref()
+			.and_then(|body| body.humanoid.as_ref())
+			.map_or(0, |humanoid| humanoid.bones.len());
+		let expression_capacity = frame.face.as_ref().map_or(0, |face| face.expressions.len());
 		let left_finger_capacity = frame.left_hand.as_ref().map_or(0, |hand| hand.fingers.len());
 		let right_finger_capacity = frame.right_hand.as_ref().map_or(0, |hand| hand.fingers.len());
 		Self {
@@ -579,11 +585,11 @@ impl MotionFrameBucket {
 			body_tracking_state: un_motion_frame::TrackingState::Unknown,
 			body_confidence: 0.0,
 			body_root: None,
-			body_bones: Vec::new(),
+			body_bones: Vec::with_capacity(body_bone_capacity),
 			face_tracking_state: un_motion_frame::TrackingState::Unknown,
 			face_confidence: 0.0,
 			face_head: None,
-			expressions: Vec::new(),
+			expressions: Vec::with_capacity(expression_capacity),
 			eyes: None,
 			left_tracking_state: un_motion_frame::TrackingState::Unknown,
 			left_confidence: 0.0,
@@ -593,7 +599,7 @@ impl MotionFrameBucket {
 			right_confidence: 0.0,
 			right_wrist: None,
 			right_fingers: Vec::with_capacity(right_finger_capacity),
-			signals: Vec::new(),
+			signals: Vec::with_capacity(frame.signals.len()),
 		}
 	}
 

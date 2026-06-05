@@ -1423,6 +1423,7 @@ impl AvatarApp {
 			return;
 		};
 		if let Ok(mut status) = status.lock() {
+			let gpu = self.gpu.as_ref();
 			let runtime_status_frame_seq = self.runtime_status_frame_seq.get().wrapping_add(1);
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
 			status.uptime_secs = self.started_at.elapsed().as_secs();
@@ -1432,31 +1433,27 @@ impl AvatarApp {
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(30) {
 				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
 			}
-			let presets = self.gpu.as_ref().map(|g| g.expression_presets()).unwrap_or(&[]);
+			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
 			if status.expression_presets.len() != presets.len() || status.expression_presets.iter().zip(presets.iter()).any(|(a, b)| a != b)
 			{
 				status.expression_presets = presets.to_vec();
 			}
-			let clamp = self.gpu.as_ref().and_then(|g| g.eye_look_at_clamp_deg());
+			let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
 			status.look_at_enabled = clamp.is_some();
 			status.look_at_clamp_deg = clamp;
-			status.apply_vmc_root_translation = self.gpu.as_ref().is_some_and(|g| g.apply_vmc_root_translation());
-			status.unmotion_zenoh_enabled = self.gpu.as_ref().is_some_and(|g| g.unmotion_zenoh_live());
+			status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
+			status.unmotion_zenoh_enabled = gpu.is_some_and(|g| g.unmotion_zenoh_live());
 			if status.unmotion_zenoh_key != self.opts.unmotion_zenoh.base_key_expr {
 				status.unmotion_zenoh_key.clone_from(&self.opts.unmotion_zenoh.base_key_expr);
 			}
-			status.unmotion_zenoh_received_frames = self.gpu.as_ref().map_or(0, |g| g.unmotion_zenoh_received_frames());
-			status.motion_applied_frames = self.gpu.as_ref().map_or(0, |g| g.motion_applied_frames());
-			status.audio_link_texture_needed = self.gpu.as_ref().is_some_and(|g| g.audio_link_texture_needed());
-			status.primary_motion_source = self
-				.gpu
-				.as_ref()
-				.map(|g| g.primary_motion_source())
-				.unwrap_or(self.opts.primary_motion_source);
-			status.show_axes = self.gpu.as_ref().is_some_and(|g| g.show_axes());
-			status.show_bone_colliders = self.gpu.as_ref().is_some_and(|g| g.show_bone_colliders());
-			status.bone_collider_count = self.gpu.as_ref().map_or(0, |g| g.bone_collider_count());
-			let bone_collider_source = self.gpu.as_ref().map_or("off", |g| g.bone_collider_source());
+			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
+			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
+			status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
+			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
+			status.show_axes = gpu.is_some_and(|g| g.show_axes());
+			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
+			status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
+			let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
 			if status.bone_collider_source != bone_collider_source {
 				status.bone_collider_source = bone_collider_source.to_string();
 			}
@@ -1464,7 +1461,7 @@ impl AvatarApp {
 			status.window_focused = self.window_focused;
 			status.window_activation_seq = self.window_activation_seq;
 			status.minimized = self.window.as_ref().is_some_and(|w| w.is_minimized().unwrap_or(false));
-			status.camera = self.gpu.as_ref().map(|g| g.camera_state_snapshot());
+			status.camera = gpu.map(|g| g.camera_state_snapshot());
 			let c = self.opts.clear_color;
 			status.clear_color = [c.r, c.g, c.b, c.a];
 			status.transparent_window = self.opts.transparent;
