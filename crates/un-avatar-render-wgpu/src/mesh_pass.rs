@@ -20,7 +20,7 @@ use crate::skin_tone::{
 };
 use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compression_preference_for_role, estimated_processed_mip_count, load_or_build_processed_texture,
-	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
+	mip_level_count, read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
 	texture_upload_payload, GpuTextureCompressionContext, TextureCacheEvent, TextureRole, TextureUploadKind,
 };
 use crate::{
@@ -2023,7 +2023,7 @@ fn cube_upload_from_image(image: &UnaImageRgba, source: Option<&UnaImageSourceMe
 }
 
 fn build_cube_mips_rgba16f(face_size: u32, base_rgba: Vec<[f32; 4]>) -> Vec<CubeMipUpload> {
-	let mut mips = Vec::new();
+	let mut mips = Vec::with_capacity(mip_level_count(face_size, face_size) as usize);
 	let mut current_size = face_size.max(1);
 	let mut current = base_rgba;
 	loop {
