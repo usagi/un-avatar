@@ -1,7 +1,6 @@
 //! §9.4 manifest ＋ stdio JSON-RPC 子プロセスで [`AvatarExporter`] を満たすアダプタ（`IoRegistry` 接続用）。
 
 use std::{
-	collections::VecDeque,
 	fmt, io,
 	path::{Path, PathBuf},
 	process::Command,
@@ -14,8 +13,8 @@ use un_avatar_io::{
 
 use crate::manifest::{load_manifest, PluginManifest};
 use crate::stdio_importer::{
-	bundle_dir_from_manifest, check_protocol, enqueue_plugin_search_children, plugin_child_uses_bundle_cwd_from_env,
-	plugin_discovery_max_depth_from_env, registration_origin_label, resolve_plugin_executable,
+	bundle_dir_from_manifest, check_protocol, plugin_child_uses_bundle_cwd_from_env, register_stdio_plugins_from_root,
+	registration_origin_label, resolve_plugin_executable,
 };
 use crate::stdio_rpc::{rpc_handshake_timeout_from_env, rpc_import_timeout_from_env, HandshakeError, PluginChild};
 
@@ -196,28 +195,7 @@ pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 
 /// [`crate::stdio_importer::register_stdio_importers_from_plugin_root`] と同じ探索規則で stdio exporter を登録する。
 pub fn register_stdio_exporters_from_plugin_root(reg: &mut un_avatar_io::IoRegistry, root: &Path) -> io::Result<usize> {
-	let mut n = register_stdio_exporters_from_manifest_dir(reg, root)?;
-	if n > 0 {
-		return Ok(n);
-	}
-	if !root.is_dir() {
-		return Ok(0);
-	}
-	let max_depth = plugin_discovery_max_depth_from_env();
-	let mut q = VecDeque::new();
-	enqueue_plugin_search_children(&mut q, root, 1)?;
-	while let Some((dir, depth)) = q.pop_front() {
-		if depth > max_depth {
-			continue;
-		}
-		let added = register_stdio_exporters_from_manifest_dir(reg, &dir)?;
-		n += added;
-		if added > 0 {
-			continue;
-		}
-		enqueue_plugin_search_children(&mut q, &dir, depth + 1)?;
-	}
-	Ok(n)
+	register_stdio_plugins_from_root(root, |dir| register_stdio_exporters_from_manifest_dir(reg, dir))
 }
 
 #[cfg(test)]
