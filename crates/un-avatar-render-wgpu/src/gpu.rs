@@ -111,6 +111,12 @@ fn expression_presets_match_catalog(current: &[String], catalog: Option<&UnaExpr
 			.all(|(current, preset)| current == &preset.name)
 }
 
+fn expression_preset_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
+	catalog
+		.map(|catalog| catalog.presets.iter().map(|preset| preset.name.clone()).collect())
+		.unwrap_or_default()
+}
+
 fn active_expression_weights_for_doc(disable_expression_morphs: bool, doc: &UnaDocument) -> Option<&un_avatar_core::UnaExpressionWeights> {
 	if disable_expression_morphs {
 		None
@@ -1286,7 +1292,7 @@ impl GpuState {
 		if let Some(doc_arc) = &gpu.document {
 			if let Ok(doc) = doc_arc.read() {
 				if let Some(catalog) = doc.expression_catalog.as_ref() {
-					gpu.expression_presets = catalog.presets.iter().map(|p| p.name.clone()).collect();
+					gpu.expression_presets = expression_preset_names(Some(catalog));
 				}
 			}
 		}
@@ -1388,11 +1394,7 @@ impl GpuState {
 			if document_revision != self.applied_document_revision
 				&& !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref())
 			{
-				self.expression_presets = doc
-					.expression_catalog
-					.as_ref()
-					.map(|c| c.presets.iter().map(|p| p.name.clone()).collect())
-					.unwrap_or_default();
+				self.expression_presets = expression_preset_names(doc.expression_catalog.as_ref());
 			}
 		}
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
@@ -2385,11 +2387,7 @@ impl GpuSceneBuildContext {
 		let expression_presets = document_wrapped
 			.read()
 			.ok()
-			.and_then(|doc| {
-				doc.expression_catalog
-					.as_ref()
-					.map(|catalog| catalog.presets.iter().map(|p| p.name.clone()).collect())
-			})
+			.map(|doc| expression_preset_names(doc.expression_catalog.as_ref()))
 			.unwrap_or_default();
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
