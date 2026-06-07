@@ -15,8 +15,8 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
-	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaImagePixelFormat, UnaMaterialPbr, UnaSceneSnapshot,
-	UnaShadingModel,
+	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
+	UnaRuntimeSourceKind, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -71,6 +71,7 @@ struct DiagnoseReport {
 	import_provider_plugin_id: Option<String>,
 	timings: DiagnoseTimingSummary,
 	import_report: ImportReport,
+	runtime: DiagnoseRuntimeSummary,
 	scene: DiagnoseSceneSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	humanoid: Option<DiagnoseHumanoidSummary>,
@@ -92,6 +93,12 @@ struct DiagnoseTimingSummary {
 	wardrobe_apply_ms: u128,
 	wardrobe_probe_ms: u128,
 	report_build_ms: u128,
+}
+
+#[derive(Serialize)]
+struct DiagnoseRuntimeSummary {
+	source_kind: UnaRuntimeSourceKind,
+	humanoid_basis: UnaHumanoidRuntimeBasis,
 }
 
 #[derive(Serialize)]
@@ -2037,6 +2044,10 @@ fn build_diagnose_report(
 	});
 
 	let runtime_model = doc.runtime_model();
+	let runtime = DiagnoseRuntimeSummary {
+		source_kind: runtime_model.source_kind(),
+		humanoid_basis: runtime_model.humanoid_basis(),
+	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: runtime_dynamics.group_count(),
@@ -2058,6 +2069,7 @@ fn build_diagnose_report(
 		import_provider_plugin_id: provider_plugin_id,
 		timings,
 		import_report,
+		runtime,
 		scene,
 		humanoid,
 		expressions,
@@ -2231,6 +2243,10 @@ fn run_diagnose(
 	println!(
 		"timings: import={}ms wardrobe_apply={}ms wardrobe_probe={}ms report_build={}ms",
 		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
+	);
+	println!(
+		"runtime: source={:?} humanoid_basis={:?}",
+		report.runtime.source_kind, report.runtime.humanoid_basis
 	);
 	if let Some(vrm) = &report.vrm {
 		println!(
