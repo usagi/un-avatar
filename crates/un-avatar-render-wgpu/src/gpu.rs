@@ -1559,7 +1559,7 @@ impl GpuState {
 		self.motion_applied_frames.load(Ordering::Relaxed)
 	}
 
-	fn refresh_scene_draw_state(&mut self, mark_revisions_applied: bool) -> bool {
+	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
 		let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) else {
 			return false;
 		};
@@ -1570,12 +1570,7 @@ impl GpuState {
 			return false;
 		};
 		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
-		let document_revision = if mark_revisions_applied {
-			Some(self.document_revision.load(Ordering::Acquire))
-		} else {
-			None
-		};
-		let document_changed = document_revision.is_some_and(|revision| revision != self.applied_document_revision);
+		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
 		if document_changed && !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref()) {
 			self.expression_presets = expression_preset_names(doc.expression_catalog.as_ref());
 		}
@@ -1591,7 +1586,7 @@ impl GpuState {
 			refresh_scene_morph_defaults,
 		);
 		let runtime_requirements_after_update = refresh_scene_morph_defaults.then(|| sm.runtime_requirements());
-		if let Some(document_revision) = document_revision {
+		if let Some(document_revision) = document_revision_to_apply {
 			self.applied_document_revision = document_revision;
 			self.applied_expression_overrides_revision = self.expression_overrides_revision;
 		}
@@ -2027,7 +2022,7 @@ impl GpuState {
 		let aa_sample_count = aa_sample_count(self.aa);
 
 		// シーンノードがある場合は現在の pose を再アップロードしておく（前フレーム未提出の可能性に備える）。
-		self.refresh_scene_draw_state(false);
+		self.refresh_scene_draw_state(None);
 		self.write_globals(w, h);
 
 		let target_tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -3179,7 +3174,7 @@ impl GpuState {
 			self.spring_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
 		let mut world_scratch_current = false;
 		if draw_scene && scene_pose_may_change {
-			world_scratch_current = self.refresh_scene_draw_state(true);
+			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
 		}
 		if self.show_bone_colliders && draw_scene {
 			if world_scratch_current {
