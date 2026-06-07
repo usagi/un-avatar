@@ -482,6 +482,14 @@ struct RuntimeRetargetData {
 	expression_lookup: ExpressionNameLookup,
 }
 
+#[derive(Clone, Copy)]
+struct RetargetCompileInput<'a> {
+	profile: Option<&'a HumanoidProfile>,
+	scene: Option<&'a UnaSceneSnapshot>,
+	rest_nodes: Option<&'a [UnaSceneNode]>,
+	profile_lookup: &'a BTreeMap<String, usize>,
+}
+
 impl RetargetRestCache {
 	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
 		let (local_rotations, local_translations): (Vec<_>, Vec<_>) = nodes
@@ -557,17 +565,15 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
+		let compile_input = RetargetCompileInput {
+			profile: document.humanoid_profile.as_ref(),
+			scene: document.scene.as_ref(),
+			rest_nodes,
+			profile_lookup: &profile_lookup,
+		};
 		let root_base = precompute_root_base(document.scene.as_ref(), rest_nodes);
-		let body_bone_nodes = document
-			.humanoid_profile
-			.as_ref()
-			.map(|profile| precompute_body_bone_nodes(profile, &profile_lookup, document.scene.as_ref(), rest_nodes))
-			.unwrap_or_default();
-		let hand_nodes = document
-			.humanoid_profile
-			.as_ref()
-			.map(|profile| precompute_hand_nodes(profile, &profile_lookup, document.scene.as_ref(), rest_nodes))
-			.unwrap_or_default();
+		let body_bone_nodes = precompute_body_bone_nodes(compile_input);
+		let hand_nodes = precompute_hand_nodes(compile_input);
 		let expression_lookup = precompute_expression_lookup(document);
 		let runtime = RuntimeRetargetData {
 			profile_lookup,
@@ -632,43 +638,53 @@ fn node_base_transform_from_scene(
 }
 
 fn precompute_body_bone_nodes(
-	profile: &HumanoidProfile,
-	profile_lookup: &BTreeMap<String, usize>,
-	scene: Option<&UnaSceneSnapshot>,
-	rest_nodes: Option<&[UnaSceneNode]>,
+	input: RetargetCompileInput<'_>,
 ) -> [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT] {
 	debug_assert_eq!(HUMANOID_PROFILE_BONES.len(), HUMANOID_PROFILE_BONE_COUNT);
 	let mut nodes = [None; HUMANOID_PROFILE_BONE_COUNT];
-	let Some(scene) = scene else {
+	let (Some(profile), Some(scene)) = (input.profile, input.scene) else {
 		return nodes;
 	};
 	for &bone in HUMANOID_PROFILE_BONES {
 		let key = humanoid_bone_profile_key(bone);
-		nodes[humanoid_bone_index(bone)] = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key);
+		nodes[humanoid_bone_index(bone)] = NodeTransformBinding::from_profile_key(
+			profile,
+			input.profile_lookup,
+			scene,
+			input.rest_nodes,
+			key,
+		);
 	}
 	nodes
 }
 
-fn precompute_hand_nodes(
-	profile: &HumanoidProfile,
-	profile_lookup: &BTreeMap<String, usize>,
-	scene: Option<&UnaSceneSnapshot>,
-	rest_nodes: Option<&[UnaSceneNode]>,
-) -> [HandNodeBindings; 2] {
+fn precompute_hand_nodes(input: RetargetCompileInput<'_>) -> [HandNodeBindings; 2] {
 	let mut hands = [HandNodeBindings::default(); 2];
-	let Some(scene) = scene else {
+	let (Some(profile), Some(scene)) = (input.profile, input.scene) else {
 		return hands;
 	};
 	for (side_index, side_prefix) in ["left", "right"].into_iter().enumerate() {
 		if let Some(key) = hand_profile_key(side_prefix) {
-			hands[side_index].wrist = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key);
+			hands[side_index].wrist = NodeTransformBinding::from_profile_key(
+				profile,
+				input.profile_lookup,
+				scene,
+				input.rest_nodes,
+				key,
+			);
 		}
 	}
 	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
 		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
 			continue;
 		};
-		let Some(node) = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key) else {
+		let Some(node) = NodeTransformBinding::from_profile_key(
+			profile,
+			input.profile_lookup,
+			scene,
+			input.rest_nodes,
+			key,
+		) else {
 			continue;
 		};
 		let Some(side_index) = side_index_from_prefix(side_prefix) else {
@@ -681,7 +697,7 @@ fn precompute_hand_nodes(
 			continue;
 		};
 		let successor_node_index = finger_successor_profile_key(side_prefix, finger_key, segment)
-			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key));
+			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(input.profile_lookup), successor_key));
 		hands[side_index].fingers[finger_index][segment_index] = Some(FingerNodeBinding {
 			node,
 			successor_node_index,
