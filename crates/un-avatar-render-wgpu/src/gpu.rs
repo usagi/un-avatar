@@ -775,7 +775,7 @@ impl MotionFrameBucket {
 		let mut frame = un_motion_frame::UNMotionFrame::new(sequence);
 		self.header.sequence = sequence;
 		frame.header = self.header.clone();
-		frame.sources = std::mem::take(&mut self.sources);
+		frame.sources.extend(self.sources.drain(..));
 		frame.metadata = std::mem::take(&mut self.metadata);
 		if self.body_root.is_some() || !self.body_bones.is_empty() {
 			frame.body = Some(un_motion_frame::BodyMotion {
@@ -783,7 +783,7 @@ impl MotionFrameBucket {
 				confidence: self.body_confidence,
 				humanoid: Some(un_motion_frame::HumanoidPose {
 					root: self.body_root.take(),
-					bones: std::mem::take(&mut self.body_bones),
+					bones: self.body_bones.drain(..).collect(),
 				}),
 			});
 		}
@@ -792,7 +792,7 @@ impl MotionFrameBucket {
 				tracking_state: self.face_tracking_state,
 				confidence: self.face_confidence,
 				head: self.face_head.take(),
-				expressions: std::mem::take(&mut self.expressions),
+				expressions: self.expressions.drain(..).collect(),
 			});
 		}
 		frame.eyes = self.eyes.take();
@@ -801,7 +801,7 @@ impl MotionFrameBucket {
 				tracking_state: self.left_tracking_state,
 				confidence: self.left_confidence,
 				wrist: self.left_wrist.take(),
-				fingers: std::mem::take(&mut self.left_fingers),
+				fingers: self.left_fingers.drain(..).collect(),
 			});
 		}
 		if self.right_wrist.is_some() || !self.right_fingers.is_empty() {
@@ -809,10 +809,10 @@ impl MotionFrameBucket {
 				tracking_state: self.right_tracking_state,
 				confidence: self.right_confidence,
 				wrist: self.right_wrist.take(),
-				fingers: std::mem::take(&mut self.right_fingers),
+				fingers: self.right_fingers.drain(..).collect(),
 			});
 		}
-		frame.signals = std::mem::take(&mut self.signals);
+		frame.signals.extend(self.signals.drain(..));
 		if frame.body.is_none()
 			&& frame.face.is_none()
 			&& frame.eyes.is_none()
