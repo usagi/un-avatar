@@ -2634,18 +2634,24 @@ impl GpuState {
 			}
 			return Ok(());
 		};
+		let debug_vmc_log = debug_vmc && self.debug_log.is_enabled();
 		let (retarget_runtime, humanoid_keys_csv) = {
 			let rest_nodes = self.rest_nodes.as_ref().map(Arc::clone);
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			(
 				rest_nodes.and_then(|rest_nodes| MotionRetargetRuntime::for_document(&d, rest_nodes)),
-				humanoid_profile_keys_csv(d.humanoid_profile.as_ref()),
+				if debug_vmc_log && vmc_address.is_some() {
+					Some(humanoid_profile_keys_csv(d.humanoid_profile.as_ref()))
+				} else {
+					None
+				},
 			)
 		};
 		let humanoid_ok = retarget_runtime.is_some();
 		self.motion_retarget_runtime = retarget_runtime;
 		if let Some(addr) = vmc_address {
 			if humanoid_ok {
+				let humanoid_keys_csv = humanoid_keys_csv.unwrap_or_default();
 				let log = self.debug_log.clone();
 				let motion_buffer_for_vmc = Arc::clone(&self.motion_buffer);
 				let receiver_generation = Arc::clone(&self.motion_receiver_generation);
@@ -2656,7 +2662,7 @@ impl GpuState {
 							Ok(m) => m,
 							Err(e) => {
 								eprintln!("[un-avatar-vmc] bind FAILED addr={addr}: {e}");
-								if debug_vmc && log.is_enabled() {
+								if debug_vmc_log {
 									log.line("vmc", format!("bind_failed {addr}: {e}"));
 								}
 								return;
@@ -2666,7 +2672,7 @@ impl GpuState {
 							Ok(local) => eprintln!("[un-avatar-vmc] bind OK requested={addr} local={local}"),
 							Err(e) => eprintln!("[un-avatar-vmc] bind OK requested={addr} but local_addr() failed: {e}"),
 						}
-						if debug_vmc && log.is_enabled() {
+						if debug_vmc_log {
 							log.line("vmc", format!("thread_start bind={addr} humanoid_profile_keys={humanoid_keys_csv}"));
 						}
 						let mut seq = 0u64;
@@ -2698,7 +2704,7 @@ impl GpuState {
 									) {
 										continue;
 									}
-									if debug_vmc && log.is_enabled() {
+									if debug_vmc_log {
 										log.line("vmc", format!("recv_io_error: {e}"));
 									}
 								}
@@ -2708,7 +2714,7 @@ impl GpuState {
 									err,
 									ref payload_head_hex,
 								}) => {
-									if debug_vmc && log.is_enabled() {
+									if debug_vmc_log {
 										log.line(
 											"vmc",
 											format!("recv_decode_error from={from} nbytes={nbytes} err={err} hex_head={payload_head_hex}"),
@@ -2717,7 +2723,7 @@ impl GpuState {
 								}
 							}
 						}
-						if debug_vmc && log.is_enabled() {
+						if debug_vmc_log {
 							log.line("vmc", "thread_stop generation_changed");
 						}
 					})
@@ -2725,7 +2731,8 @@ impl GpuState {
 				self.vmc_live = true;
 			} else {
 				eprintln!("un-avatar-renderer: --vmc-address は Humanoid とシーンがあるモデルでのみ有効です");
-				if debug_vmc && self.debug_log.is_enabled() {
+				if debug_vmc_log {
+					let humanoid_keys_csv = humanoid_keys_csv.unwrap_or_default();
 					self.debug_log.line(
 						"vmc",
 						format!(
