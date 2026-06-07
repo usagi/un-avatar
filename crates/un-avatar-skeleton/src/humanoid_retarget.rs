@@ -440,20 +440,22 @@ struct HandNodeBindings {
 
 #[derive(Debug, Default)]
 struct ExpressionNameLookup {
-	exact_ascii_casefold: BTreeMap<String, String>,
-	normalized: BTreeMap<String, String>,
+	preset_names: Vec<String>,
+	exact_ascii_casefold: BTreeMap<String, usize>,
+	normalized: BTreeMap<String, usize>,
 }
 
 impl ExpressionNameLookup {
 	fn is_empty(&self) -> bool {
-		self.exact_ascii_casefold.is_empty() && self.normalized.is_empty()
+		self.preset_names.is_empty()
 	}
 
-	fn preset_name_for(&self, name: &str) -> Option<&String> {
-		self.exact_ascii_casefold.get(&name.to_ascii_lowercase()).or_else(|| {
+	fn preset_name_for(&self, name: &str) -> Option<&str> {
+		let index = self.exact_ascii_casefold.get(&name.to_ascii_lowercase()).copied().or_else(|| {
 			let target = normalize_expression_match_key(name);
-			self.normalized.get(&target)
-		})
+			self.normalized.get(&target).copied()
+		})?;
+		self.preset_names.get(index).map(String::as_str)
 	}
 }
 
@@ -680,14 +682,16 @@ fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup 
 	};
 	let mut lookup = ExpressionNameLookup::default();
 	for preset in &catalog.presets {
+		let index = lookup.preset_names.len();
+		lookup.preset_names.push(preset.name.clone());
 		lookup
 			.exact_ascii_casefold
 			.entry(preset.name.to_ascii_lowercase())
-			.or_insert_with(|| preset.name.clone());
+			.or_insert(index);
 		lookup
 			.normalized
 			.entry(normalize_expression_match_key(&preset.name))
-			.or_insert_with(|| preset.name.clone());
+			.or_insert(index);
 	}
 	lookup
 }
@@ -1765,10 +1769,10 @@ pub fn apply_un_motion_frame_to_document_with_context(
 				// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
 				if let Some(preset_name) = context.runtime.expression_lookup.preset_name_for(&ex.name) {
 					let value = ex.value.clamp(0.0, 1.0);
-					if let Some(weight) = ew.preset_weights.get_mut(preset_name.as_str()) {
+					if let Some(weight) = ew.preset_weights.get_mut(preset_name) {
 						*weight = value;
 					} else {
-						ew.preset_weights.insert(preset_name.clone(), value);
+						ew.preset_weights.insert(preset_name.to_owned(), value);
 					}
 				}
 			}

@@ -143,6 +143,8 @@ only compatibility fallback paths resolve profile strings or base transforms at
 runtime.
 Expression preset name matching is also compiled into exact-casefold and
 normalized lookup tables, avoiding catalog scans for each PerfectSync sample.
+Those lookup tables store preset indices into a single preset-name vector rather
+than duplicating preset strings in both maps.
 Runtime expression application uses those compiled tables only; changing the
 catalog requires rebuilding the retarget context.
 Typed finger profile keys are static table lookups, not `format!` allocations,
