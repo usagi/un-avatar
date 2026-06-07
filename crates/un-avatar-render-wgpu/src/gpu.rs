@@ -2021,7 +2021,7 @@ impl GpuState {
 
 		// シーンノードがある場合は現在の pose を再アップロードしておく（前フレーム未提出の可能性に備える）。
 		self.refresh_scene_draw_state(None);
-		self.write_globals(w, h);
+		self.write_frame_globals(w, h, true);
 
 		let target_tex = self.device.create_texture(&wgpu::TextureDescriptor {
 			label: Some("screenshot-target"),
@@ -2892,6 +2892,10 @@ impl GpuState {
 	}
 
 	fn write_globals(&mut self, width: u32, height: u32) {
+		self.write_frame_globals(width, height, false);
+	}
+
+	fn write_frame_globals(&mut self, width: u32, height: u32, advance_audio_link: bool) {
 		let aspect = width.max(1) as f32 / height.max(1) as f32;
 		let diagonal_rad = self.camera.diagonal_fov_deg.to_radians();
 		let fovy = vertical_fov_from_diagonal(diagonal_rad, aspect);
@@ -2916,7 +2920,7 @@ impl GpuState {
 			self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&globals));
 			self.globals_uploaded = Some(globals);
 		}
-		let audio_link_frame = if self.audio_link_texture_needed {
+		let audio_link_frame = if advance_audio_link && self.audio_link_texture_needed {
 			self.audio_link_runtime
 				.as_mut()
 				.and_then(crate::audio_link::AudioLinkInputRuntime::next_texture_frame)
@@ -3088,7 +3092,7 @@ impl GpuState {
 			}
 		}
 		let (gw, gh) = self.render_pixel_dims();
-		self.write_globals(gw, gh);
+		self.write_frame_globals(gw, gh, true);
 
 		let frame = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
