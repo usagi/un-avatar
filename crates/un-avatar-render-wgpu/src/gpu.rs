@@ -320,6 +320,7 @@ pub(crate) struct DocumentAttachOptions {
 
 pub(crate) struct PreparedDocumentScene {
 	document: Arc<RwLock<UnaDocument>>,
+	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	scene_meshes: Option<SceneMeshes>,
 	texture_summary: Option<TextureUploadSummary>,
 	spring_sim: Option<SpringBoneSimulator>,
@@ -331,17 +332,17 @@ pub(crate) struct PreparedDocumentScene {
 }
 
 struct MotionRetargetRuntime {
-	rest_nodes: Vec<UnaSceneNode>,
+	rest_nodes: Arc<Vec<UnaSceneNode>>,
 	context: un_avatar_skeleton::HumanoidRetargetContext,
 }
 
 impl MotionRetargetRuntime {
-	fn for_document(document: &UnaDocument) -> Option<Self> {
+	fn for_document(document: &UnaDocument, rest_nodes: Option<Arc<Vec<UnaSceneNode>>>) -> Option<Self> {
 		if document.humanoid_profile.is_none() {
 			return None;
 		}
 		let scene = document.scene.as_ref()?;
-		let rest_nodes = scene.nodes.clone();
+		let rest_nodes = rest_nodes.unwrap_or_else(|| Arc::new(scene.nodes.clone()));
 		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
 		Some(Self { rest_nodes, context })
 	}
@@ -1011,7 +1012,7 @@ pub(crate) struct GpuState {
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
-	spring_rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
+	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
 	primary_motion_source: Arc<AtomicU8>,
 	/// UNMotion/Zenoh 受信が live で動いているか (subscriber スレッド起動済み)。
@@ -1390,7 +1391,7 @@ impl GpuState {
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
 			motion_retarget_runtime: None,
-			spring_rest_nodes: None,
+			rest_nodes: None,
 			primary_motion_source,
 			unmotion_zenoh_live,
 			unmotion_zenoh_received_frames,
@@ -1628,7 +1629,7 @@ impl GpuState {
 	}
 
 	fn reset_spring_bone_nodes_to_rest(&mut self) {
-		let (Some(doc_arc), Some(rest_nodes)) = (self.document.as_ref(), self.spring_rest_nodes.as_ref()) else {
+		let (Some(doc_arc), Some(rest_nodes)) = (self.document.as_ref(), self.rest_nodes.as_ref()) else {
 			return;
 		};
 		let Ok(mut doc) = doc_arc.write() else {
@@ -2414,12 +2415,8 @@ impl GpuState {
 		options: DocumentAttachOptions,
 	) -> Result<(), String> {
 		self.expression_presets = prepared.expression_presets;
+		self.rest_nodes = prepared.rest_nodes;
 		self.document = Some(prepared.document);
-		self.spring_rest_nodes = self.document.as_ref().and_then(|doc| {
-			doc.read()
-				.ok()
-				.and_then(|doc| doc.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone())))
-		});
 		self.document_revision.fetch_add(1, Ordering::Release);
 		self.applied_document_revision = 0;
 		self.scene_meshes = prepared.scene_meshes;
@@ -2455,6 +2452,7 @@ impl GpuSceneBuildContext {
 		if document.expression_catalog.as_ref().is_some_and(|c| !c.presets.is_empty()) {
 			document.expression_weights.get_or_insert_with(Default::default);
 		}
+		let rest_nodes = document.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone()));
 		let document_wrapped = Arc::new(RwLock::new(document));
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
@@ -2535,6 +2533,7 @@ impl GpuSceneBuildContext {
 			.unwrap_or_default();
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
+			rest_nodes,
 			scene_meshes,
 			texture_summary,
 			spring_sim,
@@ -2583,7 +2582,7 @@ impl GpuState {
 		};
 		let retarget_runtime = {
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			MotionRetargetRuntime::for_document(&d)
+			MotionRetargetRuntime::for_document(&d, self.rest_nodes.as_ref().map(Arc::clone))
 		};
 		let humanoid_ok = retarget_runtime.is_some();
 		self.motion_retarget_runtime = retarget_runtime;
