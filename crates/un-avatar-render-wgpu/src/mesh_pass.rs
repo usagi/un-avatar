@@ -938,6 +938,14 @@ pub(crate) struct SceneMeshRuntimeRequirements {
 	pub(crate) audio_link_texture: bool,
 }
 
+fn scene_mesh_runtime_requirements_for_draws(draws: &[MeshDraw]) -> SceneMeshRuntimeRequirements {
+	SceneMeshRuntimeRequirements {
+		audio_link_texture: draws
+			.iter()
+			.any(|draw| draw.active && material_needs_audio_link_texture(&draw.material, draw.shading)),
+	}
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -1239,6 +1247,7 @@ pub(crate) struct SceneMeshes {
 	blended_batches: Vec<DrawBatch>,
 	active_skin_palette_scratch: Vec<bool>,
 	texture_summary: TextureUploadSummary,
+	runtime_requirements: SceneMeshRuntimeRequirements,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
 	has_morph_draws: bool,
@@ -7154,6 +7163,7 @@ impl SceneMeshes {
 			build_draw_order(&draws, &opts);
 		let skin_palette_count = skin_palettes.len();
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
+		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -7194,6 +7204,7 @@ impl SceneMeshes {
 			blended_batches,
 			active_skin_palette_scratch: vec![false; skin_palette_count],
 			texture_summary,
+			runtime_requirements,
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(catalog.map_or(0, |catalog| catalog.presets.len())),
 			has_morph_draws,
@@ -7794,6 +7805,9 @@ impl SceneMeshes {
 				changed += 1;
 			}
 		}
+		if changed > 0 {
+			self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
+		}
 		changed
 	}
 
@@ -7821,12 +7835,7 @@ impl SceneMeshes {
 	}
 
 	pub(crate) fn runtime_requirements(&self) -> SceneMeshRuntimeRequirements {
-		SceneMeshRuntimeRequirements {
-			audio_link_texture: self
-				.draws
-				.iter()
-				.any(|draw| draw.active && material_needs_audio_link_texture(&draw.material, draw.shading)),
-		}
+		self.runtime_requirements
 	}
 
 	pub fn set_screen_grab_view(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) {
