@@ -66,26 +66,26 @@ fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document:
 					.any(|sample| sample.bone == bone && sample.state != un_motion_frame::SampleState::Missing)
 			})
 	};
-	let left_arm = [
-		(body_has(un_motion_frame::HumanoidBone::LeftShoulder), "LS"),
-		(body_has(un_motion_frame::HumanoidBone::LeftUpperArm), "LU"),
-		(body_has(un_motion_frame::HumanoidBone::LeftLowerArm), "LL"),
-		(body_has(un_motion_frame::HumanoidBone::LeftHand), "LH"),
-	]
-	.into_iter()
-	.filter_map(|(present, label)| present.then_some(label))
-	.collect::<Vec<_>>()
-	.join(",");
-	let right_arm = [
-		(body_has(un_motion_frame::HumanoidBone::RightShoulder), "RS"),
-		(body_has(un_motion_frame::HumanoidBone::RightUpperArm), "RU"),
-		(body_has(un_motion_frame::HumanoidBone::RightLowerArm), "RL"),
-		(body_has(un_motion_frame::HumanoidBone::RightHand), "RH"),
-	]
-	.into_iter()
-	.filter_map(|(present, label)| present.then_some(label))
-	.collect::<Vec<_>>()
-	.join(",");
+	let mut left_arm = String::new();
+	append_present_labels(
+		&mut left_arm,
+		&[
+			(body_has(un_motion_frame::HumanoidBone::LeftShoulder), "LS"),
+			(body_has(un_motion_frame::HumanoidBone::LeftUpperArm), "LU"),
+			(body_has(un_motion_frame::HumanoidBone::LeftLowerArm), "LL"),
+			(body_has(un_motion_frame::HumanoidBone::LeftHand), "LH"),
+		],
+	);
+	let mut right_arm = String::new();
+	append_present_labels(
+		&mut right_arm,
+		&[
+			(body_has(un_motion_frame::HumanoidBone::RightShoulder), "RS"),
+			(body_has(un_motion_frame::HumanoidBone::RightUpperArm), "RU"),
+			(body_has(un_motion_frame::HumanoidBone::RightLowerArm), "RL"),
+			(body_has(un_motion_frame::HumanoidBone::RightHand), "RH"),
+		],
+	);
 	let left_fingers = frame.left_hand.as_ref().map(|h| h.fingers.len()).unwrap_or(0);
 	let right_fingers = frame.right_hand.as_ref().map(|h| h.fingers.len()).unwrap_or(0);
 	let left_joints = frame
@@ -134,6 +134,43 @@ fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document:
 		"space={:?} body_bones={body_bones} left_arm={left_arm} right_arm={right_arm} left_fingers={left_fingers} right_fingers={right_fingers} left_joints={left_joints} right_joints={right_joints} profile_finger_keys={matched_finger_keys} finger_targets={finger_targets} matched_finger_targets={matched_finger_targets}",
 		frame.header.coordinate_space
 	)
+}
+
+fn append_present_labels(out: &mut String, labels: &[(bool, &str)]) {
+	for &(present, label) in labels {
+		if !present {
+			continue;
+		}
+		if !out.is_empty() {
+			out.push(',');
+		}
+		out.push_str(label);
+	}
+}
+
+fn format_top_expression_weights(weights: &std::collections::BTreeMap<String, f32>, limit: usize) -> String {
+	let mut top: Vec<(&str, f32)> = Vec::with_capacity(limit.min(weights.len()));
+	for (key, &weight) in weights {
+		let abs_weight = weight.abs();
+		let insert_at = top
+			.iter()
+			.position(|&(_, existing)| abs_weight > existing.abs())
+			.unwrap_or(top.len());
+		if insert_at < limit {
+			top.insert(insert_at, (key.as_str(), weight));
+			top.truncate(limit);
+		}
+	}
+	let mut out = String::new();
+	for (key, weight) in top {
+		if !out.is_empty() {
+			out.push_str(", ");
+		}
+		out.push_str(key);
+		out.push('=');
+		let _ = write!(out, "{weight:.3}");
+	}
+	out
 }
 
 fn expression_presets_match_catalog(current: &[String], catalog: Option<&UnaExpressionCatalog>) -> bool {
@@ -948,6 +985,19 @@ mod motion_buffer_tests {
 		assert!(frames.is_empty());
 		assert_eq!(accumulator.sequence, sequence_after_frame);
 		assert_eq!(accumulator.buckets.len(), 1);
+	}
+
+	#[test]
+	fn debug_expression_weight_summary_keeps_largest_absolute_weights() {
+		let weights = [
+			("Blink".to_string(), 0.25),
+			("Joy".to_string(), -0.9),
+			("Angry".to_string(), 0.6),
+		]
+		.into_iter()
+		.collect();
+
+		assert_eq!(format_top_expression_weights(&weights, 2), "Joy=-0.900, Angry=0.600");
 	}
 }
 
@@ -3056,17 +3106,7 @@ impl GpuState {
 			if let Ok(g) = doc_arc.read() {
 				let n_presets = g.expression_catalog.as_ref().map(|c| c.presets.len()).unwrap_or(0);
 				if let Some(ew) = g.expression_weights.as_ref() {
-					let mut pairs: Vec<(&str, f32)> = ew.preset_weights.iter().map(|(k, w)| (k.as_str(), *w)).collect();
-					pairs.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap_or(std::cmp::Ordering::Equal));
-					let mut top = String::new();
-					for (key, weight) in pairs.iter().take(16) {
-						if !top.is_empty() {
-							top.push_str(", ");
-						}
-						top.push_str(key);
-						top.push('=');
-						let _ = write!(top, "{weight:.3}");
-					}
+					let top = format_top_expression_weights(&ew.preset_weights, 16);
 					self.debug_log.line(
 						"morph",
 						format!(
