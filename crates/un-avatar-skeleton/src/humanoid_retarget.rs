@@ -916,13 +916,10 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	apply_root_translation: bool,
 	rest_cache: Option<&RetargetRestCache>,
 ) {
-	let local_cache;
-	let rest_cache = if let Some(cache) = rest_cache {
-		cache
-	} else {
-		local_cache = RetargetRestCache::new(rest_nodes.unwrap_or(nodes), roots);
-		&local_cache
-	};
+	let local_cache =
+		(coordinate_space == CoordinateSpace::UNMotion && target_basis == TargetHumanoidBasis::UnavatarUnity)
+			.then(|| RetargetRestCache::new(rest_nodes.unwrap_or(nodes), roots));
+	let rest_cache = rest_cache.or(local_cache.as_ref());
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base_node) = rest_nodes.and_then(|rest| rest.get(ri)) {
@@ -977,7 +974,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			nodes,
 			rest_nodes,
 			roots,
-			Some(rest_cache),
+			rest_cache,
 			ni,
 			target_basis,
 			coordinate_space,
@@ -1016,7 +1013,9 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 	let Some(ref profile) = document.humanoid_profile else {
 		return;
 	};
-	let rest_cache = RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots);
+	let rest_cache = (frame.header.coordinate_space == CoordinateSpace::UNMotion && target_basis == TargetHumanoidBasis::UnavatarUnity)
+		.then(|| RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots));
+	let rest_cache = rest_cache.as_ref();
 	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
 	if let Some(ref body) = frame.body {
 		if let Some(ref pose) = body.humanoid {
@@ -1031,7 +1030,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 				target_basis,
 				if opts.apply_eye_bones { opts.eye_look_at_clamp_deg } else { None },
 				opts.apply_root_translation,
-				Some(&rest_cache),
+				rest_cache,
 			);
 		}
 	}
@@ -1043,7 +1042,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 			hand,
 			"left",
 			rest_nodes,
-			Some(&rest_cache),
+			rest_cache,
 			frame.header.coordinate_space,
 			target_basis,
 			!pose_has_valid_bone(body_pose, HumanoidBone::LeftHand),
@@ -1057,7 +1056,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 			hand,
 			"right",
 			rest_nodes,
-			Some(&rest_cache),
+			rest_cache,
 			frame.header.coordinate_space,
 			target_basis,
 			!pose_has_valid_bone(body_pose, HumanoidBone::RightHand),
@@ -1070,7 +1069,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 				&mut scene.nodes,
 				rest_nodes,
 				&scene.roots,
-				Some(&rest_cache),
+				rest_cache,
 				"head",
 				head,
 				frame.header.coordinate_space,

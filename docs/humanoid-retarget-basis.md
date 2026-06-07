@@ -92,11 +92,11 @@ not enough because skinning consumes the full joint matrix.
 
 Retargeting still has format-specific code in `humanoid_retarget.rs`; this is
 not the final architecture. The first cleanup step is `RetargetRestCache`.
-It stores rest-parent indices and rest-world rotations once per applied frame,
-then shares them across body, hand, finger, and face-head retargeting. This
-removes per-bone recomputation of `scene_parent_indices` and
-`scene_world_matrices` from the `.unavatar` limb/finger adapters and makes the
-future split clearer:
+For `.unavatar + UNMotion` frames it stores rest-parent indices and rest-world
+rotations once per applied frame, then shares them across body, hand, finger,
+and face-head retargeting. Other formats do not build the cache. This removes
+per-bone recomputation of `scene_parent_indices` and `scene_world_matrices`
+from the `.unavatar` limb/finger adapters and makes the future split clearer:
 
 - import / model-compile layer: derive rest topology, rest-world rotations, and
   source-format basis adapters
