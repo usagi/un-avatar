@@ -686,6 +686,13 @@ struct MorphMetaGpu {
 	_pad: [u32; 2],
 }
 
+struct MorphGpuResources {
+	meta_buffer: wgpu::Buffer,
+	weight_buffer: wgpu::Buffer,
+	delta_buffer: wgpu::Buffer,
+	bind_group: wgpu::BindGroup,
+}
+
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
 const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3120);
@@ -1674,6 +1681,67 @@ fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3
 		out.push([0.0; 4]);
 	}
 	out
+}
+
+fn create_morph_resources(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	layout: &wgpu::BindGroupLayout,
+	target_count: u32,
+	vertex_count: u32,
+	morph_deltas: &[[f32; 4]],
+) -> MorphGpuResources {
+	let morph_meta = MorphMetaGpu {
+		target_count,
+		vertex_count,
+		_pad: [0; 2],
+	};
+	let meta_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+		label: Some("mesh_morph_meta"),
+		contents: bytemuck::bytes_of(&morph_meta),
+		usage: wgpu::BufferUsages::UNIFORM,
+	});
+	let weight_size = ((target_count as u64) * std::mem::size_of::<f32>() as u64).max(MORPH_WEIGHT_BUFFER_MIN_SIZE);
+	let weight_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+		label: Some("mesh_morph_weights"),
+		size: weight_size,
+		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+		mapped_at_creation: false,
+	});
+	let delta_size = ((morph_deltas.len() * std::mem::size_of::<[f32; 4]>()) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
+	let delta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+		label: Some("mesh_morph_deltas"),
+		size: delta_size,
+		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+		mapped_at_creation: false,
+	});
+	if !morph_deltas.is_empty() {
+		queue.write_buffer(&delta_buffer, 0, bytemuck::cast_slice(morph_deltas));
+	}
+	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+		label: Some("mesh_morph_bg"),
+		layout,
+		entries: &[
+			wgpu::BindGroupEntry {
+				binding: 0,
+				resource: meta_buffer.as_entire_binding(),
+			},
+			wgpu::BindGroupEntry {
+				binding: 1,
+				resource: weight_buffer.as_entire_binding(),
+			},
+			wgpu::BindGroupEntry {
+				binding: 2,
+				resource: delta_buffer.as_entire_binding(),
+			},
+		],
+	});
+	MorphGpuResources {
+		meta_buffer,
+		weight_buffer,
+		delta_buffer,
+		bind_group,
+	}
 }
 
 fn compact_index_format(indices: &[u32]) -> wgpu::IndexFormat {
@@ -6320,6 +6388,7 @@ impl SceneMeshes {
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
+		let empty_morph_resources = create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]);
 		for (ni, node) in scene.nodes.iter().enumerate() {
 			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
@@ -7086,50 +7155,26 @@ impl SceneMeshes {
 					],
 				});
 
-				let morph_meta = MorphMetaGpu {
-					target_count: morph_pos.len() as u32,
-					vertex_count: verts.len() as u32,
-					_pad: [0; 2],
+				let morph_target_count = morph_pos.len();
+				let has_morph_targets = morph_target_count > 0;
+				let morph_resources = if has_morph_targets {
+					let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), verts.len());
+					create_morph_resources(
+						device,
+						queue,
+						&morph_bind_group_layout,
+						morph_target_count as u32,
+						verts.len() as u32,
+						&morph_deltas,
+					)
+				} else {
+					MorphGpuResources {
+						meta_buffer: empty_morph_resources.meta_buffer.clone(),
+						weight_buffer: empty_morph_resources.weight_buffer.clone(),
+						delta_buffer: empty_morph_resources.delta_buffer.clone(),
+						bind_group: empty_morph_resources.bind_group.clone(),
+					}
 				};
-				let morph_meta_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-					label: Some("mesh_morph_meta"),
-					contents: bytemuck::bytes_of(&morph_meta),
-					usage: wgpu::BufferUsages::UNIFORM,
-				});
-				let morph_weight_size = ((morph_pos.len() * std::mem::size_of::<f32>()) as u64).max(MORPH_WEIGHT_BUFFER_MIN_SIZE);
-				let morph_weight_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-					label: Some("mesh_morph_weights"),
-					size: morph_weight_size,
-					usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-					mapped_at_creation: false,
-				});
-				let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), verts.len());
-				let morph_delta_size = ((morph_deltas.len() * std::mem::size_of::<[f32; 4]>()) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
-				let morph_delta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-					label: Some("mesh_morph_deltas"),
-					size: morph_delta_size,
-					usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-					mapped_at_creation: false,
-				});
-				queue.write_buffer(&morph_delta_buffer, 0, bytemuck::cast_slice(&morph_deltas));
-				let morph_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("mesh_morph_bg"),
-					layout: &morph_bind_group_layout,
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: morph_meta_buffer.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: morph_weight_buffer.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: morph_delta_buffer.as_entire_binding(),
-						},
-					],
-				});
 				let compute_fur_cards = if material_has_fur(&mat, mat.shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
@@ -7147,8 +7192,6 @@ impl SceneMeshes {
 				} else {
 					None
 				};
-				let has_morph_targets = !morph_pos.is_empty();
-
 				draws.push(MeshDraw {
 					vertex_buffer: vbuf,
 					index_buffer: ibuf,
@@ -7160,10 +7203,10 @@ impl SceneMeshes {
 					bind_material,
 					bind_outline_material,
 					skin_palette_index,
-					_morph_meta_buffer: morph_meta_buffer,
-					morph_weight_buffer,
-					_morph_delta_buffer: morph_delta_buffer,
-					morph_bind_group,
+					_morph_meta_buffer: morph_resources.meta_buffer,
+					morph_weight_buffer: morph_resources.weight_buffer,
+					_morph_delta_buffer: morph_resources.delta_buffer,
+					morph_bind_group: morph_resources.bind_group,
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
 					active,
@@ -7175,8 +7218,8 @@ impl SceneMeshes {
 						Vec::new()
 					},
 					default_morph_weights,
-					morph_weights: Vec::with_capacity(morph_meta.target_count as usize),
-					morph_weight_scratch: Vec::with_capacity(morph_meta.target_count as usize),
+					morph_weights: Vec::with_capacity(morph_target_count),
+					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
 					material: mat,
 					mtoon,
