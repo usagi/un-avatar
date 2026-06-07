@@ -1113,13 +1113,14 @@ fn apply_finger_transform_to_profile_node(
 fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&BTreeMap<String, usize>>, key: &str) -> Option<usize> {
 	profile.bone_node_indices.get(key).copied().or_else(|| {
 		let target = normalize_profile_match_key(key);
-		lookup.and_then(|lookup| lookup.get(&target).copied()).or_else(|| {
-			profile
-				.bone_node_indices
-				.iter()
-				.find(|(candidate, _)| normalize_profile_match_key(candidate) == target)
-				.map(|(_, index)| *index)
-		})
+		if let Some(lookup) = lookup {
+			return lookup.get(&target).copied();
+		}
+		profile
+			.bone_node_indices
+			.iter()
+			.find(|(candidate, _)| normalize_profile_match_key(candidate) == target)
+			.map(|(_, index)| *index)
 	})
 }
 
