@@ -193,6 +193,7 @@ struct RetargetFrameContext<'a> {
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
 	unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
+	base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 	profile_lookup: Option<&'a BTreeMap<String, usize>>,
 }
 
@@ -201,12 +202,14 @@ impl<'a> RetargetFrameContext<'a> {
 		coordinate_space: CoordinateSpace,
 		target_basis: TargetHumanoidBasis,
 		unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
+		base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 		profile_lookup: Option<&'a BTreeMap<String, usize>>,
 	) -> Self {
 		Self {
 			coordinate_space,
 			target_basis,
 			unavatar_adapter,
+			base_transforms,
 			profile_lookup,
 		}
 	}
@@ -342,6 +345,24 @@ struct RetargetRestCache {
 	world_rotations: Vec<Quat>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct NodeRestTransform {
+	scale: Vec3,
+	rotation: Quat,
+	translation: Vec3,
+}
+
+impl NodeRestTransform {
+	fn from_node(node: &UnaSceneNode) -> Self {
+		let (scale, rotation, translation) = node_scale_rotation_translation(node);
+		Self {
+			scale,
+			rotation,
+			translation,
+		}
+	}
+}
+
 impl RetargetRestCache {
 	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
 		let (local_rotations, local_translations): (Vec<_>, Vec<_>) = nodes
@@ -399,6 +420,7 @@ impl UnavatarRetargetAdapter {
 pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
 	profile_lookup: BTreeMap<String, usize>,
+	base_transforms: BTreeMap<usize, NodeRestTransform>,
 	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
 
@@ -410,6 +432,7 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
+		let base_transforms = precompute_base_transforms(document.humanoid_profile.as_ref(), document.scene.as_ref(), rest_nodes);
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
 			document.scene.as_ref().map(|scene| {
 				let rest = rest_nodes.unwrap_or(&scene.nodes);
@@ -421,6 +444,7 @@ impl HumanoidRetargetContext {
 		Self {
 			target_basis,
 			profile_lookup,
+			base_transforms,
 			unavatar_adapter,
 		}
 	}
@@ -431,7 +455,13 @@ impl HumanoidRetargetContext {
 		} else {
 			None
 		};
-		RetargetFrameContext::new(coordinate_space, self.target_basis, unavatar_adapter, Some(&self.profile_lookup))
+		RetargetFrameContext::new(
+			coordinate_space,
+			self.target_basis,
+			unavatar_adapter,
+			Some(&self.base_transforms),
+			Some(&self.profile_lookup),
+		)
 	}
 }
 
@@ -441,6 +471,31 @@ fn precompute_profile_lookup(profile: &HumanoidProfile) -> BTreeMap<String, usiz
 		lookup.entry(normalize_profile_match_key(key)).or_insert(index);
 	}
 	lookup
+}
+
+fn precompute_base_transforms(
+	profile: Option<&HumanoidProfile>,
+	scene: Option<&UnaSceneSnapshot>,
+	rest_nodes: Option<&[UnaSceneNode]>,
+) -> BTreeMap<usize, NodeRestTransform> {
+	let Some(scene) = scene else {
+		return BTreeMap::new();
+	};
+	let nodes = rest_nodes.unwrap_or(&scene.nodes);
+	let mut transforms = BTreeMap::new();
+	if let Some(&root) = scene.roots.first() {
+		if let Some(node) = nodes.get(root) {
+			transforms.insert(root, NodeRestTransform::from_node(node));
+		}
+	}
+	if let Some(profile) = profile {
+		for &node_index in profile.bone_node_indices.values() {
+			if let Some(node) = nodes.get(node_index) {
+				transforms.entry(node_index).or_insert_with(|| NodeRestTransform::from_node(node));
+			}
+		}
+	}
+	transforms
 }
 
 fn precompute_unavatar_rest_axes(
@@ -735,12 +790,14 @@ fn apply_humanoid_transform_to_profile_node(
 	};
 	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
-		let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
-		let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
+		let base = base_node_transform(ni, node, rest_nodes, frame_ctx);
 		let sample_translation = frame_ctx.transform_translation(transform);
-		node.transform =
-			Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation + sample_translation)
-				.to_cols_array();
+		node.transform = Mat4::from_scale_rotation_translation(
+			base.scale,
+			base.rotation * sample_rotation,
+			base.translation + sample_translation,
+		)
+		.to_cols_array();
 	}
 }
 
@@ -776,12 +833,14 @@ fn apply_finger_transform_to_profile_node(
 		successor_key,
 	);
 	if let Some(node) = nodes.get_mut(ni) {
-		let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
-		let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
+		let base = base_node_transform(ni, node, rest_nodes, frame_ctx);
 		let sample_translation = frame_ctx.transform_translation(transform);
-		node.transform =
-			Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation + sample_translation)
-				.to_cols_array();
+		node.transform = Mat4::from_scale_rotation_translation(
+			base.scale,
+			base.rotation * sample_rotation,
+			base.translation + sample_translation,
+		)
+		.to_cols_array();
 	}
 }
 
@@ -879,6 +938,22 @@ fn pose_has_valid_bone(pose: Option<&HumanoidPose>, bone: HumanoidBone) -> bool 
 fn node_scale_rotation_translation(node: &UnaSceneNode) -> (Vec3, Quat, Vec3) {
 	let (scale, rotation, translation) = Mat4::from_cols_array(&node.transform).to_scale_rotation_translation();
 	(scale, rotation, translation)
+}
+
+fn base_node_transform(
+	node_index: usize,
+	node: &UnaSceneNode,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	frame_ctx: RetargetFrameContext<'_>,
+) -> NodeRestTransform {
+	if let Some(base) = frame_ctx
+		.base_transforms
+		.and_then(|transforms| transforms.get(&node_index).copied())
+	{
+		return base;
+	}
+	let base_node = rest_nodes.and_then(|rest| rest.get(node_index)).unwrap_or(node);
+	NodeRestTransform::from_node(base_node)
 }
 
 fn constraint_axis(axis: UnaNodeConstraintAxis) -> Vec3 {
@@ -1142,7 +1217,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1167,21 +1242,26 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		frame_ctx.coordinate_space,
 		frame_ctx.target_basis,
 		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
+		frame_ctx.base_transforms,
 		frame_ctx.profile_lookup,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
-			if let Some(base_node) = rest_nodes.and_then(|rest| rest.get(ri)) {
-				let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
+			if rest_nodes.and_then(|rest| rest.get(ri)).is_some()
+				|| frame_ctx
+					.base_transforms
+					.is_some_and(|transforms| transforms.contains_key(&ri))
+			{
+				let base = base_node_transform(ri, node, rest_nodes, frame_ctx);
 				let sample_rotation = frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root);
 				// translation は opt-in 時のみ rest に加算する。OFF 時は rest pose の base_translation を温存。
 				let translation = if apply_root_translation {
-					base_translation + frame_ctx.transform_translation(root_t)
+					base.translation + frame_ctx.transform_translation(root_t)
 				} else {
-					base_translation
+					base.translation
 				};
-				node.transform =
-					Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, translation).to_cols_array();
+				node.transform = Mat4::from_scale_rotation_translation(base.scale, base.rotation * sample_rotation, translation)
+					.to_cols_array();
 			} else if apply_root_translation {
 				node.transform = Mat4::from_rotation_translation(
 					frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root),
@@ -1221,15 +1301,14 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			UnmotionHumanoidRole::BodyBone(sample.bone),
 		);
 		if let Some(node) = nodes.get_mut(ni) {
-			let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
-			let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
+			let base = base_node_transform(ni, node, rest_nodes, frame_ctx);
 			if let Some(deg) = eye_clamp_deg {
 				if matches!(sample.bone, HumanoidBone::LeftEye | HumanoidBone::RightEye) {
 					sample_rotation = clamp_eye_rotation(sample_rotation, deg);
 				}
 			}
-			node.transform =
-				Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation).to_cols_array();
+			node.transform = Mat4::from_scale_rotation_translation(base.scale, base.rotation * sample_rotation, base.translation)
+				.to_cols_array();
 		}
 	}
 }

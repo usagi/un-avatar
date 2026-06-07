@@ -119,6 +119,9 @@ then calls `apply_un_motion_frame_to_document_with_context` for each pending
 motion frame. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
 API available for tests and tools while avoiding repeated target-basis detection
 and repeated `.unavatar` rest-cache construction in the renderer hot path.
+It also stores base TRS for the root and Humanoid-profile nodes, so the renderer
+hot path can write rest-relative local transforms without decomposing each rest
+node matrix again.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Typed finger profile keys are static table lookups, not `format!` allocations,
