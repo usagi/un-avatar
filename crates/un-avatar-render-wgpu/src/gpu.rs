@@ -2524,59 +2524,56 @@ impl GpuSceneBuildContext {
 			None
 		};
 		let expression_presets = expression_preset_names(document.expression_catalog.as_ref());
-		let document_wrapped = Arc::new(RwLock::new(document));
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
-		{
-			let guard = document_wrapped.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			if let Some(sc) = &guard.scene {
-				if options.debug_material_dump {
-					log_material_skin_report(&guard);
-				}
-				let mut gpu_texture_compression = if options.block_compression_encoder == BlockCompressionEncoder::Gpu
-					&& !matches!(
-						options.texture_compression,
-						TextureCompressionMode::Source | TextureCompressionMode::Compat
-					) {
-					Some(crate::texture_pipeline::create_vulkan_gpu_texture_compression_context()?)
-				} else {
-					None
-				};
-				let mut sm = SceneMeshes::new(
-					&device,
-					&queue,
-					format,
-					aa_sample_count(aa),
-					shader_variant_tier,
-					sc,
-					guard.expression_catalog.as_ref(),
-					options.mesh_diagnostics.clone(),
-					options.texture_max_dimension,
+		if let Some(sc) = &document.scene {
+			if options.debug_material_dump {
+				log_material_skin_report(&document);
+			}
+			let mut gpu_texture_compression = if options.block_compression_encoder == BlockCompressionEncoder::Gpu
+				&& !matches!(
 					options.texture_compression,
-					options.block_compression_encoder,
-					options.block_compression_cpu_threads,
-					options.mipmap_filter,
-					&options.texture_compression_advanced,
-					options.texture_compression_bc_supported,
-					options.texture_compression_astc_supported,
-					options.texture_compression_etc2_supported,
-					options.processed_texture_cache,
-					gpu_texture_compression.as_mut(),
-					&mut progress,
-				)?;
-				if !sm.is_empty() {
-					texture_summary = Some(sm.texture_summary());
-					let world = crate::scene_transform::scene_world_matrices(sc);
-					sm.update_draw_transforms(&queue, sc, &world, guard.expression_weights.as_ref(), None, true);
-					runtime_requirements = sm.runtime_requirements();
-					if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
-						eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
-					}
-					scene_meshes = Some(sm);
+					TextureCompressionMode::Source | TextureCompressionMode::Compat
+				) {
+				Some(crate::texture_pipeline::create_vulkan_gpu_texture_compression_context()?)
+			} else {
+				None
+			};
+			let mut sm = SceneMeshes::new(
+				&device,
+				&queue,
+				format,
+				aa_sample_count(aa),
+				shader_variant_tier,
+				sc,
+				document.expression_catalog.as_ref(),
+				options.mesh_diagnostics.clone(),
+				options.texture_max_dimension,
+				options.texture_compression,
+				options.block_compression_encoder,
+				options.block_compression_cpu_threads,
+				options.mipmap_filter,
+				&options.texture_compression_advanced,
+				options.texture_compression_bc_supported,
+				options.texture_compression_astc_supported,
+				options.texture_compression_etc2_supported,
+				options.processed_texture_cache,
+				gpu_texture_compression.as_mut(),
+				&mut progress,
+			)?;
+			if !sm.is_empty() {
+				texture_summary = Some(sm.texture_summary());
+				let world = crate::scene_transform::scene_world_matrices(sc);
+				sm.update_draw_transforms(&queue, sc, &world, document.expression_weights.as_ref(), None, true);
+				runtime_requirements = sm.runtime_requirements();
+				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
+					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
 				}
+				scene_meshes = Some(sm);
 			}
 		}
+		let document_wrapped = Arc::new(RwLock::new(document));
 		let bone_collider_stats = collider_stats(&bone_colliders);
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
