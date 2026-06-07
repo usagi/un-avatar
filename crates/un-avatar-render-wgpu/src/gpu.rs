@@ -1581,7 +1581,7 @@ impl GpuState {
 		}
 		drop(doc);
 		if let Some(requirements) = runtime_requirements_after_update {
-			self.apply_runtime_requirements(requirements, self.audio_link_options.clone());
+			self.apply_runtime_requirements_with_current_audio_link(requirements);
 		}
 		true
 	}
@@ -1597,6 +1597,15 @@ impl GpuState {
 		self.audio_link_options = audio_link_options;
 		self.audio_link_texture_needed = audio_link_texture_needed;
 		if audio_link_config_changed || audio_link_need_changed {
+			self.reconfigure_audio_link_runtime();
+		}
+	}
+
+	fn apply_runtime_requirements_with_current_audio_link(&mut self, requirements: SceneMeshRuntimeRequirements) {
+		let audio_link_texture_needed =
+			self.audio_link_options.source == AudioLinkSource::InputDevice && requirements.audio_link_texture;
+		if self.audio_link_texture_needed != audio_link_texture_needed {
+			self.audio_link_texture_needed = audio_link_texture_needed;
 			self.reconfigure_audio_link_runtime();
 		}
 	}
