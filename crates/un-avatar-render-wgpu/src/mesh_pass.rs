@@ -946,6 +946,16 @@ fn scene_mesh_runtime_requirements_for_draws(draws: &[MeshDraw]) -> SceneMeshRun
 	}
 }
 
+fn active_draw_count(draws: &[MeshDraw]) -> usize {
+	draws.iter().filter(|draw| draw.active).count()
+}
+
+fn active_draws_need_screen_refraction(draws: &[MeshDraw]) -> bool {
+	draws
+		.iter()
+		.any(|draw| draw.active && material_needs_screen_refraction(&draw.material))
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -1245,6 +1255,8 @@ pub(crate) struct SceneMeshes {
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
+	active_draw_count: usize,
+	needs_screen_refraction: bool,
 	active_skin_palette_scratch: Vec<bool>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
@@ -7163,6 +7175,8 @@ impl SceneMeshes {
 			build_draw_order(&draws, &opts);
 		let skin_palette_count = skin_palettes.len();
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
+		let active_draw_count = active_draw_count(&draws);
+		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
 		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
 
 		Ok(Self {
@@ -7202,6 +7216,8 @@ impl SceneMeshes {
 			opaque_batches,
 			transparent_backpass_draw_indices,
 			blended_batches,
+			active_draw_count,
+			needs_screen_refraction,
 			active_skin_palette_scratch: vec![false; skin_palette_count],
 			texture_summary,
 			runtime_requirements,
@@ -7805,9 +7821,6 @@ impl SceneMeshes {
 				changed += 1;
 			}
 		}
-		if changed > 0 {
-			self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
-		}
 		changed
 	}
 
@@ -7821,17 +7834,20 @@ impl SceneMeshes {
 				changed += 1;
 			}
 		}
+		if changed > 0 {
+			self.active_draw_count = active_draw_count(&self.draws);
+			self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
+			self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
+		}
 		changed
 	}
 
 	pub fn is_empty(&self) -> bool {
-		self.draws.iter().all(|draw| !draw.active)
+		self.active_draw_count == 0
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
-		self.draws
-			.iter()
-			.any(|draw| draw.active && material_needs_screen_refraction(&draw.material))
+		self.needs_screen_refraction
 	}
 
 	pub(crate) fn runtime_requirements(&self) -> SceneMeshRuntimeRequirements {
