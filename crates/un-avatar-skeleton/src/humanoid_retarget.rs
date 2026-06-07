@@ -923,11 +923,30 @@ fn finger_index_from_key(finger_key: &str) -> Option<usize> {
 	}
 }
 
+fn finger_index_and_key(finger: Finger) -> (usize, &'static str) {
+	match finger {
+		Finger::Thumb => (0, "thumb"),
+		Finger::Index => (1, "index"),
+		Finger::Middle => (2, "middle"),
+		Finger::Ring => (3, "ring"),
+		Finger::Little => (4, "little"),
+	}
+}
+
 fn segment_index_from_key(segment: &str) -> Option<usize> {
 	match segment {
 		"proximal" => Some(0),
 		"intermediate" => Some(1),
 		"distal" => Some(2),
+		_ => None,
+	}
+}
+
+fn segment_key_from_index(index: usize) -> Option<&'static str> {
+	match index {
+		0 => Some("proximal"),
+		1 => Some("intermediate"),
+		2 => Some("distal"),
 		_ => None,
 	}
 }
@@ -1195,22 +1214,10 @@ fn apply_hand_motion_to_scene(
 		}
 	}
 	for finger in &hand.fingers {
-		let finger_key = match finger.finger {
-			Finger::Thumb => "thumb",
-			Finger::Index => "index",
-			Finger::Middle => "middle",
-			Finger::Ring => "ring",
-			Finger::Little => "little",
-		};
-		let Some(finger_index) = finger_index_from_key(finger_key) else {
-			continue;
-		};
+		let (finger_index, finger_key) = finger_index_and_key(finger.finger);
 		for (index, joint) in finger.joints.iter().enumerate() {
-			let segment = match index {
-				0 => "proximal",
-				1 => "intermediate",
-				2 => "distal",
-				_ => continue,
+			let Some(segment) = segment_key_from_index(index) else {
+				continue;
 			};
 			let Some(binding) = hand_bindings.and_then(|hand| hand.fingers[finger_index][index]) else {
 				continue;
