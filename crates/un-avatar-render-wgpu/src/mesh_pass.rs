@@ -1527,9 +1527,14 @@ fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool
 
 	out.clear();
 	out.resize(scene.nodes.len(), false);
-	let roots = scene_visibility_roots(scene);
-	for root in roots {
-		visit(scene, root, true, out);
+	if scene.roots.is_empty() {
+		for root in scene_visibility_roots(scene) {
+			visit(scene, root, true, out);
+		}
+	} else {
+		for &root in &scene.roots {
+			visit(scene, root, true, out);
+		}
 	}
 }
 
