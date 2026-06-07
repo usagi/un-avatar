@@ -120,3 +120,5 @@ API available for tests and tools while avoiding repeated target-basis detection
 and repeated `.unavatar` rest-cache construction in the renderer hot path.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
+Typed finger profile keys are static table lookups, not `format!` allocations,
+so the per-frame hand path does not allocate strings for each finger segment.

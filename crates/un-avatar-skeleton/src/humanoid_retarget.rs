@@ -489,13 +489,49 @@ fn unavatar_unmotion_finger_source_axis_in_target(side_prefix: &str, finger_key:
 	}
 }
 
-fn finger_successor_profile_key(side_prefix: &str, finger_key: &str, segment: &str) -> Option<String> {
+fn finger_profile_key(side_prefix: &str, finger_key: &str, segment: &str) -> Option<&'static str> {
+	match (side_prefix, finger_key, segment) {
+		("left", "thumb", "proximal") => Some("leftthumbproximal"),
+		("left", "thumb", "intermediate") => Some("leftthumbintermediate"),
+		("left", "thumb", "distal") => Some("leftthumbdistal"),
+		("left", "index", "proximal") => Some("leftindexproximal"),
+		("left", "index", "intermediate") => Some("leftindexintermediate"),
+		("left", "index", "distal") => Some("leftindexdistal"),
+		("left", "middle", "proximal") => Some("leftmiddleproximal"),
+		("left", "middle", "intermediate") => Some("leftmiddleintermediate"),
+		("left", "middle", "distal") => Some("leftmiddledistal"),
+		("left", "ring", "proximal") => Some("leftringproximal"),
+		("left", "ring", "intermediate") => Some("leftringintermediate"),
+		("left", "ring", "distal") => Some("leftringdistal"),
+		("left", "little", "proximal") => Some("leftlittleproximal"),
+		("left", "little", "intermediate") => Some("leftlittleintermediate"),
+		("left", "little", "distal") => Some("leftlittledistal"),
+		("right", "thumb", "proximal") => Some("rightthumbproximal"),
+		("right", "thumb", "intermediate") => Some("rightthumbintermediate"),
+		("right", "thumb", "distal") => Some("rightthumbdistal"),
+		("right", "index", "proximal") => Some("rightindexproximal"),
+		("right", "index", "intermediate") => Some("rightindexintermediate"),
+		("right", "index", "distal") => Some("rightindexdistal"),
+		("right", "middle", "proximal") => Some("rightmiddleproximal"),
+		("right", "middle", "intermediate") => Some("rightmiddleintermediate"),
+		("right", "middle", "distal") => Some("rightmiddledistal"),
+		("right", "ring", "proximal") => Some("rightringproximal"),
+		("right", "ring", "intermediate") => Some("rightringintermediate"),
+		("right", "ring", "distal") => Some("rightringdistal"),
+		("right", "little", "proximal") => Some("rightlittleproximal"),
+		("right", "little", "intermediate") => Some("rightlittleintermediate"),
+		("right", "little", "distal") => Some("rightlittledistal"),
+		_ => None,
+	}
+}
+
+fn finger_successor_profile_key(side_prefix: &str, finger_key: &str, segment: &str) -> Option<&'static str> {
 	let next_segment = match segment {
 		"proximal" => "intermediate",
 		"intermediate" => "distal",
 		_ => return None,
 	};
-	Some(format!("{side_prefix}{finger_key}{next_segment}"))
+	finger_profile_key(side_prefix, finger_key, next_segment)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -715,7 +751,9 @@ fn apply_hand_motion_to_scene(
 				2 => "distal",
 				_ => continue,
 			};
-			let key = format!("{side_prefix}{finger_key}{segment}");
+			let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
+				continue;
+			};
 			let successor_key = finger_successor_profile_key(side_prefix, finger_key, segment);
 			apply_finger_transform_to_profile_node(
 				profile,
@@ -723,8 +761,8 @@ fn apply_hand_motion_to_scene(
 				rest_nodes,
 				roots,
 				frame_ctx,
-				&key,
-				successor_key.as_deref(),
+				key,
+				successor_key,
 				side_prefix,
 				finger_key,
 				segment,
