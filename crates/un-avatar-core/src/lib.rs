@@ -293,6 +293,16 @@ pub enum UnaRuntimeSourceKind {
 	Unavatar,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaHumanoidRuntimeBasis {
+	#[default]
+	Vrm0,
+	Vrm1,
+	UnavatarUnity,
+	Native,
+}
+
 /// Runtime-facing normalized model view. This is intentionally a borrowed adapter
 /// while the runtime model boundary is being introduced; format-specific import data
 /// remains in [`UnaDocument`], but renderer/skeleton code can start depending on this
@@ -319,6 +329,16 @@ impl<'a> UnaRuntimeModel<'a> {
 			};
 		}
 		UnaRuntimeSourceKind::GltfLike
+	}
+
+	pub fn humanoid_basis(self) -> UnaHumanoidRuntimeBasis {
+		match self.source_kind() {
+			// .unavatar is exported from Unity as glTF-space local TRS:
+			// position = (-x, y, z), rotation = (x, -y, -z, w).
+			UnaRuntimeSourceKind::Unavatar => UnaHumanoidRuntimeBasis::UnavatarUnity,
+			UnaRuntimeSourceKind::Vrm1 => UnaHumanoidRuntimeBasis::Vrm1,
+			UnaRuntimeSourceKind::Vrm0 | UnaRuntimeSourceKind::GltfLike => UnaHumanoidRuntimeBasis::Vrm0,
+		}
 	}
 
 	pub fn scene(self) -> Option<&'a UnaSceneSnapshot> {
@@ -2896,6 +2916,7 @@ mod tests {
 		};
 
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Unavatar);
+		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::UnavatarUnity);
 	}
 
 	#[test]
@@ -2913,8 +2934,18 @@ mod tests {
 		};
 
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm0);
+		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::Vrm0);
 		document.vrm.as_mut().unwrap().spec_version = "1.0".to_string();
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm1);
+		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::Vrm1);
+	}
+
+	#[test]
+	fn runtime_model_defaults_to_vrm0_humanoid_basis_for_gltf_like_sources() {
+		let document = UnaDocument::default();
+
+		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::GltfLike);
+		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::Vrm0);
 	}
 
 	#[test]

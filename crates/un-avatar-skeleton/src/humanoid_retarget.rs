@@ -3,8 +3,8 @@
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
-	resolved_scene_roots, UnaDocument, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind,
-	UnaRuntimeSourceKind, UnaSceneNode, UnaSceneSnapshot,
+	resolved_scene_roots, UnaDocument, UnaHumanoidRuntimeBasis, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
+	UnaNodeConstraintKind, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
@@ -14,23 +14,7 @@ type ProfileNodeLookup = StringIndexLookup;
 type ExpressionLookupEntries = StringIndexLookup;
 const NO_PARENT: usize = usize::MAX;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TargetHumanoidBasis {
-	Vrm0,
-	Vrm1,
-	UnavatarUnity,
-	Native,
-}
-
-fn target_humanoid_basis(source_kind: UnaRuntimeSourceKind) -> TargetHumanoidBasis {
-	match source_kind {
-		// .unavatar is exported from Unity as glTF-space local TRS:
-		// position = (-x, y, z), rotation = (x, -y, -z, w).
-		UnaRuntimeSourceKind::Unavatar => TargetHumanoidBasis::UnavatarUnity,
-		UnaRuntimeSourceKind::Vrm1 => TargetHumanoidBasis::Vrm1,
-		UnaRuntimeSourceKind::Vrm0 | UnaRuntimeSourceKind::GltfLike => TargetHumanoidBasis::Vrm0,
-	}
-}
+type TargetHumanoidBasis = UnaHumanoidRuntimeBasis;
 
 /// [`HumanoidBone`] を VRM / [`HumanoidProfile`] で使う小文字キーへ（import 時と同じ規約）。
 pub fn humanoid_bone_profile_key(bone: HumanoidBone) -> &'static str {
@@ -579,7 +563,7 @@ pub struct HumanoidRetargetContext {
 impl HumanoidRetargetContext {
 	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
 		let runtime_model = document.runtime_model();
-		let target_basis = target_humanoid_basis(runtime_model.source_kind());
+		let target_basis = runtime_model.humanoid_basis();
 		let profile = runtime_model.humanoid_profile();
 		let scene = runtime_model.scene();
 		let profile_lookup = profile.map(precompute_profile_lookup).unwrap_or_default();
