@@ -7702,7 +7702,9 @@ impl SceneMeshes {
 				let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
 				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 			}
-			self.update_compute_fur_cards_source_vertices(queue);
+			if !self.fur_draw_indices.is_empty() {
+				self.update_compute_fur_cards_source_vertices(queue);
+			}
 		}
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
