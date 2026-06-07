@@ -7680,28 +7680,30 @@ impl SceneMeshes {
 				self.expression_value_scratch[index] = value;
 			}
 		}
-		if self.active_skin_palette_scratch.len() == self.skin_palettes.len() {
-			self.active_skin_palette_scratch.fill(false);
-		} else {
-			self.active_skin_palette_scratch.clear();
-			self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
-		}
-		for draw in &self.draws {
-			if draw.active {
-				if let Some(slot) = self.active_skin_palette_scratch.get_mut(draw.skin_palette_index) {
-					*slot = true;
+		if !self.skin_palettes.is_empty() {
+			if self.active_skin_palette_scratch.len() == self.skin_palettes.len() {
+				self.active_skin_palette_scratch.fill(false);
+			} else {
+				self.active_skin_palette_scratch.clear();
+				self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
+			}
+			for draw in &self.draws {
+				if draw.active {
+					if let Some(slot) = self.active_skin_palette_scratch.get_mut(draw.skin_palette_index) {
+						*slot = true;
+					}
 				}
 			}
-		}
-		for (palette_index, palette) in self.skin_palettes.iter_mut().enumerate() {
-			if !self.active_skin_palette_scratch.get(palette_index).copied().unwrap_or(false) {
-				palette.uploaded_changed = false;
-				continue;
+			for (palette_index, palette) in self.skin_palettes.iter_mut().enumerate() {
+				if !self.active_skin_palette_scratch.get(palette_index).copied().unwrap_or(false) {
+					palette.uploaded_changed = false;
+					continue;
+				}
+				let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
+				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 			}
-			let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
-			Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
+			self.update_compute_fur_cards_source_vertices(queue);
 		}
-		self.update_compute_fur_cards_source_vertices(queue);
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
 		for d in &mut self.draws {
