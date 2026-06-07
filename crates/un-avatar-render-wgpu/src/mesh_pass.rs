@@ -1276,6 +1276,7 @@ pub(crate) struct SceneMeshes {
 	active_skin_palette_indices: Vec<usize>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
+	visibility_scratch: Vec<bool>,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
 	has_morph_draws: bool,
@@ -1507,6 +1508,12 @@ fn mesh_draw_capacity(scene: &UnaSceneSnapshot) -> usize {
 }
 
 fn scene_effective_visibility(scene: &UnaSceneSnapshot) -> Vec<bool> {
+	let mut out = Vec::new();
+	write_scene_effective_visibility(scene, &mut out);
+	out
+}
+
+fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool>) {
 	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
 		let Some(node) = scene.nodes.get(idx) else { return };
 		let visible = parent_visible && node.visible;
@@ -1518,12 +1525,12 @@ fn scene_effective_visibility(scene: &UnaSceneSnapshot) -> Vec<bool> {
 		}
 	}
 
-	let mut out = vec![false; scene.nodes.len()];
+	out.clear();
+	out.resize(scene.nodes.len(), false);
 	let roots = scene_visibility_roots(scene);
 	for root in roots {
-		visit(scene, root, true, &mut out);
+		visit(scene, root, true, out);
 	}
-	out
 }
 
 fn scene_visibility_roots(scene: &UnaSceneSnapshot) -> Vec<usize> {
@@ -7289,6 +7296,7 @@ impl SceneMeshes {
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			texture_summary,
 			runtime_requirements: draw_state.runtime_requirements,
+			visibility_scratch: Vec::new(),
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
 			has_morph_draws,
@@ -7883,10 +7891,14 @@ impl SceneMeshes {
 	}
 
 	pub fn refresh_draw_visibility_from_scene(&mut self, scene: &UnaSceneSnapshot) -> usize {
-		let effective_visibility = scene_effective_visibility(scene);
+		write_scene_effective_visibility(scene, &mut self.visibility_scratch);
 		let mut changed = 0;
 		for draw in &mut self.draws {
-			let next = effective_visibility.get(draw.world_node_index).copied().unwrap_or(false);
+			let next = self
+				.visibility_scratch
+				.get(draw.world_node_index)
+				.copied()
+				.unwrap_or(false);
 			if draw.active != next {
 				draw.active = next;
 				changed += 1;
