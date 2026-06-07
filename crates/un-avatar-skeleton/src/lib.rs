@@ -6,7 +6,6 @@
 
 mod bone_colliders;
 mod humanoid_retarget;
-mod scene_roots;
 mod spring_bones;
 
 pub use bone_colliders::{

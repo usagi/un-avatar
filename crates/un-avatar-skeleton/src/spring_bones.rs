@@ -35,7 +35,6 @@ use serde::{Deserialize, Serialize};
 use un_avatar_core::{UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
-use crate::scene_roots::scene_roots_or_parentless;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -361,7 +360,7 @@ fn write_world_from_snapshot(scene: &UnaSceneSnapshot, world: &mut Vec<Mat4>) {
 	} else {
 		world.fill(Mat4::IDENTITY);
 	}
-	for &r in scene_roots_or_parentless(&scene.nodes, &scene.roots).iter() {
+	for &r in scene.resolved_roots().iter() {
 		if r < scene.nodes.len() {
 			propagate_world_subtree(&scene.nodes, world, r, Mat4::IDENTITY);
 		}

@@ -3,12 +3,11 @@
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
-	UnaDocument, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneNode, UnaSceneSnapshot,
+	resolved_scene_roots, UnaDocument, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind,
+	UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
-
-use crate::scene_roots::scene_roots_or_parentless;
 
 type StringIndexLookup = Vec<(String, usize)>;
 type ProfileNodeLookup = StringIndexLookup;
@@ -672,7 +671,7 @@ fn precompute_root_base(input: RetargetCompileInput<'_>) -> Option<NodeTransform
 	let Some(scene) = input.scene else {
 		return None;
 	};
-	let roots = scene_roots_or_parentless(&scene.nodes, &scene.roots);
+	let roots = scene.resolved_roots();
 	let node_index = *roots.first()?;
 	node_base_transform_from_scene(scene, input.rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
 }
@@ -1381,7 +1380,7 @@ fn scene_world_matrices(nodes: &[UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
 			visit(nodes, child, w, world);
 		}
 	}
-	for &root in scene_roots_or_parentless(nodes, roots).iter() {
+	for &root in resolved_scene_roots(nodes, roots).iter() {
 		visit(nodes, root, Mat4::IDENTITY, &mut world);
 	}
 	world
@@ -1630,7 +1629,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
 ) {
-	let resolved_roots = scene_roots_or_parentless(nodes, roots);
+	let resolved_roots = resolved_scene_roots(nodes, roots);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, resolved_roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base) = root_base_transform(ri, node, rest_nodes, frame_ctx) {

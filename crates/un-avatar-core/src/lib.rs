@@ -212,6 +212,67 @@ pub struct UnaDocument {
 	pub spring_bones: Option<UnaSpringBoneSettings>,
 }
 
+impl UnaDocument {
+	pub fn runtime_model(&self) -> UnaRuntimeModel<'_> {
+		UnaRuntimeModel { document: self }
+	}
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaRuntimeSourceKind {
+	#[default]
+	GltfLike,
+	Vrm0,
+	Vrm1,
+	Unavatar,
+}
+
+/// Runtime-facing normalized model view. This is intentionally a borrowed adapter
+/// while the runtime model boundary is being introduced; format-specific import data
+/// remains in [`UnaDocument`], but renderer/skeleton code can start depending on this
+/// view instead of branching directly on source extensions.
+#[derive(Clone, Copy, Debug)]
+pub struct UnaRuntimeModel<'a> {
+	document: &'a UnaDocument,
+}
+
+impl<'a> UnaRuntimeModel<'a> {
+	pub fn document(self) -> &'a UnaDocument {
+		self.document
+	}
+
+	pub fn source_kind(self) -> UnaRuntimeSourceKind {
+		if self.document.unavatar.is_some() {
+			return UnaRuntimeSourceKind::Unavatar;
+		}
+		if let Some(vrm) = self.document.vrm.as_ref() {
+			return if vrm.spec_version.starts_with('0') {
+				UnaRuntimeSourceKind::Vrm0
+			} else {
+				UnaRuntimeSourceKind::Vrm1
+			};
+		}
+		UnaRuntimeSourceKind::GltfLike
+	}
+
+	pub fn scene(self) -> Option<&'a UnaSceneSnapshot> {
+		self.document.scene.as_ref()
+	}
+
+	pub fn humanoid_profile(self) -> Option<&'a HumanoidProfile> {
+		self.document.humanoid_profile.as_ref()
+	}
+
+	pub fn expression_catalog(self) -> Option<&'a UnaExpressionCatalog> {
+		self.document.expression_catalog.as_ref()
+	}
+
+	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
+		self.document.spring_bones.as_ref()
+	}
+}
+
 /// `.unavatar` 固有 metadata。現段階では raw JSON を正本として保持し、runtime 対応が進むごとに構造化する。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaUnavatarExtension {
@@ -299,6 +360,35 @@ pub struct UnaSceneSnapshot {
 	/// VRM 1 `VRMC_node_constraint` 由来のノード拘束。target/source は `nodes` インデックス。
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub node_constraints: Vec<UnaNodeConstraint>,
+}
+
+impl UnaSceneSnapshot {
+	/// Runtime roots after import normalization. Authored `roots` are borrowed as-is;
+	/// legacy or partial imports without roots fall back to parentless nodes.
+	pub fn resolved_roots(&self) -> Cow<'_, [usize]> {
+		resolved_scene_roots(&self.nodes, &self.roots)
+	}
+}
+
+pub fn resolved_scene_roots<'a>(nodes: &[UnaSceneNode], roots: &'a [usize]) -> Cow<'a, [usize]> {
+	if !roots.is_empty() {
+		return Cow::Borrowed(roots);
+	}
+	let mut has_parent = vec![false; nodes.len()];
+	for node in nodes {
+		for &child in &node.children {
+			if let Some(slot) = has_parent.get_mut(child) {
+				*slot = true;
+			}
+		}
+	}
+	Cow::Owned(
+		has_parent
+			.iter()
+			.enumerate()
+			.filter_map(|(idx, has_parent)| (!*has_parent).then_some(idx))
+			.collect(),
+	)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2653,6 +2743,81 @@ mod tests {
 		ew.preset_weights.insert("x".into(), 0.5);
 		let w = morph_weights_for_primitive(&mesh, Some(&cat), Some(&ew), 0, 0);
 		assert!((w[0] - 1.0).abs() < 1e-6);
+	}
+
+	fn test_node(children: Vec<usize>) -> UnaSceneNode {
+		UnaSceneNode {
+			name: None,
+			source_node_id: None,
+			visible: true,
+			transform: [
+				1.0, 0.0, 0.0, 0.0, //
+				0.0, 1.0, 0.0, 0.0, //
+				0.0, 0.0, 1.0, 0.0, //
+				0.0, 0.0, 0.0, 1.0,
+			],
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
+	#[test]
+	fn resolved_roots_borrows_explicit_roots() {
+		let roots = vec![2usize];
+		let scene = UnaSceneSnapshot {
+			roots,
+			..Default::default()
+		};
+		let resolved = scene.resolved_roots();
+
+		assert!(matches!(resolved, Cow::Borrowed(_)));
+		assert_eq!(&*resolved, &[2]);
+	}
+
+	#[test]
+	fn resolved_roots_falls_back_to_parentless_nodes() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![test_node(vec![1]), test_node(Vec::new()), test_node(Vec::new())],
+			roots: Vec::new(),
+			..Default::default()
+		};
+
+		assert_eq!(&*scene.resolved_roots(), &[0, 2]);
+	}
+
+	#[test]
+	fn runtime_model_reports_unavatar_source() {
+		let document = UnaDocument {
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "2.0".to_string(),
+				source: serde_json::json!({}),
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Unavatar);
+	}
+
+	#[test]
+	fn runtime_model_reports_vrm_source_version() {
+		let mut document = UnaDocument {
+			vrm: Some(UnaVrmExtension {
+				spec_version: "0.0".to_string(),
+				meta: serde_json::json!({}),
+				humanoid_bones: BTreeMap::new(),
+				mtoon_materials_v0: Vec::new(),
+				mtoon_material_indices_v1: Vec::new(),
+				source: serde_json::json!({}),
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm0);
+		document.vrm.as_mut().unwrap().spec_version = "1.0".to_string();
+		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm1);
 	}
 
 	#[test]

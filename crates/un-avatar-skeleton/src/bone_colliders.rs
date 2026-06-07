@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 use un_avatar_core::UnaSceneSnapshot;
 use un_avatar_types::HumanoidProfile;
 
-use crate::scene_roots::scene_roots_or_parentless;
-
 const OFF_EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,7 +160,7 @@ pub fn collider_stats(colliders: &[BoneColliderPrimitive]) -> BoneColliderStats 
 
 pub(crate) fn scene_world(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
 	let mut world = vec![Mat4::IDENTITY; scene.nodes.len().max(1)];
-	for &root in scene_roots_or_parentless(&scene.nodes, &scene.roots).iter() {
+	for &root in scene.resolved_roots().iter() {
 		propagate_world(scene, &mut world, root, Mat4::IDENTITY);
 	}
 	world

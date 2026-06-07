@@ -13,7 +13,7 @@ use un_avatar_core::{
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
 use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
-use crate::scene_transform::{parentless_roots, safe_inverse_mesh_world, scene_world_matrices};
+use crate::scene_transform::{safe_inverse_mesh_world, scene_world_matrices};
 use crate::skin_tone::{
 	build_skin_tone_matched_images, material_skin_tone_kind, skin_tone_matching_debug_for_scene_with_world,
 	skin_tone_texture_kinds_for_scene, SkinToneMatchingDebug,
@@ -1535,7 +1535,7 @@ fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool
 	out.clear();
 	out.resize(scene.nodes.len(), false);
 	if scene.roots.is_empty() {
-		for root in scene_parentless_visibility_roots(scene) {
+		for &root in scene.resolved_roots().iter() {
 			visit(scene, root, true, out);
 		}
 	} else {
@@ -1543,10 +1543,6 @@ fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool
 			visit(scene, root, true, out);
 		}
 	}
-}
-
-fn scene_parentless_visibility_roots(scene: &UnaSceneSnapshot) -> Vec<usize> {
-	parentless_roots(&scene.nodes)
 }
 
 fn skin_palette_capacity(scene: &UnaSceneSnapshot) -> usize {

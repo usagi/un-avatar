@@ -27,7 +27,7 @@ pub(crate) fn write_world_from_nodes(scene: &UnaSceneSnapshot, world: &mut Vec<M
 		}
 	}
 	if scene.roots.is_empty() {
-		for root in parentless_roots(&scene.nodes) {
+		for &root in scene.resolved_roots().iter() {
 			visit(&scene.nodes, root, Mat4::IDENTITY, world);
 		}
 	} else {
@@ -37,22 +37,6 @@ pub(crate) fn write_world_from_nodes(scene: &UnaSceneSnapshot, world: &mut Vec<M
 			}
 		}
 	}
-}
-
-pub(crate) fn parentless_roots(nodes: &[UnaSceneNode]) -> Vec<usize> {
-	let mut has_parent = vec![false; nodes.len()];
-	for node in nodes {
-		for &child in &node.children {
-			if let Some(slot) = has_parent.get_mut(child) {
-				*slot = true;
-			}
-		}
-	}
-	has_parent
-		.iter()
-		.enumerate()
-		.filter_map(|(idx, has_parent)| (!*has_parent).then_some(idx))
-		.collect()
 }
 
 pub(crate) fn safe_inverse_mesh_world(m: Mat4) -> Mat4 {
@@ -68,6 +52,7 @@ pub(crate) fn safe_inverse_mesh_world(m: Mat4) -> Mat4 {
 mod tests {
 	use super::*;
 	use glam::Vec3;
+	use un_avatar_core::UnaSceneNode;
 
 	fn node(transform: Mat4, children: Vec<usize>) -> UnaSceneNode {
 		UnaSceneNode {

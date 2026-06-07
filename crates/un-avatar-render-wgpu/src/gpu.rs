@@ -2566,13 +2566,14 @@ impl GpuSceneBuildContext {
 			shader_variant_tier,
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
-		let bone_colliders = if let Some(scene) = document.scene.as_ref() {
-			build_bone_colliders(scene, document.humanoid_profile.as_ref(), options.bone_colliders)
+		let runtime_model = document.runtime_model();
+		let bone_colliders = if let Some(scene) = runtime_model.scene() {
+			build_bone_colliders(scene, runtime_model.humanoid_profile(), options.bone_colliders)
 		} else {
 			Vec::new()
 		};
 		let spring_sim = if options.enable_spring_bones {
-			match (&document.scene, &document.spring_bones) {
+			match (runtime_model.scene(), runtime_model.spring_bones()) {
 				(Some(sc), Some(sb)) => {
 					SpringBoneSimulator::new_with_config(sc, sb, bone_colliders.clone(), options.spring_bone_physics.clone())
 				}
@@ -2581,17 +2582,17 @@ impl GpuSceneBuildContext {
 		} else {
 			None
 		};
-		let needs_rest_nodes = document.humanoid_profile.is_some() || spring_sim.is_some();
+		let needs_rest_nodes = runtime_model.humanoid_profile().is_some() || spring_sim.is_some();
 		let rest_nodes = if needs_rest_nodes {
-			document.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone()))
+			runtime_model.scene().map(|scene| Arc::new(scene.nodes.clone()))
 		} else {
 			None
 		};
-		let expression_presets = expression_preset_names(document.expression_catalog.as_ref());
+		let expression_presets = expression_preset_names(runtime_model.expression_catalog());
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
-		if let Some(sc) = &document.scene {
+		if let Some(sc) = runtime_model.scene() {
 			if options.debug_material_dump {
 				log_material_skin_report(&document);
 			}
@@ -2611,7 +2612,7 @@ impl GpuSceneBuildContext {
 				aa_sample_count(aa),
 				shader_variant_tier,
 				sc,
-				document.expression_catalog.as_ref(),
+				runtime_model.expression_catalog(),
 				options.mesh_diagnostics.clone(),
 				options.texture_max_dimension,
 				options.texture_compression,
