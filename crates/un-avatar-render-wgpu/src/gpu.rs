@@ -1073,7 +1073,7 @@ pub(crate) struct GpuState {
 	expression_overrides_revision: u64,
 	applied_expression_overrides_revision: u64,
 	expression_presets: Vec<String>,
-	motion_apply_shared: Arc<Mutex<un_avatar_skeleton::ApplyUnMotionFrameOpts>>,
+	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
@@ -1121,12 +1121,12 @@ impl GpuState {
 		let debug_log = DebugLog::from_options(&debug).map_err(|e| e.to_string())?;
 		let debug_scene = debug.scene;
 		let debug_morph = debug.morph;
-		let motion_apply_shared = Arc::new(Mutex::new(un_avatar_skeleton::ApplyUnMotionFrameOpts {
+		let motion_apply_opts = un_avatar_skeleton::ApplyUnMotionFrameOpts {
 			apply_expressions: !disable_expression_morphs,
 			apply_eye_bones: !disable_vmc_eye_look,
 			eye_look_at_clamp_deg,
 			apply_root_translation: apply_vmc_root_translation,
-		}));
+		};
 		let size = window.inner_size();
 		let width = size.width.max(1);
 		let height = size.height.max(1);
@@ -1452,7 +1452,7 @@ impl GpuState {
 			expression_overrides_revision: 0,
 			applied_expression_overrides_revision: 0,
 			expression_presets: Vec::new(),
-			motion_apply_shared,
+			motion_apply_opts,
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
 			motion_retarget_runtime: None,
@@ -1503,29 +1503,25 @@ impl GpuState {
 	}
 
 	/// VRM 1.0 LookAt 簡易クランプ角度を更新する。`None` でクランプ無効化。
-	pub fn set_eye_look_at_clamp_deg(&self, clamp_deg: Option<f32>) {
-		if let Ok(mut g) = self.motion_apply_shared.lock() {
-			g.eye_look_at_clamp_deg = clamp_deg.filter(|d| d.is_finite() && *d >= 0.0);
-		}
+	pub fn set_eye_look_at_clamp_deg(&mut self, clamp_deg: Option<f32>) {
+		self.motion_apply_opts.eye_look_at_clamp_deg = clamp_deg.filter(|d| d.is_finite() && *d >= 0.0);
 	}
 
 	/// 現在の LookAt クランプ角度を返す（`None` なら無効）。
 	pub fn eye_look_at_clamp_deg(&self) -> Option<f32> {
-		self.motion_apply_shared.lock().ok().and_then(|g| g.eye_look_at_clamp_deg)
+		self.motion_apply_opts.eye_look_at_clamp_deg
 	}
 
 	/// VMC `Root.translation` を scene root に加算するか。OFF (既定) ならアバターの位置は rest pose を保つ。
 	/// Waidayo 等の calibration の都合で意図せず非ゼロな translation が送られる場合に、アバターが
 	/// 前後にズレないようにするためのスイッチ。
-	pub fn set_apply_vmc_root_translation(&self, enabled: bool) {
-		if let Ok(mut g) = self.motion_apply_shared.lock() {
-			g.apply_root_translation = enabled;
-		}
+	pub fn set_apply_vmc_root_translation(&mut self, enabled: bool) {
+		self.motion_apply_opts.apply_root_translation = enabled;
 	}
 
 	/// 現在の VMC Root translation 適用フラグ。
 	pub fn apply_vmc_root_translation(&self) -> bool {
-		self.motion_apply_shared.lock().map(|g| g.apply_root_translation).unwrap_or(false)
+		self.motion_apply_opts.apply_root_translation
 	}
 
 	/// 旧 IPC 互換の primary source 更新。現在の姿勢適用は key 単位の後着優先。
@@ -2804,7 +2800,7 @@ impl GpuState {
 		let Some(retarget_runtime) = self.motion_retarget_runtime.as_ref() else {
 			return;
 		};
-		let opts = self.motion_apply_shared.lock().map(|g| *g).unwrap_or_default();
+		let opts = self.motion_apply_opts;
 		let Some(doc_arc) = self.document.as_ref() else {
 			return;
 		};

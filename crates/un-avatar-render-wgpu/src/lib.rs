@@ -2445,7 +2445,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					None
 				};
 				self.opts.eye_look_at_clamp_deg = next;
-				if let Some(gpu) = self.gpu.as_ref() {
+				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_eye_look_at_clamp_deg(next);
 				}
 				self.request_redraw();
@@ -2464,7 +2464,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 			RendererControlEvent::SetApplyVmcRootTranslation { enabled } => {
 				self.opts.apply_vmc_root_translation = enabled;
-				if let Some(gpu) = self.gpu.as_ref() {
+				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_apply_vmc_root_translation(enabled);
 				}
 				self.request_redraw();
