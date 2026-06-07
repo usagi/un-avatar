@@ -444,6 +444,19 @@ struct ExpressionNameLookup {
 	normalized: BTreeMap<String, String>,
 }
 
+impl ExpressionNameLookup {
+	fn is_empty(&self) -> bool {
+		self.exact_ascii_casefold.is_empty() && self.normalized.is_empty()
+	}
+
+	fn preset_name_for(&self, name: &str) -> Option<&String> {
+		self.exact_ascii_casefold.get(&name.to_ascii_lowercase()).or_else(|| {
+			let target = normalize_expression_match_key(name);
+			self.normalized.get(&target)
+		})
+	}
+}
+
 #[derive(Debug, Default)]
 struct RuntimeRetargetData {
 	profile_lookup: BTreeMap<String, usize>,
@@ -1727,46 +1740,20 @@ pub fn apply_un_motion_frame_to_document_with_context(
 	}
 	if opts.apply_expressions {
 		if let Some(ref face) = frame.face {
-			if let Some(cat) = document.expression_catalog.as_ref() {
-				let ew = document.expression_weights.get_or_insert_with(Default::default);
-				for ex in &face.expressions {
-					// 完全一致（ASCII case 無視）優先、見つからなければ ARKit BlendShape の表記揺れに耐性のある
-					// 正規化マッチ（区切り文字除去 + 全部小文字）でリトライする。
-					// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
-					let preset_name = context
-						.runtime
-						.expression_lookup
-						.exact_ascii_casefold
-						.get(&ex.name.to_ascii_lowercase())
-						.or_else(|| {
-							let target = normalize_expression_match_key(&ex.name);
-							context.runtime.expression_lookup.normalized.get(&target)
-						});
-					if let Some(preset_name) = preset_name {
-						let value = ex.value.clamp(0.0, 1.0);
-						if let Some(weight) = ew.preset_weights.get_mut(preset_name.as_str()) {
-							*weight = value;
-						} else {
-							ew.preset_weights.insert(preset_name.clone(), value);
-						}
+			if context.runtime.expression_lookup.is_empty() {
+				return;
+			}
+			let ew = document.expression_weights.get_or_insert_with(Default::default);
+			for ex in &face.expressions {
+				// 完全一致（ASCII case 無視）優先、見つからなければ ARKit BlendShape の表記揺れに耐性のある
+				// 正規化マッチ（区切り文字除去 + 全部小文字）でリトライする。
+				// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
+				if let Some(preset_name) = context.runtime.expression_lookup.preset_name_for(&ex.name) {
+					let value = ex.value.clamp(0.0, 1.0);
+					if let Some(weight) = ew.preset_weights.get_mut(preset_name.as_str()) {
+						*weight = value;
 					} else {
-						let preset_name = cat
-							.presets
-							.iter()
-							.find(|p| p.name.eq_ignore_ascii_case(ex.name.as_str()))
-							.or_else(|| {
-								let target = normalize_expression_match_key(&ex.name);
-								cat.presets.iter().find(|p| normalize_expression_match_key(&p.name) == target)
-							})
-							.map(|preset| preset.name.clone());
-						if let Some(preset_name) = preset_name {
-							let value = ex.value.clamp(0.0, 1.0);
-							if let Some(weight) = ew.preset_weights.get_mut(&preset_name) {
-								*weight = value;
-							} else {
-								ew.preset_weights.insert(preset_name, value);
-							}
-						}
+						ew.preset_weights.insert(preset_name.clone(), value);
 					}
 				}
 			}

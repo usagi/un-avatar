@@ -136,6 +136,8 @@ only compatibility fallback paths resolve profile strings or base transforms at
 runtime.
 Expression preset name matching is also compiled into exact-casefold and
 normalized lookup tables, avoiding catalog scans for each PerfectSync sample.
+Runtime expression application uses those compiled tables only; changing the
+catalog requires rebuilding the retarget context.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
 The context also stores finger segment node bindings, including successor node
