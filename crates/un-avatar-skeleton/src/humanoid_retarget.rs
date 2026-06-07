@@ -1066,21 +1066,10 @@ fn apply_humanoid_transform_to_node_index(
 	};
 	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
-		let base = compiled_base.unwrap_or_else(|| base_node_transform(ni, node, rest_nodes));
 		if let Some(deg) = eye_clamp_deg {
 			sample_rotation = clamp_eye_rotation(sample_rotation, deg);
 		}
-		let sample_translation = if apply_translation {
-			frame_ctx.transform_translation(transform)
-		} else {
-			Vec3::ZERO
-		};
-		node.transform = Mat4::from_scale_rotation_translation(
-			base.scale,
-			base.rotation * sample_rotation,
-			base.translation + sample_translation,
-		)
-		.to_cols_array();
+		write_retargeted_local_transform(ni, node, rest_nodes, frame_ctx, compiled_base, sample_rotation, transform, apply_translation);
 	}
 }
 
@@ -1112,15 +1101,32 @@ fn apply_finger_transform_to_profile_node(
 		successor_node_index,
 	);
 	if let Some(node) = nodes.get_mut(node_index) {
-		let base = compiled_base.unwrap_or_else(|| base_node_transform(node_index, node, rest_nodes));
-		let sample_translation = frame_ctx.transform_translation(transform);
-		node.transform = Mat4::from_scale_rotation_translation(
-			base.scale,
-			base.rotation * sample_rotation,
-			base.translation + sample_translation,
-		)
-		.to_cols_array();
+		write_retargeted_local_transform(node_index, node, rest_nodes, frame_ctx, compiled_base, sample_rotation, transform, true);
 	}
+}
+
+fn write_retargeted_local_transform(
+	node_index: usize,
+	node: &mut UnaSceneNode,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	frame_ctx: RetargetFrameContext<'_>,
+	compiled_base: Option<NodeRestTransform>,
+	sample_rotation: Quat,
+	transform: &TransformSample,
+	apply_translation: bool,
+) {
+	let base = compiled_base.unwrap_or_else(|| base_node_transform(node_index, node, rest_nodes));
+	let sample_translation = if apply_translation {
+		frame_ctx.transform_translation(transform)
+	} else {
+		Vec3::ZERO
+	};
+	node.transform = Mat4::from_scale_rotation_translation(
+		base.scale,
+		base.rotation * sample_rotation,
+		base.translation + sample_translation,
+	)
+	.to_cols_array();
 }
 
 fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&BTreeMap<String, usize>>, key: &str) -> Option<usize> {
