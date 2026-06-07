@@ -1570,16 +1570,16 @@ impl GpuState {
 			return false;
 		};
 		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
-		if mark_revisions_applied {
-			let document_revision = self.document_revision.load(Ordering::Acquire);
-			if document_revision != self.applied_document_revision
-				&& !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref())
-			{
-				self.expression_presets = expression_preset_names(doc.expression_catalog.as_ref());
-			}
+		let document_revision = if mark_revisions_applied {
+			Some(self.document_revision.load(Ordering::Acquire))
+		} else {
+			None
+		};
+		let document_changed = document_revision.is_some_and(|revision| revision != self.applied_document_revision);
+		if document_changed && !expression_presets_match_catalog(&self.expression_presets, doc.expression_catalog.as_ref()) {
+			self.expression_presets = expression_preset_names(doc.expression_catalog.as_ref());
 		}
-		let refresh_scene_morph_defaults =
-			mark_revisions_applied && self.document_revision.load(Ordering::Acquire) != self.applied_document_revision;
+		let refresh_scene_morph_defaults = document_changed;
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		sm.update_draw_transforms(
@@ -1591,8 +1591,8 @@ impl GpuState {
 			refresh_scene_morph_defaults,
 		);
 		let runtime_requirements_after_update = refresh_scene_morph_defaults.then(|| sm.runtime_requirements());
-		if mark_revisions_applied {
-			self.applied_document_revision = self.document_revision.load(Ordering::Acquire);
+		if let Some(document_revision) = document_revision {
+			self.applied_document_revision = document_revision;
 			self.applied_expression_overrides_revision = self.expression_overrides_revision;
 		}
 		drop(doc);
