@@ -337,12 +337,11 @@ struct MotionRetargetRuntime {
 }
 
 impl MotionRetargetRuntime {
-	fn for_document(document: &UnaDocument, rest_nodes: Option<Arc<Vec<UnaSceneNode>>>) -> Option<Self> {
+	fn for_document(document: &UnaDocument, rest_nodes: Arc<Vec<UnaSceneNode>>) -> Option<Self> {
 		if document.humanoid_profile.is_none() {
 			return None;
 		}
-		let scene = document.scene.as_ref()?;
-		let rest_nodes = rest_nodes.unwrap_or_else(|| Arc::new(scene.nodes.clone()));
+		document.scene.as_ref()?;
 		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
 		Some(Self { rest_nodes, context })
 	}
@@ -2577,8 +2576,9 @@ impl GpuState {
 			return Ok(());
 		};
 		let retarget_runtime = {
+			let rest_nodes = self.rest_nodes.as_ref().map(Arc::clone);
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			MotionRetargetRuntime::for_document(&d, self.rest_nodes.as_ref().map(Arc::clone))
+			rest_nodes.and_then(|rest_nodes| MotionRetargetRuntime::for_document(&d, rest_nodes))
 		};
 		let humanoid_ok = retarget_runtime.is_some();
 		self.motion_retarget_runtime = retarget_runtime;
