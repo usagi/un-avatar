@@ -1003,6 +1003,14 @@ fn segment_key_from_index(index: usize) -> Option<&'static str> {
 	}
 }
 
+fn hand_wrist_adapter_role(side_prefix: &str) -> UnmotionHumanoidRole {
+	if side_prefix == "left" {
+		UnmotionHumanoidRole::BodyBone(HumanoidBone::LeftHand)
+	} else {
+		UnmotionHumanoidRole::BodyBone(HumanoidBone::RightHand)
+	}
+}
+
 #[allow(clippy::too_many_arguments)]
 fn adapt_unavatar_unmotion_finger_axis(
 	mut rotation: Quat,
@@ -1079,6 +1087,7 @@ fn apply_humanoid_transform_to_profile_node(
 	key: &str,
 	transform: &TransformSample,
 	role: UnmotionHumanoidRole,
+	adapter_role: UnmotionHumanoidRole,
 ) {
 	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), key) else {
 		return;
@@ -1092,6 +1101,7 @@ fn apply_humanoid_transform_to_profile_node(
 		ni,
 		transform,
 		role,
+		adapter_role,
 		None,
 		true,
 		None,
@@ -1108,22 +1118,12 @@ fn apply_humanoid_transform_to_node_index(
 	ni: usize,
 	transform: &TransformSample,
 	role: UnmotionHumanoidRole,
+	adapter_role: UnmotionHumanoidRole,
 	compiled_base: Option<NodeRestTransform>,
 	apply_translation: bool,
 	eye_clamp_deg: Option<f32>,
 ) {
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, role);
-	let adapter_role = if role == UnmotionHumanoidRole::HandWrist {
-		if frame_ctx.body_bone_binding(HumanoidBone::LeftHand).map(|binding| binding.node_index) == Some(ni) {
-			UnmotionHumanoidRole::BodyBone(HumanoidBone::LeftHand)
-		} else if frame_ctx.body_bone_binding(HumanoidBone::RightHand).map(|binding| binding.node_index) == Some(ni) {
-			UnmotionHumanoidRole::BodyBone(HumanoidBone::RightHand)
-		} else {
-			role
-		}
-	} else {
-		role
-	};
 	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
 		if let Some(deg) = eye_clamp_deg {
@@ -1226,6 +1226,7 @@ fn apply_hand_motion_to_scene(
 	let hand_bindings = frame_ctx.hand_bindings(side_prefix);
 	if apply_wrist {
 		if let Some(wrist) = hand.wrist.as_ref() {
+			let adapter_role = hand_wrist_adapter_role(side_prefix);
 			if let Some(binding) = hand_bindings.and_then(|hand| hand.wrist) {
 				apply_humanoid_transform_to_node_index(
 					profile,
@@ -1236,6 +1237,7 @@ fn apply_hand_motion_to_scene(
 					binding.node_index,
 					wrist,
 					UnmotionHumanoidRole::HandWrist,
+					adapter_role,
 					Some(binding.base),
 					true,
 					None,
@@ -1250,6 +1252,7 @@ fn apply_hand_motion_to_scene(
 					key,
 					wrist,
 					UnmotionHumanoidRole::HandWrist,
+					adapter_role,
 				);
 			}
 		}
@@ -1670,6 +1673,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			ni,
 			&sample.transform,
 			UnmotionHumanoidRole::BodyBone(sample.bone),
+			UnmotionHumanoidRole::BodyBone(sample.bone),
 			binding.map(|binding| binding.base),
 			false,
 			eye_clamp_deg.filter(|_| matches!(sample.bone, HumanoidBone::LeftEye | HumanoidBone::RightEye)),
@@ -1761,6 +1765,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					binding.node_index,
 					head,
 					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
 					Some(binding.base),
 					true,
 					None,
@@ -1774,6 +1779,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					frame_ctx,
 					"head",
 					head,
+					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
 					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
 				);
 			}
