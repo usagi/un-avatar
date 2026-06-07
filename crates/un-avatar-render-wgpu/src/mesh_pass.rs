@@ -7374,7 +7374,7 @@ impl SceneMeshes {
 		let (raw, uploaded) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
-			(raw.clone(), raw)
+			(Vec::new(), Vec::new())
 		} else {
 			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
 		};
