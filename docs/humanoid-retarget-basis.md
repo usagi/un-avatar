@@ -116,7 +116,9 @@ than looking at the original document format during every frame application.
 `HumanoidRetargetContext` is that first compiled context. The renderer builds it
 when motion receivers are started, next to the immutable rest-node snapshot, and
 then calls `apply_un_motion_frame_to_document_with_context` for each pending
-motion frame. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
+motion frame. It owns `RuntimeRetargetData`, the compiled runtime lookup bundle
+for profile keys, base transforms, body/finger node bindings, and expression
+name matching. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
 API available for tests and tools while avoiding repeated target-basis detection
 and repeated `.unavatar` rest-cache construction in the renderer hot path.
 It also stores base TRS for the root and Humanoid-profile nodes, so the renderer

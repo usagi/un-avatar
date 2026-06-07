@@ -221,10 +221,7 @@ struct RetargetFrameContext<'a> {
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
 	unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
-	base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
-	profile_lookup: Option<&'a BTreeMap<String, usize>>,
-	body_bone_nodes: Option<&'a [BodyBoneNodeBinding]>,
-	finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
+	runtime: Option<&'a RuntimeRetargetData>,
 }
 
 impl<'a> RetargetFrameContext<'a> {
@@ -232,19 +229,13 @@ impl<'a> RetargetFrameContext<'a> {
 		coordinate_space: CoordinateSpace,
 		target_basis: TargetHumanoidBasis,
 		unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
-		base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
-		profile_lookup: Option<&'a BTreeMap<String, usize>>,
-		body_bone_nodes: Option<&'a [BodyBoneNodeBinding]>,
-		finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
+		runtime: Option<&'a RuntimeRetargetData>,
 	) -> Self {
 		Self {
 			coordinate_space,
 			target_basis,
 			unavatar_adapter,
-			base_transforms,
-			profile_lookup,
-			body_bone_nodes,
-			finger_nodes,
+			runtime,
 		}
 	}
 
@@ -422,6 +413,15 @@ struct ExpressionNameLookup {
 	normalized: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Default)]
+struct RuntimeRetargetData {
+	profile_lookup: BTreeMap<String, usize>,
+	base_transforms: BTreeMap<usize, NodeRestTransform>,
+	body_bone_nodes: Vec<BodyBoneNodeBinding>,
+	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
+	expression_lookup: ExpressionNameLookup,
+}
+
 impl RetargetRestCache {
 	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
 		let (local_rotations, local_translations): (Vec<_>, Vec<_>) = nodes
@@ -478,11 +478,7 @@ impl UnavatarRetargetAdapter {
 #[derive(Debug)]
 pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
-	profile_lookup: BTreeMap<String, usize>,
-	base_transforms: BTreeMap<usize, NodeRestTransform>,
-	body_bone_nodes: Vec<BodyBoneNodeBinding>,
-	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
-	expression_lookup: ExpressionNameLookup,
+	runtime: RuntimeRetargetData,
 	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
 
@@ -506,21 +502,24 @@ impl HumanoidRetargetContext {
 			.map(|profile| precompute_finger_nodes(profile, &profile_lookup))
 			.unwrap_or_default();
 		let expression_lookup = precompute_expression_lookup(document);
+		let runtime = RuntimeRetargetData {
+			profile_lookup,
+			base_transforms,
+			body_bone_nodes,
+			finger_nodes,
+			expression_lookup,
+		};
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
 			document.scene.as_ref().map(|scene| {
 				let rest = rest_nodes.unwrap_or(&scene.nodes);
-				UnavatarRetargetAdapter::new(document.humanoid_profile.as_ref(), rest, &scene.roots, &profile_lookup)
+				UnavatarRetargetAdapter::new(document.humanoid_profile.as_ref(), rest, &scene.roots, &runtime.profile_lookup)
 			})
 		} else {
 			None
 		};
 		Self {
 			target_basis,
-			profile_lookup,
-			base_transforms,
-			body_bone_nodes,
-			finger_nodes,
-			expression_lookup,
+			runtime,
 			unavatar_adapter,
 		}
 	}
@@ -535,10 +534,7 @@ impl HumanoidRetargetContext {
 			coordinate_space,
 			self.target_basis,
 			unavatar_adapter,
-			Some(&self.base_transforms),
-			Some(&self.profile_lookup),
-			Some(&self.body_bone_nodes),
-			Some(&self.finger_nodes),
+			Some(&self.runtime),
 		)
 	}
 }
@@ -720,7 +716,16 @@ fn adapt_unavatar_unmotion_limb_axis(
 	let axis = frame_ctx
 		.unavatar_adapter
 		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
-		.or_else(|| rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup, rest, Some(cache), node_index, role));
+		.or_else(|| {
+			rest_humanoid_child_axis_in_parent(
+				profile,
+				frame_ctx.runtime.map(|runtime| &runtime.profile_lookup),
+				rest,
+				Some(cache),
+				node_index,
+				role,
+			)
+		});
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -839,7 +844,8 @@ fn hand_profile_key(side_prefix: &str) -> Option<&'static str> {
 
 fn body_bone_node_index(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone) -> Option<usize> {
 	frame_ctx
-		.body_bone_nodes
+		.runtime
+		.map(|runtime| runtime.body_bone_nodes.as_slice())
 		.and_then(|nodes| nodes.iter().find(|binding| binding.bone == bone).map(|binding| binding.node_index))
 }
 
@@ -928,7 +934,7 @@ fn apply_humanoid_transform_to_profile_node(
 	transform: &TransformSample,
 	role: UnmotionHumanoidRole,
 ) {
-	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
+	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.runtime.map(|runtime| &runtime.profile_lookup), key) else {
 		return;
 	};
 	apply_humanoid_transform_to_node_index(
@@ -1105,7 +1111,8 @@ fn apply_hand_motion_to_scene(
 				2 => "distal",
 				_ => continue,
 			};
-			let binding = frame_ctx.finger_nodes.and_then(|nodes| {
+			let binding = frame_ctx.runtime.and_then(|runtime| {
+				let nodes = &runtime.finger_nodes;
 				nodes.get(&FingerProfileSegment {
 					side_prefix,
 					finger_key,
@@ -1151,7 +1158,8 @@ fn base_node_transform(
 	frame_ctx: RetargetFrameContext<'_>,
 ) -> NodeRestTransform {
 	if let Some(base) = frame_ctx
-		.base_transforms
+		.runtime
+		.map(|runtime| &runtime.base_transforms)
 		.and_then(|transforms| transforms.get(&node_index).copied())
 	{
 		return base;
@@ -1421,7 +1429,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1446,16 +1454,14 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		frame_ctx.coordinate_space,
 		frame_ctx.target_basis,
 		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
-		frame_ctx.base_transforms,
-		frame_ctx.profile_lookup,
-		frame_ctx.body_bone_nodes,
-		frame_ctx.finger_nodes,
+		frame_ctx.runtime,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if rest_nodes.and_then(|rest| rest.get(ri)).is_some()
 				|| frame_ctx
-					.base_transforms
+					.runtime
+					.map(|runtime| &runtime.base_transforms)
 					.is_some_and(|transforms| transforms.contains_key(&ri))
 			{
 				let base = base_node_transform(ri, node, rest_nodes, frame_ctx);
@@ -1493,7 +1499,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		}
 		let Some(ni) = body_bone_node_index(frame_ctx, sample.bone).or_else(|| {
 			let key = humanoid_bone_profile_key(sample.bone);
-			profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key)
+			profile_node_index_with_lookup(profile, frame_ctx.runtime.map(|runtime| &runtime.profile_lookup), key)
 		}) else {
 			continue;
 		};
@@ -1630,30 +1636,38 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					// 正規化マッチ（区切り文字除去 + 全部小文字）でリトライする。
 					// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
 					let preset_name = context
+						.runtime
 						.expression_lookup
 						.exact_ascii_casefold
 						.get(&ex.name.to_ascii_lowercase())
 						.or_else(|| {
 							let target = normalize_expression_match_key(&ex.name);
-							context.expression_lookup.normalized.get(&target)
-						})
-						.cloned()
-						.or_else(|| {
-							cat.presets
-								.iter()
-								.find(|p| p.name.eq_ignore_ascii_case(ex.name.as_str()))
-								.or_else(|| {
-									let target = normalize_expression_match_key(&ex.name);
-									cat.presets.iter().find(|p| normalize_expression_match_key(&p.name) == target)
-								})
-								.map(|preset| preset.name.clone())
+							context.runtime.expression_lookup.normalized.get(&target)
 						});
 					if let Some(preset_name) = preset_name {
 						let value = ex.value.clamp(0.0, 1.0);
-						if let Some(weight) = ew.preset_weights.get_mut(&preset_name) {
+						if let Some(weight) = ew.preset_weights.get_mut(preset_name.as_str()) {
 							*weight = value;
 						} else {
-							ew.preset_weights.insert(preset_name, value);
+							ew.preset_weights.insert(preset_name.clone(), value);
+						}
+					} else {
+						let preset_name = cat
+							.presets
+							.iter()
+							.find(|p| p.name.eq_ignore_ascii_case(ex.name.as_str()))
+							.or_else(|| {
+								let target = normalize_expression_match_key(&ex.name);
+								cat.presets.iter().find(|p| normalize_expression_match_key(&p.name) == target)
+							})
+							.map(|preset| preset.name.clone());
+						if let Some(preset_name) = preset_name {
+							let value = ex.value.clamp(0.0, 1.0);
+							if let Some(weight) = ew.preset_weights.get_mut(&preset_name) {
+								*weight = value;
+							} else {
+								ew.preset_weights.insert(preset_name, value);
+							}
 						}
 					}
 				}
