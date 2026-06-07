@@ -63,6 +63,34 @@ pub fn humanoid_bone_profile_key(bone: HumanoidBone) -> &'static str {
 	}
 }
 
+const HUMANOID_PROFILE_BONES: &[HumanoidBone] = &[
+	HumanoidBone::Hips,
+	HumanoidBone::Spine,
+	HumanoidBone::Chest,
+	HumanoidBone::UpperChest,
+	HumanoidBone::Neck,
+	HumanoidBone::Head,
+	HumanoidBone::LeftShoulder,
+	HumanoidBone::LeftUpperArm,
+	HumanoidBone::LeftLowerArm,
+	HumanoidBone::LeftHand,
+	HumanoidBone::RightShoulder,
+	HumanoidBone::RightUpperArm,
+	HumanoidBone::RightLowerArm,
+	HumanoidBone::RightHand,
+	HumanoidBone::LeftUpperLeg,
+	HumanoidBone::LeftLowerLeg,
+	HumanoidBone::LeftFoot,
+	HumanoidBone::LeftToes,
+	HumanoidBone::RightUpperLeg,
+	HumanoidBone::RightLowerLeg,
+	HumanoidBone::RightFoot,
+	HumanoidBone::RightToes,
+	HumanoidBone::LeftEye,
+	HumanoidBone::RightEye,
+	HumanoidBone::Jaw,
+];
+
 fn convert_rotation_from_coordinate_space(rotation: Quat, coordinate_space: CoordinateSpace, target_basis: TargetHumanoidBasis) -> Quat {
 	match coordinate_space {
 		CoordinateSpace::Vmc => match target_basis {
@@ -195,6 +223,7 @@ struct RetargetFrameContext<'a> {
 	unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 	base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 	profile_lookup: Option<&'a BTreeMap<String, usize>>,
+	body_bone_nodes: Option<&'a [BodyBoneNodeBinding]>,
 	finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
 }
 
@@ -205,6 +234,7 @@ impl<'a> RetargetFrameContext<'a> {
 		unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 		base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 		profile_lookup: Option<&'a BTreeMap<String, usize>>,
+		body_bone_nodes: Option<&'a [BodyBoneNodeBinding]>,
 		finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
 	) -> Self {
 		Self {
@@ -213,6 +243,7 @@ impl<'a> RetargetFrameContext<'a> {
 			unavatar_adapter,
 			base_transforms,
 			profile_lookup,
+			body_bone_nodes,
 			finger_nodes,
 		}
 	}
@@ -366,6 +397,12 @@ impl NodeRestTransform {
 	}
 }
 
+#[derive(Clone, Copy, Debug)]
+struct BodyBoneNodeBinding {
+	bone: HumanoidBone,
+	node_index: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct FingerProfileSegment {
 	side_prefix: &'static str,
@@ -437,6 +474,7 @@ pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
 	profile_lookup: BTreeMap<String, usize>,
 	base_transforms: BTreeMap<usize, NodeRestTransform>,
+	body_bone_nodes: Vec<BodyBoneNodeBinding>,
 	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
 	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
@@ -450,6 +488,11 @@ impl HumanoidRetargetContext {
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
 		let base_transforms = precompute_base_transforms(document.humanoid_profile.as_ref(), document.scene.as_ref(), rest_nodes);
+		let body_bone_nodes = document
+			.humanoid_profile
+			.as_ref()
+			.map(|profile| precompute_body_bone_nodes(profile, &profile_lookup))
+			.unwrap_or_default();
 		let finger_nodes = document
 			.humanoid_profile
 			.as_ref()
@@ -467,6 +510,7 @@ impl HumanoidRetargetContext {
 			target_basis,
 			profile_lookup,
 			base_transforms,
+			body_bone_nodes,
 			finger_nodes,
 			unavatar_adapter,
 		}
@@ -484,6 +528,7 @@ impl HumanoidRetargetContext {
 			unavatar_adapter,
 			Some(&self.base_transforms),
 			Some(&self.profile_lookup),
+			Some(&self.body_bone_nodes),
 			Some(&self.finger_nodes),
 		)
 	}
@@ -520,6 +565,17 @@ fn precompute_base_transforms(
 		}
 	}
 	transforms
+}
+
+fn precompute_body_bone_nodes(profile: &HumanoidProfile, profile_lookup: &BTreeMap<String, usize>) -> Vec<BodyBoneNodeBinding> {
+	HUMANOID_PROFILE_BONES
+		.iter()
+		.filter_map(|&bone| {
+			let key = humanoid_bone_profile_key(bone);
+			profile_node_index_with_lookup(profile, Some(profile_lookup), key)
+				.map(|node_index| BodyBoneNodeBinding { bone, node_index })
+		})
+		.collect()
 }
 
 fn precompute_finger_nodes(
@@ -752,6 +808,12 @@ fn hand_profile_key(side_prefix: &str) -> Option<&'static str> {
 		"right" => Some("righthand"),
 		_ => None,
 	}
+}
+
+fn body_bone_node_index(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone) -> Option<usize> {
+	frame_ctx
+		.body_bone_nodes
+		.and_then(|nodes| nodes.iter().find(|binding| binding.bone == bone).map(|binding| binding.node_index))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1278,7 +1340,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1305,6 +1367,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
 		frame_ctx.base_transforms,
 		frame_ctx.profile_lookup,
+		frame_ctx.body_bone_nodes,
 		frame_ctx.finger_nodes,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
@@ -1347,8 +1410,10 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		if skip_eye_bones && matches!(sample.bone, HumanoidBone::LeftEye | HumanoidBone::RightEye) {
 			continue;
 		}
-		let key = humanoid_bone_profile_key(sample.bone);
-		let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
+		let Some(ni) = body_bone_node_index(frame_ctx, sample.bone).or_else(|| {
+			let key = humanoid_bone_profile_key(sample.bone);
+			profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key)
+		}) else {
 			continue;
 		};
 		let mut sample_rotation = frame_ctx.transform_rotation(&sample.transform, UnmotionHumanoidRole::BodyBone(sample.bone));

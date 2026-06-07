@@ -124,6 +124,8 @@ hot path can write rest-relative local transforms without decomposing each rest
 node matrix again.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
+Body Humanoid bone node bindings are also compiled into the context, so body
+pose application does not resolve profile strings for each received bone sample.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
 The context also stores finger segment node bindings, including successor node
