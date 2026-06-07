@@ -2516,7 +2516,6 @@ impl GpuSceneBuildContext {
 			shader_variant_tier,
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
-		let rest_nodes = document.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone()));
 		let bone_colliders = if let Some(scene) = document.scene.as_ref() {
 			build_bone_colliders(scene, document.humanoid_profile.as_ref(), options.bone_colliders)
 		} else {
@@ -2529,6 +2528,12 @@ impl GpuSceneBuildContext {
 				}
 				_ => None,
 			}
+		} else {
+			None
+		};
+		let needs_rest_nodes = document.humanoid_profile.is_some() || spring_sim.is_some();
+		let rest_nodes = if needs_rest_nodes {
+			document.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone()))
 		} else {
 			None
 		};
