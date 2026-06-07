@@ -14,7 +14,10 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use un_avatar_core::{morph_weights_for_primitive, UnaAlphaMode, UnaImagePixelFormat, UnaMaterialPbr, UnaSceneSnapshot, UnaShadingModel};
+use un_avatar_core::{
+	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaImagePixelFormat, UnaMaterialPbr, UnaSceneSnapshot,
+	UnaShadingModel,
+};
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
 	FormatDescriptor, FormatId, ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
@@ -73,6 +76,7 @@ struct DiagnoseReport {
 	humanoid: Option<DiagnoseHumanoidSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	expressions: Option<DiagnoseExpressionSummary>,
+	dynamics: DiagnoseDynamicsSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	vrm: Option<DiagnoseVrmSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -330,6 +334,14 @@ struct DiagnoseVrmSummary {
 	mtoon_materials_v0: usize,
 	mtoon_material_indices_v1: Vec<usize>,
 	spring_group_count: usize,
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsSummary {
+	group_count: usize,
+	vrm_spring_bone_group_count: usize,
+	vrc_physbone_group_count: usize,
+	unknown_group_count: usize,
 }
 
 #[derive(Serialize)]
@@ -2024,11 +2036,19 @@ fn build_diagnose_report(
 		apply_probe: expression_apply_probe,
 	});
 
+	let runtime_model = doc.runtime_model();
+	let runtime_dynamics = runtime_model.dynamics();
+	let dynamics = DiagnoseDynamicsSummary {
+		group_count: runtime_dynamics.group_count(),
+		vrm_spring_bone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
+		vrc_physbone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
+		unknown_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::Unknown),
+	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
 		spec_version: vrm.spec_version.clone(),
 		mtoon_materials_v0: vrm.mtoon_materials_v0.len(),
 		mtoon_material_indices_v1: vrm.mtoon_material_indices_v1.clone(),
-		spring_group_count: doc.spring_bones.as_ref().map(|s| s.groups.len()).unwrap_or(0),
+		spring_group_count: dynamics.vrm_spring_bone_group_count,
 	});
 	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
 
@@ -2041,6 +2061,7 @@ fn build_diagnose_report(
 		scene,
 		humanoid,
 		expressions,
+		dynamics,
 		vrm,
 		unavatar,
 		wardrobe_probes,
@@ -2219,6 +2240,13 @@ fn run_diagnose(
 	} else {
 		println!("vrm: none");
 	}
+	println!(
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={}",
+		report.dynamics.group_count,
+		report.dynamics.vrm_spring_bone_group_count,
+		report.dynamics.vrc_physbone_group_count,
+		report.dynamics.unknown_group_count
+	);
 	if let Some(unavatar) = &report.unavatar {
 		println!(
 			"unavatar: spec={} generator={:?} name={:?} source={:?}",
