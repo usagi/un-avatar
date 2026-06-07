@@ -122,3 +122,7 @@ It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
+For `.unavatar + UNMotion`, the context also precomputes adapter rest axes by
+node index. Body limb and typed finger adapters then use a single node-index
+lookup instead of rediscovering Humanoid successors or first-child fallback axes
+for every frame.

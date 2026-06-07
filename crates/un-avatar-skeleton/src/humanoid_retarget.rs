@@ -197,6 +197,7 @@ struct RetargetFrameContext<'a> {
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
 	rest_cache: Option<&'a RetargetRestCache>,
+	rest_axes: Option<&'a BTreeMap<usize, (Quat, Vec3)>>,
 	profile_lookup: Option<&'a BTreeMap<String, usize>>,
 }
 
@@ -205,12 +206,14 @@ impl<'a> RetargetFrameContext<'a> {
 		coordinate_space: CoordinateSpace,
 		target_basis: TargetHumanoidBasis,
 		rest_cache: Option<&'a RetargetRestCache>,
+		rest_axes: Option<&'a BTreeMap<usize, (Quat, Vec3)>>,
 		profile_lookup: Option<&'a BTreeMap<String, usize>>,
 	) -> Self {
 		Self {
 			coordinate_space,
 			target_basis,
 			rest_cache,
+			rest_axes,
 			profile_lookup,
 		}
 	}
@@ -389,6 +392,7 @@ impl RetargetRestCache {
 pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
 	profile_lookup: BTreeMap<String, usize>,
+	unavatar_rest_axes: BTreeMap<usize, (Quat, Vec3)>,
 	unavatar_rest_cache: Option<RetargetRestCache>,
 }
 
@@ -400,14 +404,24 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
-		let unavatar_rest_cache = if target_basis == TargetHumanoidBasis::UnavatarUnity {
-			document.scene.as_ref().map(|scene| RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots))
+		let (unavatar_rest_cache, unavatar_rest_axes) = if target_basis == TargetHumanoidBasis::UnavatarUnity {
+			document
+				.scene
+				.as_ref()
+				.map(|scene| {
+					let rest = rest_nodes.unwrap_or(&scene.nodes);
+					let cache = RetargetRestCache::new(rest, &scene.roots);
+					let axes = precompute_unavatar_rest_axes(document.humanoid_profile.as_ref(), rest, &cache, &profile_lookup);
+					(Some(cache), axes)
+				})
+				.unwrap_or_default()
 		} else {
-			None
+			(None, BTreeMap::new())
 		};
 		Self {
 			target_basis,
 			profile_lookup,
+			unavatar_rest_axes,
 			unavatar_rest_cache,
 		}
 	}
@@ -416,7 +430,9 @@ impl HumanoidRetargetContext {
 		let rest_cache = (coordinate_space == CoordinateSpace::UNMotion)
 			.then_some(self.unavatar_rest_cache.as_ref())
 			.flatten();
-		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache, Some(&self.profile_lookup))
+		let rest_axes = (coordinate_space == CoordinateSpace::UNMotion && self.target_basis == TargetHumanoidBasis::UnavatarUnity)
+			.then_some(&self.unavatar_rest_axes);
+		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache, rest_axes, Some(&self.profile_lookup))
 	}
 }
 
@@ -426,6 +442,65 @@ fn precompute_profile_lookup(profile: &HumanoidProfile) -> BTreeMap<String, usiz
 		lookup.entry(normalize_profile_match_key(key)).or_insert(index);
 	}
 	lookup
+}
+
+fn precompute_unavatar_rest_axes(
+	profile: Option<&HumanoidProfile>,
+	nodes: &[UnaSceneNode],
+	cache: &RetargetRestCache,
+	profile_lookup: &BTreeMap<String, usize>,
+) -> BTreeMap<usize, (Quat, Vec3)> {
+	let Some(profile) = profile else {
+		return BTreeMap::new();
+	};
+	let mut axes = BTreeMap::new();
+	for bone in [
+		HumanoidBone::LeftShoulder,
+		HumanoidBone::LeftUpperArm,
+		HumanoidBone::LeftLowerArm,
+		HumanoidBone::LeftHand,
+		HumanoidBone::RightShoulder,
+		HumanoidBone::RightUpperArm,
+		HumanoidBone::RightLowerArm,
+		HumanoidBone::RightHand,
+		HumanoidBone::LeftUpperLeg,
+		HumanoidBone::LeftLowerLeg,
+		HumanoidBone::LeftFoot,
+		HumanoidBone::RightUpperLeg,
+		HumanoidBone::RightLowerLeg,
+		HumanoidBone::RightFoot,
+	] {
+		let key = humanoid_bone_profile_key(bone);
+		let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) else {
+			continue;
+		};
+		if let Some(axis) = rest_humanoid_child_axis_in_parent(
+			profile,
+			Some(profile_lookup),
+			nodes,
+			Some(cache),
+			node_index,
+			UnmotionHumanoidRole::BodyBone(bone),
+		) {
+			axes.insert(node_index, axis);
+		}
+	}
+	for (side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
+		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
+			continue;
+		};
+		let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) else {
+			continue;
+		};
+		let axis = finger_successor_profile_key(side_prefix, finger_key, segment)
+			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key))
+			.and_then(|child_index| rest_child_axis_from_direct_child_cached(nodes, Some(cache), node_index, child_index))
+			.or_else(|| rest_first_child_axis_in_parent_cached(nodes, Some(cache), node_index));
+		if let Some(axis) = axis {
+			axes.insert(node_index, axis);
+		}
+	}
+	axes
 }
 
 fn adapt_unavatar_unmotion_limb_axis(
@@ -452,9 +527,10 @@ fn adapt_unavatar_unmotion_limb_axis(
 		local_cache = RetargetRestCache::new(rest, roots);
 		&local_cache
 	};
-	let Some((rest_rotation, target_axis)) =
+	let axis = frame_ctx.rest_axes.and_then(|axes| axes.get(&node_index).copied()).or_else(|| {
 		rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup, rest, Some(cache), node_index, role)
-	else {
+	});
+	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
 	let parent_world_rotation = cache.parent_world_rotation(node_index);
@@ -487,6 +563,39 @@ fn unavatar_unmotion_finger_source_axis_in_target(side_prefix: &str, finger_key:
 		-Vec3::X
 	}
 }
+
+const FINGER_PROFILE_SEGMENTS: &[(&str, &str, &str)] = &[
+	("left", "thumb", "proximal"),
+	("left", "thumb", "intermediate"),
+	("left", "thumb", "distal"),
+	("left", "index", "proximal"),
+	("left", "index", "intermediate"),
+	("left", "index", "distal"),
+	("left", "middle", "proximal"),
+	("left", "middle", "intermediate"),
+	("left", "middle", "distal"),
+	("left", "ring", "proximal"),
+	("left", "ring", "intermediate"),
+	("left", "ring", "distal"),
+	("left", "little", "proximal"),
+	("left", "little", "intermediate"),
+	("left", "little", "distal"),
+	("right", "thumb", "proximal"),
+	("right", "thumb", "intermediate"),
+	("right", "thumb", "distal"),
+	("right", "index", "proximal"),
+	("right", "index", "intermediate"),
+	("right", "index", "distal"),
+	("right", "middle", "proximal"),
+	("right", "middle", "intermediate"),
+	("right", "middle", "distal"),
+	("right", "ring", "proximal"),
+	("right", "ring", "intermediate"),
+	("right", "ring", "distal"),
+	("right", "little", "proximal"),
+	("right", "little", "intermediate"),
+	("right", "little", "distal"),
+];
 
 fn finger_profile_key(side_prefix: &str, finger_key: &str, segment: &str) -> Option<&'static str> {
 	match (side_prefix, finger_key, segment) {
@@ -571,10 +680,12 @@ fn adapt_unavatar_unmotion_finger_axis(
 		local_cache = RetargetRestCache::new(rest, roots);
 		&local_cache
 	};
-	let axis = successor_key
-		.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
-		.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
-		.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index));
+	let axis = frame_ctx.rest_axes.and_then(|axes| axes.get(&node_index).copied()).or_else(|| {
+		successor_key
+			.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
+			.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
+			.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
+	});
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -1045,7 +1156,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1070,6 +1181,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		frame_ctx.coordinate_space,
 		frame_ctx.target_basis,
 		frame_ctx.rest_cache.or(local_cache.as_ref()),
+		frame_ctx.rest_axes,
 		frame_ctx.profile_lookup,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
