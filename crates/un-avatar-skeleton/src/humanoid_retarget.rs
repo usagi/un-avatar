@@ -282,6 +282,24 @@ impl<'a> RetargetFrameContext<'a> {
 	fn transform_translation(self, sample: &TransformSample) -> Vec3 {
 		transform_humanoid_sample_translation(sample, self.coordinate_space, self.target_basis)
 	}
+
+	fn profile_lookup(self) -> Option<&'a BTreeMap<String, usize>> {
+		self.runtime.map(|runtime| &runtime.profile_lookup)
+	}
+
+	fn body_bone_binding(self, bone: HumanoidBone) -> Option<NodeTransformBinding> {
+		self.runtime
+			.and_then(|runtime| runtime.body_bone_nodes.get(humanoid_bone_index(bone)).copied().flatten())
+	}
+
+	fn hand_bindings(self, side_prefix: &str) -> Option<&'a HandNodeBindings> {
+		let side_index = side_index_from_prefix(side_prefix)?;
+		self.runtime.and_then(|runtime| runtime.hand_nodes.get(side_index))
+	}
+
+	fn has_runtime(self) -> bool {
+		self.runtime.is_some()
+	}
 }
 
 fn unavatar_unmotion_limb_source_axis_in_target(role: UnmotionHumanoidRole) -> Option<Vec3> {
@@ -815,7 +833,7 @@ fn adapt_unavatar_unmotion_limb_axis(
 		.or_else(|| {
 			rest_humanoid_child_axis_in_parent(
 				profile,
-				frame_ctx.runtime.map(|runtime| &runtime.profile_lookup),
+				frame_ctx.profile_lookup(),
 				rest,
 				Some(cache),
 				node_index,
@@ -985,17 +1003,6 @@ fn segment_key_from_index(index: usize) -> Option<&'static str> {
 	}
 }
 
-fn body_bone_binding(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone) -> Option<NodeTransformBinding> {
-	frame_ctx
-		.runtime
-		.and_then(|runtime| runtime.body_bone_nodes.get(humanoid_bone_index(bone)).copied().flatten())
-}
-
-fn hand_node_bindings<'a>(frame_ctx: RetargetFrameContext<'a>, side_prefix: &str) -> Option<&'a HandNodeBindings> {
-	let side_index = side_index_from_prefix(side_prefix)?;
-	frame_ctx.runtime.and_then(|runtime| runtime.hand_nodes.get(side_index))
-}
-
 #[allow(clippy::too_many_arguments)]
 fn adapt_unavatar_unmotion_finger_axis(
 	mut rotation: Quat,
@@ -1073,7 +1080,7 @@ fn apply_humanoid_transform_to_profile_node(
 	transform: &TransformSample,
 	role: UnmotionHumanoidRole,
 ) {
-	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.runtime.map(|runtime| &runtime.profile_lookup), key) else {
+	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), key) else {
 		return;
 	};
 	apply_humanoid_transform_to_node_index(
@@ -1107,9 +1114,9 @@ fn apply_humanoid_transform_to_node_index(
 ) {
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, role);
 	let adapter_role = if role == UnmotionHumanoidRole::HandWrist {
-		if body_bone_binding(frame_ctx, HumanoidBone::LeftHand).map(|binding| binding.node_index) == Some(ni) {
+		if frame_ctx.body_bone_binding(HumanoidBone::LeftHand).map(|binding| binding.node_index) == Some(ni) {
 			UnmotionHumanoidRole::BodyBone(HumanoidBone::LeftHand)
-		} else if body_bone_binding(frame_ctx, HumanoidBone::RightHand).map(|binding| binding.node_index) == Some(ni) {
+		} else if frame_ctx.body_bone_binding(HumanoidBone::RightHand).map(|binding| binding.node_index) == Some(ni) {
 			UnmotionHumanoidRole::BodyBone(HumanoidBone::RightHand)
 		} else {
 			role
@@ -1216,7 +1223,7 @@ fn apply_hand_motion_to_scene(
 	if hand.tracking_state == un_motion_frame::TrackingState::Lost {
 		return;
 	}
-	let hand_bindings = hand_node_bindings(frame_ctx, side_prefix);
+	let hand_bindings = frame_ctx.hand_bindings(side_prefix);
 	if apply_wrist {
 		if let Some(wrist) = hand.wrist.as_ref() {
 			if let Some(binding) = hand_bindings.and_then(|hand| hand.wrist) {
@@ -1328,7 +1335,7 @@ fn root_base_transform(
 		.filter(|binding| binding.node_index == node_index)
 		.map(|binding| binding.base)
 		.or_else(|| rest_nodes.and_then(|rest| rest.get(node_index)).map(NodeRestTransform::from_node))
-		.or_else(|| frame_ctx.runtime.map(|_| NodeRestTransform::from_node(node)))
+		.or_else(|| frame_ctx.has_runtime().then(|| NodeRestTransform::from_node(node)))
 }
 
 fn constraint_axis(axis: UnaNodeConstraintAxis) -> Vec3 {
@@ -1646,10 +1653,10 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		if skip_eye_bones && matches!(sample.bone, HumanoidBone::LeftEye | HumanoidBone::RightEye) {
 			continue;
 		}
-		let binding = body_bone_binding(frame_ctx, sample.bone);
+		let binding = frame_ctx.body_bone_binding(sample.bone);
 		let ni = binding.map(|binding| binding.node_index).or_else(|| {
 			let key = humanoid_bone_profile_key(sample.bone);
-			profile_node_index_with_lookup(profile, frame_ctx.runtime.map(|runtime| &runtime.profile_lookup), key)
+			profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), key)
 		});
 		let Some(ni) = ni else {
 			continue;
@@ -1744,7 +1751,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 	}
 	if let Some(ref face) = frame.face {
 		if let Some(ref head) = face.head {
-			if let Some(binding) = body_bone_binding(frame_ctx, HumanoidBone::Head) {
+			if let Some(binding) = frame_ctx.body_bone_binding(HumanoidBone::Head) {
 				apply_humanoid_transform_to_node_index(
 					profile,
 					&mut scene.nodes,
