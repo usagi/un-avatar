@@ -4,7 +4,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
 	resolved_scene_roots, UnaDocument, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind,
-	UnaSceneNode, UnaSceneSnapshot,
+	UnaRuntimeSourceKind, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
@@ -22,19 +22,13 @@ enum TargetHumanoidBasis {
 	Native,
 }
 
-fn target_humanoid_basis(document: &UnaDocument) -> TargetHumanoidBasis {
-	if document.unavatar.is_some() {
+fn target_humanoid_basis(source_kind: UnaRuntimeSourceKind) -> TargetHumanoidBasis {
+	match source_kind {
 		// .unavatar is exported from Unity as glTF-space local TRS:
 		// position = (-x, y, z), rotation = (x, -y, -z, w).
-		return TargetHumanoidBasis::UnavatarUnity;
-	}
-	let Some(vrm) = document.vrm.as_ref() else {
-		return TargetHumanoidBasis::Vrm0;
-	};
-	if vrm.spec_version.starts_with('1') {
-		TargetHumanoidBasis::Vrm1
-	} else {
-		TargetHumanoidBasis::Vrm0
+		UnaRuntimeSourceKind::Unavatar => TargetHumanoidBasis::UnavatarUnity,
+		UnaRuntimeSourceKind::Vrm1 => TargetHumanoidBasis::Vrm1,
+		UnaRuntimeSourceKind::Vrm0 | UnaRuntimeSourceKind::GltfLike => TargetHumanoidBasis::Vrm0,
 	}
 }
 
@@ -584,22 +578,21 @@ pub struct HumanoidRetargetContext {
 
 impl HumanoidRetargetContext {
 	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
-		let target_basis = target_humanoid_basis(document);
-		let profile_lookup = document
-			.humanoid_profile
-			.as_ref()
-			.map(precompute_profile_lookup)
-			.unwrap_or_default();
+		let runtime_model = document.runtime_model();
+		let target_basis = target_humanoid_basis(runtime_model.source_kind());
+		let profile = runtime_model.humanoid_profile();
+		let scene = runtime_model.scene();
+		let profile_lookup = profile.map(precompute_profile_lookup).unwrap_or_default();
 		let compile_input = RetargetCompileInput {
-			profile: document.humanoid_profile.as_ref(),
-			scene: document.scene.as_ref(),
+			profile,
+			scene,
 			rest_nodes,
 			profile_lookup: &profile_lookup,
 		};
 		let root_base = precompute_root_base(compile_input);
 		let body_bone_nodes = precompute_body_bone_nodes(compile_input);
 		let hand_nodes = precompute_hand_nodes(compile_input);
-		let expression_lookup = precompute_expression_lookup(document);
+		let expression_lookup = precompute_expression_lookup(runtime_model.expression_catalog());
 		let runtime = RuntimeRetargetData {
 			profile_lookup,
 			root_base,
@@ -608,9 +601,9 @@ impl HumanoidRetargetContext {
 			expression_lookup,
 		};
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
-			document.scene.as_ref().map(|scene| {
+			scene.map(|scene| {
 				let rest = rest_nodes.unwrap_or(&scene.nodes);
-				UnavatarRetargetAdapter::new(document.humanoid_profile.as_ref(), rest, &scene.roots, &runtime.profile_lookup)
+				UnavatarRetargetAdapter::new(profile, rest, &scene.roots, &runtime.profile_lookup)
 			})
 		} else {
 			None
@@ -730,8 +723,8 @@ fn precompute_hand_nodes(input: RetargetCompileInput<'_>) -> [HandNodeBindings; 
 	hands
 }
 
-fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup {
-	let Some(catalog) = document.expression_catalog.as_ref() else {
+fn precompute_expression_lookup(catalog: Option<&un_avatar_core::UnaExpressionCatalog>) -> ExpressionNameLookup {
+	let Some(catalog) = catalog else {
 		return ExpressionNameLookup::default();
 	};
 	let mut lookup = ExpressionNameLookup::default();
