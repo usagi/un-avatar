@@ -9,6 +9,7 @@ use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
 
 type ProfileNodeLookup = Vec<(String, usize)>;
+type ExpressionLookupEntries = Vec<(String, usize)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetHumanoidBasis {
@@ -475,8 +476,8 @@ struct HandNodeBindings {
 #[derive(Debug, Default)]
 struct ExpressionNameLookup {
 	preset_names: Vec<String>,
-	exact_ascii_casefold: BTreeMap<String, usize>,
-	normalized: BTreeMap<String, usize>,
+	exact_ascii_casefold: ExpressionLookupEntries,
+	normalized: ExpressionLookupEntries,
 }
 
 impl ExpressionNameLookup {
@@ -485,9 +486,9 @@ impl ExpressionNameLookup {
 	}
 
 	fn preset_name_for(&self, name: &str) -> Option<&str> {
-		let index = self.exact_ascii_casefold.get(&name.to_ascii_lowercase()).copied().or_else(|| {
+		let index = lookup_entry_index(&self.exact_ascii_casefold, &name.to_ascii_lowercase()).or_else(|| {
 			let target = normalize_expression_match_key(name);
-			self.normalized.get(&target).copied()
+			lookup_entry_index(&self.normalized, &target)
 		})?;
 		self.preset_names.get(index).map(String::as_str)
 	}
@@ -650,6 +651,18 @@ fn profile_lookup_node_index(lookup: &ProfileNodeLookup, key: &str) -> Option<us
 		.map(|index| lookup[index].1)
 }
 
+fn lookup_entry_index(entries: &ExpressionLookupEntries, key: &str) -> Option<usize> {
+	entries
+		.binary_search_by(|(candidate, _)| candidate.as_str().cmp(key))
+		.ok()
+		.map(|index| entries[index].1)
+}
+
+fn sort_dedup_lookup_entries(entries: &mut ExpressionLookupEntries) {
+	entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+	entries.dedup_by(|(a, _), (b, _)| a == b);
+}
+
 fn precompute_root_base(scene: Option<&UnaSceneSnapshot>, rest_nodes: Option<&[UnaSceneNode]>) -> Option<NodeTransformBinding> {
 	let Some(scene) = scene else {
 		return None;
@@ -746,13 +759,13 @@ fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup 
 		lookup.preset_names.push(preset.name.clone());
 		lookup
 			.exact_ascii_casefold
-			.entry(preset.name.to_ascii_lowercase())
-			.or_insert(index);
+			.push((preset.name.to_ascii_lowercase(), index));
 		lookup
 			.normalized
-			.entry(normalize_expression_match_key(&preset.name))
-			.or_insert(index);
+			.push((normalize_expression_match_key(&preset.name), index));
 	}
+	sort_dedup_lookup_entries(&mut lookup.exact_ascii_casefold);
+	sort_dedup_lookup_entries(&mut lookup.normalized);
 	lookup
 }
 
