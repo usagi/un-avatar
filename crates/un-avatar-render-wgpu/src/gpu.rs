@@ -2801,14 +2801,14 @@ impl GpuState {
 		if self.pending_motion_frames.is_empty() {
 			return;
 		}
+		let Some(retarget_runtime) = self.motion_retarget_runtime.as_ref() else {
+			return;
+		};
+		let opts = self.motion_apply_shared.lock().map(|g| *g).unwrap_or_default();
 		let Some(doc_arc) = self.document.as_ref() else {
 			return;
 		};
 		let Ok(mut document) = doc_arc.write() else {
-			return;
-		};
-		let opts = self.motion_apply_shared.lock().map(|g| *g).unwrap_or_default();
-		let Some(retarget_runtime) = self.motion_retarget_runtime.as_ref() else {
 			return;
 		};
 		let should_log = self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(120);
