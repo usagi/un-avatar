@@ -1213,12 +1213,33 @@ fn apply_hand_motion_to_scene(
 	}
 }
 
-fn pose_has_valid_bone(pose: Option<&HumanoidPose>, bone: HumanoidBone) -> bool {
-	pose.is_some_and(|pose| {
-		pose.bones
-			.iter()
-			.any(|sample| sample.bone == bone && sample.state != SampleState::Missing)
-	})
+#[derive(Clone, Copy, Debug, Default)]
+struct BodyPoseOwnership {
+	left_hand: bool,
+	right_hand: bool,
+}
+
+impl BodyPoseOwnership {
+	fn from_pose(pose: Option<&HumanoidPose>) -> Self {
+		let Some(pose) = pose else {
+			return Self::default();
+		};
+		let mut ownership = Self::default();
+		for sample in &pose.bones {
+			if sample.state == SampleState::Missing {
+				continue;
+			}
+			match sample.bone {
+				HumanoidBone::LeftHand => ownership.left_hand = true,
+				HumanoidBone::RightHand => ownership.right_hand = true,
+				_ => {}
+			}
+			if ownership.left_hand && ownership.right_hand {
+				break;
+			}
+		}
+		ownership
+	}
 }
 
 fn node_scale_rotation_translation(node: &UnaSceneNode) -> (Vec3, Quat, Vec3) {
@@ -1625,6 +1646,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 	};
 	let frame_ctx = context.frame_context(frame.header.coordinate_space);
 	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
+	let body_pose_ownership = BodyPoseOwnership::from_pose(body_pose);
 	if let Some(ref body) = frame.body {
 		if let Some(ref pose) = body.humanoid {
 			apply_humanoid_pose_to_scene_with_rest_in_space_full(
@@ -1649,7 +1671,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 			"left",
 			rest_nodes,
 			frame_ctx,
-			!pose_has_valid_bone(body_pose, HumanoidBone::LeftHand),
+			!body_pose_ownership.left_hand,
 		);
 	}
 	if let Some(ref hand) = frame.right_hand {
@@ -1661,7 +1683,7 @@ pub fn apply_un_motion_frame_to_document_with_context(
 			"right",
 			rest_nodes,
 			frame_ctx,
-			!pose_has_valid_bone(body_pose, HumanoidBone::RightHand),
+			!body_pose_ownership.right_hand,
 		);
 	}
 	if let Some(ref face) = frame.face {
