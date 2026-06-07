@@ -7134,6 +7134,7 @@ impl SceneMeshes {
 				} else {
 					None
 				};
+				let has_morph_targets = !morph_pos.is_empty();
 
 				draws.push(MeshDraw {
 					vertex_buffer: vbuf,
@@ -7155,7 +7156,11 @@ impl SceneMeshes {
 					active,
 					shading: mat.shading,
 					morph_pos,
-					expression_bindings: expression_bindings.get(&(mesh_i, prim_i)).cloned().unwrap_or_default(),
+					expression_bindings: if has_morph_targets {
+						expression_bindings.get(&(mesh_i, prim_i)).cloned().unwrap_or_default()
+					} else {
+						Vec::new()
+					},
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_meta.target_count as usize),
 					morph_weight_scratch: Vec::with_capacity(morph_meta.target_count as usize),
