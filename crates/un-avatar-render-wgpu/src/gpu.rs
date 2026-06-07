@@ -1130,7 +1130,6 @@ impl GpuState {
 		let size = window.inner_size();
 		let width = size.width.max(1);
 		let height = size.height.max(1);
-		let document_wrapped: Option<Arc<RwLock<UnaDocument>>> = None;
 		let vmc_live = false;
 		let unmotion_zenoh_live = false;
 		let unmotion_zenoh_received_frames = Arc::new(AtomicU64::new(0));
@@ -1412,7 +1411,7 @@ impl GpuState {
 			contact_shadow_pipeline,
 			contact_shadow_buffer,
 			contact_shadow_bind_group,
-			document: document_wrapped,
+			document: None,
 			document_revision,
 			applied_document_revision: 0,
 			vmc_live,
@@ -2474,6 +2473,13 @@ impl GpuState {
 		prepared: PreparedDocumentScene,
 		options: DocumentAttachOptions,
 	) -> Result<(), String> {
+		let DocumentAttachOptions {
+			vmc_address,
+			unmotion_zenoh,
+			audio_link,
+			debug_vmc,
+			..
+		} = options;
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
 		self.document = Some(prepared.document);
@@ -2485,8 +2491,8 @@ impl GpuState {
 		self.bone_colliders = prepared.bone_colliders;
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
-		self.apply_runtime_requirements(prepared.runtime_requirements, options.audio_link.clone());
-		self.reconfigure_motion_receivers(options.vmc_address, options.unmotion_zenoh, options.debug_vmc)?;
+		self.apply_runtime_requirements(prepared.runtime_requirements, audio_link);
+		self.reconfigure_motion_receivers(vmc_address, unmotion_zenoh, debug_vmc)?;
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
 		self.write_globals(gw, gh);
