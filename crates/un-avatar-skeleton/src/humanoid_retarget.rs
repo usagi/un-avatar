@@ -426,6 +426,20 @@ struct NodeTransformBinding {
 	base: NodeRestTransform,
 }
 
+impl NodeTransformBinding {
+	fn from_profile_key(
+		profile: &HumanoidProfile,
+		profile_lookup: &BTreeMap<String, usize>,
+		scene: &UnaSceneSnapshot,
+		rest_nodes: Option<&[UnaSceneNode]>,
+		key: &str,
+	) -> Option<Self> {
+		let node_index = profile_node_index_with_lookup(profile, Some(profile_lookup), key)?;
+		let base = node_base_transform_from_scene(scene, rest_nodes, node_index)?;
+		Some(Self { node_index, base })
+	}
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FingerNodeBinding {
 	node: NodeTransformBinding,
@@ -630,11 +644,7 @@ fn precompute_body_bone_nodes(
 	};
 	for &bone in HUMANOID_PROFILE_BONES {
 		let key = humanoid_bone_profile_key(bone);
-		if let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) {
-			if let Some(base) = node_base_transform_from_scene(scene, rest_nodes, node_index) {
-				nodes[humanoid_bone_index(bone)] = Some(NodeTransformBinding { node_index, base });
-			}
-		}
+		nodes[humanoid_bone_index(bone)] = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key);
 	}
 	nodes
 }
@@ -651,15 +661,14 @@ fn precompute_hand_nodes(
 	};
 	for (side_index, side_prefix) in ["left", "right"].into_iter().enumerate() {
 		if let Some(key) = hand_profile_key(side_prefix) {
-			hands[side_index].wrist = profile_node_index_with_lookup(profile, Some(profile_lookup), key)
-				.and_then(|node_index| node_base_transform_from_scene(scene, rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base }));
+			hands[side_index].wrist = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key);
 		}
 	}
 	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
 		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
 			continue;
 		};
-		let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) else {
+		let Some(node) = NodeTransformBinding::from_profile_key(profile, profile_lookup, scene, rest_nodes, key) else {
 			continue;
 		};
 		let Some(side_index) = side_index_from_prefix(side_prefix) else {
@@ -673,12 +682,10 @@ fn precompute_hand_nodes(
 		};
 		let successor_node_index = finger_successor_profile_key(side_prefix, finger_key, segment)
 			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key));
-		if let Some(base) = node_base_transform_from_scene(scene, rest_nodes, node_index) {
-			hands[side_index].fingers[finger_index][segment_index] = Some(FingerNodeBinding {
-				node: NodeTransformBinding { node_index, base },
-				successor_node_index,
-			});
-		}
+		hands[side_index].fingers[finger_index][segment_index] = Some(FingerNodeBinding {
+			node,
+			successor_node_index,
+		});
 	}
 	hands
 }
