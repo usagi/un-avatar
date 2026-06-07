@@ -6421,6 +6421,7 @@ impl SceneMeshes {
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		let mut empty_morph_resources: Option<MorphGpuResources> = None;
+		let default_material = UnaMaterialPbr::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
 			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
@@ -6428,8 +6429,8 @@ impl SceneMeshes {
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
 				let mi = buf.material_index.unwrap_or(0);
-				let mat = scene.materials.get(mi).cloned().unwrap_or_default();
-				if material_is_fully_invisible_for_draw(&mat, &opts) {
+				let mat = scene.materials.get(mi).unwrap_or(&default_material);
+				if material_is_fully_invisible_for_draw(mat, &opts) {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
 				}
@@ -6803,7 +6804,7 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
-				let draw_material = mesh_draw_material_gpu(&mat, &mtoon, &opts, mesh_i, prim_i);
+				let draw_material = mesh_draw_material_gpu(mat, &mtoon, &opts, mesh_i, prim_i);
 				let draw_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 					label: Some("mesh_draw_material"),
 					contents: bytemuck::bytes_of(&draw_material),
@@ -7206,11 +7207,11 @@ impl SceneMeshes {
 						bind_group: empty_morph_resources.bind_group.clone(),
 					}
 				};
-				let compute_fur_cards = if material_has_fur(&mat, mat.shading, &opts) {
+				let compute_fur_cards = if material_has_fur(mat, mat.shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
 						&compute_fur_cards_bind_group_layout,
-						&mat,
+						mat,
 						&verts,
 						&indices,
 						compute_fur_cards_cpu_fur_maps,
@@ -7253,7 +7254,7 @@ impl SceneMeshes {
 					morph_weights: Vec::with_capacity(morph_target_count),
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
-					material: mat,
+					material: mat.clone(),
 					mtoon,
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
