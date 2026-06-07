@@ -8,8 +8,9 @@ use un_avatar_core::{
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
 
-type ProfileNodeLookup = Vec<(String, usize)>;
-type ExpressionLookupEntries = Vec<(String, usize)>;
+type StringIndexLookup = Vec<(String, usize)>;
+type ProfileNodeLookup = StringIndexLookup;
+type ExpressionLookupEntries = StringIndexLookup;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetHumanoidBasis {
@@ -639,26 +640,26 @@ fn precompute_profile_lookup(profile: &HumanoidProfile) -> ProfileNodeLookup {
 		.iter()
 		.map(|(key, &index)| (normalize_profile_match_key(key), index))
 		.collect();
-	lookup.sort_by(|(a, _), (b, _)| a.cmp(b));
-	lookup.dedup_by(|(a, _), (b, _)| a == b);
+	sort_dedup_string_index_lookup(&mut lookup);
 	lookup
 }
 
 fn profile_lookup_node_index(lookup: &ProfileNodeLookup, key: &str) -> Option<usize> {
-	lookup
-		.binary_search_by(|(candidate, _)| candidate.as_str().cmp(key))
-		.ok()
-		.map(|index| lookup[index].1)
+	string_index_lookup_value(lookup, key)
 }
 
 fn lookup_entry_index(entries: &ExpressionLookupEntries, key: &str) -> Option<usize> {
+	string_index_lookup_value(entries, key)
+}
+
+fn string_index_lookup_value(entries: &StringIndexLookup, key: &str) -> Option<usize> {
 	entries
 		.binary_search_by(|(candidate, _)| candidate.as_str().cmp(key))
 		.ok()
 		.map(|index| entries[index].1)
 }
 
-fn sort_dedup_lookup_entries(entries: &mut ExpressionLookupEntries) {
+fn sort_dedup_string_index_lookup(entries: &mut StringIndexLookup) {
 	entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 	entries.dedup_by(|(a, _), (b, _)| a == b);
 }
@@ -764,8 +765,8 @@ fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup 
 			.normalized
 			.push((normalize_expression_match_key(&preset.name), index));
 	}
-	sort_dedup_lookup_entries(&mut lookup.exact_ascii_casefold);
-	sort_dedup_lookup_entries(&mut lookup.normalized);
+	sort_dedup_string_index_lookup(&mut lookup.exact_ascii_casefold);
+	sort_dedup_string_index_lookup(&mut lookup.normalized);
 	lookup
 }
 
