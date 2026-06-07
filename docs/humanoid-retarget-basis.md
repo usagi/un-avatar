@@ -125,6 +125,8 @@ It also stores root base TRS and per-node base TRS inside body/hand bindings, so
 the renderer hot path can write rest-relative local transforms without
 decomposing each rest node matrix again or keeping a duplicate base-transform
 map for every Humanoid node.
+Root application also reads that compiled root binding before falling back to
+legacy rest/current-node decomposition.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Body Humanoid bone node bindings are also compiled into a fixed bone-index

@@ -1269,6 +1269,21 @@ fn base_node_transform(
 	NodeRestTransform::from_node(base_node)
 }
 
+fn root_base_transform(
+	node_index: usize,
+	node: &UnaSceneNode,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	frame_ctx: RetargetFrameContext<'_>,
+) -> Option<NodeRestTransform> {
+	frame_ctx
+		.runtime
+		.and_then(|runtime| runtime.root_base)
+		.filter(|binding| binding.node_index == node_index)
+		.map(|binding| binding.base)
+		.or_else(|| rest_nodes.and_then(|rest| rest.get(node_index)).map(NodeRestTransform::from_node))
+		.or_else(|| frame_ctx.runtime.map(|_| NodeRestTransform::from_node(node)))
+}
+
 fn constraint_axis(axis: UnaNodeConstraintAxis) -> Vec3 {
 	match axis {
 		UnaNodeConstraintAxis::X => Vec3::X,
@@ -1557,18 +1572,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
-			if rest_nodes.and_then(|rest| rest.get(ri)).is_some()
-				|| frame_ctx
-					.runtime
-					.and_then(|runtime| runtime.root_base)
-					.is_some_and(|binding| binding.node_index == ri)
-			{
-				let base = frame_ctx
-					.runtime
-					.and_then(|runtime| runtime.root_base)
-					.filter(|binding| binding.node_index == ri)
-					.map(|binding| binding.base)
-					.unwrap_or_else(|| base_node_transform(ri, node, rest_nodes));
+			if let Some(base) = root_base_transform(ri, node, rest_nodes, frame_ctx) {
 				let sample_rotation = frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root);
 				// translation は opt-in 時のみ rest に加算する。OFF 時は rest pose の base_translation を温存。
 				let translation = if apply_root_translation {
