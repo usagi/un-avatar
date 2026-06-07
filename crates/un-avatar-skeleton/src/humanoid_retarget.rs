@@ -595,7 +595,7 @@ impl HumanoidRetargetContext {
 			rest_nodes,
 			profile_lookup: &profile_lookup,
 		};
-		let root_base = precompute_root_base(document.scene.as_ref(), rest_nodes);
+		let root_base = precompute_root_base(compile_input);
 		let body_bone_nodes = precompute_body_bone_nodes(compile_input);
 		let hand_nodes = precompute_hand_nodes(compile_input);
 		let expression_lookup = precompute_expression_lookup(document);
@@ -666,12 +666,12 @@ fn sort_dedup_string_index_lookup(entries: &mut StringIndexLookup) {
 	entries.dedup_by(|(a, _), (b, _)| a == b);
 }
 
-fn precompute_root_base(scene: Option<&UnaSceneSnapshot>, rest_nodes: Option<&[UnaSceneNode]>) -> Option<NodeTransformBinding> {
-	let Some(scene) = scene else {
+fn precompute_root_base(input: RetargetCompileInput<'_>) -> Option<NodeTransformBinding> {
+	let Some(scene) = input.scene else {
 		return None;
 	};
 	let node_index = *scene.roots.first()?;
-	node_base_transform_from_scene(scene, rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
+	node_base_transform_from_scene(scene, input.rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
 }
 
 fn node_base_transform_from_scene(
