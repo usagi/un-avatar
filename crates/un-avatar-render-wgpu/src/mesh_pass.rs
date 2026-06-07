@@ -7178,6 +7178,8 @@ impl SceneMeshes {
 		let active_draw_count = active_draw_count(&draws);
 		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
 		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
+		let expression_names = if has_morph_draws { expression_names } else { Vec::new() };
+		let expression_value_capacity = expression_names.len();
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -7222,7 +7224,7 @@ impl SceneMeshes {
 			texture_summary,
 			runtime_requirements,
 			expression_names,
-			expression_value_scratch: Vec::with_capacity(catalog.map_or(0, |catalog| catalog.presets.len())),
+			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
 			has_morph_draws,
 			opts,
 		})
