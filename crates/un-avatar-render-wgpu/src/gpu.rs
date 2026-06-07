@@ -1470,13 +1470,6 @@ impl GpuState {
 		if timestamp_features.contains(wgpu::Features::TIMESTAMP_QUERY) {
 			gpu.gpu_timestamps = Some(GpuTimestamps::new(&gpu.device, &gpu.queue));
 		}
-		if let Some(doc_arc) = &gpu.document {
-			if let Ok(doc) = doc_arc.read() {
-				if let Some(catalog) = doc.expression_catalog.as_ref() {
-					gpu.expression_presets = expression_preset_names(Some(catalog));
-				}
-			}
-		}
 		gpu.write_globals(gw, gh);
 		Ok(gpu)
 	}
