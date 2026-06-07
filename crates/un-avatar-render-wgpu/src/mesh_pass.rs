@@ -7804,6 +7804,9 @@ impl SceneMeshes {
 	}
 
 	pub fn refresh_morph_defaults_from_scene(&mut self, scene: &UnaSceneSnapshot) -> usize {
+		if !self.has_morph_draws {
+			return 0;
+		}
 		let mut changed = 0;
 		for draw in &mut self.draws {
 			let target_count = draw.morph_pos.len();
