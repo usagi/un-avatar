@@ -6388,7 +6388,7 @@ impl SceneMeshes {
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
-		let empty_morph_resources = create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]);
+		let mut empty_morph_resources: Option<MorphGpuResources> = None;
 		for (ni, node) in scene.nodes.iter().enumerate() {
 			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
@@ -7168,6 +7168,8 @@ impl SceneMeshes {
 						&morph_deltas,
 					)
 				} else {
+					let empty_morph_resources =
+						empty_morph_resources.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
 					MorphGpuResources {
 						meta_buffer: empty_morph_resources.meta_buffer.clone(),
 						weight_buffer: empty_morph_resources.weight_buffer.clone(),
