@@ -7504,6 +7504,12 @@ impl SceneMeshes {
 		self.blended_batches = blended_batches;
 	}
 
+	fn refresh_cached_draw_state(&mut self) {
+		self.active_draw_count = active_draw_count(&self.draws);
+		self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
+		self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
+	}
+
 	pub fn set_avatar_rim(&mut self, queue: &wgpu::Queue, rim: AvatarRimOptions) {
 		if self.opts.avatar_rim == rim {
 			return;
@@ -7838,9 +7844,7 @@ impl SceneMeshes {
 			}
 		}
 		if changed > 0 {
-			self.active_draw_count = active_draw_count(&self.draws);
-			self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
-			self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
+			self.refresh_cached_draw_state();
 		}
 		changed
 	}
