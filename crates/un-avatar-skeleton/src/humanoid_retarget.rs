@@ -628,12 +628,7 @@ impl HumanoidRetargetContext {
 		} else {
 			None
 		};
-		RetargetFrameContext::new(
-			coordinate_space,
-			self.target_basis,
-			unavatar_adapter,
-			Some(&self.runtime),
-		)
+		RetargetFrameContext::new(coordinate_space, self.target_basis, unavatar_adapter, Some(&self.runtime))
 	}
 }
 
@@ -685,9 +680,7 @@ fn node_base_transform_from_scene(
 	nodes.get(node_index).map(NodeRestTransform::from_node)
 }
 
-fn precompute_body_bone_nodes(
-	input: RetargetCompileInput<'_>,
-) -> [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT] {
+fn precompute_body_bone_nodes(input: RetargetCompileInput<'_>) -> [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT] {
 	debug_assert_eq!(HUMANOID_PROFILE_BONES.len(), HUMANOID_PROFILE_BONE_COUNT);
 	let mut nodes = [None; HUMANOID_PROFILE_BONE_COUNT];
 	let (Some(profile), Some(scene)) = (input.profile, input.scene) else {
@@ -695,13 +688,8 @@ fn precompute_body_bone_nodes(
 	};
 	for &bone in HUMANOID_PROFILE_BONES {
 		let key = humanoid_bone_profile_key(bone);
-		nodes[humanoid_bone_index(bone)] = NodeTransformBinding::from_profile_key(
-			profile,
-			input.profile_lookup,
-			scene,
-			input.rest_nodes,
-			key,
-		);
+		nodes[humanoid_bone_index(bone)] =
+			NodeTransformBinding::from_profile_key(profile, input.profile_lookup, scene, input.rest_nodes, key);
 	}
 	nodes
 }
@@ -713,26 +701,14 @@ fn precompute_hand_nodes(input: RetargetCompileInput<'_>) -> [HandNodeBindings; 
 	};
 	for (side_index, side_prefix) in ["left", "right"].into_iter().enumerate() {
 		if let Some(key) = hand_profile_key(side_prefix) {
-			hands[side_index].wrist = NodeTransformBinding::from_profile_key(
-				profile,
-				input.profile_lookup,
-				scene,
-				input.rest_nodes,
-				key,
-			);
+			hands[side_index].wrist = NodeTransformBinding::from_profile_key(profile, input.profile_lookup, scene, input.rest_nodes, key);
 		}
 	}
 	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
 		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
 			continue;
 		};
-		let Some(node) = NodeTransformBinding::from_profile_key(
-			profile,
-			input.profile_lookup,
-			scene,
-			input.rest_nodes,
-			key,
-		) else {
+		let Some(node) = NodeTransformBinding::from_profile_key(profile, input.profile_lookup, scene, input.rest_nodes, key) else {
 			continue;
 		};
 		let Some(side_index) = side_index_from_prefix(side_prefix) else {
@@ -762,12 +738,8 @@ fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup 
 	for preset in &catalog.presets {
 		let index = lookup.preset_names.len();
 		lookup.preset_names.push(preset.name.clone());
-		lookup
-			.exact_ascii_casefold
-			.push((preset.name.to_ascii_lowercase(), index));
-		lookup
-			.normalized
-			.push((normalize_expression_match_key(&preset.name), index));
+		lookup.exact_ascii_casefold.push((preset.name.to_ascii_lowercase(), index));
+		lookup.normalized.push((normalize_expression_match_key(&preset.name), index));
 	}
 	sort_dedup_string_index_lookup(&mut lookup.exact_ascii_casefold);
 	sort_dedup_string_index_lookup(&mut lookup.normalized);
@@ -853,16 +825,9 @@ fn adapt_unavatar_unmotion_limb_axis(
 		return rotation;
 	};
 	let cache = &adapter.rest_cache;
-	let axis = adapter.rest_axis(node_index).or_else(|| {
-		rest_humanoid_child_axis_in_parent(
-			profile,
-			frame_ctx.profile_lookup(),
-			rest,
-			Some(cache),
-			node_index,
-			role,
-		)
-	});
+	let axis = adapter
+		.rest_axis(node_index)
+		.or_else(|| rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup(), rest, Some(cache), node_index, role));
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -1142,7 +1107,16 @@ fn apply_humanoid_transform_to_node_index(
 		if let Some(deg) = eye_clamp_deg {
 			sample_rotation = clamp_eye_rotation(sample_rotation, deg);
 		}
-		write_retargeted_local_transform(ni, node, rest_nodes, frame_ctx, compiled_base, sample_rotation, transform, apply_translation);
+		write_retargeted_local_transform(
+			ni,
+			node,
+			rest_nodes,
+			frame_ctx,
+			compiled_base,
+			sample_rotation,
+			transform,
+			apply_translation,
+		);
 	}
 }
 
@@ -1172,7 +1146,16 @@ fn apply_finger_transform_to_profile_node(
 		successor_node_index,
 	);
 	if let Some(node) = nodes.get_mut(node_index) {
-		write_retargeted_local_transform(node_index, node, rest_nodes, frame_ctx, compiled_base, sample_rotation, transform, true);
+		write_retargeted_local_transform(
+			node_index,
+			node,
+			rest_nodes,
+			frame_ctx,
+			compiled_base,
+			sample_rotation,
+			transform,
+			true,
+		);
 	}
 }
 
@@ -1192,12 +1175,9 @@ fn write_retargeted_local_transform(
 	} else {
 		Vec3::ZERO
 	};
-	node.transform = Mat4::from_scale_rotation_translation(
-		base.scale,
-		base.rotation * sample_rotation,
-		base.translation + sample_translation,
-	)
-	.to_cols_array();
+	node.transform =
+		Mat4::from_scale_rotation_translation(base.scale, base.rotation * sample_rotation, base.translation + sample_translation)
+			.to_cols_array();
 }
 
 fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&ProfileNodeLookup>, key: &str) -> Option<usize> {
@@ -1324,11 +1304,7 @@ fn node_scale_rotation_translation(node: &UnaSceneNode) -> (Vec3, Quat, Vec3) {
 	(scale, rotation, translation)
 }
 
-fn base_node_transform(
-	node_index: usize,
-	node: &UnaSceneNode,
-	rest_nodes: Option<&[UnaSceneNode]>,
-) -> NodeRestTransform {
+fn base_node_transform(node_index: usize, node: &UnaSceneNode, rest_nodes: Option<&[UnaSceneNode]>) -> NodeRestTransform {
 	let base_node = rest_nodes.and_then(|rest| rest.get(node_index)).unwrap_or(node);
 	NodeRestTransform::from_node(base_node)
 }
@@ -1640,8 +1616,8 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 				} else {
 					base.translation
 				};
-				node.transform = Mat4::from_scale_rotation_translation(base.scale, base.rotation * sample_rotation, translation)
-					.to_cols_array();
+				node.transform =
+					Mat4::from_scale_rotation_translation(base.scale, base.rotation * sample_rotation, translation).to_cols_array();
 			} else if apply_root_translation {
 				node.transform = Mat4::from_rotation_translation(
 					frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root),

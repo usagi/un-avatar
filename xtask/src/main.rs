@@ -1972,7 +1972,11 @@ fn retarget_finger_frame(
 	joint_index: usize,
 	rotation: Quat,
 ) -> UNMotionFrame {
-	let mut joints = vec![identity_transform_sample(), identity_transform_sample(), identity_transform_sample()];
+	let mut joints = vec![
+		identity_transform_sample(),
+		identity_transform_sample(),
+		identity_transform_sample(),
+	];
 	if let Some(joint) = joints.get_mut(joint_index) {
 		*joint = rotation_transform_sample(rotation);
 	}
@@ -1998,13 +2002,7 @@ fn retarget_finger_frame(
 
 fn retarget_thumb_proximal_unmotion_frame(side_prefix: &str, curl: f32) -> UNMotionFrame {
 	let yaw = if side_prefix == "left" { -0.44 + curl } else { 0.44 - curl };
-	retarget_finger_frame(
-		side_prefix,
-		Finger::Thumb,
-		CoordinateSpace::UNMotion,
-		0,
-		Quat::from_rotation_y(yaw),
-	)
+	retarget_finger_frame(side_prefix, Finger::Thumb, CoordinateSpace::UNMotion, 0, Quat::from_rotation_y(yaw))
 }
 
 fn retarget_thumb_proximal_unmotion_z_curl_frame(side_prefix: &str, curl: f32) -> UNMotionFrame {
@@ -2220,8 +2218,8 @@ fn print_thumb_hinge_candidates(model: &RetargetAuditModel) {
 		let Some(successor_index) = profile_node_index(profile, &successor_key) else {
 			continue;
 		};
-		let thumb_axis = (world[successor_index].transform_point3(Vec3::ZERO) - world[thumb_index].transform_point3(Vec3::ZERO))
-			.normalize_or_zero();
+		let thumb_axis =
+			(world[successor_index].transform_point3(Vec3::ZERO) - world[thumb_index].transform_point3(Vec3::ZERO)).normalize_or_zero();
 		let (_, thumb_rot, _) = world[thumb_index].to_scale_rotation_translation();
 		let candidates = [
 			("thumb_basis_x", thumb_rot * Vec3::X),
@@ -2479,7 +2477,13 @@ fn run_retarget_audit(repo: &Path) -> bool {
 		let mut axes = BTreeMap::new();
 		for model in &models {
 			let mut document = model.document.clone();
-			let frame = retarget_finger_frame(case.side_prefix, case.finger, case.coordinate_space, case.joint_index, case.rotation);
+			let frame = retarget_finger_frame(
+				case.side_prefix,
+				case.finger,
+				case.coordinate_space,
+				case.joint_index,
+				case.rotation,
+			);
 			apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&model.rest_nodes));
 			match normalized_world_successor_axis(&document, case.parent_key, case.successor_key) {
 				Ok(axis) => {
@@ -2518,8 +2522,19 @@ fn run_retarget_audit(repo: &Path) -> bool {
 			let mut bases = BTreeMap::new();
 			for model in &models {
 				let mut document = model.document.clone();
-				let frame = retarget_finger_frame(case.side_prefix, case.finger, case.coordinate_space, case.joint_index, case.rotation);
-				apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&model.rest_nodes));
+				let frame = retarget_finger_frame(
+					case.side_prefix,
+					case.finger,
+					case.coordinate_space,
+					case.joint_index,
+					case.rotation,
+				);
+				apply_un_motion_frame_to_document_with_rest(
+					&mut document,
+					&frame,
+					ApplyUnMotionFrameOpts::default(),
+					Some(&model.rest_nodes),
+				);
 				if let Ok(basis) = normalized_world_basis(&document, case.parent_key) {
 					println!(
 						"  {:24} basis x=({:+.3},{:+.3},{:+.3}) y=({:+.3},{:+.3},{:+.3}) z=({:+.3},{:+.3},{:+.3})",
@@ -2764,21 +2779,14 @@ fn print_thumb_joints(prefix: &str, hand: Option<&HandMotion>) {
 			let Some(q) = joint.rotation.as_ref() else {
 				continue;
 			};
-			println!(
-				"  {prefix}.thumb[{index}] q=({:+.5},{:+.5},{:+.5},{:+.5})",
-				q.x, q.y, q.z, q.w
-			);
+			println!("  {prefix}.thumb[{index}] q=({:+.5},{:+.5},{:+.5},{:+.5})", q.x, q.y, q.z, q.w);
 		}
 	}
 }
 
 fn run_unmotion_thumb_dump(args: &[String]) -> bool {
 	let key = args.first().cloned().unwrap_or_else(|| "un-motion/frame".to_string());
-	let seconds = args
-		.get(1)
-		.and_then(|value| value.parse::<f32>().ok())
-		.unwrap_or(3.0)
-		.max(0.1);
+	let seconds = args.get(1).and_then(|value| value.parse::<f32>().ok()).unwrap_or(3.0).max(0.1);
 	let strategy = ZenohTopicStrategy::new(key, un_motion_frame_zenoh::TopicMode::Frame);
 	let receiver = match UnAvatarZenohReceiver::declare_zenoh_default(strategy) {
 		Ok(receiver) => receiver,

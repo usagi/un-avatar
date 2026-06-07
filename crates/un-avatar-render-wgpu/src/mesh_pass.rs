@@ -2513,8 +2513,7 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
 			}
 			d.shading == UnaShadingModel::MToonLike
-				&& d
-					.material
+				&& d.material
 					.mtoon
 					.as_ref()
 					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
@@ -7188,8 +7187,8 @@ impl SceneMeshes {
 						&morph_deltas,
 					)
 				} else {
-					let empty_morph_resources =
-						empty_morph_resources.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
+					let empty_morph_resources = empty_morph_resources
+						.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
 					MorphGpuResources {
 						meta_buffer: empty_morph_resources.meta_buffer.clone(),
 						weight_buffer: empty_morph_resources.weight_buffer.clone(),
@@ -7900,11 +7899,7 @@ impl SceneMeshes {
 		write_scene_effective_visibility(scene, &mut self.visibility_scratch);
 		let mut changed = 0;
 		for draw in &mut self.draws {
-			let next = self
-				.visibility_scratch
-				.get(draw.world_node_index)
-				.copied()
-				.unwrap_or(false);
+			let next = self.visibility_scratch.get(draw.world_node_index).copied().unwrap_or(false);
 			if draw.active != next {
 				draw.active = next;
 				changed += 1;
@@ -7982,7 +7977,12 @@ impl SceneMeshes {
 
 	pub fn set_audio_link_external_enabled(&mut self, enabled: bool) {
 		let next = if enabled {
-			[1.0, self.audio_link_frame_params[1], self.audio_link_frame_params[2], self.audio_link_frame_params[3]]
+			[
+				1.0,
+				self.audio_link_frame_params[1],
+				self.audio_link_frame_params[2],
+				self.audio_link_frame_params[3],
+			]
 		} else {
 			[0.0; 4]
 		};
