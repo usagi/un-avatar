@@ -394,17 +394,16 @@ struct BodyBoneNodeBinding {
 	node_index: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-struct FingerProfileSegment {
-	side_prefix: &'static str,
-	finger_key: &'static str,
-	segment: &'static str,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct FingerNodeBinding {
 	node_index: usize,
 	successor_node_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HandNodeBindings {
+	wrist_node_index: Option<usize>,
+	fingers: [[Option<FingerNodeBinding>; 3]; 5],
 }
 
 #[derive(Debug, Default)]
@@ -418,7 +417,7 @@ struct RuntimeRetargetData {
 	profile_lookup: BTreeMap<String, usize>,
 	base_transforms: BTreeMap<usize, NodeRestTransform>,
 	body_bone_nodes: Vec<BodyBoneNodeBinding>,
-	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
+	hand_nodes: [HandNodeBindings; 2],
 	expression_lookup: ExpressionNameLookup,
 }
 
@@ -496,17 +495,17 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(|profile| precompute_body_bone_nodes(profile, &profile_lookup))
 			.unwrap_or_default();
-		let finger_nodes = document
+		let hand_nodes = document
 			.humanoid_profile
 			.as_ref()
-			.map(|profile| precompute_finger_nodes(profile, &profile_lookup))
+			.map(|profile| precompute_hand_nodes(profile, &profile_lookup))
 			.unwrap_or_default();
 		let expression_lookup = precompute_expression_lookup(document);
 		let runtime = RuntimeRetargetData {
 			profile_lookup,
 			base_transforms,
 			body_bone_nodes,
-			finger_nodes,
+			hand_nodes,
 			expression_lookup,
 		};
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
@@ -583,11 +582,16 @@ fn precompute_body_bone_nodes(profile: &HumanoidProfile, profile_lookup: &BTreeM
 		.collect()
 }
 
-fn precompute_finger_nodes(
+fn precompute_hand_nodes(
 	profile: &HumanoidProfile,
 	profile_lookup: &BTreeMap<String, usize>,
-) -> BTreeMap<FingerProfileSegment, FingerNodeBinding> {
-	let mut nodes = BTreeMap::new();
+) -> [HandNodeBindings; 2] {
+	let mut hands = [HandNodeBindings::default(); 2];
+	for (side_index, side_prefix) in ["left", "right"].into_iter().enumerate() {
+		if let Some(key) = hand_profile_key(side_prefix) {
+			hands[side_index].wrist_node_index = profile_node_index_with_lookup(profile, Some(profile_lookup), key);
+		}
+	}
 	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
 		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
 			continue;
@@ -595,21 +599,23 @@ fn precompute_finger_nodes(
 		let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) else {
 			continue;
 		};
+		let Some(side_index) = side_index_from_prefix(side_prefix) else {
+			continue;
+		};
+		let Some(finger_index) = finger_index_from_key(finger_key) else {
+			continue;
+		};
+		let Some(segment_index) = segment_index_from_key(segment) else {
+			continue;
+		};
 		let successor_node_index = finger_successor_profile_key(side_prefix, finger_key, segment)
 			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key));
-		nodes.insert(
-			FingerProfileSegment {
-				side_prefix,
-				finger_key,
-				segment,
-			},
-			FingerNodeBinding {
-				node_index,
-				successor_node_index,
-			},
-		);
+		hands[side_index].fingers[finger_index][segment_index] = Some(FingerNodeBinding {
+			node_index,
+			successor_node_index,
+		});
 	}
-	nodes
+	hands
 }
 
 fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup {
@@ -842,6 +848,34 @@ fn hand_profile_key(side_prefix: &str) -> Option<&'static str> {
 	}
 }
 
+fn side_index_from_prefix(side_prefix: &str) -> Option<usize> {
+	match side_prefix {
+		"left" => Some(0),
+		"right" => Some(1),
+		_ => None,
+	}
+}
+
+fn finger_index_from_key(finger_key: &str) -> Option<usize> {
+	match finger_key {
+		"thumb" => Some(0),
+		"index" => Some(1),
+		"middle" => Some(2),
+		"ring" => Some(3),
+		"little" => Some(4),
+		_ => None,
+	}
+}
+
+fn segment_index_from_key(segment: &str) -> Option<usize> {
+	match segment {
+		"proximal" => Some(0),
+		"intermediate" => Some(1),
+		"distal" => Some(2),
+		_ => None,
+	}
+}
+
 fn body_bone_node_index(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone) -> Option<usize> {
 	frame_ctx
 		.runtime
@@ -849,12 +883,9 @@ fn body_bone_node_index(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone)
 		.and_then(|nodes| nodes.iter().find(|binding| binding.bone == bone).map(|binding| binding.node_index))
 }
 
-fn hand_bone_for_side(side_prefix: &str) -> Option<HumanoidBone> {
-	match side_prefix {
-		"left" => Some(HumanoidBone::LeftHand),
-		"right" => Some(HumanoidBone::RightHand),
-		_ => None,
-	}
+fn hand_node_bindings<'a>(frame_ctx: RetargetFrameContext<'a>, side_prefix: &str) -> Option<&'a HandNodeBindings> {
+	let side_index = side_index_from_prefix(side_prefix)?;
+	frame_ctx.runtime.and_then(|runtime| runtime.hand_nodes.get(side_index))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1067,9 +1098,10 @@ fn apply_hand_motion_to_scene(
 	if hand.tracking_state == un_motion_frame::TrackingState::Lost {
 		return;
 	}
+	let hand_bindings = hand_node_bindings(frame_ctx, side_prefix);
 	if apply_wrist {
 		if let Some(wrist) = hand.wrist.as_ref() {
-			if let Some(ni) = hand_bone_for_side(side_prefix).and_then(|bone| body_bone_node_index(frame_ctx, bone)) {
+			if let Some(ni) = hand_bindings.and_then(|hand| hand.wrist_node_index) {
 				apply_humanoid_transform_to_node_index(
 					profile,
 					nodes,
@@ -1104,6 +1136,9 @@ fn apply_hand_motion_to_scene(
 			Finger::Ring => "ring",
 			Finger::Little => "little",
 		};
+		let Some(finger_index) = finger_index_from_key(finger_key) else {
+			continue;
+		};
 		for (index, joint) in finger.joints.iter().enumerate() {
 			let segment = match index {
 				0 => "proximal",
@@ -1111,15 +1146,7 @@ fn apply_hand_motion_to_scene(
 				2 => "distal",
 				_ => continue,
 			};
-			let binding = frame_ctx.runtime.and_then(|runtime| {
-				let nodes = &runtime.finger_nodes;
-				nodes.get(&FingerProfileSegment {
-					side_prefix,
-					finger_key,
-					segment,
-				})
-			});
-			let Some(binding) = binding.copied() else {
+			let Some(binding) = hand_bindings.and_then(|hand| hand.fingers[finger_index][index]) else {
 				continue;
 			};
 			apply_finger_transform_to_profile_node(
