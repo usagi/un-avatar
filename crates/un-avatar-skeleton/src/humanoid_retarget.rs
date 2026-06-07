@@ -11,6 +11,7 @@ use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, Humanoi
 type StringIndexLookup = Vec<(String, usize)>;
 type ProfileNodeLookup = StringIndexLookup;
 type ExpressionLookupEntries = StringIndexLookup;
+const NO_PARENT: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetHumanoidBasis {
@@ -420,7 +421,7 @@ fn rest_humanoid_child_axis_in_parent(
 struct RetargetRestCache {
 	local_rotations: Vec<Quat>,
 	local_translations: Vec<Vec3>,
-	parents: Vec<Option<usize>>,
+	parents: Vec<usize>,
 	world_rotations: Vec<Quat>,
 }
 
@@ -521,7 +522,7 @@ impl RetargetRestCache {
 				(rotation, translation)
 			})
 			.unzip();
-		let parents = scene_parent_indices(nodes);
+		let parents = compact_scene_parent_indices(nodes);
 		let world_rotations = scene_world_matrices(nodes, roots)
 			.into_iter()
 			.map(|matrix| matrix.to_scale_rotation_translation().1)
@@ -537,12 +538,13 @@ impl RetargetRestCache {
 	fn parent_world_rotation(&self, node_index: usize) -> Quat {
 		self.parents
 			.get(node_index)
-			.and_then(|parent| parent.and_then(|parent| self.world_rotations.get(parent).copied()))
+			.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+			.and_then(|parent| self.world_rotations.get(parent).copied())
 			.unwrap_or(Quat::IDENTITY)
 	}
 
 	fn direct_child_axis(&self, node_index: usize, child_index: usize) -> Option<(Quat, Vec3)> {
-		if self.parents.get(child_index).copied().flatten() != Some(node_index) {
+		if self.parents.get(child_index).copied() != Some(node_index) {
 			return None;
 		}
 		let rest_rotation = *self.local_rotations.get(node_index)?;
@@ -1388,6 +1390,18 @@ fn scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<Option<usize>> {
 		for &child in &node.children {
 			if child < parents.len() {
 				parents[child] = Some(parent);
+			}
+		}
+	}
+	parents
+}
+
+fn compact_scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<usize> {
+	let mut parents = vec![NO_PARENT; nodes.len()];
+	for (parent, node) in nodes.iter().enumerate() {
+		for &child in &node.children {
+			if child < parents.len() {
+				parents[child] = parent;
 			}
 		}
 	}
