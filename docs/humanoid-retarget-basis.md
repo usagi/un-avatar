@@ -79,11 +79,30 @@ the non-thumb Z curl so Unity/VRC exports follow the VRM0/1.0.0 curl direction.
 Thumb joints are not the same as the four long fingers. UNMotion typed
 `HandMotion` emits thumb flexion as yaw, and proximal CMC yaw already includes
 the UNMotion rest-open / spread term. The `.unavatar` adapter therefore must
-not remove that rest-open term. `cargo xtask retarget-audit` compares
+not remove that rest-open term. `.unavatar` thumb intermediate / distal also do
+not use the long-finger child-axis adapter: live UNMF/Z carries thumb yaw
+directly, and adapting those joints as long fingers turns small open-hand
+residual yaw into visible over-curl. `cargo xtask retarget-audit` compares
 `model1.vrm`, a VRM1 fixture, and `mizuki-split.unavatar` for the same
 `curl=0.0 -> 0.8` UNMF/Z samples. The audit checks both successor-axis movement
 and the parent joint's world-basis movement; successor-axis-only agreement is
-not enough because skinning consumes the full joint matrix. The current
-diagnostic contract intentionally exposes the remaining `.unavatar` thumb
-proximal problem as a basis-delta mismatch rather than hiding it with a
-model-specific correction.
+not enough because skinning consumes the full joint matrix.
+
+## Runtime Cache Boundary
+
+Retargeting still has format-specific code in `humanoid_retarget.rs`; this is
+not the final architecture. The first cleanup step is `RetargetRestCache`.
+It stores rest-parent indices and rest-world rotations once per applied frame,
+then shares them across body, hand, finger, and face-head retargeting. This
+removes per-bone recomputation of `scene_parent_indices` and
+`scene_world_matrices` from the `.unavatar` limb/finger adapters and makes the
+future split clearer:
+
+- import / model-compile layer: derive rest topology, rest-world rotations, and
+  source-format basis adapters
+- runtime layer: apply UNMotion to compiled canonical Humanoid data without
+  rediscovering model topology
+
+The next structural step is to move `TargetHumanoidBasis` and the
+`.unavatar`-only adapter decisions into a compiled model-retarget context rather
+than looking at the original document format during every frame application.

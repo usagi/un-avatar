@@ -279,12 +279,37 @@ fn rest_humanoid_child_axis_in_parent(
 	rest_first_child_axis_in_parent(nodes, node_index)
 }
 
+#[derive(Debug)]
+struct RetargetRestCache {
+	parents: Vec<Option<usize>>,
+	world_rotations: Vec<Quat>,
+}
+
+impl RetargetRestCache {
+	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
+		let parents = scene_parent_indices(nodes);
+		let world_rotations = scene_world_matrices(nodes, roots)
+			.into_iter()
+			.map(|matrix| matrix.to_scale_rotation_translation().1)
+			.collect();
+		Self { parents, world_rotations }
+	}
+
+	fn parent_world_rotation(&self, node_index: usize) -> Quat {
+		self.parents
+			.get(node_index)
+			.and_then(|parent| parent.and_then(|parent| self.world_rotations.get(parent).copied()))
+			.unwrap_or(Quat::IDENTITY)
+	}
+}
+
 fn adapt_unavatar_unmotion_limb_axis(
 	profile: &HumanoidProfile,
 	rotation: Quat,
 	nodes: &[UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	roots: &[usize],
+	rest_cache: Option<&RetargetRestCache>,
 	node_index: usize,
 	target_basis: TargetHumanoidBasis,
 	coordinate_space: CoordinateSpace,
@@ -300,13 +325,14 @@ fn adapt_unavatar_unmotion_limb_axis(
 	let Some((rest_rotation, target_axis)) = rest_humanoid_child_axis_in_parent(profile, rest, node_index, role) else {
 		return rotation;
 	};
-	let parents = scene_parent_indices(rest);
-	let world = scene_world_matrices(rest, roots);
-	let parent_world_rotation = parents
-		.get(node_index)
-		.and_then(|parent| parent.map(|parent| world[parent]))
-		.map(|m| m.to_scale_rotation_translation().1)
-		.unwrap_or(Quat::IDENTITY);
+	let local_cache;
+	let cache = if let Some(cache) = rest_cache {
+		cache
+	} else {
+		local_cache = RetargetRestCache::new(rest, roots);
+		&local_cache
+	};
+	let parent_world_rotation = cache.parent_world_rotation(node_index);
 	let source_axis_in_parent = (parent_world_rotation.inverse() * source_axis).normalize_or_zero();
 	if source_axis_in_parent.length_squared() < 1e-10 {
 		return rotation;
@@ -353,6 +379,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 	nodes: &[UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	roots: &[usize],
+	rest_cache: Option<&RetargetRestCache>,
 	node_index: usize,
 	target_basis: TargetHumanoidBasis,
 	coordinate_space: CoordinateSpace,
@@ -385,13 +412,14 @@ fn adapt_unavatar_unmotion_finger_axis(
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
-	let parents = scene_parent_indices(rest);
-	let world = scene_world_matrices(rest, roots);
-	let parent_world_rotation = parents
-		.get(node_index)
-		.and_then(|parent| parent.map(|parent| world[parent]))
-		.map(|m| m.to_scale_rotation_translation().1)
-		.unwrap_or(Quat::IDENTITY);
+	let local_cache;
+	let cache = if let Some(cache) = rest_cache {
+		cache
+	} else {
+		local_cache = RetargetRestCache::new(rest, roots);
+		&local_cache
+	};
+	let parent_world_rotation = cache.parent_world_rotation(node_index);
 	let source_axis = unavatar_unmotion_finger_source_axis_in_target(side_prefix, finger_key, segment);
 	let source_axis_in_parent = (parent_world_rotation.inverse() * source_axis).normalize_or_zero();
 	if source_axis_in_parent.length_squared() < 1e-10 {
@@ -415,6 +443,7 @@ fn apply_humanoid_transform_to_profile_node(
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	roots: &[usize],
+	rest_cache: Option<&RetargetRestCache>,
 	key: &str,
 	transform: &TransformSample,
 	coordinate_space: CoordinateSpace,
@@ -443,6 +472,7 @@ fn apply_humanoid_transform_to_profile_node(
 		nodes,
 		rest_nodes,
 		roots,
+		rest_cache,
 		ni,
 		target_basis,
 		coordinate_space,
@@ -464,6 +494,7 @@ fn apply_finger_transform_to_profile_node(
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	roots: &[usize],
+	rest_cache: Option<&RetargetRestCache>,
 	key: &str,
 	successor_key: Option<&str>,
 	side_prefix: &str,
@@ -484,6 +515,7 @@ fn apply_finger_transform_to_profile_node(
 		nodes,
 		rest_nodes,
 		roots,
+		rest_cache,
 		ni,
 		target_basis,
 		coordinate_space,
@@ -527,6 +559,7 @@ fn apply_hand_motion_to_scene(
 	hand: &HandMotion,
 	side_prefix: &str,
 	rest_nodes: Option<&[UnaSceneNode]>,
+	rest_cache: Option<&RetargetRestCache>,
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
 	apply_wrist: bool,
@@ -541,6 +574,7 @@ fn apply_hand_motion_to_scene(
 				nodes,
 				rest_nodes,
 				roots,
+				rest_cache,
 				&format!("{side_prefix}hand"),
 				wrist,
 				coordinate_space,
@@ -571,6 +605,7 @@ fn apply_hand_motion_to_scene(
 				nodes,
 				rest_nodes,
 				roots,
+				rest_cache,
 				&key,
 				successor_key.as_deref(),
 				side_prefix,
@@ -863,6 +898,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
+		None,
 	);
 }
 
@@ -878,7 +914,15 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	target_basis: TargetHumanoidBasis,
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
+	rest_cache: Option<&RetargetRestCache>,
 ) {
+	let local_cache;
+	let rest_cache = if let Some(cache) = rest_cache {
+		cache
+	} else {
+		local_cache = RetargetRestCache::new(rest_nodes.unwrap_or(nodes), roots);
+		&local_cache
+	};
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base_node) = rest_nodes.and_then(|rest| rest.get(ri)) {
@@ -933,6 +977,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			nodes,
 			rest_nodes,
 			roots,
+			Some(rest_cache),
 			ni,
 			target_basis,
 			coordinate_space,
@@ -971,6 +1016,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 	let Some(ref profile) = document.humanoid_profile else {
 		return;
 	};
+	let rest_cache = RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots);
 	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
 	if let Some(ref body) = frame.body {
 		if let Some(ref pose) = body.humanoid {
@@ -985,6 +1031,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 				target_basis,
 				if opts.apply_eye_bones { opts.eye_look_at_clamp_deg } else { None },
 				opts.apply_root_translation,
+				Some(&rest_cache),
 			);
 		}
 	}
@@ -996,6 +1043,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 			hand,
 			"left",
 			rest_nodes,
+			Some(&rest_cache),
 			frame.header.coordinate_space,
 			target_basis,
 			!pose_has_valid_bone(body_pose, HumanoidBone::LeftHand),
@@ -1009,6 +1057,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 			hand,
 			"right",
 			rest_nodes,
+			Some(&rest_cache),
 			frame.header.coordinate_space,
 			target_basis,
 			!pose_has_valid_bone(body_pose, HumanoidBone::RightHand),
@@ -1021,6 +1070,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 				&mut scene.nodes,
 				rest_nodes,
 				&scene.roots,
+				Some(&rest_cache),
 				"head",
 				head,
 				frame.header.coordinate_space,
