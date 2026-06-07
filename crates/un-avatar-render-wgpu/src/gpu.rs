@@ -335,6 +335,23 @@ struct MotionRetargetRuntime {
 	context: Arc<un_avatar_skeleton::HumanoidRetargetContext>,
 }
 
+impl MotionRetargetRuntime {
+	fn apply_frame(
+		&self,
+		document: &mut UnaDocument,
+		frame: &un_motion_frame::UNMotionFrame,
+		opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
+	) {
+		un_avatar_skeleton::apply_un_motion_frame_to_document_with_context(
+			document,
+			frame,
+			opts,
+			Some(self.rest_nodes.as_slice()),
+			&self.context,
+		);
+	}
+}
+
 pub(crate) struct GpuSceneBuildContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
@@ -2758,8 +2775,7 @@ impl GpuState {
 				);
 			}
 			if let Some(runtime) = retarget_runtime {
-				let rest_nodes = Some(runtime.rest_nodes.as_slice());
-				un_avatar_skeleton::apply_un_motion_frame_to_document_with_context(&mut document, frame, opts, rest_nodes, &runtime.context);
+				runtime.apply_frame(&mut document, frame, opts);
 			} else {
 				un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(&mut document, frame, opts, None);
 			}
