@@ -336,13 +336,17 @@ struct MotionRetargetRuntime {
 }
 
 impl MotionRetargetRuntime {
-	fn for_document(document: &UnaDocument) -> Self {
-		let rest_nodes: Arc<Vec<UnaSceneNode>> = Arc::new(document.scene.as_ref().map(|scene| scene.nodes.clone()).unwrap_or_default());
+	fn for_document(document: &UnaDocument) -> Option<Self> {
+		if document.humanoid_profile.is_none() {
+			return None;
+		}
+		let scene = document.scene.as_ref()?;
+		let rest_nodes: Arc<Vec<UnaSceneNode>> = Arc::new(scene.nodes.clone());
 		let context = Arc::new(un_avatar_skeleton::HumanoidRetargetContext::for_document(
 			document,
 			Some(rest_nodes.as_slice()),
 		));
-		Self { rest_nodes, context }
+		Some(Self { rest_nodes, context })
 	}
 
 	fn apply_frame(
@@ -2580,12 +2584,12 @@ impl GpuState {
 			}
 			return Ok(());
 		};
-		let (humanoid_ok, retarget_runtime) = {
+		let retarget_runtime = {
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			let humanoid_ok = d.humanoid_profile.is_some() && d.scene.is_some();
-			(humanoid_ok, MotionRetargetRuntime::for_document(&d))
+			MotionRetargetRuntime::for_document(&d)
 		};
-		self.motion_retarget_runtime = Some(retarget_runtime);
+		let humanoid_ok = retarget_runtime.is_some();
+		self.motion_retarget_runtime = retarget_runtime;
 		if let Some(addr) = vmc_address {
 			let humanoid_keys_csv = {
 				let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
@@ -2764,7 +2768,9 @@ impl GpuState {
 			return;
 		};
 		let opts = self.motion_apply_shared.lock().map(|g| *g).unwrap_or_default();
-		let retarget_runtime = self.motion_retarget_runtime.as_ref();
+		let Some(retarget_runtime) = self.motion_retarget_runtime.as_ref() else {
+			return;
+		};
 		let should_log = self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(120);
 		for frame in &self.pending_motion_frames {
 			if should_log {
@@ -2778,11 +2784,7 @@ impl GpuState {
 					),
 				);
 			}
-			if let Some(runtime) = retarget_runtime {
-				runtime.apply_frame(&mut document, frame, opts);
-			} else {
-				un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(&mut document, frame, opts, None);
-			}
+			retarget_runtime.apply_frame(&mut document, frame, opts);
 		}
 		self.motion_applied_frames
 			.fetch_add(self.pending_motion_frames.len() as u64, Ordering::Relaxed);

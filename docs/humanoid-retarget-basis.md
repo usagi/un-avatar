@@ -124,6 +124,8 @@ and repeated `.unavatar` rest-cache construction in the renderer hot path.
 Renderer state keeps the immutable rest-node snapshot and
 `HumanoidRetargetContext` together as one motion retarget runtime, so frame
 application cannot accidentally mix a context with a different rest snapshot.
+The renderer only builds that runtime for documents that have both a scene and a
+Humanoid profile; non-Humanoid documents do not keep an unused retarget context.
 It also stores root base TRS and per-node base TRS inside body/hand bindings, so
 the renderer hot path can write rest-relative local transforms without
 decomposing each rest node matrix again or keeping a duplicate base-transform
