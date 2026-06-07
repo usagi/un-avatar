@@ -2574,7 +2574,8 @@ impl GpuSceneBuildContext {
 			if !sm.is_empty() {
 				texture_summary = Some(sm.texture_summary());
 				let world = crate::scene_transform::scene_world_matrices(sc);
-				sm.update_draw_transforms(&queue, sc, &world, document.expression_weights.as_ref(), None, true);
+				let expression_weights = active_expression_weights_for_doc(false, &document);
+				sm.update_draw_transforms(&queue, sc, &world, expression_weights, None, true);
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
