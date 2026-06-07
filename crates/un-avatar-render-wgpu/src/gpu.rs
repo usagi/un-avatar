@@ -2798,13 +2798,16 @@ impl GpuState {
 			return;
 		}
 		let Some(retarget_runtime) = self.motion_retarget_runtime.as_ref() else {
+			self.pending_motion_frames.clear();
 			return;
 		};
 		let opts = self.motion_apply_opts;
 		let Some(doc_arc) = self.document.as_ref() else {
+			self.pending_motion_frames.clear();
 			return;
 		};
 		let Ok(mut document) = doc_arc.write() else {
+			self.pending_motion_frames.clear();
 			return;
 		};
 		let should_log = self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(120);
@@ -2822,8 +2825,10 @@ impl GpuState {
 			}
 			retarget_runtime.apply_frame(&mut document, frame, opts);
 		}
+		let applied_frame_count = self.pending_motion_frames.len();
+		self.pending_motion_frames.clear();
 		self.motion_applied_frames
-			.fetch_add(self.pending_motion_frames.len() as u64, Ordering::Relaxed);
+			.fetch_add(applied_frame_count as u64, Ordering::Relaxed);
 		self.document_revision.fetch_add(1, Ordering::Release);
 	}
 
