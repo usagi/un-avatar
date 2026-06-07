@@ -282,7 +282,7 @@ fn rest_child_axis_from_direct_child_cached(
 	child_index: usize,
 ) -> Option<(Quat, Vec3)> {
 	cache
-		.and_then(|cache| cache.direct_child_axis(nodes, node_index, child_index))
+		.and_then(|cache| cache.direct_child_axis(node_index, child_index))
 		.or_else(|| rest_child_axis_from_direct_child(nodes, node_index, child_index))
 }
 
@@ -375,9 +375,8 @@ impl RetargetRestCache {
 			.unwrap_or(Quat::IDENTITY)
 	}
 
-	fn direct_child_axis(&self, nodes: &[UnaSceneNode], node_index: usize, child_index: usize) -> Option<(Quat, Vec3)> {
-		let node = nodes.get(node_index)?;
-		if !node.children.contains(&child_index) {
+	fn direct_child_axis(&self, node_index: usize, child_index: usize) -> Option<(Quat, Vec3)> {
+		if self.parents.get(child_index).copied().flatten() != Some(node_index) {
 			return None;
 		}
 		let rest_rotation = *self.local_rotations.get(node_index)?;
