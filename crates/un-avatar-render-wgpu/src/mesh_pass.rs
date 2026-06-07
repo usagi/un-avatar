@@ -1476,6 +1476,10 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 	index
 }
 
+fn scene_has_morph_targets(scene: &UnaSceneSnapshot) -> bool {
+	scene.meshes.iter().flatten().any(|primitive| !primitive.morph_targets.is_empty())
+}
+
 fn mesh_draw_capacity(scene: &UnaSceneSnapshot) -> usize {
 	scene
 		.nodes
@@ -6301,8 +6305,17 @@ impl SceneMeshes {
 			.expect("neutral vector texture was just pushed")
 			.create_view(&wgpu::TextureViewDescriptor::default());
 
-		let expression_names = expression_names(catalog);
-		let expression_bindings = expression_binding_index(catalog);
+		let scene_has_morph_targets = scene_has_morph_targets(scene);
+		let expression_names = if scene_has_morph_targets {
+			expression_names(catalog)
+		} else {
+			Vec::new()
+		};
+		let expression_bindings = if scene_has_morph_targets {
+			expression_binding_index(catalog)
+		} else {
+			BTreeMap::new()
+		};
 		let effective_visibility = scene_effective_visibility(scene);
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
@@ -7183,7 +7196,6 @@ impl SceneMeshes {
 		let active_draw_count = active_draw_count(&draws);
 		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
 		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
-		let expression_names = if has_morph_draws { expression_names } else { Vec::new() };
 		let expression_value_capacity = expression_names.len();
 
 		Ok(Self {
