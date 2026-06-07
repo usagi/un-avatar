@@ -911,7 +911,6 @@ struct MeshDraw {
 	morph_weight_scratch: Vec<f32>,
 	alpha_mode: UnaAlphaMode,
 	material: UnaMaterialPbr,
-	mtoon: UnaMtoonMaterial,
 	mesh_index: usize,
 	primitive_index: usize,
 	probe_anchor_node: Option<usize>,
@@ -1111,7 +1110,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	transparent_backpass_enabled(
 		draw.alpha_mode,
-		draw.mtoon.transparent_with_z_write,
+		draw.material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
 		shading,
 		liltoon_backpass_enabled,
 	)
@@ -1205,7 +1204,11 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 					blend_pipeline_for_draw(
 						draw,
 						shading,
-						transparent_forward_zwrite_enabled(draw.alpha_mode, draw.mtoon.transparent_with_z_write, shading),
+						transparent_forward_zwrite_enabled(
+							draw.alpha_mode,
+							draw.material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+							shading,
+						),
 					),
 					draw_index,
 				));
@@ -2513,7 +2516,12 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 					.as_ref()
 					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
 			}
-			d.shading == UnaShadingModel::MToonLike && effective_mtoon_outline(&d.mtoon, opts).is_some()
+			d.shading == UnaShadingModel::MToonLike
+				&& d
+					.material
+					.mtoon
+					.as_ref()
+					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
 		}
 		AvatarOutlinePolicy::Off => false,
 	}
@@ -6407,6 +6415,7 @@ impl SceneMeshes {
 		let mut skin_palette_indices = BTreeMap::new();
 		let mut empty_morph_resources: Option<MorphGpuResources> = None;
 		let default_material = UnaMaterialPbr::default();
+		let default_mtoon = UnaMtoonMaterial::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
 			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
@@ -6466,7 +6475,7 @@ impl SceneMeshes {
 					}),
 				};
 
-				let mtoon = mat.mtoon.clone().unwrap_or_default();
+				let mtoon = mat.mtoon.as_ref().unwrap_or(&default_mtoon);
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let shade_texture_index = mat
@@ -6789,7 +6798,7 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
-				let draw_material = mesh_draw_material_gpu(mat, &mtoon, &opts, mesh_i, prim_i);
+				let draw_material = mesh_draw_material_gpu(mat, mtoon, &opts, mesh_i, prim_i);
 				let draw_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 					label: Some("mesh_draw_material"),
 					contents: bytemuck::bytes_of(&draw_material),
@@ -7240,7 +7249,6 @@ impl SceneMeshes {
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
 					material: mat.clone(),
-					mtoon,
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
 					probe_anchor_node: node.probe_anchor_node,
@@ -7616,8 +7624,10 @@ impl SceneMeshes {
 	}
 
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
+		let default_mtoon = UnaMtoonMaterial::default();
 		for draw in &self.draws {
-			let material = mesh_draw_material_gpu(&draw.material, &draw.mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+			let mtoon = draw.material.mtoon.as_ref().unwrap_or(&default_mtoon);
+			let material = mesh_draw_material_gpu(&draw.material, mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
 			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material));
 		}
 	}
