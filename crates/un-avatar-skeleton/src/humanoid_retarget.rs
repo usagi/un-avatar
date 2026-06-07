@@ -4358,6 +4358,51 @@ mod tests {
 	}
 
 	#[test]
+	fn expression_normalized_lookup_keeps_first_matching_preset() {
+		let mut document = UnaDocument::default();
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: vec![],
+			roots: vec![],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile::default());
+		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
+			presets: ["MouthSmileLeft", "mouth_smile_left"]
+				.into_iter()
+				.map(|name| un_avatar_core::UnaExpressionPreset {
+					name: name.to_string(),
+					binds: vec![],
+				})
+				.collect(),
+		});
+		document.expression_weights = Some(un_avatar_core::UnaExpressionWeights::default());
+		let mut frame = UNMotionFrame::new(0);
+		frame.face = Some(FaceMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			head: None,
+			expressions: vec![un_motion_frame::ExpressionSample {
+				name: "MOUTH-SMILE-LEFT".to_string(),
+				value: 0.6,
+				confidence: 1.0,
+				source_index: None,
+				state: SampleState::Valid,
+			}],
+		});
+
+		apply_un_motion_frame_to_document(&mut document, &frame, ApplyUnMotionFrameOpts::default());
+
+		let ew = document.expression_weights.as_ref().unwrap();
+		assert!((ew.preset_weights.get("MouthSmileLeft").copied().unwrap_or(0.0) - 0.6).abs() < 1e-5);
+		assert_eq!(ew.preset_weights.get("mouth_smile_left").copied().unwrap_or(0.0), 0.0);
+	}
+
+	#[test]
 	fn perfect_sync_input_does_not_drive_basic_vrm_expressions_when_preset_is_missing() {
 		let mut document = UnaDocument::default();
 		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
