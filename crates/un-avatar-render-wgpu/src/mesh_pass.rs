@@ -963,6 +963,17 @@ fn active_draws_need_screen_refraction(draws: &[MeshDraw]) -> bool {
 		.any(|draw| draw.active && material_needs_screen_refraction(&draw.material))
 }
 
+fn active_skin_palette_indices_for_draws(draws: &[MeshDraw]) -> Vec<usize> {
+	let mut indices: Vec<usize> = draws
+		.iter()
+		.filter(|draw| draw.active)
+		.map(|draw| draw.skin_palette_index)
+		.collect();
+	indices.sort_unstable();
+	indices.dedup();
+	indices
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -1264,7 +1275,7 @@ pub(crate) struct SceneMeshes {
 	blended_batches: Vec<DrawBatch>,
 	active_draw_count: usize,
 	needs_screen_refraction: bool,
-	active_skin_palette_scratch: Vec<bool>,
+	active_skin_palette_indices: Vec<usize>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	expression_names: Vec<String>,
@@ -7236,10 +7247,10 @@ impl SceneMeshes {
 
 		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&draws, &opts);
-		let skin_palette_count = skin_palettes.len();
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
 		let active_draw_count = active_draw_count(&draws);
 		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
+		let active_skin_palette_indices = active_skin_palette_indices_for_draws(&draws);
 		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
 		let expression_value_capacity = expression_names.len();
 
@@ -7282,7 +7293,7 @@ impl SceneMeshes {
 			blended_batches,
 			active_draw_count,
 			needs_screen_refraction,
-			active_skin_palette_scratch: vec![false; skin_palette_count],
+			active_skin_palette_indices,
 			texture_summary,
 			runtime_requirements,
 			expression_names,
@@ -7571,6 +7582,7 @@ impl SceneMeshes {
 	fn refresh_cached_draw_state(&mut self) {
 		self.active_draw_count = active_draw_count(&self.draws);
 		self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
+		self.active_skin_palette_indices = active_skin_palette_indices_for_draws(&self.draws);
 		self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
 	}
 
@@ -7780,25 +7792,11 @@ impl SceneMeshes {
 				self.expression_value_scratch[index] = value;
 			}
 		}
-		if !self.skin_palettes.is_empty() {
-			if self.active_skin_palette_scratch.len() == self.skin_palettes.len() {
-				self.active_skin_palette_scratch.fill(false);
-			} else {
-				self.active_skin_palette_scratch.clear();
-				self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
-			}
-			for draw in &self.draws {
-				if draw.active {
-					if let Some(slot) = self.active_skin_palette_scratch.get_mut(draw.skin_palette_index) {
-						*slot = true;
-					}
-				}
-			}
-			for (palette_index, palette) in self.skin_palettes.iter_mut().enumerate() {
-				if !self.active_skin_palette_scratch.get(palette_index).copied().unwrap_or(false) {
-					palette.uploaded_changed = false;
+		if !self.active_skin_palette_indices.is_empty() {
+			for &palette_index in &self.active_skin_palette_indices {
+				let Some(palette) = self.skin_palettes.get_mut(palette_index) else {
 					continue;
-				}
+				};
 				let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
 				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 			}
