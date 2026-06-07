@@ -195,6 +195,7 @@ struct RetargetFrameContext<'a> {
 	unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 	base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 	profile_lookup: Option<&'a BTreeMap<String, usize>>,
+	finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
 }
 
 impl<'a> RetargetFrameContext<'a> {
@@ -204,6 +205,7 @@ impl<'a> RetargetFrameContext<'a> {
 		unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 		base_transforms: Option<&'a BTreeMap<usize, NodeRestTransform>>,
 		profile_lookup: Option<&'a BTreeMap<String, usize>>,
+		finger_nodes: Option<&'a BTreeMap<FingerProfileSegment, FingerNodeBinding>>,
 	) -> Self {
 		Self {
 			coordinate_space,
@@ -211,6 +213,7 @@ impl<'a> RetargetFrameContext<'a> {
 			unavatar_adapter,
 			base_transforms,
 			profile_lookup,
+			finger_nodes,
 		}
 	}
 
@@ -363,6 +366,19 @@ impl NodeRestTransform {
 	}
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct FingerProfileSegment {
+	side_prefix: &'static str,
+	finger_key: &'static str,
+	segment: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FingerNodeBinding {
+	node_index: usize,
+	successor_node_index: Option<usize>,
+}
+
 impl RetargetRestCache {
 	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
 		let (local_rotations, local_translations): (Vec<_>, Vec<_>) = nodes
@@ -421,6 +437,7 @@ pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
 	profile_lookup: BTreeMap<String, usize>,
 	base_transforms: BTreeMap<usize, NodeRestTransform>,
+	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
 	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
 
@@ -433,6 +450,11 @@ impl HumanoidRetargetContext {
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
 		let base_transforms = precompute_base_transforms(document.humanoid_profile.as_ref(), document.scene.as_ref(), rest_nodes);
+		let finger_nodes = document
+			.humanoid_profile
+			.as_ref()
+			.map(|profile| precompute_finger_nodes(profile, &profile_lookup))
+			.unwrap_or_default();
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
 			document.scene.as_ref().map(|scene| {
 				let rest = rest_nodes.unwrap_or(&scene.nodes);
@@ -445,6 +467,7 @@ impl HumanoidRetargetContext {
 			target_basis,
 			profile_lookup,
 			base_transforms,
+			finger_nodes,
 			unavatar_adapter,
 		}
 	}
@@ -461,6 +484,7 @@ impl HumanoidRetargetContext {
 			unavatar_adapter,
 			Some(&self.base_transforms),
 			Some(&self.profile_lookup),
+			Some(&self.finger_nodes),
 		)
 	}
 }
@@ -496,6 +520,35 @@ fn precompute_base_transforms(
 		}
 	}
 	transforms
+}
+
+fn precompute_finger_nodes(
+	profile: &HumanoidProfile,
+	profile_lookup: &BTreeMap<String, usize>,
+) -> BTreeMap<FingerProfileSegment, FingerNodeBinding> {
+	let mut nodes = BTreeMap::new();
+	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
+		let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
+			continue;
+		};
+		let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) else {
+			continue;
+		};
+		let successor_node_index = finger_successor_profile_key(side_prefix, finger_key, segment)
+			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key));
+		nodes.insert(
+			FingerProfileSegment {
+				side_prefix,
+				finger_key,
+				segment,
+			},
+			FingerNodeBinding {
+				node_index,
+				successor_node_index,
+			},
+		);
+	}
+	nodes
 }
 
 fn precompute_unavatar_rest_axes(
@@ -693,9 +746,16 @@ fn finger_successor_profile_key(side_prefix: &str, finger_key: &str, segment: &s
 	finger_profile_key(side_prefix, finger_key, next_segment)
 }
 
+fn hand_profile_key(side_prefix: &str) -> Option<&'static str> {
+	match side_prefix {
+		"left" => Some("lefthand"),
+		"right" => Some("righthand"),
+		_ => None,
+	}
+}
+
 #[allow(clippy::too_many_arguments)]
 fn adapt_unavatar_unmotion_finger_axis(
-	profile: &HumanoidProfile,
 	mut rotation: Quat,
 	nodes: &[UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
@@ -705,7 +765,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 	side_prefix: &str,
 	finger_key: &str,
 	segment: &str,
-	successor_key: Option<&str>,
+	successor_node_index: Option<usize>,
 ) -> Quat {
 	if !frame_ctx.needs_unavatar_unmotion_adapter() {
 		return rotation;
@@ -735,8 +795,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 		.unavatar_adapter
 		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
 		.or_else(|| {
-			successor_key
-				.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
+			successor_node_index
 				.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
 				.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
 		});
@@ -803,37 +862,32 @@ fn apply_humanoid_transform_to_profile_node(
 
 #[allow(clippy::too_many_arguments)]
 fn apply_finger_transform_to_profile_node(
-	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
-	key: &str,
-	successor_key: Option<&str>,
+	node_index: usize,
+	successor_node_index: Option<usize>,
 	side_prefix: &str,
 	finger_key: &str,
 	segment: &str,
 	transform: &TransformSample,
 ) {
-	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
-		return;
-	};
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, UnmotionHumanoidRole::HandFinger);
 	sample_rotation = adapt_unavatar_unmotion_finger_axis(
-		profile,
 		sample_rotation,
 		nodes,
 		rest_nodes,
 		roots,
 		frame_ctx,
-		ni,
+		node_index,
 		side_prefix,
 		finger_key,
 		segment,
-		successor_key,
+		successor_node_index,
 	);
-	if let Some(node) = nodes.get_mut(ni) {
-		let base = base_node_transform(ni, node, rest_nodes, frame_ctx);
+	if let Some(node) = nodes.get_mut(node_index) {
+		let base = base_node_transform(node_index, node, rest_nodes, frame_ctx);
 		let sample_translation = frame_ctx.transform_translation(transform);
 		node.transform = Mat4::from_scale_rotation_translation(
 			base.scale,
@@ -869,7 +923,7 @@ fn apply_hand_motion_to_scene(
 	nodes: &mut [UnaSceneNode],
 	roots: &[usize],
 	hand: &HandMotion,
-	side_prefix: &str,
+	side_prefix: &'static str,
 	rest_nodes: Option<&[UnaSceneNode]>,
 	frame_ctx: RetargetFrameContext<'_>,
 	apply_wrist: bool,
@@ -879,16 +933,18 @@ fn apply_hand_motion_to_scene(
 	}
 	if apply_wrist {
 		if let Some(wrist) = hand.wrist.as_ref() {
-			apply_humanoid_transform_to_profile_node(
-				profile,
-				nodes,
-				rest_nodes,
-				roots,
-				frame_ctx,
-				&format!("{side_prefix}hand"),
-				wrist,
-				UnmotionHumanoidRole::HandWrist,
-			);
+			if let Some(key) = hand_profile_key(side_prefix) {
+				apply_humanoid_transform_to_profile_node(
+					profile,
+					nodes,
+					rest_nodes,
+					roots,
+					frame_ctx,
+					key,
+					wrist,
+					UnmotionHumanoidRole::HandWrist,
+				);
+			}
 		}
 	}
 	for finger in &hand.fingers {
@@ -906,18 +962,23 @@ fn apply_hand_motion_to_scene(
 				2 => "distal",
 				_ => continue,
 			};
-			let Some(key) = finger_profile_key(side_prefix, finger_key, segment) else {
+			let binding = frame_ctx.finger_nodes.and_then(|nodes| {
+				nodes.get(&FingerProfileSegment {
+					side_prefix,
+					finger_key,
+					segment,
+				})
+			});
+			let Some(binding) = binding.copied() else {
 				continue;
 			};
-			let successor_key = finger_successor_profile_key(side_prefix, finger_key, segment);
 			apply_finger_transform_to_profile_node(
-				profile,
 				nodes,
 				rest_nodes,
 				roots,
 				frame_ctx,
-				key,
-				successor_key,
+				binding.node_index,
+				binding.successor_node_index,
 				side_prefix,
 				finger_key,
 				segment,
@@ -1217,7 +1278,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1244,6 +1305,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
 		frame_ctx.base_transforms,
 		frame_ctx.profile_lookup,
+		frame_ctx.finger_nodes,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {

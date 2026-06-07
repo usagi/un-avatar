@@ -126,6 +126,9 @@ It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
+The context also stores finger segment node bindings, including successor node
+indices. Runtime hand application therefore no longer resolves finger profile
+keys or successor profile keys for each finger joint.
 For `.unavatar + UNMotion`, body limb and typed finger adapters use the
 compiled adapter's single node-index lookup instead of rediscovering Humanoid
 successors or first-child fallback axes for every frame.
