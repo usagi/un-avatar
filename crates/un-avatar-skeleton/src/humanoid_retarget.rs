@@ -212,7 +212,7 @@ impl<'a> RetargetFrameContext<'a> {
 	}
 
 	fn needs_unavatar_unmotion_adapter(self) -> bool {
-		self.coordinate_space == CoordinateSpace::UNMotion && self.target_basis == TargetHumanoidBasis::UnavatarUnity
+		self.unavatar_adapter.is_some()
 	}
 
 	fn transform_rotation(self, sample: &TransformSample, role: UnmotionHumanoidRole) -> Quat {
