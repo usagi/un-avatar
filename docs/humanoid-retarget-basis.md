@@ -126,8 +126,9 @@ hot path can write rest-relative local transforms without decomposing each rest
 node matrix again.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
-Body Humanoid bone node bindings are also compiled into the context, so body
-pose application does not resolve profile strings for each received bone sample.
+Body Humanoid bone node bindings are also compiled into a fixed bone-index
+array, so body pose application does not resolve profile strings or scan node
+binding lists for each received bone sample.
 Body, face-head, and hand-wrist application share the node-index transform path;
 only compatibility fallback paths resolve profile strings at runtime.
 Expression preset name matching is also compiled into exact-casefold and

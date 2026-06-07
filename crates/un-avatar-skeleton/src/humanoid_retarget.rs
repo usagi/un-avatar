@@ -63,6 +63,36 @@ pub fn humanoid_bone_profile_key(bone: HumanoidBone) -> &'static str {
 	}
 }
 
+fn humanoid_bone_index(bone: HumanoidBone) -> usize {
+	match bone {
+		HumanoidBone::Hips => 0,
+		HumanoidBone::Spine => 1,
+		HumanoidBone::Chest => 2,
+		HumanoidBone::UpperChest => 3,
+		HumanoidBone::Neck => 4,
+		HumanoidBone::Head => 5,
+		HumanoidBone::LeftShoulder => 6,
+		HumanoidBone::LeftUpperArm => 7,
+		HumanoidBone::LeftLowerArm => 8,
+		HumanoidBone::LeftHand => 9,
+		HumanoidBone::RightShoulder => 10,
+		HumanoidBone::RightUpperArm => 11,
+		HumanoidBone::RightLowerArm => 12,
+		HumanoidBone::RightHand => 13,
+		HumanoidBone::LeftUpperLeg => 14,
+		HumanoidBone::LeftLowerLeg => 15,
+		HumanoidBone::LeftFoot => 16,
+		HumanoidBone::LeftToes => 17,
+		HumanoidBone::RightUpperLeg => 18,
+		HumanoidBone::RightLowerLeg => 19,
+		HumanoidBone::RightFoot => 20,
+		HumanoidBone::RightToes => 21,
+		HumanoidBone::LeftEye => 22,
+		HumanoidBone::RightEye => 23,
+		HumanoidBone::Jaw => 24,
+	}
+}
+
 const HUMANOID_PROFILE_BONES: &[HumanoidBone] = &[
 	HumanoidBone::Hips,
 	HumanoidBone::Spine,
@@ -90,6 +120,8 @@ const HUMANOID_PROFILE_BONES: &[HumanoidBone] = &[
 	HumanoidBone::RightEye,
 	HumanoidBone::Jaw,
 ];
+
+const HUMANOID_PROFILE_BONE_COUNT: usize = 25;
 
 fn convert_rotation_from_coordinate_space(rotation: Quat, coordinate_space: CoordinateSpace, target_basis: TargetHumanoidBasis) -> Quat {
 	match coordinate_space {
@@ -389,12 +421,6 @@ impl NodeRestTransform {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct BodyBoneNodeBinding {
-	bone: HumanoidBone,
-	node_index: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
 struct FingerNodeBinding {
 	node_index: usize,
 	successor_node_index: Option<usize>,
@@ -416,7 +442,7 @@ struct ExpressionNameLookup {
 struct RuntimeRetargetData {
 	profile_lookup: BTreeMap<String, usize>,
 	base_transforms: BTreeMap<usize, NodeRestTransform>,
-	body_bone_nodes: Vec<BodyBoneNodeBinding>,
+	body_bone_nodes: [Option<usize>; HUMANOID_PROFILE_BONE_COUNT],
 	hand_nodes: [HandNodeBindings; 2],
 	expression_lookup: ExpressionNameLookup,
 }
@@ -571,15 +597,19 @@ fn precompute_base_transforms(
 	transforms
 }
 
-fn precompute_body_bone_nodes(profile: &HumanoidProfile, profile_lookup: &BTreeMap<String, usize>) -> Vec<BodyBoneNodeBinding> {
-	HUMANOID_PROFILE_BONES
-		.iter()
-		.filter_map(|&bone| {
-			let key = humanoid_bone_profile_key(bone);
-			profile_node_index_with_lookup(profile, Some(profile_lookup), key)
-				.map(|node_index| BodyBoneNodeBinding { bone, node_index })
-		})
-		.collect()
+fn precompute_body_bone_nodes(
+	profile: &HumanoidProfile,
+	profile_lookup: &BTreeMap<String, usize>,
+) -> [Option<usize>; HUMANOID_PROFILE_BONE_COUNT] {
+	debug_assert_eq!(HUMANOID_PROFILE_BONES.len(), HUMANOID_PROFILE_BONE_COUNT);
+	let mut nodes = [None; HUMANOID_PROFILE_BONE_COUNT];
+	for &bone in HUMANOID_PROFILE_BONES {
+		let key = humanoid_bone_profile_key(bone);
+		if let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) {
+			nodes[humanoid_bone_index(bone)] = Some(node_index);
+		}
+	}
+	nodes
 }
 
 fn precompute_hand_nodes(
@@ -879,8 +909,7 @@ fn segment_index_from_key(segment: &str) -> Option<usize> {
 fn body_bone_node_index(frame_ctx: RetargetFrameContext<'_>, bone: HumanoidBone) -> Option<usize> {
 	frame_ctx
 		.runtime
-		.map(|runtime| runtime.body_bone_nodes.as_slice())
-		.and_then(|nodes| nodes.iter().find(|binding| binding.bone == bone).map(|binding| binding.node_index))
+		.and_then(|runtime| runtime.body_bone_nodes.get(humanoid_bone_index(bone)).copied().flatten())
 }
 
 fn hand_node_bindings<'a>(frame_ctx: RetargetFrameContext<'a>, side_prefix: &str) -> Option<&'a HandNodeBindings> {
