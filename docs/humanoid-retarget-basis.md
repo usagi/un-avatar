@@ -156,3 +156,5 @@ profile keys, base transforms, or map lookups for each finger joint.
 For `.unavatar + UNMotion`, body limb and typed finger adapters use the
 compiled adapter's single node-index lookup instead of rediscovering Humanoid
 successors or first-child fallback axes for every frame.
+The adapter stores those rest axes as a sorted node-index table rather than a
+tree map; duplicate resolution happens only while compiling the context.

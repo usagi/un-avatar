@@ -510,7 +510,7 @@ impl RetargetRestCache {
 #[derive(Debug)]
 struct UnavatarRetargetAdapter {
 	rest_cache: RetargetRestCache,
-	rest_axes: BTreeMap<usize, (Quat, Vec3)>,
+	rest_axes: Vec<(usize, (Quat, Vec3))>,
 }
 
 impl UnavatarRetargetAdapter {
@@ -518,6 +518,13 @@ impl UnavatarRetargetAdapter {
 		let rest_cache = RetargetRestCache::new(nodes, roots);
 		let rest_axes = precompute_unavatar_rest_axes(profile, nodes, &rest_cache, profile_lookup);
 		Self { rest_cache, rest_axes }
+	}
+
+	fn rest_axis(&self, node_index: usize) -> Option<(Quat, Vec3)> {
+		self.rest_axes
+			.binary_search_by_key(&node_index, |(node_index, _)| *node_index)
+			.ok()
+			.map(|index| self.rest_axes[index].1)
 	}
 }
 
@@ -701,9 +708,9 @@ fn precompute_unavatar_rest_axes(
 	nodes: &[UnaSceneNode],
 	cache: &RetargetRestCache,
 	profile_lookup: &BTreeMap<String, usize>,
-) -> BTreeMap<usize, (Quat, Vec3)> {
+) -> Vec<(usize, (Quat, Vec3))> {
 	let Some(profile) = profile else {
-		return BTreeMap::new();
+		return Vec::new();
 	};
 	let mut axes = BTreeMap::new();
 	for bone in [
@@ -752,7 +759,7 @@ fn precompute_unavatar_rest_axes(
 			axes.insert(node_index, axis);
 		}
 	}
-	axes
+	axes.into_iter().collect()
 }
 
 fn adapt_unavatar_unmotion_limb_axis(
@@ -781,7 +788,7 @@ fn adapt_unavatar_unmotion_limb_axis(
 	};
 	let axis = frame_ctx
 		.unavatar_adapter
-		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
+		.and_then(|adapter| adapter.rest_axis(node_index))
 		.or_else(|| {
 			rest_humanoid_child_axis_in_parent(
 				profile,
@@ -1005,7 +1012,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 	};
 	let axis = frame_ctx
 		.unavatar_adapter
-		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
+		.and_then(|adapter| adapter.rest_axis(node_index))
 		.or_else(|| {
 			successor_node_index
 				.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
