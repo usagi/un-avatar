@@ -9,10 +9,10 @@ use std::{collections::BTreeMap, path::Path};
 use glam::Mat4;
 use serde_json::Value;
 use un_avatar_core::{
-	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba,
-	UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
-	UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry,
-	UnaVrmExtension,
+	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset,
+	UnaExpressionWeights, UnaImageRgba, UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
+	UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1010,6 +1010,7 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				continue;
 			}
 			out_groups.push(UnaSpringBoneGroup {
+				source_kind: UnaDynamicsSourceKind::VrmSpringBone,
 				comment: comment.clone(),
 				category: String::new(),
 				stiffness,
@@ -1063,6 +1064,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 		}
 		let comment = sp.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string();
 		out_groups.push(UnaSpringBoneGroup {
+			source_kind: UnaDynamicsSourceKind::VrmSpringBone,
 			comment,
 			category: String::new(),
 			stiffness,

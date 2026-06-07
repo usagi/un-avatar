@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
+use un_avatar_core::{UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
 
@@ -478,6 +478,16 @@ impl SpringBoneSimulator {
 		bone_colliders: Vec<BoneColliderPrimitive>,
 		physics: SpringBonePhysicsConfig,
 	) -> Option<Self> {
+		Self::new_with_runtime_dynamics(scene, settings.runtime_dynamics(), bone_colliders, physics)
+	}
+
+	pub fn new_with_runtime_dynamics(
+		scene: &UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		bone_colliders: Vec<BoneColliderPrimitive>,
+		physics: SpringBonePhysicsConfig,
+	) -> Option<Self> {
+		let settings = dynamics.spring_bones()?;
 		let physics = physics.normalized();
 		let world0 = world_from_snapshot(scene);
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
@@ -587,6 +597,13 @@ impl SpringBoneSimulator {
 	///
 	/// 実時間 `dt` を蓄積し、設定された fixed timestep 単位の固定サブステップで進める。
 	pub fn step(&mut self, scene: &mut UnaSceneSnapshot, settings: &UnaSpringBoneSettings, dt: f32) {
+		self.step_runtime_dynamics(scene, settings.runtime_dynamics(), dt);
+	}
+
+	pub fn step_runtime_dynamics(&mut self, scene: &mut UnaSceneSnapshot, dynamics: UnaRuntimeDynamics<'_>, dt: f32) {
+		let Some(settings) = dynamics.spring_bones() else {
+			return;
+		};
 		if !dt.is_finite() || dt <= 0.0 {
 			return;
 		}
@@ -820,6 +837,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.05,
@@ -859,6 +877,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -901,6 +920,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -980,6 +1000,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: "ミミ spring".to_string(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1024,6 +1045,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1070,6 +1092,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.8,
@@ -1127,6 +1150,7 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,

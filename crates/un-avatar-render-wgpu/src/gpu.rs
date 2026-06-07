@@ -1714,11 +1714,10 @@ impl GpuState {
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
 		self.spring_sim = if enabled {
-			match (runtime_model.scene(), runtime_model.spring_bones()) {
-				(Some(scene), Some(settings)) => {
-					SpringBoneSimulator::new_with_config(scene, settings, colliders.clone(), spring_bone_physics)
-				}
-				_ => None,
+			if let Some(scene) = runtime_model.scene() {
+				SpringBoneSimulator::new_with_runtime_dynamics(scene, runtime_model.dynamics(), colliders.clone(), spring_bone_physics)
+			} else {
+				None
 			}
 		} else {
 			None
@@ -1733,8 +1732,10 @@ impl GpuState {
 		let Ok(mut doc) = doc_arc.write() else {
 			return;
 		};
-		let UnaDocument { scene, spring_bones, .. } = &mut *doc;
-		let (Some(scene), Some(settings)) = (scene.as_mut(), spring_bones.as_ref()) else {
+		let Some((scene, dynamics)) = doc.runtime_scene_and_dynamics_mut() else {
+			return;
+		};
+		let Some(settings) = dynamics.spring_bones() else {
 			return;
 		};
 		for node_index in settings.groups.iter().flat_map(|group| group.bone_node_indices.iter().copied()) {
@@ -2561,11 +2562,15 @@ impl GpuSceneBuildContext {
 			Vec::new()
 		};
 		let spring_sim = if options.enable_spring_bones {
-			match (runtime_model.scene(), runtime_model.spring_bones()) {
-				(Some(sc), Some(sb)) => {
-					SpringBoneSimulator::new_with_config(sc, sb, bone_colliders.clone(), options.spring_bone_physics.clone())
-				}
-				_ => None,
+			if let Some(sc) = runtime_model.scene() {
+				SpringBoneSimulator::new_with_runtime_dynamics(
+					sc,
+					runtime_model.dynamics(),
+					bone_colliders.clone(),
+					options.spring_bone_physics.clone(),
+				)
+			} else {
+				None
 			}
 		} else {
 			None
@@ -3118,9 +3123,8 @@ impl GpuState {
 		self.apply_pending_motion_frames();
 		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.spring_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
-				let UnaDocument { scene, spring_bones, .. } = &mut *doc;
-				if let (Some(scene), Some(settings)) = (scene, spring_bones.as_ref()) {
-					sim.step(scene, settings, dt);
+				if let Some((scene, dynamics)) = doc.runtime_scene_and_dynamics_mut() {
+					sim.step_runtime_dynamics(scene, dynamics, dt);
 				}
 			}
 		}

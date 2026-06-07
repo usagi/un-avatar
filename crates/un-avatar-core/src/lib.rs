@@ -116,8 +116,10 @@ pub struct UnaExpressionWeights {
 }
 
 /// VRM Secondary Animation / SpringBone の 1 チェーン（bootstrap）。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaSpringBoneGroup {
+	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+	pub source_kind: UnaDynamicsSourceKind,
 	#[serde(default)]
 	pub comment: String,
 	/// UN Avatar 側で推定・編集する SpringBone 物理カテゴリ。
@@ -144,6 +146,21 @@ pub struct UnaSpringBoneGroup {
 	pub bone_node_indices: Vec<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsSourceKind {
+	#[default]
+	VrmSpringBone,
+	VrcPhysBone,
+	Unknown,
+}
+
+impl UnaDynamicsSourceKind {
+	pub fn is_default(self: &Self) -> bool {
+		*self == Self::default()
+	}
+}
+
 fn default_spring_gravity_dir() -> [f32; 3] {
 	[0.0, -1.0, 0.0]
 }
@@ -156,6 +173,37 @@ fn default_spring_drag() -> f32 {
 pub struct UnaSpringBoneSettings {
 	#[serde(default)]
 	pub groups: Vec<UnaSpringBoneGroup>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnaRuntimeDynamics<'a> {
+	spring_bones: Option<&'a UnaSpringBoneSettings>,
+}
+
+impl<'a> UnaRuntimeDynamics<'a> {
+	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
+		self.spring_bones
+	}
+
+	pub fn has_groups(self) -> bool {
+		self.spring_bones.is_some_and(|settings| !settings.groups.is_empty())
+	}
+
+	pub fn group_count(self) -> usize {
+		self.spring_bones.map(|settings| settings.groups.len()).unwrap_or(0)
+	}
+
+	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
+		self.spring_bones
+			.map(|settings| settings.groups.iter().filter(|group| group.source_kind == source_kind).count())
+			.unwrap_or(0)
+	}
+}
+
+impl UnaSpringBoneSettings {
+	pub fn runtime_dynamics(&self) -> UnaRuntimeDynamics<'_> {
+		UnaRuntimeDynamics { spring_bones: Some(self) }
+	}
 }
 
 /// glTF メッシュ default + 表情プリセットから、当該 primitive のモーフウェイトを合成する。
@@ -222,6 +270,17 @@ impl UnaDocument {
 	pub fn runtime_model(&self) -> UnaRuntimeModel<'_> {
 		UnaRuntimeModel { document: self }
 	}
+
+	pub fn runtime_scene_and_dynamics_mut(&mut self) -> Option<(&mut UnaSceneSnapshot, UnaRuntimeDynamics<'_>)> {
+		let UnaDocument { scene, spring_bones, .. } = self;
+		let scene = scene.as_mut()?;
+		Some((
+			scene,
+			UnaRuntimeDynamics {
+				spring_bones: spring_bones.as_ref(),
+			},
+		))
+	}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -280,6 +339,12 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
 		self.document.spring_bones.as_ref()
+	}
+
+	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
+		UnaRuntimeDynamics {
+			spring_bones: self.document.spring_bones.as_ref(),
+		}
 	}
 }
 
@@ -2884,6 +2949,49 @@ mod tests {
 		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::MToonLike));
 		assert!(material.liltoon_like_runtime().is_none());
 		assert!(material.mtoon_like_runtime().is_some());
+	}
+
+	#[test]
+	fn runtime_dynamics_reports_spring_bone_groups() {
+		let document = UnaDocument {
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![
+					UnaSpringBoneGroup {
+						bone_node_indices: vec![0, 1],
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						bone_node_indices: vec![2, 3],
+						..Default::default()
+					},
+				],
+			}),
+			..Default::default()
+		};
+		let dynamics = document.runtime_model().dynamics();
+
+		assert!(dynamics.has_groups());
+		assert_eq!(dynamics.group_count(), 2);
+		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone), 1);
+		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone), 1);
+	}
+
+	#[test]
+	fn spring_bone_group_source_kind_defaults_for_legacy_json() {
+		let group: UnaSpringBoneGroup = serde_json::from_str(
+			r#"{
+				"comment": "legacy",
+				"stiffness": 1.0,
+				"gravity_power": 0.0,
+				"drag_force": 0.4,
+				"hit_radius": 0.02,
+				"bone_node_indices": [0, 1]
+			}"#,
+		)
+		.expect("legacy spring bone group");
+
+		assert_eq!(group.source_kind, UnaDynamicsSourceKind::VrmSpringBone);
 	}
 
 	#[test]
