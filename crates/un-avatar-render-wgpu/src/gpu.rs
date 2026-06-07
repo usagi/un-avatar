@@ -336,6 +336,15 @@ struct MotionRetargetRuntime {
 }
 
 impl MotionRetargetRuntime {
+	fn for_document(document: &UnaDocument) -> Self {
+		let rest_nodes: Arc<Vec<UnaSceneNode>> = Arc::new(document.scene.as_ref().map(|scene| scene.nodes.clone()).unwrap_or_default());
+		let context = Arc::new(un_avatar_skeleton::HumanoidRetargetContext::for_document(
+			document,
+			Some(rest_nodes.as_slice()),
+		));
+		Self { rest_nodes, context }
+	}
+
 	fn apply_frame(
 		&self,
 		document: &mut UnaDocument,
@@ -2571,17 +2580,12 @@ impl GpuState {
 			}
 			return Ok(());
 		};
-		let (humanoid_ok, rest_nodes, retarget_context) = {
+		let (humanoid_ok, retarget_runtime) = {
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let humanoid_ok = d.humanoid_profile.is_some() && d.scene.is_some();
-			let rest_nodes: Arc<Vec<UnaSceneNode>> = Arc::new(d.scene.as_ref().map(|scene| scene.nodes.clone()).unwrap_or_default());
-			let retarget_context = Arc::new(un_avatar_skeleton::HumanoidRetargetContext::for_document(&d, Some(rest_nodes.as_slice())));
-			(humanoid_ok, rest_nodes, retarget_context)
+			(humanoid_ok, MotionRetargetRuntime::for_document(&d))
 		};
-		self.motion_retarget_runtime = Some(MotionRetargetRuntime {
-			rest_nodes,
-			context: retarget_context,
-		});
+		self.motion_retarget_runtime = Some(retarget_runtime);
 		if let Some(addr) = vmc_address {
 			let humanoid_keys_csv = {
 				let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
