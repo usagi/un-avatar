@@ -1800,13 +1800,13 @@ pub fn apply_un_motion_frame_to_document_with_context(
 			if context.runtime.expression_lookup.is_empty() {
 				return;
 			}
-			let ew = document.expression_weights.get_or_insert_with(Default::default);
 			for ex in &face.expressions {
 				// 完全一致（ASCII case 無視）優先、見つからなければ ARKit BlendShape の表記揺れに耐性のある
 				// 正規化マッチ（区切り文字除去 + 全部小文字）でリトライする。
 				// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
 				if let Some(preset_name) = context.runtime.expression_lookup.preset_name_for(&ex.name) {
 					let value = ex.value.clamp(0.0, 1.0);
+					let ew = document.expression_weights.get_or_insert_with(Default::default);
 					if let Some(weight) = ew.preset_weights.get_mut(preset_name) {
 						*weight = value;
 					} else {
