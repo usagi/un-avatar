@@ -2624,18 +2624,17 @@ impl GpuState {
 			}
 			return Ok(());
 		};
-		let retarget_runtime = {
+		let (retarget_runtime, humanoid_keys_csv) = {
 			let rest_nodes = self.rest_nodes.as_ref().map(Arc::clone);
 			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			rest_nodes.and_then(|rest_nodes| MotionRetargetRuntime::for_document(&d, rest_nodes))
+			(
+				rest_nodes.and_then(|rest_nodes| MotionRetargetRuntime::for_document(&d, rest_nodes)),
+				humanoid_profile_keys_csv(d.humanoid_profile.as_ref()),
+			)
 		};
 		let humanoid_ok = retarget_runtime.is_some();
 		self.motion_retarget_runtime = retarget_runtime;
 		if let Some(addr) = vmc_address {
-			let humanoid_keys_csv = {
-				let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-				humanoid_profile_keys_csv(d.humanoid_profile.as_ref())
-			};
 			if humanoid_ok {
 				let log = self.debug_log.clone();
 				let motion_buffer_for_vmc = Arc::clone(&self.motion_buffer);
