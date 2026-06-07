@@ -953,8 +953,12 @@ fn scene_mesh_runtime_requirements_for_draws(draws: &[MeshDraw]) -> SceneMeshRun
 	}
 }
 
-fn active_draw_count(draws: &[MeshDraw]) -> usize {
-	draws.iter().filter(|draw| draw.active).count()
+fn active_draw_indices_for_draws(draws: &[MeshDraw]) -> Vec<usize> {
+	draws
+		.iter()
+		.enumerate()
+		.filter_map(|(index, draw)| draw.active.then_some(index))
+		.collect()
 }
 
 fn active_draws_need_screen_refraction(draws: &[MeshDraw]) -> bool {
@@ -1273,7 +1277,7 @@ pub(crate) struct SceneMeshes {
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
-	active_draw_count: usize,
+	active_draw_indices: Vec<usize>,
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	texture_summary: TextureUploadSummary,
@@ -7248,7 +7252,7 @@ impl SceneMeshes {
 		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&draws, &opts);
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
-		let active_draw_count = active_draw_count(&draws);
+		let active_draw_indices = active_draw_indices_for_draws(&draws);
 		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
 		let active_skin_palette_indices = active_skin_palette_indices_for_draws(&draws);
 		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
@@ -7291,7 +7295,7 @@ impl SceneMeshes {
 			opaque_batches,
 			transparent_backpass_draw_indices,
 			blended_batches,
-			active_draw_count,
+			active_draw_indices,
 			needs_screen_refraction,
 			active_skin_palette_indices,
 			texture_summary,
@@ -7580,7 +7584,7 @@ impl SceneMeshes {
 	}
 
 	fn refresh_cached_draw_state(&mut self) {
-		self.active_draw_count = active_draw_count(&self.draws);
+		self.active_draw_indices = active_draw_indices_for_draws(&self.draws);
 		self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
 		self.active_skin_palette_indices = active_skin_palette_indices_for_draws(&self.draws);
 		self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
@@ -7806,10 +7810,10 @@ impl SceneMeshes {
 		}
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
-		for d in &mut self.draws {
-			if !d.active {
+		for &draw_index in &self.active_draw_indices {
+			let Some(d) = self.draws.get_mut(draw_index) else {
 				continue;
-			}
+			};
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			d.world_origin = if let Some(bounds) = d.local_bounds {
 				let reference_world = d.probe_anchor_node.and_then(|node| world.get(node)).copied().unwrap_or(mesh_world);
@@ -7912,7 +7916,7 @@ impl SceneMeshes {
 	}
 
 	pub fn is_empty(&self) -> bool {
-		self.active_draw_count == 0
+		self.active_draw_indices.is_empty()
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
