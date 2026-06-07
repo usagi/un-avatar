@@ -24,8 +24,8 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, MaterialTier, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements,
-		SceneMeshes, TextureUploadSummary,
+		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshBuildProgress, SceneMeshLoadOpts,
+		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
 	},
 	options::{
 		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
@@ -41,14 +41,51 @@ const SHADER_BONE_COLLIDERS: &str = include_str!("../shaders/bone_colliders.wgsl
 const SHADER_STARTUP_SPLASH: &str = include_str!("../shaders/startup_splash.wgsl");
 const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl");
 
-const PORTABLE_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
-const PORTABLE_SAMPLERS_PER_STAGE: u32 = 16;
-const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
-const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE: u32 = 19;
+const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
+const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
+const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
+const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
 fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document: &UnaDocument) -> String {
+	let body_bones = frame
+		.body
+		.as_ref()
+		.and_then(|body| body.humanoid.as_ref())
+		.map(|pose| pose.bones.len())
+		.unwrap_or(0);
+	let body_has = |bone| {
+		frame
+			.body
+			.as_ref()
+			.and_then(|body| body.humanoid.as_ref())
+			.is_some_and(|pose| {
+				pose.bones
+					.iter()
+					.any(|sample| sample.bone == bone && sample.state != un_motion_frame::SampleState::Missing)
+			})
+	};
+	let left_arm = [
+		(body_has(un_motion_frame::HumanoidBone::LeftShoulder), "LS"),
+		(body_has(un_motion_frame::HumanoidBone::LeftUpperArm), "LU"),
+		(body_has(un_motion_frame::HumanoidBone::LeftLowerArm), "LL"),
+		(body_has(un_motion_frame::HumanoidBone::LeftHand), "LH"),
+	]
+	.into_iter()
+	.filter_map(|(present, label)| present.then_some(label))
+	.collect::<Vec<_>>()
+	.join(",");
+	let right_arm = [
+		(body_has(un_motion_frame::HumanoidBone::RightShoulder), "RS"),
+		(body_has(un_motion_frame::HumanoidBone::RightUpperArm), "RU"),
+		(body_has(un_motion_frame::HumanoidBone::RightLowerArm), "RL"),
+		(body_has(un_motion_frame::HumanoidBone::RightHand), "RH"),
+	]
+	.into_iter()
+	.filter_map(|(present, label)| present.then_some(label))
+	.collect::<Vec<_>>()
+	.join(",");
 	let left_fingers = frame.left_hand.as_ref().map(|h| h.fingers.len()).unwrap_or(0);
 	let right_fingers = frame.right_hand.as_ref().map(|h| h.fingers.len()).unwrap_or(0);
 	let left_joints = frame
@@ -94,7 +131,7 @@ fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document:
 		})
 		.unwrap_or((0, 0));
 	format!(
-		"space={:?} left_fingers={left_fingers} right_fingers={right_fingers} left_joints={left_joints} right_joints={right_joints} profile_finger_keys={matched_finger_keys} finger_targets={finger_targets} matched_finger_targets={matched_finger_targets}",
+		"space={:?} body_bones={body_bones} left_arm={left_arm} right_arm={right_arm} left_fingers={left_fingers} right_fingers={right_fingers} left_joints={left_joints} right_joints={right_joints} profile_finger_keys={matched_finger_keys} finger_targets={finger_targets} matched_finger_targets={matched_finger_targets}",
 		frame.header.coordinate_space
 	)
 }
@@ -298,7 +335,7 @@ pub(crate) struct GpuSceneBuildContext {
 	queue: wgpu::Queue,
 	format: wgpu::TextureFormat,
 	aa: AaMode,
-	material_tier: MaterialTier,
+	shader_variant_tier: MeshShaderVariantTier,
 }
 
 /// `Mat4::perspective_rh` 用の縦方向 FOV（ラジアン）を、対角画角と幅÷高さから求める。
@@ -905,7 +942,7 @@ pub(crate) struct GpuState {
 	/// VMC 受信スレッドが起動済みか。受信データは描画直前に pending buffer から適用する。
 	vmc_live: bool,
 	scene_meshes: Option<SceneMeshes>,
-	material_tier: MaterialTier,
+	shader_variant_tier: MeshShaderVariantTier,
 	avatar_outline: AvatarOutlineOptions,
 	environment_color: EnvironmentColorOptions,
 	lighting: LightingOptions,
@@ -1020,38 +1057,38 @@ impl GpuState {
 		let adapter_limits = adapter.limits();
 		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
 		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
-		let full_liltoon_one_pass_supported = adapter_limits.max_sampled_textures_per_shader_stage
-			>= FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE
-			&& adapter_limits.max_samplers_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE;
-		let material_tier = if full_liltoon_one_pass_supported {
-			MaterialTier::FullOnePass
+		let high_capability_liltoon_supported = adapter_limits.max_sampled_textures_per_shader_stage
+			>= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
+			&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE;
+		let shader_variant_tier = if high_capability_liltoon_supported {
+			MeshShaderVariantTier::HighCapability
 		} else {
-			MaterialTier::Portable16
+			MeshShaderVariantTier::BaselineFallback
 		};
-		if full_liltoon_one_pass_supported {
+		if high_capability_liltoon_supported {
 			limits.max_sampled_textures_per_shader_stage = limits
 				.max_sampled_textures_per_shader_stage
-				.max(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE)
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE)
 				.min(adapter_limits.max_sampled_textures_per_shader_stage);
 			limits.max_samplers_per_shader_stage = limits
 				.max_samplers_per_shader_stage
-				.max(FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE)
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE)
 				.min(adapter_limits.max_samplers_per_shader_stage);
 		} else {
 			limits.max_sampled_textures_per_shader_stage = limits
 				.max_sampled_textures_per_shader_stage
-				.max(PORTABLE_SAMPLED_TEXTURES_PER_STAGE)
+				.max(BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE)
 				.min(adapter_limits.max_sampled_textures_per_shader_stage);
 			limits.max_samplers_per_shader_stage = limits
 				.max_samplers_per_shader_stage
-				.max(PORTABLE_SAMPLERS_PER_STAGE)
+				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE)
 				.min(adapter_limits.max_samplers_per_shader_stage);
 			eprintln!(
-				"un-avatar-renderer: GPU sampled texture/sampler limits are below full lilToon 1-pass target; using portable material tier (adapter sampled={} samplers={}, target sampled={} samplers={})",
+				"un-avatar-renderer: GPU sampled texture/sampler limits are below the high-capability lilToon-compatible shader target; using baseline fallback variant (adapter sampled={} samplers={}, target sampled={} samplers={})",
 				adapter_limits.max_sampled_textures_per_shader_stage,
 				adapter_limits.max_samplers_per_shader_stage,
-				FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE,
-				FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE,
+				HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+				HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 			);
 		}
 
@@ -1282,7 +1319,7 @@ impl GpuState {
 			applied_document_revision: 0,
 			vmc_live,
 			scene_meshes,
-			material_tier,
+			shader_variant_tier,
 			avatar_outline,
 			environment_color,
 			lighting,
@@ -1443,12 +1480,26 @@ impl GpuState {
 				self.expression_presets = expression_preset_names(doc.expression_catalog.as_ref());
 			}
 		}
+		let refresh_scene_morph_defaults =
+			mark_revisions_applied && self.document_revision.load(Ordering::Acquire) != self.applied_document_revision;
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
-		sm.update_draw_transforms(&self.queue, sc, &self.world_scratch, expr_weights, expression_overrides);
+		sm.update_draw_transforms(
+			&self.queue,
+			sc,
+			&self.world_scratch,
+			expr_weights,
+			expression_overrides,
+			refresh_scene_morph_defaults,
+		);
+		let runtime_requirements_after_update = refresh_scene_morph_defaults.then(|| sm.runtime_requirements());
 		if mark_revisions_applied {
 			self.applied_document_revision = self.document_revision.load(Ordering::Acquire);
 			self.applied_expression_overrides_revision = self.expression_overrides_revision;
+		}
+		drop(doc);
+		if let Some(requirements) = runtime_requirements_after_update {
+			self.apply_runtime_requirements(requirements, self.audio_link_options.clone());
 		}
 		true
 	}
@@ -2302,13 +2353,26 @@ impl GpuState {
 		self.texture_summary.clone()
 	}
 
+	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
+		let set_id = crate::model_loader::normalize_wardrobe_set_id(Some(set_id)).ok_or_else(|| "wardrobe set id required".to_string())?;
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		crate::model_loader::apply_requested_wardrobe_set(&mut doc, Some(set_id))
+			.ok_or_else(|| format!("wardrobe set `{set_id}` not applied"))?;
+		self.document_revision.fetch_add(1, Ordering::Release);
+		self.applied_document_revision = 0;
+		Ok(())
+	}
+
 	pub(crate) fn scene_build_context(&self) -> GpuSceneBuildContext {
 		GpuSceneBuildContext {
 			device: self.device.clone(),
 			queue: self.queue.clone(),
 			format: self.config.format,
 			aa: self.aa,
-			material_tier: self.material_tier,
+			shader_variant_tier: self.shader_variant_tier,
 		}
 	}
 
@@ -2353,7 +2417,7 @@ impl GpuSceneBuildContext {
 			queue,
 			format,
 			aa,
-			material_tier,
+			shader_variant_tier,
 		} = self;
 		let mut document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		if document.expression_catalog.as_ref().is_some_and(|c| !c.presets.is_empty()) {
@@ -2383,7 +2447,7 @@ impl GpuSceneBuildContext {
 					&queue,
 					format,
 					aa_sample_count(aa),
-					material_tier,
+					shader_variant_tier,
 					sc,
 					guard.expression_catalog.as_ref(),
 					options.mesh_diagnostics.clone(),
@@ -2403,7 +2467,7 @@ impl GpuSceneBuildContext {
 				if !sm.is_empty() {
 					texture_summary = Some(sm.texture_summary());
 					let world = crate::scene_transform::scene_world_matrices(sc);
-					sm.update_draw_transforms(&queue, sc, &world, guard.expression_weights.as_ref(), None);
+					sm.update_draw_transforms(&queue, sc, &world, guard.expression_weights.as_ref(), None, true);
 					runtime_requirements = sm.runtime_requirements();
 					if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 						eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
@@ -3835,12 +3899,12 @@ fn create_startup_splash_pipeline(
 
 #[cfg(test)]
 mod tests {
-	use super::{transparent_alpha_mode, FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE};
+	use super::{transparent_alpha_mode, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
-	fn full_liltoon_texture_budget_covers_highest_mesh_binding() {
-		assert_eq!(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE, 56);
+	fn high_capability_liltoon_texture_budget_covers_highest_mesh_binding() {
+		assert_eq!(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, 56);
 	}
 
 	#[test]

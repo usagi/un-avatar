@@ -182,6 +182,10 @@ enum RendererControlEvent {
 		path: std::path::PathBuf,
 		result: ScreenshotResultSlot,
 	},
+	SetWardrobe {
+		set_id: String,
+		result: ScreenshotResultSlot,
+	},
 	SceneState {
 		result: SceneStateResultSlot,
 	},
@@ -362,6 +366,9 @@ enum RendererControlCommand {
 	},
 	Screenshot {
 		path: String,
+	},
+	SetWardrobe {
+		set_id: String,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -606,6 +613,7 @@ impl RendererControlCommand {
 				height,
 			},
 			Self::Screenshot { .. } => unreachable!("Screenshot は runtime_control_response で個別に処理する"),
+			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -1545,6 +1553,15 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_wardrobe_set(&self, set_id: Option<String>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.active_wardrobe_set = set_id;
+		}
+	}
+
 	fn update_runtime_startup(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -2322,6 +2339,20 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(outcome);
 				}
 			}
+			RendererControlEvent::SetWardrobe { set_id, result } => {
+				let active_set_id = model_loader::normalize_wardrobe_set_id(Some(&set_id)).map(str::to_owned);
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.apply_wardrobe_set(&set_id),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if outcome.is_ok() {
+					self.update_runtime_wardrobe_set(active_set_id);
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
 			RendererControlEvent::SceneState { result } => {
 				let state = if self.startup_failed.is_some() {
 					SCENE_STATE_FAILED
@@ -2832,6 +2863,8 @@ struct RendererRuntimeSnapshot {
 	texture_compression_advanced: TextureCompressionAdvancedOptions,
 	processed_texture_cache: bool,
 	texture_summary: Option<mesh_pass::TextureUploadSummary>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -2925,6 +2958,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 			"set_spout_output".to_string(),
 			"set_window".to_string(),
 			"screenshot".to_string(),
+			"set_wardrobe".to_string(),
 			"set_expression_override".to_string(),
 			"clear_expression_overrides".to_string(),
 			"set_look_at".to_string(),
@@ -2968,6 +3002,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_compression_advanced: opts.texture_compression_advanced.clone(),
 		processed_texture_cache: opts.processed_texture_cache,
 		texture_summary: None,
+		active_wardrobe_set: opts.wardrobe_set.clone(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -3249,11 +3284,41 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	}
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
+		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
 		},
 		Err(e) => format!("err {e}"),
+	}
+}
+
+fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
+	if set_id.trim().is_empty() {
+		return "err wardrobe set id required".to_string();
+	}
+	let result: ScreenshotResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetWardrobe {
+		set_id,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	let deadline = Instant::now() + Duration::from_secs(2);
+	loop {
+		if let Ok(guard) = result.lock() {
+			if let Some(outcome) = guard.as_ref() {
+				return match outcome {
+					Ok(()) => "ok".to_string(),
+					Err(e) => format!("err {e}"),
+				};
+			}
+		}
+		if Instant::now() >= deadline {
+			return "err set_wardrobe timeout".to_string();
+		}
+		thread::sleep(Duration::from_millis(20));
 	}
 }
 
@@ -4032,7 +4097,11 @@ mod tests {
 	#[test]
 	fn runtime_status_server_keeps_one_shot_compatibility() {
 		let address = reserve_runtime_status_address();
-		let _status = start_runtime_status_server(address, &AvatarWindowOptions::default());
+		let opts = AvatarWindowOptions {
+			wardrobe_set: Some("field_drape".to_string()),
+			..Default::default()
+		};
+		let _status = start_runtime_status_server(address, &opts);
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
 		stream.read_to_string(&mut text).unwrap();
@@ -4044,10 +4113,18 @@ mod tests {
 			snapshot.get("scene_state").and_then(|value| value.as_str()),
 			Some(SCENE_STATE_SPLASH)
 		);
+		assert_eq!(
+			snapshot.get("active_wardrobe_set").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
 		assert!(snapshot
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
 			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("scene_state"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_wardrobe"))));
 	}
 
 	#[test]
@@ -4088,6 +4165,15 @@ mod tests {
 			parse_renderer_control_command(r#"{"command":"reset_camera"}"#).unwrap(),
 			RendererControlCommand::ResetCamera
 		));
+	}
+
+	#[test]
+	fn parses_json_set_wardrobe_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"set_wardrobe","set_id":"field_drape"}"#).unwrap();
+		let RendererControlCommand::SetWardrobe { set_id } = command else {
+			panic!("expected set_wardrobe command");
+		};
+		assert_eq!(set_id, "field_drape");
 	}
 
 	#[test]

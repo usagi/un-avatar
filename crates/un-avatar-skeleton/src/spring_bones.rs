@@ -801,6 +801,8 @@ mod tests {
 			children,
 			mesh: None,
 			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
 		}
 	}
 

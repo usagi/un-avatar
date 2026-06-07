@@ -1,12 +1,25 @@
 //! UN Avatar workspace 用 xtask。`cargo xtask ci` 等を拡張する。
 
 use std::{
+	collections::BTreeMap,
 	env, fs,
 	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
 	process::{self, Command, Stdio},
+	time::{Duration, Instant},
 };
 
+use glam::{EulerRot, Mat4, Quat, Vec3};
+use un_avatar_core::UnaDocument;
+use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
+use un_avatar_skeleton::{apply_un_motion_frame_to_document_with_rest, ApplyUnMotionFrameOpts};
+use un_avatar_types::HumanoidProfile;
+use un_avatar_zenoh::UnAvatarZenohReceiver;
+use un_motion_frame::{
+	BodyMotion, BoneSample, CoordinateSpace, Finger, FingerPose, HandMotion, HumanoidBone, HumanoidPose, Quatf, SampleState, TrackingState,
+	TransformSample, UNMotionFrame,
+};
+use un_motion_frame_zenoh::ZenohTopicStrategy;
 use zip::{write::SimpleFileOptions, CompressionMethod};
 
 const SPOUT2_REPO_URL: &str = "https://github.com/leadedge/Spout2.git";
@@ -1870,6 +1883,932 @@ fn print_run_renderer_usage() {
 	);
 }
 
+#[derive(Clone)]
+struct RetargetAuditModel {
+	label: &'static str,
+	document: UnaDocument,
+	rest_nodes: Vec<un_avatar_core::UnaSceneNode>,
+}
+
+struct RetargetAxisCase {
+	name: &'static str,
+	bone: HumanoidBone,
+	source_axis: Vec3,
+	target_axis: Vec3,
+	successor_key: &'static str,
+}
+
+struct RetargetFingerAxisCase {
+	name: &'static str,
+	finger: Finger,
+	coordinate_space: CoordinateSpace,
+	side_prefix: &'static str,
+	rotation: Quat,
+	joint_index: usize,
+	parent_key: &'static str,
+	successor_key: &'static str,
+	reference_label: &'static str,
+}
+
+fn quatf(q: Quat) -> Quatf {
+	Quatf {
+		x: q.x,
+		y: q.y,
+		z: q.z,
+		w: q.w,
+	}
+}
+
+fn identity_transform_sample() -> TransformSample {
+	TransformSample {
+		translation: None,
+		rotation: Some(quatf(Quat::IDENTITY)),
+		scale: None,
+		linear_velocity: None,
+		angular_velocity: None,
+	}
+}
+
+fn rotation_transform_sample(rotation: Quat) -> TransformSample {
+	TransformSample {
+		translation: None,
+		rotation: Some(quatf(rotation)),
+		scale: None,
+		linear_velocity: None,
+		angular_velocity: None,
+	}
+}
+
+fn retarget_body_frame(bone: HumanoidBone, rotation: Quat) -> UNMotionFrame {
+	let mut frame = UNMotionFrame::new(0);
+	frame.header.coordinate_space = CoordinateSpace::UNMotion;
+	frame.body = Some(BodyMotion {
+		tracking_state: TrackingState::Valid,
+		confidence: 1.0,
+		humanoid: Some(HumanoidPose {
+			root: None,
+			bones: vec![BoneSample {
+				bone,
+				transform: TransformSample {
+					translation: None,
+					rotation: Some(quatf(rotation)),
+					scale: None,
+					linear_velocity: None,
+					angular_velocity: None,
+				},
+				confidence: 1.0,
+				source_index: Some(0),
+				state: SampleState::Valid,
+			}],
+		}),
+	});
+	frame
+}
+
+fn retarget_finger_frame(
+	side_prefix: &str,
+	finger: Finger,
+	coordinate_space: CoordinateSpace,
+	joint_index: usize,
+	rotation: Quat,
+) -> UNMotionFrame {
+	let mut joints = vec![identity_transform_sample(), identity_transform_sample(), identity_transform_sample()];
+	if let Some(joint) = joints.get_mut(joint_index) {
+		*joint = rotation_transform_sample(rotation);
+	}
+	let hand = HandMotion {
+		tracking_state: TrackingState::Valid,
+		confidence: 1.0,
+		wrist: None,
+		fingers: vec![FingerPose {
+			finger,
+			joints,
+			confidence: 1.0,
+		}],
+	};
+	let mut frame = UNMotionFrame::new(0);
+	frame.header.coordinate_space = coordinate_space;
+	if side_prefix == "left" {
+		frame.left_hand = Some(hand);
+	} else {
+		frame.right_hand = Some(hand);
+	}
+	frame
+}
+
+fn retarget_thumb_proximal_unmotion_frame(side_prefix: &str, curl: f32) -> UNMotionFrame {
+	let yaw = if side_prefix == "left" { -0.44 + curl } else { 0.44 - curl };
+	retarget_finger_frame(
+		side_prefix,
+		Finger::Thumb,
+		CoordinateSpace::UNMotion,
+		0,
+		Quat::from_rotation_y(yaw),
+	)
+}
+
+fn retarget_thumb_proximal_unmotion_z_curl_frame(side_prefix: &str, curl: f32) -> UNMotionFrame {
+	let yaw = if side_prefix == "left" { -0.44 } else { 0.44 };
+	let roll = if side_prefix == "left" { curl } else { -curl };
+	retarget_finger_frame(
+		side_prefix,
+		Finger::Thumb,
+		CoordinateSpace::UNMotion,
+		0,
+		Quat::from_euler(EulerRot::XYZ, 0.0, yaw, roll),
+	)
+}
+
+fn retarget_full_thumb_unmotion_curl_frame(side_prefix: &str, curl: f32) -> UNMotionFrame {
+	let yaw = if side_prefix == "left" { -0.44 } else { 0.44 };
+	let side = if side_prefix == "left" { 1.0 } else { -1.0 };
+	let hand = HandMotion {
+		tracking_state: TrackingState::Valid,
+		confidence: 1.0,
+		wrist: None,
+		fingers: vec![FingerPose {
+			finger: Finger::Thumb,
+			joints: vec![
+				rotation_transform_sample(Quat::from_euler(EulerRot::XYZ, 0.0, yaw, side * curl.min(0.61))),
+				rotation_transform_sample(Quat::from_rotation_y(side * (curl * 1.57).min(1.57))),
+				rotation_transform_sample(Quat::from_rotation_y(side * (curl * 0.70).min(0.70))),
+			],
+			confidence: 1.0,
+		}],
+	};
+	let mut frame = UNMotionFrame::new(0);
+	frame.header.coordinate_space = CoordinateSpace::UNMotion;
+	if side_prefix == "left" {
+		frame.left_hand = Some(hand);
+	} else {
+		frame.right_hand = Some(hand);
+	}
+	frame
+}
+
+fn scene_world_matrices(nodes: &[un_avatar_core::UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
+	let mut world = vec![Mat4::IDENTITY; nodes.len().max(1)];
+	fn visit(nodes: &[un_avatar_core::UnaSceneNode], idx: usize, parent: Mat4, world: &mut [Mat4]) {
+		if idx >= nodes.len() {
+			return;
+		}
+		let local = Mat4::from_cols_array(&nodes[idx].transform);
+		let w = parent * local;
+		world[idx] = w;
+		for &child in &nodes[idx].children {
+			visit(nodes, child, w, world);
+		}
+	}
+	for &root in roots {
+		visit(nodes, root, Mat4::IDENTITY, &mut world);
+	}
+	world
+}
+
+fn profile_node_index(profile: &HumanoidProfile, key: &str) -> Option<usize> {
+	let normalized = normalize_humanoid_profile_key(key);
+	profile
+		.bone_node_indices
+		.iter()
+		.find(|(candidate, _)| normalize_humanoid_profile_key(candidate) == normalized)
+		.map(|(_, index)| *index)
+}
+
+fn normalize_humanoid_profile_key(value: &str) -> String {
+	value
+		.chars()
+		.filter(|ch| ch.is_ascii_alphanumeric())
+		.map(|ch| ch.to_ascii_lowercase())
+		.collect()
+}
+
+fn normalized_world_successor_axis(document: &UnaDocument, parent_key: &str, successor_key: &str) -> Result<Vec3, String> {
+	let scene = document.scene.as_ref().ok_or("document has no scene")?;
+	let profile = document.humanoid_profile.as_ref().ok_or("document has no humanoid profile")?;
+	let parent = profile_node_index(profile, parent_key).ok_or_else(|| format!("missing humanoid bone: {parent_key}"))?;
+	let child = profile_node_index(profile, successor_key).ok_or_else(|| format!("missing humanoid successor: {successor_key}"))?;
+	let world = scene_world_matrices(&scene.nodes, &scene.roots);
+	let from = world[parent].transform_point3(Vec3::ZERO);
+	let to = world[child].transform_point3(Vec3::ZERO);
+	(to - from)
+		.try_normalize()
+		.ok_or_else(|| format!("zero-length axis: {parent_key}->{successor_key}"))
+}
+
+fn normalized_world_basis(document: &UnaDocument, key: &str) -> Result<[Vec3; 3], String> {
+	let scene = document.scene.as_ref().ok_or("document has no scene")?;
+	let profile = document.humanoid_profile.as_ref().ok_or("document has no humanoid profile")?;
+	let node = profile_node_index(profile, key).ok_or_else(|| format!("missing humanoid bone: {key}"))?;
+	let world = scene_world_matrices(&scene.nodes, &scene.roots);
+	let (_, rotation, _) = world[node].to_scale_rotation_translation();
+	Ok([
+		(rotation * Vec3::X).normalize_or_zero(),
+		(rotation * Vec3::Y).normalize_or_zero(),
+		(rotation * Vec3::Z).normalize_or_zero(),
+	])
+}
+
+fn world_point(document: &UnaDocument, key: &str) -> Result<Vec3, String> {
+	let scene = document.scene.as_ref().ok_or("document has no scene")?;
+	let profile = document.humanoid_profile.as_ref().ok_or("document has no humanoid profile")?;
+	let node = profile_node_index(profile, key).ok_or_else(|| format!("missing humanoid bone: {key}"))?;
+	let world = scene_world_matrices(&scene.nodes, &scene.roots);
+	Ok(world[node].transform_point3(Vec3::ZERO))
+}
+
+fn print_thumb_index_distance_delta(
+	name: &str,
+	side_prefix: &str,
+	model: &RetargetAuditModel,
+	open_document: &UnaDocument,
+	curled_document: &UnaDocument,
+) {
+	let thumb_key = format!("{side_prefix}thumbdistal");
+	let index_key = format!("{side_prefix}indexproximal");
+	let Ok(open_thumb) = world_point(open_document, &thumb_key) else {
+		return;
+	};
+	let Ok(open_index) = world_point(open_document, &index_key) else {
+		return;
+	};
+	let Ok(curled_thumb) = world_point(curled_document, &thumb_key) else {
+		return;
+	};
+	let Ok(curled_index) = world_point(curled_document, &index_key) else {
+		return;
+	};
+	let open_distance = open_thumb.distance(open_index);
+	let curled_distance = curled_thumb.distance(curled_index);
+	println!(
+		"  {:24} {name}_thumb_index_dist open={open_distance:.5} curled={curled_distance:.5} delta={:+.5}",
+		model.label,
+		curled_distance - open_distance
+	);
+}
+
+fn compare_delta_direction(
+	ok: &mut bool,
+	name: &str,
+	model_deltas: &BTreeMap<&'static str, Vec3>,
+	reference_label: &'static str,
+	max_unavatar_delta_deg: f32,
+) {
+	if let Some(reference) = model_deltas.get(reference_label).copied() {
+		for (label, delta) in model_deltas {
+			let angle = reference.angle_between(*delta).to_degrees();
+			println!("  {:24} {name}_delta_to_{}={angle:.3}deg", label, reference_label);
+			if label.starts_with("unavatar:") && angle > max_unavatar_delta_deg {
+				eprintln!("retarget-audit: {} {name} differs from {} by {angle:.3}deg", label, reference_label);
+				*ok = false;
+			}
+		}
+	}
+}
+
+fn print_thumb_rest_chain(model: &RetargetAuditModel) {
+	let Some(scene) = model.document.scene.as_ref() else {
+		return;
+	};
+	let Some(profile) = model.document.humanoid_profile.as_ref() else {
+		return;
+	};
+	for key in [
+		"leftthumbproximal",
+		"leftthumbintermediate",
+		"leftthumbdistal",
+		"rightthumbproximal",
+		"rightthumbintermediate",
+		"rightthumbdistal",
+	] {
+		let Some(index) = profile_node_index(profile, key) else {
+			continue;
+		};
+		let Some(node) = scene.nodes.get(index) else {
+			continue;
+		};
+		let (_, rotation, translation) = Mat4::from_cols_array(&node.transform).to_scale_rotation_translation();
+		println!(
+			"  {:24} rest {key} node={} name={} t=({:+.4},{:+.4},{:+.4}) children={:?} local_y=({:+.3},{:+.3},{:+.3})",
+			model.label,
+			index,
+			node.name.as_deref().unwrap_or(""),
+			translation.x,
+			translation.y,
+			translation.z,
+			node.children,
+			(rotation * Vec3::Y).x,
+			(rotation * Vec3::Y).y,
+			(rotation * Vec3::Y).z,
+		);
+	}
+}
+
+fn print_thumb_hinge_candidates(model: &RetargetAuditModel) {
+	let Some(scene) = model.document.scene.as_ref() else {
+		return;
+	};
+	let Some(profile) = model.document.humanoid_profile.as_ref() else {
+		return;
+	};
+	let world = scene_world_matrices(&scene.nodes, &scene.roots);
+	for side in ["left", "right"] {
+		let thumb_key = format!("{side}thumbproximal");
+		let successor_key = format!("{side}thumbintermediate");
+		let Some(thumb_index) = profile_node_index(profile, &thumb_key) else {
+			continue;
+		};
+		let Some(successor_index) = profile_node_index(profile, &successor_key) else {
+			continue;
+		};
+		let thumb_axis = (world[successor_index].transform_point3(Vec3::ZERO) - world[thumb_index].transform_point3(Vec3::ZERO))
+			.normalize_or_zero();
+		let (_, thumb_rot, _) = world[thumb_index].to_scale_rotation_translation();
+		let candidates = [
+			("thumb_basis_x", thumb_rot * Vec3::X),
+			("thumb_basis_y", thumb_rot * Vec3::Y),
+			("thumb_basis_z", thumb_rot * Vec3::Z),
+		];
+		let sign = if side == "left" { 1.0 } else { -1.0 };
+		for (name, axis) in candidates {
+			let curled = Quat::from_axis_angle(axis.normalize_or_zero(), sign * 0.8) * thumb_axis;
+			println!(
+				"  {:24} {side} {name} hinge=({:+.4},{:+.4},{:+.4}) curled_axis=({:+.4},{:+.4},{:+.4})",
+				model.label, axis.x, axis.y, axis.z, curled.x, curled.y, curled.z
+			);
+		}
+	}
+}
+
+fn import_vrm_model(path: &Path) -> Result<UnaDocument, String> {
+	let importer = un_avatar_io_vrm::VrmImporter;
+	let mut ctx = ImportContext::dummy();
+	importer
+		.import(&mut ctx, ImportInput::Path(path.to_path_buf()), ImportOptions)
+		.map(|result| result.document)
+		.map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn import_unavatar_model(path: &Path) -> Result<UnaDocument, String> {
+	let importer = un_avatar_io_gltf::GltfImporter;
+	let mut ctx = ImportContext::dummy();
+	importer
+		.import(&mut ctx, ImportInput::Path(path.to_path_buf()), ImportOptions)
+		.map(|result| result.document)
+		.map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn retarget_audit_model(label: &'static str, document: UnaDocument) -> Result<RetargetAuditModel, String> {
+	let scene = document.scene.as_ref().ok_or_else(|| format!("{label}: missing scene"))?;
+	let rest_nodes = scene.nodes.clone();
+	if document.humanoid_profile.is_none() {
+		return Err(format!("{label}: missing humanoid profile"));
+	}
+	if scene.roots.is_empty() {
+		return Err(format!("{label}: missing scene roots"));
+	}
+	Ok(RetargetAuditModel {
+		label,
+		document,
+		rest_nodes,
+	})
+}
+
+fn find_vrm1_fixture(repo: &Path) -> Option<PathBuf> {
+	fs::read_dir(repo.join("target/tmp"))
+		.ok()?
+		.filter_map(Result::ok)
+		.map(|entry| entry.path())
+		.find(|path| {
+			path.extension()
+				.and_then(|ext| ext.to_str())
+				.is_some_and(|ext| ext.eq_ignore_ascii_case("vrm"))
+				&& path
+					.file_name()
+					.and_then(|name| name.to_str())
+					.is_some_and(|name| name.contains("vrm1.0-optimized"))
+		})
+}
+
+fn run_retarget_audit(repo: &Path) -> bool {
+	let model1 = repo.join("target/tmp/model1.vrm");
+	let vrm1 = match find_vrm1_fixture(repo) {
+		Some(path) => path,
+		None => {
+			eprintln!("retarget-audit: VRM1 fixture not found under target/tmp");
+			return false;
+		}
+	};
+	let mizuki = repo.join("target/tmp/mizuki-split.unavatar");
+	for path in [&model1, &vrm1, &mizuki] {
+		if !path.is_file() {
+			eprintln!("retarget-audit: fixture not found: {}", path.display());
+			return false;
+		}
+	}
+
+	let models = match (
+		import_vrm_model(&model1).and_then(|doc| retarget_audit_model("vrm0:model1", doc)),
+		import_vrm_model(&vrm1).and_then(|doc| retarget_audit_model("vrm1:usagi", doc)),
+		import_unavatar_model(&mizuki).and_then(|doc| retarget_audit_model("unavatar:mizuki-split", doc)),
+	) {
+		(Ok(a), Ok(b), Ok(c)) => vec![a, b, c],
+		(a, b, c) => {
+			for result in [a, b, c] {
+				if let Err(error) = result {
+					eprintln!("retarget-audit: {error}");
+				}
+			}
+			return false;
+		}
+	};
+
+	for model in &models {
+		print_thumb_rest_chain(model);
+		print_thumb_hinge_candidates(model);
+	}
+
+	let cases = [
+		RetargetAxisCase {
+			name: "left upper arm raise",
+			bone: HumanoidBone::LeftUpperArm,
+			source_axis: -Vec3::X,
+			target_axis: Vec3::Y,
+			successor_key: "leftlowerarm",
+		},
+		RetargetAxisCase {
+			name: "right upper arm raise",
+			bone: HumanoidBone::RightUpperArm,
+			source_axis: Vec3::X,
+			target_axis: Vec3::Y,
+			successor_key: "rightlowerarm",
+		},
+		RetargetAxisCase {
+			name: "left lower arm forward",
+			bone: HumanoidBone::LeftLowerArm,
+			source_axis: -Vec3::X,
+			target_axis: Vec3::Z,
+			successor_key: "lefthand",
+		},
+		RetargetAxisCase {
+			name: "right lower arm forward",
+			bone: HumanoidBone::RightLowerArm,
+			source_axis: Vec3::X,
+			target_axis: Vec3::Z,
+			successor_key: "righthand",
+		},
+		RetargetAxisCase {
+			name: "left upper leg down",
+			bone: HumanoidBone::LeftUpperLeg,
+			source_axis: -Vec3::Y,
+			target_axis: -Vec3::Y,
+			successor_key: "leftlowerleg",
+		},
+		RetargetAxisCase {
+			name: "right upper leg down",
+			bone: HumanoidBone::RightUpperLeg,
+			source_axis: -Vec3::Y,
+			target_axis: -Vec3::Y,
+			successor_key: "rightlowerleg",
+		},
+	];
+
+	let mut ok = true;
+	for case in cases {
+		println!("retarget-audit: {}", case.name);
+		let mut axes = BTreeMap::new();
+		let rotation = Quat::from_rotation_arc(case.source_axis, case.target_axis);
+		for model in &models {
+			let mut document = model.document.clone();
+			let frame = retarget_body_frame(case.bone, rotation);
+			apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&model.rest_nodes));
+			let parent_key = un_avatar_skeleton::humanoid_bone_profile_key(case.bone);
+			match normalized_world_successor_axis(&document, parent_key, case.successor_key) {
+				Ok(axis) => {
+					println!("  {:24} axis=({:+.4}, {:+.4}, {:+.4})", model.label, axis.x, axis.y, axis.z);
+					axes.insert(model.label, axis);
+				}
+				Err(error) => {
+					eprintln!("  {:24} ERROR {error}", model.label);
+					ok = false;
+				}
+			}
+		}
+		if let Some(reference) = axes.get("vrm1:usagi").copied() {
+			for (label, axis) in &axes {
+				let angle = reference.angle_between(*axis).to_degrees();
+				println!("  {:24} delta_to_vrm1={angle:.3}deg", label);
+				if angle > 8.0 {
+					eprintln!("retarget-audit: {} differs from vrm1 by {angle:.3}deg in {}", label, case.name);
+					ok = false;
+				}
+			}
+		}
+	}
+
+	let finger_cases = [
+		RetargetFingerAxisCase {
+			name: "left index intermediate curl",
+			finger: Finger::Index,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "left",
+			rotation: Quat::from_rotation_z(0.5),
+			joint_index: 1,
+			parent_key: "leftindexintermediate",
+			successor_key: "leftindexdistal",
+			reference_label: "vrm0:model1",
+		},
+		RetargetFingerAxisCase {
+			name: "right index intermediate curl",
+			finger: Finger::Index,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "right",
+			rotation: Quat::from_rotation_z(-0.5),
+			joint_index: 1,
+			parent_key: "rightindexintermediate",
+			successor_key: "rightindexdistal",
+			reference_label: "vrm0:model1",
+		},
+		RetargetFingerAxisCase {
+			name: "left thumb proximal curl",
+			finger: Finger::Thumb,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "left",
+			rotation: Quat::from_rotation_y(-0.44 + 0.5),
+			joint_index: 0,
+			parent_key: "leftthumbproximal",
+			successor_key: "leftthumbintermediate",
+			reference_label: "vrm0:model1",
+		},
+		RetargetFingerAxisCase {
+			name: "right thumb proximal curl",
+			finger: Finger::Thumb,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "right",
+			rotation: Quat::from_rotation_y(0.44 - 0.5),
+			joint_index: 0,
+			parent_key: "rightthumbproximal",
+			successor_key: "rightthumbintermediate",
+			reference_label: "vrm0:model1",
+		},
+		RetargetFingerAxisCase {
+			name: "left thumb intermediate curl",
+			finger: Finger::Thumb,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "left",
+			rotation: Quat::from_rotation_y(0.5),
+			joint_index: 1,
+			parent_key: "leftthumbintermediate",
+			successor_key: "leftthumbdistal",
+			reference_label: "vrm0:model1",
+		},
+		RetargetFingerAxisCase {
+			name: "right thumb intermediate curl",
+			finger: Finger::Thumb,
+			coordinate_space: CoordinateSpace::UNMotion,
+			side_prefix: "right",
+			rotation: Quat::from_rotation_y(-0.5),
+			joint_index: 1,
+			parent_key: "rightthumbintermediate",
+			successor_key: "rightthumbdistal",
+			reference_label: "vrm0:model1",
+		},
+	];
+
+	for case in finger_cases {
+		println!("retarget-audit: {}", case.name);
+		let mut axes = BTreeMap::new();
+		for model in &models {
+			let mut document = model.document.clone();
+			let frame = retarget_finger_frame(case.side_prefix, case.finger, case.coordinate_space, case.joint_index, case.rotation);
+			apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&model.rest_nodes));
+			match normalized_world_successor_axis(&document, case.parent_key, case.successor_key) {
+				Ok(axis) => {
+					println!("  {:24} axis=({:+.4}, {:+.4}, {:+.4})", model.label, axis.x, axis.y, axis.z);
+					axes.insert(model.label, axis);
+				}
+				Err(error) => {
+					eprintln!("  {:24} ERROR {error}", model.label);
+					if model.label == case.reference_label {
+						ok = false;
+					}
+				}
+			}
+		}
+		if let Some(reference) = axes.get(case.reference_label).copied() {
+			for (label, axis) in &axes {
+				let angle = reference.angle_between(*axis).to_degrees();
+				println!("  {:24} delta_to_{}={angle:.3}deg", label, case.reference_label);
+				if angle > 8.0 {
+					if label.starts_with("unavatar:") {
+						eprintln!(
+							"retarget-audit: {} differs from {} by {angle:.3}deg in {}",
+							label, case.reference_label, case.name
+						);
+						ok = false;
+					} else {
+						eprintln!(
+							"retarget-audit: note: {} differs from {} by {angle:.3}deg in {}",
+							label, case.reference_label, case.name
+						);
+					}
+				}
+			}
+		}
+		if case.finger == Finger::Thumb {
+			let mut bases = BTreeMap::new();
+			for model in &models {
+				let mut document = model.document.clone();
+				let frame = retarget_finger_frame(case.side_prefix, case.finger, case.coordinate_space, case.joint_index, case.rotation);
+				apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&model.rest_nodes));
+				if let Ok(basis) = normalized_world_basis(&document, case.parent_key) {
+					println!(
+						"  {:24} basis x=({:+.3},{:+.3},{:+.3}) y=({:+.3},{:+.3},{:+.3}) z=({:+.3},{:+.3},{:+.3})",
+						model.label,
+						basis[0].x,
+						basis[0].y,
+						basis[0].z,
+						basis[1].x,
+						basis[1].y,
+						basis[1].z,
+						basis[2].x,
+						basis[2].y,
+						basis[2].z
+					);
+					bases.insert(model.label, basis);
+				}
+			}
+			if let Some(reference) = bases.get(case.reference_label) {
+				for (label, basis) in &bases {
+					for (axis_name, (a, b)) in ["x", "y", "z"].into_iter().zip(reference.iter().zip(basis.iter())) {
+						println!(
+							"  {:24} basis_{}_delta_to_{}={:.3}deg",
+							label,
+							axis_name,
+							case.reference_label,
+							a.angle_between(*b).to_degrees()
+						);
+					}
+				}
+			}
+		}
+	}
+
+	for (name, side_prefix, parent_key, successor_key) in [
+		(
+			"left thumb proximal curl direction",
+			"left",
+			"leftthumbproximal",
+			"leftthumbintermediate",
+		),
+		(
+			"right thumb proximal curl direction",
+			"right",
+			"rightthumbproximal",
+			"rightthumbintermediate",
+		),
+	] {
+		println!("retarget-audit: {name}");
+		let mut deltas = BTreeMap::new();
+		let mut basis_x_deltas = BTreeMap::new();
+		let mut basis_y_deltas = BTreeMap::new();
+		let mut basis_z_deltas = BTreeMap::new();
+		for model in &models {
+			let mut open_document = model.document.clone();
+			let mut curled_document = model.document.clone();
+			let open_frame = retarget_thumb_proximal_unmotion_frame(side_prefix, 0.0);
+			let curled_frame = retarget_thumb_proximal_unmotion_frame(side_prefix, 0.8);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut open_document,
+				&open_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut curled_document,
+				&curled_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			print_thumb_index_distance_delta("y_curl", side_prefix, model, &open_document, &curled_document);
+			let open_axis = normalized_world_successor_axis(&open_document, parent_key, successor_key);
+			let curled_axis = normalized_world_successor_axis(&curled_document, parent_key, successor_key);
+			let open_basis = normalized_world_basis(&open_document, parent_key);
+			let curled_basis = normalized_world_basis(&curled_document, parent_key);
+			match (open_axis, curled_axis) {
+				(Ok(open_axis), Ok(curled_axis)) => {
+					let delta = curled_axis - open_axis;
+					println!(
+						"  {:24} open=({:+.4}, {:+.4}, {:+.4}) curled=({:+.4}, {:+.4}, {:+.4}) delta=({:+.4}, {:+.4}, {:+.4})",
+						model.label,
+						open_axis.x,
+						open_axis.y,
+						open_axis.z,
+						curled_axis.x,
+						curled_axis.y,
+						curled_axis.z,
+						delta.x,
+						delta.y,
+						delta.z
+					);
+					if delta.length_squared() > 1e-8 {
+						deltas.insert(model.label, delta.normalize());
+					}
+				}
+				(Err(error), _) | (_, Err(error)) => {
+					eprintln!("  {:24} ERROR {error}", model.label);
+					if model.label == "vrm0:model1" {
+						ok = false;
+					}
+				}
+			}
+			match (open_basis, curled_basis) {
+				(Ok(open_basis), Ok(curled_basis)) => {
+					for (axis_name, open_axis, curled_axis, out) in [
+						("basis_x", open_basis[0], curled_basis[0], &mut basis_x_deltas),
+						("basis_y", open_basis[1], curled_basis[1], &mut basis_y_deltas),
+						("basis_z", open_basis[2], curled_basis[2], &mut basis_z_deltas),
+					] {
+						let delta = curled_axis - open_axis;
+						println!(
+							"  {:24} {axis_name}_open=({:+.4}, {:+.4}, {:+.4}) {axis_name}_curled=({:+.4}, {:+.4}, {:+.4}) {axis_name}_delta=({:+.4}, {:+.4}, {:+.4})",
+							model.label,
+							open_axis.x,
+							open_axis.y,
+							open_axis.z,
+							curled_axis.x,
+							curled_axis.y,
+							curled_axis.z,
+							delta.x,
+							delta.y,
+							delta.z
+						);
+						if delta.length_squared() > 1e-8 {
+							out.insert(model.label, delta.normalize());
+						}
+					}
+				}
+				(Err(error), _) | (_, Err(error)) => {
+					eprintln!("  {:24} ERROR {error}", model.label);
+					if model.label == "vrm0:model1" {
+						ok = false;
+					}
+				}
+			}
+		}
+		compare_delta_direction(&mut ok, "successor_axis_curl", &deltas, "vrm0:model1", 20.0);
+		compare_delta_direction(&mut ok, "basis_x_curl", &basis_x_deltas, "vrm0:model1", 20.0);
+		compare_delta_direction(&mut ok, "basis_y_curl", &basis_y_deltas, "vrm0:model1", 20.0);
+		compare_delta_direction(&mut ok, "basis_z_curl", &basis_z_deltas, "vrm0:model1", 20.0);
+	}
+	for (name, side_prefix, parent_key, successor_key) in [
+		(
+			"left thumb proximal z-curl direction",
+			"left",
+			"leftthumbproximal",
+			"leftthumbintermediate",
+		),
+		(
+			"right thumb proximal z-curl direction",
+			"right",
+			"rightthumbproximal",
+			"rightthumbintermediate",
+		),
+	] {
+		println!("retarget-audit: {name}");
+		let mut deltas = BTreeMap::new();
+		for model in &models {
+			let mut open_document = model.document.clone();
+			let mut curled_document = model.document.clone();
+			let open_frame = retarget_thumb_proximal_unmotion_z_curl_frame(side_prefix, 0.0);
+			let curled_frame = retarget_thumb_proximal_unmotion_z_curl_frame(side_prefix, 0.8);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut open_document,
+				&open_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut curled_document,
+				&curled_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			print_thumb_index_distance_delta("z_curl", side_prefix, model, &open_document, &curled_document);
+			match (
+				normalized_world_successor_axis(&open_document, parent_key, successor_key),
+				normalized_world_successor_axis(&curled_document, parent_key, successor_key),
+			) {
+				(Ok(open_axis), Ok(curled_axis)) => {
+					let delta = curled_axis - open_axis;
+					println!(
+						"  {:24} open=({:+.4}, {:+.4}, {:+.4}) curled=({:+.4}, {:+.4}, {:+.4}) delta=({:+.4}, {:+.4}, {:+.4})",
+						model.label,
+						open_axis.x,
+						open_axis.y,
+						open_axis.z,
+						curled_axis.x,
+						curled_axis.y,
+						curled_axis.z,
+						delta.x,
+						delta.y,
+						delta.z
+					);
+					if delta.length_squared() > 1e-8 {
+						deltas.insert(model.label, delta.normalize());
+					}
+				}
+				(Err(error), _) | (_, Err(error)) => {
+					eprintln!("  {:24} ERROR {error}", model.label);
+					if model.label == "vrm0:model1" {
+						ok = false;
+					}
+				}
+			}
+		}
+		compare_delta_direction(&mut ok, "successor_axis_z_curl", &deltas, "vrm0:model1", 20.0);
+	}
+	for (name, side_prefix) in [("left full thumb curl", "left"), ("right full thumb curl", "right")] {
+		println!("retarget-audit: {name}");
+		for model in &models {
+			let mut open_document = model.document.clone();
+			let mut curled_document = model.document.clone();
+			let open_frame = retarget_full_thumb_unmotion_curl_frame(side_prefix, 0.0);
+			let curled_frame = retarget_full_thumb_unmotion_curl_frame(side_prefix, 1.0);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut open_document,
+				&open_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			apply_un_motion_frame_to_document_with_rest(
+				&mut curled_document,
+				&curled_frame,
+				ApplyUnMotionFrameOpts::default(),
+				Some(&model.rest_nodes),
+			);
+			print_thumb_index_distance_delta("full_curl", side_prefix, model, &open_document, &curled_document);
+		}
+	}
+	ok
+}
+
+fn print_thumb_joints(prefix: &str, hand: Option<&HandMotion>) {
+	let Some(hand) = hand else {
+		return;
+	};
+	for finger in &hand.fingers {
+		if finger.finger != Finger::Thumb {
+			continue;
+		}
+		for (index, joint) in finger.joints.iter().enumerate() {
+			let Some(q) = joint.rotation.as_ref() else {
+				continue;
+			};
+			println!(
+				"  {prefix}.thumb[{index}] q=({:+.5},{:+.5},{:+.5},{:+.5})",
+				q.x, q.y, q.z, q.w
+			);
+		}
+	}
+}
+
+fn run_unmotion_thumb_dump(args: &[String]) -> bool {
+	let key = args.first().cloned().unwrap_or_else(|| "un-motion/frame".to_string());
+	let seconds = args
+		.get(1)
+		.and_then(|value| value.parse::<f32>().ok())
+		.unwrap_or(3.0)
+		.max(0.1);
+	let strategy = ZenohTopicStrategy::new(key, un_motion_frame_zenoh::TopicMode::Frame);
+	let receiver = match UnAvatarZenohReceiver::declare_zenoh_default(strategy) {
+		Ok(receiver) => receiver,
+		Err(error) => {
+			eprintln!("unmotion-thumb-dump: subscribe failed: {error}");
+			return false;
+		}
+	};
+	let deadline = Instant::now() + Duration::from_secs_f32(seconds);
+	let mut count = 0usize;
+	while Instant::now() < deadline {
+		if let Some(frame) = receiver.try_recv() {
+			count += 1;
+			println!(
+				"frame seq={} space={:?} stream={:?}",
+				frame.header.sequence, frame.header.coordinate_space, frame.header.stream_id
+			);
+			print_thumb_joints("left", frame.left_hand.as_ref());
+			print_thumb_joints("right", frame.right_hand.as_ref());
+		} else {
+			std::thread::sleep(Duration::from_millis(10));
+		}
+	}
+	if count == 0 {
+		eprintln!("unmotion-thumb-dump: no frames received");
+		return false;
+	}
+	true
+}
+
 fn print_usage() {
 	eprintln!(
 		"un-avatar xtask\n\
@@ -1885,6 +2824,8 @@ commands:\n\
   smoke        一時 .una で CLI validate / formats list / sample plugin / convert を確認\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
   run-renderer  profile名またはmanifest pathからrenderer windowを起動\n\
+  retarget-audit VRM0/VRM1/.unavatar のCPU Humanoid retarget軸比較\n\
+  unmotion-thumb-dump [key] [seconds] UNMotion/Zenoh の thumb joint quaternion を短時間dump\n\
 	acceptance-preflight MVP acceptance の実機確認前に必要な高速preflightを実行\n\
 	acceptance-prepare   MVP acceptance の証跡テンプレートと実測用manifestを生成\n\
   spout2       Spout2 を取得・CMake Release ビルドし、配布物へ配置\n\
@@ -1913,6 +2854,8 @@ fn main() {
 		"smoke" => run_smoke(repo),
 		"render-smoke" => run_render_smoke(repo),
 		"run-renderer" => run_renderer(repo, args),
+		"retarget-audit" => run_retarget_audit(repo),
+		"unmotion-thumb-dump" => run_unmotion_thumb_dump(&args.collect::<Vec<_>>()),
 		"acceptance-preflight" => run_acceptance_preflight(repo),
 		"acceptance-prepare" => run_acceptance_prepare(repo),
 		"spout2" => run_spout2(repo, args),

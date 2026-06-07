@@ -25,6 +25,12 @@ avatar.unavatar
 - v0.1 では原則 `extensionsRequired` に入れない。
 - U.N. Avatar 拡張を無視した glTF viewer でも、最低限の見た目を表示できる状態を目指す。
 
+Skinning は glTF 標準の `skins`、node `skin`、primitive `JOINTS_0` / `WEIGHTS_0`、inverse bind matrices を正本にする。Runtime importer はこれを既存 `UnaSceneSnapshot.skins` / `UnaSceneNode.skin` / `UnaMeshBuffers.joints` / `weights` へ落とし、VRM と同じ GPU skinning pipeline に接続する。`.unavatar` 専用の別 skinning renderer は作らない。
+
+Renderer は skin の joint count と inverse bind matrix count の小さい方を effective palette として扱う。現在の GPU palette limit は 512 bones であり、これを超える skin、JOINTS/WEIGHTS の片方だけを持つ primitive、effective palette 外の joint index は diagnose warning の対象にする。Runtime は破綻回避のため範囲外 joint を clamp するが、正しい出力は exporter 側で valid palette を出すことを前提にする。
+
+Morph は glTF mesh morph targets と mesh default weights を正本にする。`.unavatar` wardrobe の `blendShapeWeight` operation は import 時に primitive default morph weights へ反映する。Renderer は起動時と document revision 更新時に scene default morph weights を draw 側へ再読込し、既に upload 済みの morph weight buffer state を invalidation する。通常フレームでは default morph の再走査を行わず、expression override / active expression weights だけを per-frame 合成する。
+
 glTF node には必要に応じて `extras.UN_avatar_node` を付与する。これは標準 glTF viewer には無視されるが、U.N. Avatar Runtime は wardrobe / dynamics / diagnostics の stable target として使う。
 
 ```json
@@ -135,7 +141,7 @@ v0.1 parser は `humanBones` を `HumanoidProfile` へ正規化する。bone nam
 
 v0.1 は glTF PBR material を必ず fallback とし、`UN_avatar.materials` は toon / VRC source hint として扱う。
 
-UNToon v2 の基準は lilToon-compatible 表現である。v1 の MToon 互換 shader / `UnaMtoonMaterial` は実装上の出発点として使うが、`.unavatar` v2 では lilToon の主要表現を MToon 互換枠へ押し込めない。VRM0/VRM1 MToon は UNToon v2 へ変換される入力 profile として扱い、shade / matcap / rim / emission / outline / alpha / cull / render queue などを UNToon 側の共通表現へ正規化する。
+UNToon v2 の基準は lilToon-compatible 表現である。v1 の MToon 互換 shader / `UnaMtoonMaterial` は実装上の出発点として使うが、`.unavatar` v2 では lilToon の主要表現を MToon 互換枠へ押し込めない。VRM0/VRM1 MToon は UNToon v2 へ変換される入力 profile として扱い、shade / matcap / rim / emission / outline / alpha / cull / render queue などを UNToon 側の共通表現へ正規化する。renderer は固定の Full / Portable shader tier ではなく、モデル単位の required feature と GPU resource budget から dynamic variant を構成する。詳細は [`untoon-dynamic-variant-architecture.md`](untoon-dynamic-variant-architecture.md) を正本にする。
 
 ```json
 {
@@ -254,7 +260,7 @@ glTF core `images[].extras.UN_avatar_image` と `UN_avatar.textureAssets[]` は 
 
 `sourceLayout` は source image が texture shape へ変換される前の配置 hint である。Unity `TextureImporter.generateCubemap` が取得できる場合は `unity_auto_cubemap` など `unity_*` 値を保持し、併せて `unityGenerateCubemap` に Unity enum 名をそのまま残す。取得できない場合だけ寸法から `latlong`, `horizontal_strip`, `vertical_strip`, `horizontal_cross`, `vertical_cross`, `unknown_cube_source` などを推定する。これは source binary を変換する指示ではなく、runtime upload / PMREM cache 生成時の解釈 hint である。
 
-`textureShape = "TextureCube"` / `"Cube"` の reflection source は、UNToon v2 / lilToon-compatible path では true cubemap として扱う。Renderer は source bytes を decode したあと、layout metadata と source image dimensions に基づき cube faces へ展開し、`texture_cube` / cube texture view で sample する。2D equirectangular approximation は diagnostic / compatibility fallback であり、lilToon-compatible high-tier path の正本ではない。PMREM / roughness mip chain は source package を書き換えず、runtime cache または explicit optimizer output として生成する。
+`textureShape = "TextureCube"` / `"Cube"` の reflection source は、UNToon v2 / lilToon-compatible path では true cubemap として扱う。Renderer は source bytes を decode したあと、layout metadata と source image dimensions に基づき cube faces へ展開し、`texture_cube` / cube texture view で sample する。2D equirectangular approximation は diagnostic / compatibility fallback であり、lilToon-compatible high-capability path の正本ではない。PMREM / roughness mip chain は source package を書き換えず、runtime cache または explicit optimizer output として生成する。
 
 `RGB16F` source を wgpu upload で `RGBA16Float` に拡張するのは、wgpu の portable `TextureFormat` に `RGB16Float` が無く、一般的な GPU API でも 3ch half float texture は 4ch half float より互換性が低いためである。`.unavatar` と CPU decoded representation は `RGB16F` を維持し、alpha=1 の追加は renderer upload boundary の明示的 fallback とする。
 

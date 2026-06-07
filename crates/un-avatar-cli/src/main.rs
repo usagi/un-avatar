@@ -119,8 +119,27 @@ struct DiagnoseSceneSummary {
 	visible_alpha_counts: BTreeMap<String, usize>,
 	visible_material_indices: Vec<usize>,
 	eye_like_material_indices: Vec<usize>,
+	skins: Vec<DiagnoseSkinSummary>,
 	materials: Vec<DiagnoseMaterialSummary>,
 	visible_mesh_nodes: Vec<DiagnoseVisibleMeshNodeSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseSkinSummary {
+	index: usize,
+	joint_count: usize,
+	inverse_bind_count: usize,
+	effective_joint_count: usize,
+	over_renderer_bone_limit: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	skeleton_node: Option<usize>,
+	used_by_node_count: usize,
+	primitive_joint_attribute_count: usize,
+	primitive_weight_attribute_count: usize,
+	mismatched_joint_weight_attribute_count: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	max_joint_index: Option<u16>,
+	out_of_range_joint_attribute_count: usize,
 }
 
 #[derive(Serialize)]
@@ -1391,6 +1410,62 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 		.collect()
 }
 
+fn skin_summaries(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<DiagnoseSkinSummary> {
+	const RENDERER_MAX_BONES: usize = 512;
+	let mut summaries = scene
+		.skins
+		.iter()
+		.enumerate()
+		.map(|(index, skin)| {
+			let effective_joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len());
+			DiagnoseSkinSummary {
+				index,
+				joint_count: skin.joint_nodes.len(),
+				inverse_bind_count: skin.inverse_bind_matrices.len(),
+				effective_joint_count,
+				over_renderer_bone_limit: effective_joint_count > RENDERER_MAX_BONES,
+				skeleton_node: skin.skeleton_node,
+				used_by_node_count: 0,
+				primitive_joint_attribute_count: 0,
+				primitive_weight_attribute_count: 0,
+				mismatched_joint_weight_attribute_count: 0,
+				max_joint_index: None,
+				out_of_range_joint_attribute_count: 0,
+			}
+		})
+		.collect::<Vec<_>>();
+	for node in &scene.nodes {
+		let Some(skin_index) = node.skin else { continue };
+		let Some(summary) = summaries.get_mut(skin_index) else { continue };
+		summary.used_by_node_count += 1;
+		let joint_bound = summary.joint_count.min(summary.inverse_bind_count);
+		let Some(mesh_index) = node.mesh else { continue };
+		let Some(primitives) = scene.meshes.get(mesh_index) else { continue };
+		for primitive in primitives {
+			if primitive.joints.is_some() != primitive.weights.is_some() {
+				summary.mismatched_joint_weight_attribute_count += 1;
+			}
+			if let Some(joints) = primitive.joints.as_ref() {
+				summary.primitive_joint_attribute_count += 1;
+				if let Some(max_joint) = joints.iter().flatten().copied().max() {
+					summary.max_joint_index = Some(summary.max_joint_index.map_or(max_joint, |current| current.max(max_joint)));
+				}
+				if joints
+					.iter()
+					.flatten()
+					.any(|joint| (*joint as usize) >= joint_bound || (*joint as usize) >= RENDERER_MAX_BONES)
+				{
+					summary.out_of_range_joint_attribute_count += 1;
+				}
+			}
+			if primitive.weights.is_some() {
+				summary.primitive_weight_attribute_count += 1;
+			}
+		}
+	}
+	summaries
+}
+
 fn unavatar_wardrobe_sets(doc: &UnaDocument) -> Vec<(String, Option<String>)> {
 	doc.unavatar
 		.as_ref()
@@ -1816,6 +1891,40 @@ fn build_diagnose_report(
 			.collect();
 		visible_material_indices.sort_unstable();
 		visible_material_indices.dedup();
+		let skins = skin_summaries(sc);
+		let skin_over_limit = skins
+			.iter()
+			.filter(|skin| skin.over_renderer_bone_limit)
+			.map(|skin| skin.index)
+			.collect::<Vec<_>>();
+		if !skin_over_limit.is_empty() {
+			warnings.push(format!(
+				"skins exceed renderer bone palette limit: {:?}; affected vertices will be clamped unless the renderer limit or skin split is improved",
+				skin_over_limit
+			));
+		}
+		let skin_mismatched_attrs = skins
+			.iter()
+			.filter(|skin| skin.mismatched_joint_weight_attribute_count > 0)
+			.map(|skin| (skin.index, skin.mismatched_joint_weight_attribute_count))
+			.collect::<Vec<_>>();
+		if !skin_mismatched_attrs.is_empty() {
+			warnings.push(format!(
+				"skins have primitives with mismatched JOINTS/WEIGHTS attributes: {:?}; verify exporter and source mesh skinning data",
+				skin_mismatched_attrs
+			));
+		}
+		let skin_out_of_range = skins
+			.iter()
+			.filter(|skin| skin.out_of_range_joint_attribute_count > 0)
+			.map(|skin| (skin.index, skin.out_of_range_joint_attribute_count))
+			.collect::<Vec<_>>();
+		if !skin_out_of_range.is_empty() {
+			warnings.push(format!(
+				"skins have primitives with joint indices outside effective palette: {:?}; renderer clamps these vertices",
+				skin_out_of_range
+			));
+		}
 		DiagnoseSceneSummary {
 			has_scene: true,
 			mesh_count: sc.meshes.len(),
@@ -1848,6 +1957,7 @@ fn build_diagnose_report(
 			visible_alpha_counts,
 			visible_material_indices,
 			eye_like_material_indices,
+			skins,
 			materials,
 			visible_mesh_nodes,
 		}
@@ -1881,6 +1991,7 @@ fn build_diagnose_report(
 			visible_alpha_counts: BTreeMap::new(),
 			visible_material_indices: Vec::new(),
 			eye_like_material_indices: Vec::new(),
+			skins: Vec::new(),
 			materials: Vec::new(),
 			visible_mesh_nodes: Vec::new(),
 		}
@@ -2174,6 +2285,23 @@ fn run_diagnose(
 		report.scene.image_count,
 		report.scene.material_count
 	);
+	for skin in &report.scene.skins {
+		println!(
+			"skin[{}]: joints={} inverse_binds={} effective={} over_renderer_limit={} skeleton={:?} used_nodes={} prim_joints={} prim_weights={} mismatched_attrs={} max_joint={:?} out_of_range_prim_joints={}",
+			skin.index,
+			skin.joint_count,
+			skin.inverse_bind_count,
+			skin.effective_joint_count,
+			skin.over_renderer_bone_limit,
+			skin.skeleton_node,
+			skin.used_by_node_count,
+			skin.primitive_joint_attribute_count,
+			skin.primitive_weight_attribute_count,
+			skin.mismatched_joint_weight_attribute_count,
+			skin.max_joint_index,
+			skin.out_of_range_joint_attribute_count
+		);
+	}
 	println!("node_constraints: {}", report.scene.node_constraint_count);
 	println!(
 		"image_sources: {} / {} images, {} bytes, MIME {:?}",
@@ -2574,6 +2702,85 @@ mod tests {
 		assert_eq!(report.scene.eye_like_material_indices, vec![0]);
 		assert_eq!(report.vrm.as_ref().unwrap().mtoon_material_indices_v1, vec![0, 1]);
 		assert!(!report.warnings.iter().any(|w| w.contains("eye-like material[0]")));
+	}
+
+	#[test]
+	fn diagnose_report_warns_about_skinning_palette_risks() {
+		fn identity_transform() -> [f32; 16] {
+			[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+		}
+		fn primitive(joints: Option<Vec<[u16; 4]>>, weights: Option<Vec<[f32; 4]>>) -> un_avatar_core::UnaMeshBuffers {
+			un_avatar_core::UnaMeshBuffers {
+				name: None,
+				positions: vec![[0.0, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints,
+				weights,
+				indices: None,
+				material_index: None,
+				morph_targets: Vec::new(),
+				morph_target_names: Vec::new(),
+				default_morph_weights: Vec::new(),
+			}
+		}
+
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: vec![un_avatar_core::UnaSceneNode {
+					name: None,
+					source_node_id: None,
+					visible: true,
+					transform: identity_transform(),
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: Some(0),
+					probe_anchor_node: None,
+					local_bounds: None,
+				}],
+				meshes: vec![vec![
+					primitive(Some(vec![[600, 0, 0, 0]]), Some(vec![[1.0, 0.0, 0.0, 0.0]])),
+					primitive(Some(vec![[0, 0, 0, 0]]), None),
+				]],
+				skins: vec![un_avatar_core::UnaSkin {
+					joint_nodes: (0..513).collect(),
+					inverse_bind_matrices: vec![[0.0; 16]; 513],
+					skeleton_node: Some(0),
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let skin = &report.scene.skins[0];
+		assert_eq!(skin.effective_joint_count, 513);
+		assert!(skin.over_renderer_bone_limit);
+		assert_eq!(skin.max_joint_index, Some(600));
+		assert_eq!(skin.mismatched_joint_weight_attribute_count, 1);
+		assert_eq!(skin.out_of_range_joint_attribute_count, 1);
+		assert!(report.warnings.iter().any(|w| w.contains("renderer bone palette limit")));
+		assert!(report.warnings.iter().any(|w| w.contains("mismatched JOINTS/WEIGHTS")));
+		assert!(report.warnings.iter().any(|w| w.contains("outside effective palette")));
 	}
 
 	#[test]

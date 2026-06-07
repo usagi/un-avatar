@@ -110,7 +110,7 @@ mod tests {
 		assert!(
 			mesh.contains("@group(1) @binding(73) var matcap_bump_tex: texture_2d<f32>;")
 				&& mesh.contains("@group(1) @binding(74) var matcap2_bump_tex: texture_2d<f32>;"),
-			"MatCap custom normal maps must be bound in FullOnePass"
+			"MatCap custom normal maps must be bound in the high-capability mesh shader variant"
 		);
 		assert!(
 			mesh.contains("let map_uv = uv * uv_offset_scale.zw + uv_offset_scale.xy;")

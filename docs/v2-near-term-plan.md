@@ -6,17 +6,19 @@
 
 - AudioLink は v2 初期範囲として十分に完了した扱いにする。
 - lilToon-like rendering は互換性優先を維持する。今後の見た目調整は、lilToon 本家実装または具体的な観測差分を根拠にする。
+- lilToon 互換が成立したので、MToon / lilToon を別 renderer として並べるのではなく、UNToon semantic material と dynamic variant planning へ整理する。正本は [`untoon-dynamic-variant-architecture.md`](untoon-dynamic-variant-architecture.md)。
 - 次の大きな価値は VRC model import / runtime behavior。具体的には wardrobe 高速切替、expression、animation-driven toggle、後続の PhysBone。
 - これらを足す前に、runtime state が読みにくくならない程度のリファクタリングと最適化を行う。
 
 ## 近々の順序
 
 1. 現状の v2 renderer / runtime 実装をほどほどにリファクタリングし、最適化する。
-2. renderer 再起動なしの Wardrobe hot switch を実装する。
-3. VRC Expression Menu、toggle、hotkey、将来の ring menu emulation 向け runtime action model を作る。
-4. action model の上に imported animation / expression / material / visibility evaluation を足す。
-5. wardrobe と animation state の所有関係が明確になってから PhysBone を進める。
-6. instant switching が正しく安定してから、お着替え transition effect を足す。
+2. VRC import base の `.unavatar` skinning / morph を既存 GPU skinning / morph pipeline に接続・検証し、UNToon dynamic variant planning の resource reservation に接続する。
+3. renderer 再起動なしの Wardrobe hot switch を実装する。
+4. VRC Expression Menu、toggle、hotkey、将来の ring menu emulation 向け runtime action model を作る。
+5. action model の上に imported animation / expression / material / visibility evaluation を足す。
+6. wardrobe と animation state の所有関係が明確になってから PhysBone を進める。
+7. instant switching が正しく安定してから、お着替え transition effect を足す。
 
 ## リファクタリング / 最適化範囲
 
@@ -39,6 +41,8 @@
 
 リファクタリング後の最初の機能ターゲットは、renderer を再起動せずに `wardrobe_set` を切り替えること。
 
+前提として、startup import 時点の `.unavatar` skinning / morph は共通 `UnaSceneSnapshot` 経由で GPU pipeline に接続済みとする。Wardrobe の `blendShapeWeight` operation は scene primitive の default morph weights を変えるため、hot switch は document revision を進め、draw 側の default morph weights を再読込し、既存 uploaded morph weights を invalidation する。通常フレームでは scene default morph の再走査を行わない。
+
 初期 behavior:
 
 - 選択された wardrobe operations を runtime resolved state へ適用する。
@@ -46,6 +50,14 @@
 - 可能な範囲で upload 済み asset を再利用する。
 - runtime status に active set を出す。
 - hot switch path が成熟するまでは、現在の startup path を fallback として残す。
+
+MVP control command:
+
+```json
+{"command":"set_wardrobe","set_id":"field_drape"}
+```
+
+この command は既に attach 済みの document を base wardrobe state へ戻してから対象 `.unavatar` wardrobe operation を適用し、document revision を進める。対象 set だけを現在状態へ重ねると、前回 set の visibility / morph default が累積してしまうため禁止。draw transform / visibility / morph default は次の frame update で反映する。成功時は runtime status の `active_wardrobe_set` を更新する。初期実装では新規 GPU resource が必要な material / mesh を lazy upload せず、startup 時に読み込まれた resource set の範囲で切り替える。
 
 後回し:
 

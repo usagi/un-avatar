@@ -12,7 +12,17 @@ publish = false
 workspace = true
 
 [dependencies]
+glam = { version = "0.32", features = ["bytemuck"] }
 toml = { workspace = true }
+un-avatar-core = { path = "../crates/un-avatar-core" }
+un-avatar-io = { path = "../crates/un-avatar-io" }
+un-avatar-io-gltf = { path = "../crates/un-avatar-io-gltf" }
+un-avatar-io-vrm = { path = "../crates/un-avatar-io-vrm" }
+un-avatar-skeleton = { path = "../crates/un-avatar-skeleton" }
+un-avatar-types = { path = "../crates/un-avatar-types" }
+un-avatar-zenoh = { path = "../crates/un-avatar-zenoh" }
+un-motion-frame = { workspace = true }
+un-motion-frame-zenoh = { workspace = true }
 zip = { version = "2.3", default-features = false, features = ["deflate"] }
 
 [[bin]]

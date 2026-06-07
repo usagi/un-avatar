@@ -192,9 +192,9 @@ pub struct SceneMeshLoadOpts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MaterialTier {
-	FullOnePass,
-	Portable16,
+pub(crate) enum MeshShaderVariantTier {
+	HighCapability,
+	BaselineFallback,
 }
 
 use wgpu::util::DeviceExt;
@@ -202,14 +202,14 @@ use wgpu::util::DeviceExt;
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
 const SHADER_COMPUTE_FUR_CARDS: &str = include_str!("../shaders/compute_fur_cards.wgsl");
 
-fn mesh_shader_source_for_tier(tier: MaterialTier) -> Cow<'static, str> {
-	match tier {
-		MaterialTier::FullOnePass => Cow::Borrowed(SHADER_MESH),
-		MaterialTier::Portable16 => Cow::Owned(portable_mesh_shader_source()),
+fn mesh_shader_source_for_tier(variant_tier: MeshShaderVariantTier) -> Cow<'static, str> {
+	match variant_tier {
+		MeshShaderVariantTier::HighCapability => Cow::Borrowed(SHADER_MESH),
+		MeshShaderVariantTier::BaselineFallback => Cow::Owned(baseline_fallback_mesh_shader_source()),
 	}
 }
 
-fn portable_mesh_shader_source() -> String {
+fn baseline_fallback_mesh_shader_source() -> String {
 	let mut shader = SHADER_MESH.to_string();
 	for snippet in [
 		"@group(1) @binding(24) var shadow_border_mask_tex: texture_2d<f32>;\n",
@@ -893,6 +893,7 @@ struct MeshDraw {
 	morph_bind_group: wgpu::BindGroup,
 	_compute_fur_cards: Option<ComputeFurCardsDrawResources>,
 	world_node_index: usize,
+	active: bool,
 	shading: UnaShadingModel,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	default_morph_weights: Vec<f32>,
@@ -1119,6 +1120,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
 	for (draw_index, draw) in draws.iter().enumerate() {
+		if !draw.active {
+			continue;
+		}
 		let shading = effective_mesh_shading(draw, opts);
 		if !opts.disable_mtoon_outlines
 			&& draw_has_outline(draw, opts)
@@ -1233,6 +1237,7 @@ pub(crate) struct SceneMeshes {
 	opaque_batches: Vec<DrawBatch>,
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
+	active_skin_palette_scratch: Vec<bool>,
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
@@ -1472,14 +1477,69 @@ fn scene_effective_visibility(scene: &UnaSceneSnapshot) -> Vec<bool> {
 	}
 
 	let mut out = vec![false; scene.nodes.len()];
-	for &root in &scene.roots {
+	let roots = scene_visibility_roots(scene);
+	for root in roots {
 		visit(scene, root, true, &mut out);
 	}
 	out
 }
 
+fn scene_visibility_roots(scene: &UnaSceneSnapshot) -> Vec<usize> {
+	if !scene.roots.is_empty() {
+		return scene.roots.clone();
+	}
+	let mut has_parent = vec![false; scene.nodes.len()];
+	for node in &scene.nodes {
+		for &child in &node.children {
+			if let Some(slot) = has_parent.get_mut(child) {
+				*slot = true;
+			}
+		}
+	}
+	has_parent
+		.iter()
+		.enumerate()
+		.filter_map(|(idx, has_parent)| (!*has_parent).then_some(idx))
+		.collect()
+}
+
 fn skin_palette_capacity(scene: &UnaSceneSnapshot) -> usize {
 	scene.nodes.iter().filter(|node| node.mesh.is_some()).count()
+}
+
+fn normalize_skinning_vertices(verts: &mut [Vertex], primitive_has_joints: bool, skin: Option<&un_avatar_core::UnaSkin>) {
+	if !primitive_has_joints {
+		return;
+	}
+	let Some(skin) = skin else {
+		for v in verts {
+			v.joints = [0, 0, 0, 0];
+			v.weights = [1.0, 0.0, 0.0, 0.0];
+		}
+		return;
+	};
+	let joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES);
+	if joint_count == 0 {
+		for v in verts {
+			v.joints = [0, 0, 0, 0];
+			v.weights = [1.0, 0.0, 0.0, 0.0];
+		}
+		return;
+	}
+	let cap = (joint_count - 1).min(u16::MAX as usize) as u16;
+	for v in verts {
+		for joint in &mut v.joints {
+			if *joint as usize >= joint_count {
+				*joint = cap;
+			}
+		}
+	}
+}
+
+fn skin_palette_matrix_capacity(skin: Option<&un_avatar_core::UnaSkin>) -> usize {
+	skin.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
+		.unwrap_or(1)
+		.max(1)
 }
 
 fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
@@ -1533,6 +1593,44 @@ fn morph_weights_match_default(uploaded: &[f32], default_morph_weights: &[f32], 
 	}
 	let copy_len = default_morph_weights.len().min(target_count);
 	uploaded[..copy_len] == default_morph_weights[..copy_len] && uploaded[copy_len..].iter().all(|&weight| weight == 0.0)
+}
+
+fn scene_default_morph_weights_for_draw(
+	scene: &UnaSceneSnapshot,
+	mesh_index: usize,
+	primitive_index: usize,
+	target_count: usize,
+) -> Vec<f32> {
+	let mut out = vec![0.0; target_count];
+	let Some(primitive) = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index)) else {
+		return out;
+	};
+	let copy_len = primitive.default_morph_weights.len().min(target_count);
+	for (dst, src) in out
+		.iter_mut()
+		.take(copy_len)
+		.zip(primitive.default_morph_weights.iter().take(copy_len))
+	{
+		*dst = src.clamp(0.0, 1.0);
+	}
+	out
+}
+
+fn refresh_morph_default_weights(
+	default_morph_weights: &mut Vec<f32>,
+	uploaded_morph_weights: &mut Vec<f32>,
+	scene: &UnaSceneSnapshot,
+	mesh_index: usize,
+	primitive_index: usize,
+	target_count: usize,
+) -> bool {
+	let next = scene_default_morph_weights_for_draw(scene, mesh_index, primitive_index, target_count);
+	if *default_morph_weights == next {
+		return false;
+	}
+	*default_morph_weights = next;
+	uploaded_morph_weights.clear();
+	true
 }
 
 fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize) -> Vec<[f32; 4]> {
@@ -1657,7 +1755,7 @@ fn storage_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages,
 	}
 }
 
-fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayoutEntry> {
+fn mesh_material_layout_entries(variant_tier: MeshShaderVariantTier) -> Vec<wgpu::BindGroupLayoutEntry> {
 	let mut entries = vec![
 		uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
 		texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
@@ -1692,7 +1790,7 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 		texture_bind_group_layout_entry(36, wgpu::ShaderStages::FRAGMENT),
 		sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
 	];
-	if tier == MaterialTier::FullOnePass {
+	if variant_tier == MeshShaderVariantTier::HighCapability {
 		entries.extend([
 			texture_bind_group_layout_entry(24, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(25, wgpu::ShaderStages::FRAGMENT),
@@ -1741,6 +1839,24 @@ fn mesh_material_layout_entries(tier: MaterialTier) -> Vec<wgpu::BindGroupLayout
 		]);
 	}
 	entries
+}
+
+fn mesh_outline_material_layout_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
+	vec![
+		uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
+		texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(2, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(8, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(9, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		uniform_bind_group_layout_entry(10, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(19, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(36, wgpu::ShaderStages::FRAGMENT),
+		sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(40, wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(76, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+		texture_bind_group_layout_entry(77, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+	]
 }
 
 fn create_mesh_sampler(device: &wgpu::Device, label: &'static str, sampler: &UnaTextureSampler) -> wgpu::Sampler {
@@ -4626,7 +4742,7 @@ impl SceneMeshes {
 		queue: &wgpu::Queue,
 		format: wgpu::TextureFormat,
 		sample_count: u32,
-		material_tier: MaterialTier,
+		shader_variant_tier: MeshShaderVariantTier,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
 		opts: SceneMeshLoadOpts,
@@ -5228,93 +5344,18 @@ impl SceneMeshes {
 				texture_bind_group_layout_entry(77, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			],
 		});
-		let portable_material_entries = mesh_material_layout_entries(MaterialTier::Portable16);
-		let portable_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("mesh_material_portable16"),
-			entries: &portable_material_entries,
+		let baseline_material_entries = mesh_material_layout_entries(MeshShaderVariantTier::BaselineFallback);
+		let baseline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_material_baseline_fallback"),
+			entries: &baseline_material_entries,
 		});
-		let material_layout = match material_tier {
-			MaterialTier::FullOnePass => &full_material_layout,
-			MaterialTier::Portable16 => &portable_material_layout,
+		let material_layout = match shader_variant_tier {
+			MeshShaderVariantTier::HighCapability => &full_material_layout,
+			MeshShaderVariantTier::BaselineFallback => &baseline_material_layout,
 		};
 		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_outline_material"),
-			entries: &[
-				wgpu::BindGroupLayoutEntry {
-					binding: 0,
-					visibility: wgpu::ShaderStages::VERTEX,
-					ty: wgpu::BindingType::Buffer {
-						ty: wgpu::BufferBindingType::Uniform,
-						has_dynamic_offset: false,
-						min_binding_size: None,
-					},
-					count: None,
-				},
-				wgpu::BindGroupLayoutEntry {
-					binding: 1,
-					visibility: wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-				sampler_bind_group_layout_entry(2, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
-				wgpu::BindGroupLayoutEntry {
-					binding: 8,
-					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-				wgpu::BindGroupLayoutEntry {
-					binding: 9,
-					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-				wgpu::BindGroupLayoutEntry {
-					binding: 10,
-					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Buffer {
-						ty: wgpu::BufferBindingType::Uniform,
-						has_dynamic_offset: false,
-						min_binding_size: None,
-					},
-					count: None,
-				},
-				sampler_bind_group_layout_entry(19, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
-				sampler_bind_group_layout_entry(23, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
-				wgpu::BindGroupLayoutEntry {
-					binding: 36,
-					visibility: wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-				sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
-				wgpu::BindGroupLayoutEntry {
-					binding: 40,
-					visibility: wgpu::ShaderStages::FRAGMENT,
-					ty: wgpu::BindingType::Texture {
-						multisampled: false,
-						view_dimension: wgpu::TextureViewDimension::D2,
-						sample_type: wgpu::TextureSampleType::Float { filterable: true },
-					},
-					count: None,
-				},
-			],
+			entries: &mesh_outline_material_layout_entries(),
 		});
 
 		let skin_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -5392,7 +5433,7 @@ impl SceneMeshes {
 
 		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 			label: Some("mesh"),
-			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
+			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(shader_variant_tier)),
 		});
 
 		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 10] = [
@@ -6245,9 +6286,7 @@ impl SceneMeshes {
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		for (ni, node) in scene.nodes.iter().enumerate() {
-			if !effective_visibility.get(ni).copied().unwrap_or(false) {
-				continue;
-			}
+			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
@@ -6268,77 +6307,21 @@ impl SceneMeshes {
 					morph_nrm,
 					default_morph_weights,
 				} = exp;
-				// スキニング: ノードに skin が無いのに JOINTS があると、bone[0] 以外を参照して頂点が吹き飛ぶ（前腕欠落など）。
-				if node.skin.is_none() && buf.joints.is_some() {
-					for v in &mut verts {
-						v.joints = [0, 0, 0, 0];
-						v.weights = [1.0, 0.0, 0.0, 0.0];
-					}
-				} else if let Some(si) = node.skin {
-					if let Some(skin) = scene.skins.get(si) {
-						let jc = skin.joint_nodes.len();
-						if jc > 0 {
-							let cap = (jc - 1).min(u16::MAX as usize) as u16;
-							for v in &mut verts {
-								for k in 0..4 {
-									if v.joints[k] as usize >= jc {
-										v.joints[k] = cap;
-									}
-								}
-							}
-						}
-					}
-				}
+				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
+				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
 				let skin_palette_key = SkinPaletteKey {
 					world_node_index: ni,
 					skin_index: node.skin,
 				};
-				let skin_palette_index = if let Some(&index) = skin_palette_indices.get(&skin_palette_key) {
-					index
-				} else {
-					let matrix_capacity = node
-						.skin
-						.and_then(|skin_index| scene.skins.get(skin_index))
-						.map(|skin| skin.joint_nodes.len().min(MAX_BONES))
-						.unwrap_or(1)
-						.max(1);
-					let bone_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-						label: Some("mesh_bones"),
-						size: matrix_capacity as u64 * BONE_MATRIX_SIZE,
-						usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-						mapped_at_creation: false,
-					});
-					let bone_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-						label: Some("mesh_bone_bg"),
-						layout: &skin_bind_group_layout,
-						entries: &[wgpu::BindGroupEntry {
-							binding: 0,
-							resource: bone_buffer.as_entire_binding(),
-						}],
-					});
-					let index = skin_palettes.len();
-					let raw_capacity = matrix_raw_capacity(matrix_capacity);
-					let static_identity = skin_palette_key.skin_index.is_none();
-					let (raw, uploaded) = if static_identity {
-						let raw = identity_matrix_raw();
-						queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
-						(raw.clone(), raw)
-					} else {
-						(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
-					};
-					skin_palettes.push(SkinPalette {
-						key: skin_palette_key,
-						buffer: bone_buffer,
-						bind_group: bone_bind_group,
-						matrix_capacity,
-						static_identity,
-						raw,
-						uploaded,
-						uploaded_changed: false,
-					});
-					skin_palette_indices.insert(skin_palette_key, index);
-					index
-				};
+				let skin_palette_index = Self::skin_palette_index(
+					device,
+					queue,
+					&skin_bind_group_layout,
+					&mut skin_palettes,
+					&mut skin_palette_indices,
+					skin_palette_key,
+					skin,
+				);
 				let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("mesh_v"),
 					size: (verts.len() * std::mem::size_of::<Vertex>()) as u64,
@@ -6824,7 +6807,7 @@ impl SceneMeshes {
 						resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
 					},
 				];
-				if material_tier == MaterialTier::FullOnePass {
+				if shader_variant_tier == MeshShaderVariantTier::HighCapability {
 					bind_material_entries.extend([
 						wgpu::BindGroupEntry {
 							binding: 19,
@@ -7057,6 +7040,14 @@ impl SceneMeshes {
 							binding: 40,
 							resource: wgpu::BindingResource::TextureView(outline_color_view),
 						},
+						wgpu::BindGroupEntry {
+							binding: 76,
+							resource: wgpu::BindingResource::TextureView(audio_link_mask_view),
+						},
+						wgpu::BindGroupEntry {
+							binding: 77,
+							resource: wgpu::BindingResource::TextureView(audio_link_local_map_view),
+						},
 					],
 				});
 
@@ -7139,6 +7130,7 @@ impl SceneMeshes {
 					morph_bind_group,
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
+					active,
 					shading: mat.shading,
 					morph_pos,
 					expression_bindings: expression_bindings.get(&(mesh_i, prim_i)).cloned().unwrap_or_default(),
@@ -7159,6 +7151,7 @@ impl SceneMeshes {
 
 		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&draws, &opts);
+		let skin_palette_count = skin_palettes.len();
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -7197,6 +7190,7 @@ impl SceneMeshes {
 			opaque_batches,
 			transparent_backpass_draw_indices,
 			blended_batches,
+			active_skin_palette_scratch: vec![false; skin_palette_count],
 			texture_summary,
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(catalog.map_or(0, |catalog| catalog.presets.len())),
@@ -7239,6 +7233,57 @@ impl SceneMeshes {
 			palette.uploaded.extend_from_slice(&palette.raw);
 			palette.uploaded_changed = true;
 		}
+	}
+
+	fn skin_palette_index(
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		skin_bind_group_layout: &wgpu::BindGroupLayout,
+		skin_palettes: &mut Vec<SkinPalette>,
+		skin_palette_indices: &mut BTreeMap<SkinPaletteKey, usize>,
+		key: SkinPaletteKey,
+		skin: Option<&un_avatar_core::UnaSkin>,
+	) -> usize {
+		if let Some(&index) = skin_palette_indices.get(&key) {
+			return index;
+		}
+		let matrix_capacity = skin_palette_matrix_capacity(skin);
+		let bone_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("mesh_bones"),
+			size: matrix_capacity as u64 * BONE_MATRIX_SIZE,
+			usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let bone_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("mesh_bone_bg"),
+			layout: skin_bind_group_layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: bone_buffer.as_entire_binding(),
+			}],
+		});
+		let index = skin_palettes.len();
+		let raw_capacity = matrix_raw_capacity(matrix_capacity);
+		let static_identity = key.skin_index.is_none();
+		let (raw, uploaded) = if static_identity {
+			let raw = identity_matrix_raw();
+			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
+			(raw.clone(), raw)
+		} else {
+			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
+		};
+		skin_palettes.push(SkinPalette {
+			key,
+			buffer: bone_buffer,
+			bind_group: bone_bind_group,
+			matrix_capacity,
+			static_identity,
+			raw,
+			uploaded,
+			uploaded_changed: false,
+		});
+		skin_palette_indices.insert(key, index);
+		index
 	}
 
 	pub fn prepare_frame(
@@ -7415,6 +7460,11 @@ impl SceneMeshes {
 			return;
 		}
 		self.opts.avatar_outline = outline;
+		self.rebuild_draw_order();
+		self.rewrite_avatar_materials(queue);
+	}
+
+	fn rebuild_draw_order(&mut self) {
 		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&self.draws, &self.opts);
 		self.outline_draw_indices = outline_draw_indices;
@@ -7422,7 +7472,6 @@ impl SceneMeshes {
 		self.opaque_batches = opaque_batches;
 		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
 		self.blended_batches = blended_batches;
-		self.rewrite_avatar_materials(queue);
 	}
 
 	pub fn set_avatar_rim(&mut self, queue: &wgpu::Queue, rim: AvatarRimOptions) {
@@ -7610,9 +7659,16 @@ impl SceneMeshes {
 		world: &[Mat4],
 		expr_weights: Option<&UnaExpressionWeights>,
 		expression_overrides: Option<&BTreeMap<String, f32>>,
+		refresh_scene_morph_defaults: bool,
 	) {
 		let debug_skin_legacy_no_inv_mesh = self.opts.debug_skin_legacy_no_inv_mesh;
 		let debug_zero_morphs = self.opts.debug_zero_morphs;
+		if refresh_scene_morph_defaults {
+			self.refresh_morph_defaults_from_scene(scene);
+			if self.refresh_draw_visibility_from_scene(scene) > 0 {
+				self.rebuild_draw_order();
+			}
+		}
 		self.expression_value_scratch.clear();
 		if expr_weights.is_some() || expression_overrides.is_some() {
 			self.expression_value_scratch.reserve(self.expression_names.len());
@@ -7624,7 +7680,20 @@ impl SceneMeshes {
 				self.expression_value_scratch.push(value);
 			}
 		}
-		for palette in &mut self.skin_palettes {
+		self.active_skin_palette_scratch.clear();
+		self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
+		for draw in &self.draws {
+			if draw.active {
+				if let Some(slot) = self.active_skin_palette_scratch.get_mut(draw.skin_palette_index) {
+					*slot = true;
+				}
+			}
+		}
+		for (palette_index, palette) in self.skin_palettes.iter_mut().enumerate() {
+			if !self.active_skin_palette_scratch.get(palette_index).copied().unwrap_or(false) {
+				palette.uploaded_changed = false;
+				continue;
+			}
 			let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
 			Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 		}
@@ -7632,6 +7701,9 @@ impl SceneMeshes {
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
 		for d in &mut self.draws {
+			if !d.active {
+				continue;
+			}
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			d.world_origin = if let Some(bounds) = d.local_bounds {
 				let reference_world = d.probe_anchor_node.and_then(|node| world.get(node)).copied().unwrap_or(mesh_world);
@@ -7693,12 +7765,48 @@ impl SceneMeshes {
 		}
 	}
 
+	pub fn refresh_morph_defaults_from_scene(&mut self, scene: &UnaSceneSnapshot) -> usize {
+		let mut changed = 0;
+		for draw in &mut self.draws {
+			let target_count = draw.morph_pos.len();
+			if target_count == 0 {
+				continue;
+			}
+			if refresh_morph_default_weights(
+				&mut draw.default_morph_weights,
+				&mut draw.morph_weights,
+				scene,
+				draw.mesh_index,
+				draw.primitive_index,
+				target_count,
+			) {
+				changed += 1;
+			}
+		}
+		changed
+	}
+
+	pub fn refresh_draw_visibility_from_scene(&mut self, scene: &UnaSceneSnapshot) -> usize {
+		let effective_visibility = scene_effective_visibility(scene);
+		let mut changed = 0;
+		for draw in &mut self.draws {
+			let next = effective_visibility.get(draw.world_node_index).copied().unwrap_or(false);
+			if draw.active != next {
+				draw.active = next;
+				changed += 1;
+			}
+		}
+		changed
+	}
+
 	pub fn is_empty(&self) -> bool {
-		self.draws.is_empty()
+		self.draws.iter().all(|draw| !draw.active)
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
-		self.draws.iter().any(|draw| material_needs_screen_refraction(&draw.material))
+		self.draws
+			.iter()
+			.any(|draw| draw.active && material_needs_screen_refraction(&draw.material))
 	}
 
 	pub(crate) fn runtime_requirements(&self) -> SceneMeshRuntimeRequirements {
@@ -7706,7 +7814,7 @@ impl SceneMeshes {
 			audio_link_texture: self
 				.draws
 				.iter()
-				.any(|draw| material_needs_audio_link_texture(&draw.material, draw.shading)),
+				.any(|draw| draw.active && material_needs_audio_link_texture(&draw.material, draw.shading)),
 		}
 	}
 
@@ -7873,8 +7981,8 @@ mod tests {
 	}
 
 	#[test]
-	fn portable_mesh_shader_strips_high_tier_bindings_and_validates() {
-		let source = portable_mesh_shader_source();
+	fn baseline_fallback_mesh_shader_strips_high_capability_bindings_and_validates() {
+		let source = baseline_fallback_mesh_shader_source();
 		for binding in [
 			"@group(1) @binding(24)",
 			"@group(1) @binding(25)",
@@ -7918,19 +8026,19 @@ mod tests {
 			"@group(1) @binding(74)",
 			"@group(1) @binding(75)",
 		] {
-			assert!(!source.contains(binding), "portable shader still contains {binding}");
+			assert!(!source.contains(binding), "baseline fallback shader still contains {binding}");
 		}
-		let module = naga::front::wgsl::parse_str(&source).expect("portable mesh shader parses");
+		let module = naga::front::wgsl::parse_str(&source).expect("baseline fallback mesh shader parses");
 		let mut validator = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
-		validator.validate(&module).expect("portable mesh shader validates");
+		validator.validate(&module).expect("baseline fallback mesh shader validates");
 	}
 
 	#[test]
 	fn mesh_toon_pipeline_interfaces_match() {
-		const PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
-		const PORTABLE_SAMPLERS_PER_STAGE_TEST: u32 = 16;
-		const FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 56;
-		const FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST: u32 = 19;
+		const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 16;
+		const BASELINE_FALLBACK_SAMPLERS_PER_STAGE_TEST: u32 = 16;
+		const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE_TEST: u32 = 56;
+		const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE_TEST: u32 = 19;
 
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 		let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -7943,31 +8051,32 @@ mod tests {
 		};
 
 		let adapter_limits = adapter.limits();
-		let full_supported = adapter_limits.max_sampled_textures_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST
-			&& adapter_limits.max_samplers_per_shader_stage >= FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST;
-		let material_tier = if full_supported {
-			MaterialTier::FullOnePass
+		let high_capability_supported = adapter_limits.max_sampled_textures_per_shader_stage
+			>= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE_TEST
+			&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE_TEST;
+		let shader_variant_tier = if high_capability_supported {
+			MeshShaderVariantTier::HighCapability
 		} else {
-			MaterialTier::Portable16
+			MeshShaderVariantTier::BaselineFallback
 		};
 		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-		if full_supported {
+		if high_capability_supported {
 			limits.max_sampled_textures_per_shader_stage = limits
 				.max_sampled_textures_per_shader_stage
-				.max(FULL_LILTOON_ONE_PASS_SAMPLED_TEXTURES_PER_STAGE_TEST)
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE_TEST)
 				.min(adapter_limits.max_sampled_textures_per_shader_stage);
 			limits.max_samplers_per_shader_stage = limits
 				.max_samplers_per_shader_stage
-				.max(FULL_LILTOON_ONE_PASS_SAMPLERS_PER_STAGE_TEST)
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE_TEST)
 				.min(adapter_limits.max_samplers_per_shader_stage);
 		} else {
 			limits.max_sampled_textures_per_shader_stage = limits
 				.max_sampled_textures_per_shader_stage
-				.max(PORTABLE_SAMPLED_TEXTURES_PER_STAGE_TEST)
+				.max(BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE_TEST)
 				.min(adapter_limits.max_sampled_textures_per_shader_stage);
 			limits.max_samplers_per_shader_stage = limits
 				.max_samplers_per_shader_stage
-				.max(PORTABLE_SAMPLERS_PER_STAGE_TEST)
+				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE_TEST)
 				.min(adapter_limits.max_samplers_per_shader_stage);
 		}
 
@@ -7991,10 +8100,15 @@ mod tests {
 				texture_bind_group_layout_entry(3, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 			],
 		});
-		let material_entries = mesh_material_layout_entries(material_tier);
+		let material_entries = mesh_material_layout_entries(shader_variant_tier);
 		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_material_test"),
 			entries: &material_entries,
+		});
+		let outline_material_entries = mesh_outline_material_layout_entries();
+		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_outline_material_test"),
+			entries: &outline_material_entries,
 		});
 		let bone_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_bones_test"),
@@ -8040,9 +8154,19 @@ mod tests {
 			bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&bone_layout), Some(&morph_layout)],
 			immediate_size: 0,
 		});
+		let outline_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("mesh_outline_pipeline_test"),
+			bind_group_layouts: &[
+				Some(&frame_layout),
+				Some(&outline_material_layout),
+				Some(&bone_layout),
+				Some(&morph_layout),
+			],
+			immediate_size: 0,
+		});
 		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 			label: Some("mesh_shader_test"),
-			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(material_tier)),
+			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(shader_variant_tier)),
 		});
 		let attrs = [
 			wgpu::VertexAttribute {
@@ -8139,6 +8263,22 @@ mod tests {
 			attributes: &compute_fur_cards_attrs,
 		};
 
+		let _outline_toon = SceneMeshes::create_mesh_pipeline(
+			&device,
+			&outline_pipeline_layout,
+			&shader,
+			wgpu::TextureFormat::Rgba8Unorm,
+			&vb_layout,
+			"mesh_outline_toon",
+			"vs_outline",
+			"fs_outline",
+			None,
+			wgpu::ColorWrites::ALL,
+			false,
+			wgpu::CompareFunction::Less,
+			Some(wgpu::Face::Front),
+			1,
+		);
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
@@ -8395,6 +8535,137 @@ mod tests {
 	}
 
 	#[test]
+	fn scene_default_morph_weights_for_draw_clamps_and_pads_scene_values() {
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![UnaMeshBuffers {
+				name: None,
+				positions: vec![[0.0; 3]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: None,
+				weights: None,
+				indices: None,
+				material_index: None,
+				morph_targets: vec![
+					UnaMorphTargetDeltas {
+						position_deltas: vec![[0.0; 3]],
+						normal_deltas: None,
+					},
+					UnaMorphTargetDeltas {
+						position_deltas: vec![[0.0; 3]],
+						normal_deltas: None,
+					},
+				],
+				morph_target_names: vec!["A".to_string(), "B".to_string()],
+				default_morph_weights: vec![1.2],
+			}]],
+			..Default::default()
+		};
+		assert_eq!(scene_default_morph_weights_for_draw(&scene, 0, 0, 2), vec![1.0, 0.0]);
+		assert_eq!(scene_default_morph_weights_for_draw(&scene, 9, 0, 2), vec![0.0, 0.0]);
+	}
+
+	#[test]
+	fn refresh_morph_default_weights_invalidates_uploaded_weights_only_on_change() {
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![UnaMeshBuffers {
+				name: None,
+				positions: vec![[0.0; 3]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: None,
+				weights: None,
+				indices: None,
+				material_index: None,
+				morph_targets: vec![UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				}],
+				morph_target_names: vec!["A".to_string()],
+				default_morph_weights: vec![0.75],
+			}]],
+			..Default::default()
+		};
+		let mut defaults = vec![0.25];
+		let mut uploaded = vec![0.25];
+		assert!(refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, 1));
+		assert_eq!(defaults, vec![0.75]);
+		assert!(uploaded.is_empty());
+
+		uploaded.push(0.75);
+		assert!(!refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, 1));
+		assert_eq!(uploaded, vec![0.75]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_merges_scene_defaults_and_expression_bindings() {
+		let bindings = [ExpressionBinding {
+			preset_index: 0,
+			morph_target_index: 1,
+			weight_scale: 0.5,
+		}];
+		let mut out = Vec::new();
+		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &mut out);
+		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
+		Vertex {
+			pos: [0.0; 3],
+			norm: [0.0; 3],
+			tangent: [0.0; 4],
+			uv: [0.0; 2],
+			uv1: [0.0; 2],
+			uv2: [0.0; 2],
+			uv3: [0.0; 2],
+			joints,
+			weights,
+			color: [0.0; 4],
+		}
+	}
+
+	#[test]
+	fn normalize_skinning_vertices_resets_joint_attributes_without_skin() {
+		let mut verts = vec![test_vertex([3, 2, 1, 0], [0.1, 0.2, 0.3, 0.4])];
+		normalize_skinning_vertices(&mut verts, true, None);
+		assert_eq!(verts[0].joints, [0, 0, 0, 0]);
+		assert_eq!(verts[0].weights, [1.0, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn normalize_skinning_vertices_clamps_to_valid_palette_range() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let mut verts = vec![test_vertex([0, 1, 2, 9], [0.25; 4])];
+		normalize_skinning_vertices(&mut verts, true, Some(&skin));
+		assert_eq!(verts[0].joints, [0, 1, 1, 1]);
+		assert_eq!(skin_palette_matrix_capacity(Some(&skin)), 2);
+	}
+
+	#[test]
+	fn skin_palette_capacity_uses_inverse_bind_count_as_bound() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		assert_eq!(skin_palette_matrix_capacity(Some(&skin)), 1);
+	}
+
+	#[test]
 	fn expand_primitive_bakes_static_default_morphs() {
 		let buf = UnaMeshBuffers {
 			name: None,
@@ -8473,6 +8744,52 @@ mod tests {
 		};
 
 		assert_eq!(scene_effective_visibility(&scene), vec![false, false]);
+	}
+
+	#[test]
+	fn effective_visibility_falls_back_to_parentless_roots_when_scene_roots_are_missing() {
+		let identity = Mat4::IDENTITY.to_cols_array();
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					source_node_id: None,
+					name: Some("root".to_string()),
+					visible: true,
+					transform: identity,
+					children: vec![1],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					name: Some("child".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					name: Some("hidden_parentless".to_string()),
+					visible: false,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(1),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: vec![],
+			..Default::default()
+		};
+
+		assert_eq!(scene_effective_visibility(&scene), vec![true, true, false]);
 	}
 
 	#[test]

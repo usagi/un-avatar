@@ -54,7 +54,7 @@ Fur fragment は通常 toon fragment の流用だけでは不十分。`mesh.wgsl
 - Fur / FurCutout / FurTwoPass 相当の cutout / transparent alpha handling
 - `_FurRimColor` / `_FurRimFresnelPower` / `_FurRimAntiLight` による Fur rim
 
-Portable16 tier では high-tier Fur textures を落とし、texture budget を維持する。
+最低保証 fallback では high-capability Fur textures を落とし、resource budget を維持する。
 
 ## 非目標
 

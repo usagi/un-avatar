@@ -11,10 +11,16 @@ use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, Humanoi
 enum TargetHumanoidBasis {
 	Vrm0,
 	Vrm1,
+	UnavatarUnity,
 	Native,
 }
 
 fn target_humanoid_basis(document: &UnaDocument) -> TargetHumanoidBasis {
+	if document.unavatar.is_some() {
+		// .unavatar is exported from Unity as glTF-space local TRS:
+		// position = (-x, y, z), rotation = (x, -y, -z, w).
+		return TargetHumanoidBasis::UnavatarUnity;
+	}
 	let Some(vrm) = document.vrm.as_ref() else {
 		return TargetHumanoidBasis::Vrm0;
 	};
@@ -60,7 +66,9 @@ fn convert_rotation_from_coordinate_space(rotation: Quat, coordinate_space: Coor
 	match coordinate_space {
 		CoordinateSpace::Vmc => match target_basis {
 			TargetHumanoidBasis::Vrm0 => Quat::from_xyzw(-rotation.x, -rotation.y, rotation.z, rotation.w),
-			TargetHumanoidBasis::Vrm1 => Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w),
+			TargetHumanoidBasis::Vrm1 | TargetHumanoidBasis::UnavatarUnity => {
+				Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w)
+			}
 			TargetHumanoidBasis::Native => rotation,
 		},
 		_ => rotation,
@@ -75,7 +83,7 @@ fn convert_translation_from_coordinate_space(
 	match coordinate_space {
 		CoordinateSpace::Vmc => match target_basis {
 			TargetHumanoidBasis::Vrm0 => Vec3::new(translation.x, translation.y, -translation.z),
-			TargetHumanoidBasis::Vrm1 => Vec3::new(-translation.x, translation.y, translation.z),
+			TargetHumanoidBasis::Vrm1 | TargetHumanoidBasis::UnavatarUnity => Vec3::new(-translation.x, translation.y, translation.z),
 			TargetHumanoidBasis::Native => translation,
 		},
 		_ => translation,
@@ -106,14 +114,59 @@ fn transform_sample_translation(t: &TransformSample, coordinate_space: Coordinat
 	convert_translation_from_coordinate_space(translation, coordinate_space, target_basis)
 }
 
-fn transform_humanoid_sample_rotation(t: &TransformSample, coordinate_space: CoordinateSpace, target_basis: TargetHumanoidBasis) -> Quat {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnmotionHumanoidRole {
+	Root,
+	BodyBone(HumanoidBone),
+	HandWrist,
+	HandFinger,
+}
+
+fn unavatar_unmotion_limb_uses_vrm0_like_axis(role: UnmotionHumanoidRole) -> bool {
+	matches!(role, UnmotionHumanoidRole::HandWrist)
+}
+
+fn convert_unmotion_humanoid_rotation_to_target(
+	rotation: Quat,
+	target_basis: TargetHumanoidBasis,
+	role: UnmotionHumanoidRole,
+) -> Quat {
+	match target_basis {
+		TargetHumanoidBasis::Vrm0 if matches!(role, UnmotionHumanoidRole::HandFinger) => rotation,
+		TargetHumanoidBasis::Vrm0 if matches!(role, UnmotionHumanoidRole::HandWrist) => rotation,
+		TargetHumanoidBasis::Vrm0 => Quat::from_xyzw(-rotation.x, -rotation.y, rotation.z, rotation.w),
+		TargetHumanoidBasis::Vrm1 if matches!(role, UnmotionHumanoidRole::HandWrist | UnmotionHumanoidRole::HandFinger) => rotation,
+		TargetHumanoidBasis::Vrm1 => Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w),
+		TargetHumanoidBasis::UnavatarUnity if matches!(role, UnmotionHumanoidRole::HandFinger) => rotation,
+		TargetHumanoidBasis::UnavatarUnity if unavatar_unmotion_limb_uses_vrm0_like_axis(role) => {
+			Quat::from_xyzw(-rotation.x, -rotation.y, rotation.z, rotation.w)
+		}
+		TargetHumanoidBasis::UnavatarUnity => Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w),
+		TargetHumanoidBasis::Native => rotation,
+	}
+}
+
+fn convert_unmotion_humanoid_translation_to_target(translation: Vec3, target_basis: TargetHumanoidBasis) -> Vec3 {
+	match target_basis {
+		TargetHumanoidBasis::Vrm0 => Vec3::new(translation.x, translation.y, -translation.z),
+		TargetHumanoidBasis::Vrm1 | TargetHumanoidBasis::UnavatarUnity => Vec3::new(-translation.x, translation.y, translation.z),
+		TargetHumanoidBasis::Native => translation,
+	}
+}
+
+fn transform_humanoid_sample_rotation(
+	t: &TransformSample,
+	coordinate_space: CoordinateSpace,
+	target_basis: TargetHumanoidBasis,
+	role: UnmotionHumanoidRole,
+) -> Quat {
 	if coordinate_space == CoordinateSpace::UNMotion {
 		let mut rotation = t
 			.rotation
 			.as_ref()
 			.map(|quat| Quat::from_xyzw(quat.x, quat.y, quat.z, quat.w))
 			.unwrap_or(Quat::IDENTITY);
-		rotation = convert_rotation_from_coordinate_space(rotation, CoordinateSpace::Vmc, target_basis);
+		rotation = convert_unmotion_humanoid_rotation_to_target(rotation, target_basis, role);
 		if rotation.length_squared() > 1e-20 {
 			return rotation.normalize();
 		}
@@ -133,16 +186,289 @@ fn transform_humanoid_sample_translation(
 			.as_ref()
 			.map(|value| Vec3::new(value.x, value.y, value.z))
 			.unwrap_or(Vec3::ZERO);
-		return convert_translation_from_coordinate_space(translation, CoordinateSpace::Vmc, target_basis);
+		return convert_unmotion_humanoid_translation_to_target(translation, target_basis);
 	}
 	transform_sample_translation(t, coordinate_space, target_basis)
 }
 
-fn apply_transform_to_profile_node(
+fn unavatar_unmotion_limb_source_axis_in_target(role: UnmotionHumanoidRole) -> Option<Vec3> {
+	match role {
+		UnmotionHumanoidRole::BodyBone(
+			HumanoidBone::LeftShoulder | HumanoidBone::LeftUpperArm | HumanoidBone::LeftLowerArm | HumanoidBone::LeftHand,
+		) => Some(Vec3::X),
+		UnmotionHumanoidRole::BodyBone(
+			HumanoidBone::RightShoulder | HumanoidBone::RightUpperArm | HumanoidBone::RightLowerArm | HumanoidBone::RightHand,
+		) => Some(-Vec3::X),
+		UnmotionHumanoidRole::BodyBone(
+			HumanoidBone::LeftUpperLeg | HumanoidBone::LeftLowerLeg | HumanoidBone::RightUpperLeg | HumanoidBone::RightLowerLeg,
+		) => Some(-Vec3::Y),
+		UnmotionHumanoidRole::BodyBone(HumanoidBone::LeftFoot | HumanoidBone::RightFoot) => Some(Vec3::Z),
+		_ => None,
+	}
+}
+
+fn humanoid_successor_profile_key(bone: HumanoidBone) -> Option<&'static str> {
+	match bone {
+		HumanoidBone::LeftShoulder => Some("leftupperarm"),
+		HumanoidBone::LeftUpperArm => Some("leftlowerarm"),
+		HumanoidBone::LeftLowerArm => Some("lefthand"),
+		HumanoidBone::LeftHand => Some("leftmiddleproximal"),
+		HumanoidBone::LeftUpperLeg => Some("leftlowerleg"),
+		HumanoidBone::LeftLowerLeg => Some("leftfoot"),
+		HumanoidBone::LeftFoot => Some("lefttoes"),
+		HumanoidBone::RightShoulder => Some("rightupperarm"),
+		HumanoidBone::RightUpperArm => Some("rightlowerarm"),
+		HumanoidBone::RightLowerArm => Some("righthand"),
+		HumanoidBone::RightHand => Some("rightmiddleproximal"),
+		HumanoidBone::RightUpperLeg => Some("rightlowerleg"),
+		HumanoidBone::RightLowerLeg => Some("rightfoot"),
+		HumanoidBone::RightFoot => Some("righttoes"),
+		_ => None,
+	}
+}
+
+fn rest_child_axis_from_direct_child(nodes: &[UnaSceneNode], node_index: usize, child_index: usize) -> Option<(Quat, Vec3)> {
+	let node = nodes.get(node_index)?;
+	let (_, rest_rotation, _) = node_scale_rotation_translation(node);
+	if !node.children.contains(&child_index) {
+		return None;
+	}
+	let child = nodes.get(child_index)?;
+	let (_, _, translation) = node_scale_rotation_translation(child);
+	(translation.length_squared() > 1e-8).then(|| (rest_rotation, (rest_rotation * translation).normalize()))
+}
+
+fn rest_first_child_axis_in_parent(nodes: &[UnaSceneNode], node_index: usize) -> Option<(Quat, Vec3)> {
+	let node = nodes.get(node_index)?;
+	node.children
+		.iter()
+		.find_map(|&child| rest_child_axis_from_direct_child(nodes, node_index, child))
+}
+
+fn rest_named_child_axis_in_parent(nodes: &[UnaSceneNode], node_index: usize, pattern: &str) -> Option<(Quat, Vec3)> {
+	let node = nodes.get(node_index)?;
+	node.children.iter().find_map(|&child| {
+		let name = nodes.get(child).and_then(|node| node.name.as_deref()).unwrap_or("");
+		normalize_profile_match_key(name)
+			.contains(pattern)
+			.then(|| rest_child_axis_from_direct_child(nodes, node_index, child))
+			.flatten()
+	})
+}
+
+fn rest_humanoid_child_axis_in_parent(
+	profile: &HumanoidProfile,
+	nodes: &[UnaSceneNode],
+	node_index: usize,
+	role: UnmotionHumanoidRole,
+) -> Option<(Quat, Vec3)> {
+	if let UnmotionHumanoidRole::BodyBone(bone) = role {
+		if let Some(key) = humanoid_successor_profile_key(bone) {
+			if let Some(child_index) = profile_node_index(profile, key) {
+				if let Some(axis) = rest_child_axis_from_direct_child(nodes, node_index, child_index) {
+					return Some(axis);
+				}
+			}
+		}
+		if matches!(bone, HumanoidBone::LeftFoot | HumanoidBone::RightFoot) {
+			if let Some(axis) = rest_named_child_axis_in_parent(nodes, node_index, "toe") {
+				return Some(axis);
+			}
+		}
+	}
+	rest_first_child_axis_in_parent(nodes, node_index)
+}
+
+fn adapt_unavatar_unmotion_limb_axis(
+	profile: &HumanoidProfile,
+	rotation: Quat,
+	nodes: &[UnaSceneNode],
+	rest_nodes: Option<&[UnaSceneNode]>,
+	roots: &[usize],
+	node_index: usize,
+	target_basis: TargetHumanoidBasis,
+	coordinate_space: CoordinateSpace,
+	role: UnmotionHumanoidRole,
+) -> Quat {
+	if coordinate_space != CoordinateSpace::UNMotion || target_basis != TargetHumanoidBasis::UnavatarUnity {
+		return rotation;
+	}
+	let Some(source_axis) = unavatar_unmotion_limb_source_axis_in_target(role) else {
+		return rotation;
+	};
+	let rest = rest_nodes.unwrap_or(nodes);
+	let Some((rest_rotation, target_axis)) = rest_humanoid_child_axis_in_parent(profile, rest, node_index, role) else {
+		return rotation;
+	};
+	let parents = scene_parent_indices(rest);
+	let world = scene_world_matrices(rest, roots);
+	let parent_world_rotation = parents
+		.get(node_index)
+		.and_then(|parent| parent.map(|parent| world[parent]))
+		.map(|m| m.to_scale_rotation_translation().1)
+		.unwrap_or(Quat::IDENTITY);
+	let source_axis_in_parent = (parent_world_rotation.inverse() * source_axis).normalize_or_zero();
+	if source_axis_in_parent.length_squared() < 1e-10 {
+		return rotation;
+	}
+	let rotation_in_parent = parent_world_rotation.inverse() * rotation * parent_world_rotation;
+	let adapter = Quat::from_rotation_arc(target_axis, source_axis_in_parent);
+	let parent_space_delta = (rotation_in_parent * adapter).normalize();
+	(rest_rotation.inverse() * parent_space_delta * rest_rotation).normalize()
+}
+
+fn unavatar_unmotion_finger_source_axis_in_target(side_prefix: &str, finger_key: &str, segment: &str) -> Vec3 {
+	if finger_key == "thumb" && segment == "proximal" {
+		const THUMB_REST_OPEN_RAD: f32 = 0.31;
+		let side = if side_prefix == "left" { 1.0 } else { -1.0 };
+		Vec3::new(side * THUMB_REST_OPEN_RAD.cos(), 0.0, THUMB_REST_OPEN_RAD.sin())
+	} else if finger_key == "thumb" {
+		const THUMB_FLEXION_REST_OPEN_RAD: f32 = 0.33;
+		let side = if side_prefix == "left" { 1.0 } else { -1.0 };
+		Vec3::new(
+			side * THUMB_FLEXION_REST_OPEN_RAD.cos(),
+			0.0,
+			-THUMB_FLEXION_REST_OPEN_RAD.sin(),
+		)
+	} else if side_prefix == "left" {
+		Vec3::X
+	} else {
+		-Vec3::X
+	}
+}
+
+fn finger_successor_profile_key(side_prefix: &str, finger_key: &str, segment: &str) -> Option<String> {
+	let next_segment = match segment {
+		"proximal" => "intermediate",
+		"intermediate" => "distal",
+		_ => return None,
+	};
+	Some(format!("{side_prefix}{finger_key}{next_segment}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adapt_unavatar_unmotion_finger_axis(
+	profile: &HumanoidProfile,
+	mut rotation: Quat,
+	nodes: &[UnaSceneNode],
+	rest_nodes: Option<&[UnaSceneNode]>,
+	roots: &[usize],
+	node_index: usize,
+	target_basis: TargetHumanoidBasis,
+	coordinate_space: CoordinateSpace,
+	side_prefix: &str,
+	finger_key: &str,
+	segment: &str,
+	successor_key: Option<&str>,
+) -> Quat {
+	if coordinate_space != CoordinateSpace::UNMotion || target_basis != TargetHumanoidBasis::UnavatarUnity {
+		return rotation;
+	}
+	if rotation.angle_between(Quat::IDENTITY) < 1e-5 {
+		return Quat::IDENTITY;
+	}
+	if finger_key == "thumb" && segment == "proximal" {
+		rotation = Quat::from_xyzw(rotation.x, rotation.y, -rotation.z, rotation.w).normalize();
+	} else if finger_key == "thumb" {
+		rotation = rotation.normalize();
+	} else {
+		rotation = Quat::from_xyzw(rotation.x, rotation.y, -rotation.z, rotation.w).normalize();
+	}
+	if rotation.angle_between(Quat::IDENTITY) < 1e-5 {
+		return Quat::IDENTITY;
+	}
+	let rest = rest_nodes.unwrap_or(nodes);
+	let axis = successor_key
+		.and_then(|key| profile_node_index(profile, key))
+		.and_then(|child_index| rest_child_axis_from_direct_child(rest, node_index, child_index))
+		.or_else(|| rest_first_child_axis_in_parent(rest, node_index));
+	let Some((rest_rotation, target_axis)) = axis else {
+		return rotation;
+	};
+	let parents = scene_parent_indices(rest);
+	let world = scene_world_matrices(rest, roots);
+	let parent_world_rotation = parents
+		.get(node_index)
+		.and_then(|parent| parent.map(|parent| world[parent]))
+		.map(|m| m.to_scale_rotation_translation().1)
+		.unwrap_or(Quat::IDENTITY);
+	let source_axis = unavatar_unmotion_finger_source_axis_in_target(side_prefix, finger_key, segment);
+	let source_axis_in_parent = (parent_world_rotation.inverse() * source_axis).normalize_or_zero();
+	if source_axis_in_parent.length_squared() < 1e-10 {
+		return rotation;
+	}
+	let rotation_in_parent = parent_world_rotation.inverse() * rotation * parent_world_rotation;
+	let parent_space_delta = if finger_key == "thumb" && segment == "proximal" {
+		rotation_in_parent.normalize()
+	} else {
+		let desired_axis = (rotation_in_parent * source_axis_in_parent).normalize_or_zero();
+		if desired_axis.length_squared() < 1e-10 {
+			return rotation;
+		}
+		Quat::from_rotation_arc(target_axis, desired_axis).normalize()
+	};
+	(rest_rotation.inverse() * parent_space_delta * rest_rotation).normalize()
+}
+
+fn apply_humanoid_transform_to_profile_node(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
+	roots: &[usize],
 	key: &str,
+	transform: &TransformSample,
+	coordinate_space: CoordinateSpace,
+	target_basis: TargetHumanoidBasis,
+	role: UnmotionHumanoidRole,
+) {
+	let Some(ni) = profile_node_index(profile, key) else {
+		return;
+	};
+	let mut sample_rotation = transform_humanoid_sample_rotation(transform, coordinate_space, target_basis, role);
+	let adapter_role = if role == UnmotionHumanoidRole::HandWrist {
+		let normalized_key = normalize_profile_match_key(key);
+		if normalized_key.starts_with("left") {
+			UnmotionHumanoidRole::BodyBone(HumanoidBone::LeftHand)
+		} else if normalized_key.starts_with("right") {
+			UnmotionHumanoidRole::BodyBone(HumanoidBone::RightHand)
+		} else {
+			role
+		}
+	} else {
+		role
+	};
+	sample_rotation = adapt_unavatar_unmotion_limb_axis(
+		profile,
+		sample_rotation,
+		nodes,
+		rest_nodes,
+		roots,
+		ni,
+		target_basis,
+		coordinate_space,
+		adapter_role,
+	);
+	if let Some(node) = nodes.get_mut(ni) {
+		let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
+		let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
+		let sample_translation = transform_humanoid_sample_translation(transform, coordinate_space, target_basis);
+		node.transform =
+			Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation + sample_translation)
+				.to_cols_array();
+	}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_finger_transform_to_profile_node(
+	profile: &HumanoidProfile,
+	nodes: &mut [UnaSceneNode],
+	rest_nodes: Option<&[UnaSceneNode]>,
+	roots: &[usize],
+	key: &str,
+	successor_key: Option<&str>,
+	side_prefix: &str,
+	finger_key: &str,
+	segment: &str,
 	transform: &TransformSample,
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
@@ -150,12 +476,29 @@ fn apply_transform_to_profile_node(
 	let Some(ni) = profile_node_index(profile, key) else {
 		return;
 	};
+	let mut sample_rotation =
+		transform_humanoid_sample_rotation(transform, coordinate_space, target_basis, UnmotionHumanoidRole::HandFinger);
+	sample_rotation = adapt_unavatar_unmotion_finger_axis(
+		profile,
+		sample_rotation,
+		nodes,
+		rest_nodes,
+		roots,
+		ni,
+		target_basis,
+		coordinate_space,
+		side_prefix,
+		finger_key,
+		segment,
+		successor_key,
+	);
 	if let Some(node) = nodes.get_mut(ni) {
 		let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
 		let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
-		let sample_rotation = transform_sample_rotation(transform, coordinate_space, target_basis);
+		let sample_translation = transform_humanoid_sample_translation(transform, coordinate_space, target_basis);
 		node.transform =
-			Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation).to_cols_array();
+			Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, base_translation + sample_translation)
+				.to_cols_array();
 	}
 }
 
@@ -180,25 +523,31 @@ fn normalize_profile_match_key(name: &str) -> String {
 fn apply_hand_motion_to_scene(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
+	roots: &[usize],
 	hand: &HandMotion,
 	side_prefix: &str,
 	rest_nodes: Option<&[UnaSceneNode]>,
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
+	apply_wrist: bool,
 ) {
 	if hand.tracking_state == un_motion_frame::TrackingState::Lost {
 		return;
 	}
-	if let Some(wrist) = hand.wrist.as_ref() {
-		apply_transform_to_profile_node(
-			profile,
-			nodes,
-			rest_nodes,
-			&format!("{side_prefix}hand"),
-			wrist,
-			coordinate_space,
-			target_basis,
-		);
+	if apply_wrist {
+		if let Some(wrist) = hand.wrist.as_ref() {
+			apply_humanoid_transform_to_profile_node(
+				profile,
+				nodes,
+				rest_nodes,
+				roots,
+				&format!("{side_prefix}hand"),
+				wrist,
+				coordinate_space,
+				target_basis,
+				UnmotionHumanoidRole::HandWrist,
+			);
+		}
 	}
 	for finger in &hand.fingers {
 		let finger_key = match finger.finger {
@@ -215,17 +564,32 @@ fn apply_hand_motion_to_scene(
 				2 => "distal",
 				_ => continue,
 			};
-			apply_transform_to_profile_node(
+			let key = format!("{side_prefix}{finger_key}{segment}");
+			let successor_key = finger_successor_profile_key(side_prefix, finger_key, segment);
+			apply_finger_transform_to_profile_node(
 				profile,
 				nodes,
 				rest_nodes,
-				&format!("{side_prefix}{finger_key}{segment}"),
+				roots,
+				&key,
+				successor_key.as_deref(),
+				side_prefix,
+				finger_key,
+				segment,
 				joint,
 				coordinate_space,
 				target_basis,
 			);
 		}
 	}
+}
+
+fn pose_has_valid_bone(pose: Option<&HumanoidPose>, bone: HumanoidBone) -> bool {
+	pose.is_some_and(|pose| {
+		pose.bones
+			.iter()
+			.any(|sample| sample.bone == bone && sample.state != SampleState::Missing)
+	})
 }
 
 fn node_scale_rotation_translation(node: &UnaSceneNode) -> (Vec3, Quat, Vec3) {
@@ -519,7 +883,8 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base_node) = rest_nodes.and_then(|rest| rest.get(ri)) {
 				let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
-				let sample_rotation = transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis);
+				let sample_rotation =
+					transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis, UnmotionHumanoidRole::Root);
 				// translation は opt-in 時のみ rest に加算する。OFF 時は rest pose の base_translation を温存。
 				let translation = if apply_root_translation {
 					base_translation + transform_humanoid_sample_translation(root_t, coordinate_space, target_basis)
@@ -530,7 +895,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 					Mat4::from_scale_rotation_translation(base_scale, base_rotation * sample_rotation, translation).to_cols_array();
 			} else if apply_root_translation {
 				node.transform = Mat4::from_rotation_translation(
-					transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis),
+					transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis, UnmotionHumanoidRole::Root),
 					transform_humanoid_sample_translation(root_t, coordinate_space, target_basis),
 				)
 				.to_cols_array();
@@ -538,7 +903,8 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 				// rest_nodes が無く apply_root_translation OFF のときは、rotation のみ書き戻し translation は既存値を温存。
 				let local = Mat4::from_cols_array(&node.transform);
 				let (base_scale, _base_rot, base_translation) = local.to_scale_rotation_translation();
-				let sample_rotation = transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis);
+				let sample_rotation =
+					transform_humanoid_sample_rotation(root_t, coordinate_space, target_basis, UnmotionHumanoidRole::Root);
 				node.transform = Mat4::from_scale_rotation_translation(base_scale, sample_rotation, base_translation).to_cols_array();
 			}
 		}
@@ -552,13 +918,29 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			continue;
 		}
 		let key = humanoid_bone_profile_key(sample.bone);
-		let Some(&ni) = profile.bone_node_indices.get(key) else {
+		let Some(ni) = profile_node_index(profile, key) else {
 			continue;
 		};
+		let mut sample_rotation = transform_humanoid_sample_rotation(
+			&sample.transform,
+			coordinate_space,
+			target_basis,
+			UnmotionHumanoidRole::BodyBone(sample.bone),
+		);
+		sample_rotation = adapt_unavatar_unmotion_limb_axis(
+			profile,
+			sample_rotation,
+			nodes,
+			rest_nodes,
+			roots,
+			ni,
+			target_basis,
+			coordinate_space,
+			UnmotionHumanoidRole::BodyBone(sample.bone),
+		);
 		if let Some(node) = nodes.get_mut(ni) {
 			let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
 			let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
-			let mut sample_rotation = transform_humanoid_sample_rotation(&sample.transform, coordinate_space, target_basis);
 			if let Some(deg) = eye_clamp_deg {
 				if matches!(sample.bone, HumanoidBone::LeftEye | HumanoidBone::RightEye) {
 					sample_rotation = clamp_eye_rotation(sample_rotation, deg);
@@ -589,6 +971,7 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 	let Some(ref profile) = document.humanoid_profile else {
 		return;
 	};
+	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
 	if let Some(ref body) = frame.body {
 		if let Some(ref pose) = body.humanoid {
 			apply_humanoid_pose_to_scene_with_rest_in_space_full(
@@ -609,23 +992,42 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 		apply_hand_motion_to_scene(
 			profile,
 			&mut scene.nodes,
+			&scene.roots,
 			hand,
 			"left",
 			rest_nodes,
 			frame.header.coordinate_space,
 			target_basis,
+			!pose_has_valid_bone(body_pose, HumanoidBone::LeftHand),
 		);
 	}
 	if let Some(ref hand) = frame.right_hand {
 		apply_hand_motion_to_scene(
 			profile,
 			&mut scene.nodes,
+			&scene.roots,
 			hand,
 			"right",
 			rest_nodes,
 			frame.header.coordinate_space,
 			target_basis,
+			!pose_has_valid_bone(body_pose, HumanoidBone::RightHand),
 		);
+	}
+	if let Some(ref face) = frame.face {
+		if let Some(ref head) = face.head {
+			apply_humanoid_transform_to_profile_node(
+				profile,
+				&mut scene.nodes,
+				rest_nodes,
+				&scene.roots,
+				"head",
+				head,
+				frame.header.coordinate_space,
+				target_basis,
+				UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+			);
+		}
 	}
 	if let Some(rest_nodes) = rest_nodes {
 		let UnaSceneSnapshot {
@@ -723,7 +1125,61 @@ mod tests {
 			children: vec![],
 			mesh: None,
 			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
 		}
+	}
+
+	fn quatf(q: Quat) -> Quatf {
+		Quatf {
+			x: q.x,
+			y: q.y,
+			z: q.z,
+			w: q.w,
+		}
+	}
+
+	fn valid_bone_sample(bone: HumanoidBone, rotation: Quat) -> BoneSample {
+		BoneSample {
+			bone,
+			transform: TransformSample {
+				translation: None,
+				rotation: Some(quatf(rotation)),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			},
+			confidence: 1.0,
+			source_index: Some(0),
+			state: SampleState::Valid,
+		}
+	}
+
+	fn unmotion_body_frame(bone: HumanoidBone, rotation: Quat) -> UNMotionFrame {
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![valid_bone_sample(bone, rotation)],
+			}),
+		});
+		frame
+	}
+
+	fn normalized_world_bone_axis(scene: &UnaSceneSnapshot, parent: usize, child: usize) -> Vec3 {
+		let world = scene_world_matrices(&scene.nodes, &scene.roots);
+		let from = world[parent].transform_point3(Vec3::ZERO);
+		let to = world[child].transform_point3(Vec3::ZERO);
+		(to - from).normalize()
+	}
+
+	fn apply_left_upper_arm_sample(mut document: UnaDocument, rest_nodes: Vec<UnaSceneNode>, source_rotation: Quat) -> UnaSceneSnapshot {
+		let frame = unmotion_body_frame(HumanoidBone::LeftUpperArm, source_rotation);
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+		document.scene.unwrap()
 	}
 
 	#[test]
@@ -891,6 +1347,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![unknown_node()],
 			roots: vec![0],
@@ -1056,6 +1513,39 @@ mod tests {
 		let node = &document.scene.as_ref().unwrap().nodes[0];
 		let (_, rotation, _) = Mat4::from_cols_array(&node.transform).to_scale_rotation_translation();
 		assert!(rotation.angle_between(Quat::from_rotation_z(0.5)) < 1e-4);
+	}
+
+	#[test]
+	fn applies_body_motion_to_normalized_profile_keys() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("left_upper_arm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let rotation = Quat::from_rotation_z(0.35);
+		let frame = unmotion_body_frame(HumanoidBone::LeftUpperArm, rotation);
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let node = &document.scene.as_ref().unwrap().nodes[1];
+		let (_, applied, _) = Mat4::from_cols_array(&node.transform).to_scale_rotation_translation();
+		assert!(
+			applied.angle_between(rotation) < 1e-4,
+			"body motion should resolve normalized profile keys; got {applied:?}"
+		);
 	}
 
 	#[test]
@@ -1230,6 +1720,7 @@ mod tests {
 		let (_, head_rotation, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
 		let (_, finger_applied, _) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
 		let expected_head = Quat::from_rotation_x(-0.4);
+		let expected_finger = finger_rotation;
 		assert!(
 			(head_rotation.dot(expected_head).abs() - 1.0).abs() < 1e-5,
 			"expected head {:?}, got {:?}",
@@ -1237,9 +1728,9 @@ mod tests {
 			head_rotation
 		);
 		assert!(
-			(finger_applied.dot(finger_rotation).abs() - 1.0).abs() < 1e-5,
+			(finger_applied.dot(expected_finger).abs() - 1.0).abs() < 1e-5,
 			"expected finger {:?}, got {:?}",
-			finger_rotation,
+			expected_finger,
 			finger_applied
 		);
 	}
@@ -1346,12 +1837,13 @@ mod tests {
 			hand_bone_rotation.z,
 			hand_bone_rotation.w,
 		);
+		let expected_finger = finger_rotation;
 		assert!(
 			(hand_applied.dot(expected_hand).abs() - 1.0).abs() < 1e-5,
 			"hand motion without wrist must not reset body-owned RightHand rotation"
 		);
 		assert!(
-			(finger_applied.dot(finger_rotation).abs() - 1.0).abs() < 1e-5,
+			(finger_applied.dot(expected_finger).abs() - 1.0).abs() < 1e-5,
 			"finger joints should still apply"
 		);
 	}
@@ -1371,6 +1863,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
@@ -1417,6 +1910,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
@@ -1463,6 +1957,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
 			roots: vec![],
@@ -1531,6 +2026,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
@@ -1592,12 +2088,9 @@ mod tests {
 		assert!((applied - expected).abs_diff_eq(Mat4::ZERO, 1e-5));
 	}
 
-	/// Phase 2 で `un-motion-frame-zenoh` 経由で受信する UNMotionFrame は
-	/// `coordinate_space = UNMotion` を持つ想定。UNMotion canonical basis (RH, +Y up, +Z forward) は
-	/// UN Avatar 内部表現と同一なので、bone rotation も root translation も **そのまま** 適用される
-	/// (VMC のような z-flip / x-flip 補正は走らない) ことを回帰テストとして固定する。
+	/// 1.0.0 互換: VRM0 の Humanoid body/root へ入る UNMotion は VRM0 target basis へ変換して合成する。
 	#[test]
-	fn unmotion_coordinate_space_applies_rotation_and_translation_as_native() {
+	fn vrm0_unmotion_humanoid_body_uses_reference_target_basis() {
 		let rest_rotation = Quat::from_rotation_y(0.25);
 		let rest_transform = Mat4::from_scale_rotation_translation(Vec3::ONE, rest_rotation, Vec3::new(0.2, 1.0, 0.0));
 		let rest_nodes = vec![
@@ -1612,6 +2105,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
@@ -1666,24 +2160,1263 @@ mod tests {
 		);
 
 		let scene = document.scene.unwrap();
-		// Humanoid body/root は、VMC で正しく解釈される UNMotionFrame のボーン基底を VRM0 scene へ合わせる。
 		let root_transform = Mat4::from_cols_array(&scene.nodes[0].transform);
 		assert!(
 			(root_transform.w_axis.truncate() - Vec3::new(1.0, 2.0, -3.0)).length() < 1e-5,
-			"UNMotion humanoid root translation must use the VRM0 target basis; got {:?}",
+			"VRM0 UNMotion humanoid root translation must use the 1.0.0 target-basis conversion; got {:?}",
 			root_transform.w_axis.truncate()
 		);
-		// Body bone rotation: UNMotionFrame のボーン回転は VMC target basis と同じ変換で VRM0 rest に合成する。
 		let applied = Mat4::from_cols_array(&scene.nodes[1].transform);
 		let expected_source = Quat::from_xyzw(-source_rotation.x, -source_rotation.y, source_rotation.z, source_rotation.w);
 		let expected_rotation = rest_rotation * expected_source;
 		let expected = Mat4::from_scale_rotation_translation(Vec3::ONE, expected_rotation, Vec3::new(0.2, 1.0, 0.0));
 		assert!(
 			(applied - expected).abs_diff_eq(Mat4::ZERO, 1e-5),
-			"UNMotion humanoid bone rotation must use the VRM0 target basis (got {:?}, expected {:?})",
+			"VRM0 UNMotion humanoid bone rotation must use the 1.0.0 target-basis conversion (got {:?}, expected {:?})",
 			applied,
 			expected
 		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_arm_limb_uses_unity_limb_axis_basis() {
+		let rest_rotation = Quat::from_rotation_y(0.25);
+		let rest_transform = Mat4::from_scale_rotation_translation(Vec3::ONE, rest_rotation, Vec3::new(0.2, 1.0, 0.0));
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: rest_transform.to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
+		});
+		let source_rotation = Quat::from_rotation_z(0.5);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![BoneSample {
+					bone: HumanoidBone::LeftLowerArm,
+					transform: TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: source_rotation.x,
+							y: source_rotation.y,
+							z: source_rotation.z,
+							w: source_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					confidence: 1.0,
+					source_index: Some(0),
+					state: SampleState::Valid,
+				}],
+			}),
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let applied = Mat4::from_cols_array(&scene.nodes[1].transform);
+		let source_in_limb_axis = Quat::from_xyzw(source_rotation.x, -source_rotation.y, -source_rotation.z, source_rotation.w);
+		let expected_rotation = rest_rotation * source_in_limb_axis;
+		let expected = Mat4::from_scale_rotation_translation(Vec3::ONE, expected_rotation, Vec3::new(0.2, 1.0, 0.0));
+		assert!(
+			(applied - expected).abs_diff_eq(Mat4::ZERO, 1e-5),
+			".unavatar UNMotion arm limb rotation must use the Unity humanoid limb-axis correction"
+		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_lower_arm_adapts_canonical_arm_axis_to_converted_rest_child_axis() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
+		});
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Z);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![BoneSample {
+					bone: HumanoidBone::LeftLowerArm,
+					transform: TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: source_rotation.x,
+							y: source_rotation.y,
+							z: source_rotation.z,
+							w: source_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					confidence: 1.0,
+					source_index: Some(0),
+					state: SampleState::Valid,
+				}],
+			}),
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let child_axis_after_rotation = applied * Vec3::Y;
+		let expected_axis = Vec3::Z;
+		assert!(
+			(child_axis_after_rotation - expected_axis).length() < 1e-5,
+			".unavatar lower arm rest child axis should follow the UNMotion canonical arm axis after target-basis conversion; got {:?}",
+			child_axis_after_rotation
+		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_arm_axis_adapter_includes_rest_rotation() {
+		let rest_rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::from_rotation_translation(rest_rotation, Vec3::ZERO).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftupperarm".to_string(), 1)].into_iter().collect(),
+		});
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Z);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![BoneSample {
+					bone: HumanoidBone::LeftUpperArm,
+					transform: TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: source_rotation.x,
+							y: source_rotation.y,
+							z: source_rotation.z,
+							w: source_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					confidence: 1.0,
+					source_index: Some(0),
+					state: SampleState::Valid,
+				}],
+			}),
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let child_axis_after_rotation = applied * Vec3::Y;
+		assert!(
+			(child_axis_after_rotation - Vec3::Z).length() < 1e-5,
+			".unavatar arm axis adapter must account for rest rotation; got {:?}",
+			child_axis_after_rotation
+		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_shoulder_axis_uses_humanoid_successor_not_first_decoration_child() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("Shoulder_Ribbon_FrontRoot_L".to_string()),
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("Upperarm_L".to_string()),
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftshoulder".to_string(), 1), ("leftupperarm".to_string(), 3)]
+				.into_iter()
+				.collect(),
+		});
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Z);
+		let frame = unmotion_body_frame(HumanoidBone::LeftShoulder, source_rotation);
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let humanoid_child_axis_after_rotation = applied * Vec3::Y;
+		assert!(
+			(humanoid_child_axis_after_rotation - Vec3::Z).length() < 1e-5,
+			".unavatar shoulder adapter must use the Humanoid successor child axis, not the first decoration child; got {:?}",
+			humanoid_child_axis_after_rotation
+		);
+	}
+
+	#[test]
+	fn unmotion_left_upper_arm_matches_vrm0_vrm1_and_equivalent_unavatar_world_axis() {
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Z);
+
+		let vrm0_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::from_rotation_y(std::f32::consts::PI).to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(-Vec3::X).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(-Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut vrm0_document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vrm0_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("leftupperarm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		vrm0_document.vrm = Some(un_avatar_core::UnaVrmExtension {
+			spec_version: "0.0".to_string(),
+			meta: serde_json::Value::Null,
+			humanoid_bones: Default::default(),
+			mtoon_materials_v0: vec![],
+			mtoon_material_indices_v1: vec![],
+			source: serde_json::Value::Null,
+		});
+		let vrm0_scene = apply_left_upper_arm_sample(vrm0_document, vrm0_rest_nodes, source_rotation);
+		let vrm0_axis = normalized_world_bone_axis(&vrm0_scene, 1, 2);
+
+		let vrm1_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let vrm1_document = UnaDocument {
+			vrm: Some(un_avatar_core::UnaVrmExtension {
+				spec_version: "1.0".to_string(),
+				meta: serde_json::Value::Null,
+				humanoid_bones: Default::default(),
+				mtoon_materials_v0: vec![],
+				mtoon_material_indices_v1: vec![],
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: vrm1_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("leftupperarm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let vrm1_scene = apply_left_upper_arm_sample(vrm1_document, vrm1_rest_nodes, source_rotation);
+		let vrm1_axis = normalized_world_bone_axis(&vrm1_scene, 1, 2);
+
+		let unavatar_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_2).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				children: vec![3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let unavatar_document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: unavatar_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("leftupperarm".to_string(), 2)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let unavatar_scene = apply_left_upper_arm_sample(unavatar_document, unavatar_rest_nodes, source_rotation);
+		let unavatar_axis = normalized_world_bone_axis(&unavatar_scene, 2, 3);
+
+		assert!(
+			(vrm0_axis - vrm1_axis).length() < 1e-5,
+			"VRM0 and VRM1 should agree in world space after root/basis normalization: vrm0={:?} vrm1={:?}",
+			vrm0_axis,
+			vrm1_axis
+		);
+		assert!(
+			(unavatar_axis - vrm1_axis).length() < 1e-5,
+			".unavatar +Y local arm chain equivalent to VRM1 +X should produce the same world axis: unavatar={:?} vrm1={:?}",
+			unavatar_axis,
+			vrm1_axis
+		);
+		assert!((vrm1_axis - Vec3::Z).length() < 1e-5);
+	}
+
+	#[test]
+	fn unavatar_unmotion_upper_arm_raise_matches_vrm1_world_axis() {
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Y);
+
+		let vrm1_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let vrm1_document = UnaDocument {
+			vrm: Some(un_avatar_core::UnaVrmExtension {
+				spec_version: "1.0".to_string(),
+				meta: serde_json::Value::Null,
+				humanoid_bones: Default::default(),
+				mtoon_materials_v0: vec![],
+				mtoon_material_indices_v1: vec![],
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: vrm1_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("leftupperarm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let vrm1_scene = apply_left_upper_arm_sample(vrm1_document, vrm1_rest_nodes, source_rotation);
+		let vrm1_axis = normalized_world_bone_axis(&vrm1_scene, 1, 2);
+
+		let unavatar_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				children: vec![3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let unavatar_document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: unavatar_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("leftupperarm".to_string(), 2)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let unavatar_scene = apply_left_upper_arm_sample(unavatar_document, unavatar_rest_nodes, source_rotation);
+		let unavatar_axis = normalized_world_bone_axis(&unavatar_scene, 2, 3);
+
+		assert!(
+			(unavatar_axis - vrm1_axis).length() < 1e-5,
+			".unavatar +Y upper-arm raise must match VRM1 +X upper-arm raise: unavatar={:?} vrm1={:?}",
+			unavatar_axis,
+			vrm1_axis
+		);
+		assert!((vrm1_axis - Vec3::Y).length() < 1e-5);
+	}
+
+	#[test]
+	fn unavatar_unmotion_hand_axis_uses_middle_finger_not_first_decoration_child() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("coat_hand_root_L".to_string()),
+				transform: Mat4::from_translation(-Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("Middle Proximal_L".to_string()),
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("lefthand".to_string(), 1), ("leftmiddleproximal".to_string(), 3)]
+				.into_iter()
+				.collect(),
+		});
+		let source_rotation = Quat::from_rotation_arc(-Vec3::X, Vec3::Z);
+		let frame = unmotion_body_frame(HumanoidBone::LeftHand, source_rotation);
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let middle_axis_after_rotation = applied * Vec3::Y;
+		assert!(
+			(middle_axis_after_rotation - Vec3::Z).length() < 1e-5,
+			".unavatar hand adapter must use the middle-finger Humanoid successor, not the first decoration child; got {:?}",
+			middle_axis_after_rotation
+		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_leg_axis_adapts_plus_y_chain_to_canonical_down_axis() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftupperleg".to_string(), 1), ("leftlowerleg".to_string(), 2)]
+				.into_iter()
+				.collect(),
+		});
+		let frame = unmotion_body_frame(HumanoidBone::LeftUpperLeg, Quat::IDENTITY);
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let lower_leg_axis = applied * Vec3::Y;
+		assert!(
+			(lower_leg_axis + Vec3::Y).length() < 1e-5,
+			".unavatar +Y leg chain must match the canonical UNMotion down axis; got {:?}",
+			lower_leg_axis
+		);
+	}
+
+	#[test]
+	fn unavatar_unmotion_foot_axis_uses_toe_child_not_first_decoration_child() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("Leg_frills_Root_L".to_string()),
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				name: Some("Toe_L".to_string()),
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftfoot".to_string(), 1)].into_iter().collect(),
+		});
+		let frame = unmotion_body_frame(HumanoidBone::LeftFoot, Quat::IDENTITY);
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let toe_axis = applied * Vec3::Y;
+		assert!(
+			(toe_axis - Vec3::Z).length() < 1e-5,
+			".unavatar foot adapter must use the toe child, not the first decoration child; got {:?}",
+			toe_axis
+		);
+	}
+
+	#[test]
+	fn body_hand_rotation_is_not_overwritten_by_hand_wrist_when_body_owns_hand_bone() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("lefthand".to_string(), 1)].into_iter().collect(),
+		});
+		let body_hand_rotation = Quat::from_rotation_y(0.4);
+		let wrist_rotation = Quat::from_rotation_y(-1.0);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![BoneSample {
+					bone: HumanoidBone::LeftHand,
+					transform: TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: body_hand_rotation.x,
+							y: body_hand_rotation.y,
+							z: body_hand_rotation.z,
+							w: body_hand_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					confidence: 1.0,
+					source_index: Some(0),
+					state: SampleState::Valid,
+				}],
+			}),
+		});
+		frame.left_hand = Some(HandMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			wrist: Some(TransformSample {
+				translation: None,
+				rotation: Some(Quatf {
+					x: wrist_rotation.x,
+					y: wrist_rotation.y,
+					z: wrist_rotation.z,
+					w: wrist_rotation.w,
+				}),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			}),
+			fingers: Vec::new(),
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let expected = Quat::from_xyzw(-body_hand_rotation.x, -body_hand_rotation.y, body_hand_rotation.z, body_hand_rotation.w);
+		assert!(
+			(applied.dot(expected).abs() - 1.0).abs() < 1e-5,
+			"body-owned LeftHand rotation must not be overwritten by HandMotion.wrist"
+		);
+	}
+
+	#[test]
+	fn unavatar_hand_wrist_fallback_uses_body_hand_axis_adapter_per_side() {
+		for (side_prefix, hand_key, middle_key, source_axis) in [
+			("left", "lefthand", "leftmiddleproximal", Vec3::X),
+			("right", "righthand", "rightmiddleproximal", -Vec3::X),
+		] {
+			let rest_nodes = vec![
+				unknown_node(),
+				UnaSceneNode {
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![2],
+					..unknown_node()
+				},
+				UnaSceneNode {
+					transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+					..unknown_node()
+				},
+			];
+			let mut document = UnaDocument::default();
+			document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::Value::Null,
+			});
+			document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+				meshes: vec![],
+				materials: vec![],
+				images: vec![],
+				image_sources: vec![],
+				skins: vec![],
+				nodes: rest_nodes.clone(),
+				roots: vec![0],
+				node_constraints: vec![],
+			});
+			document.humanoid_profile = Some(HumanoidProfile {
+				bone_node_indices: [(hand_key.to_string(), 1), (middle_key.to_string(), 2)]
+					.into_iter()
+					.collect(),
+			});
+			let mut frame = UNMotionFrame::new(0);
+			frame.header.coordinate_space = CoordinateSpace::UNMotion;
+			let hand = HandMotion {
+				tracking_state: TrackingState::Valid,
+				confidence: 1.0,
+				wrist: Some(TransformSample {
+					translation: None,
+					rotation: Some(quatf(Quat::IDENTITY)),
+					scale: None,
+					linear_velocity: None,
+					angular_velocity: None,
+				}),
+				fingers: Vec::new(),
+			};
+			if side_prefix == "left" {
+				frame.left_hand = Some(hand);
+			} else {
+				frame.right_hand = Some(hand);
+			}
+
+			apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+			let scene = document.scene.unwrap();
+			let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+			let middle_axis = applied * Vec3::Y;
+			assert!(
+				(middle_axis - source_axis).length() < 1e-5,
+				".unavatar HandMotion.wrist fallback must use the {side_prefix} hand axis adapter; got {:?}",
+				middle_axis
+			);
+		}
+	}
+
+	#[test]
+	fn unavatar_unmotion_hand_fingers_adapt_plus_y_chain_to_canonical_finger_axis() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("rightindexintermediate".to_string(), 1), ("rightindexdistal".to_string(), 2)]
+				.into_iter()
+				.collect(),
+		});
+		let source_rotation = Quat::from_rotation_z(-0.5);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.right_hand = Some(HandMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			wrist: None,
+			fingers: vec![FingerPose {
+				finger: Finger::Index,
+				joints: vec![
+					TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: 0.0,
+							y: 0.0,
+							z: 0.0,
+							w: 1.0,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: source_rotation.x,
+							y: source_rotation.y,
+							z: source_rotation.z,
+							w: source_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+				],
+				confidence: 1.0,
+			}],
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let axis_after_curl = applied * Vec3::Y;
+		let expected_axis = Quat::from_rotation_z(0.5) * -Vec3::X;
+		assert!(
+			(axis_after_curl - expected_axis).length() < 1e-5,
+			".unavatar +Y finger chain must match the VRM0/1.0.0 right-finger curl axis; got {:?}, expected {:?}",
+			axis_after_curl,
+			expected_axis
+		);
+	}
+
+	#[test]
+	fn unavatar_thumb_proximal_applies_live_unmotion_relative_curl() {
+		let rest_rotation = Quat::from_rotation_z(-0.5) * Quat::from_rotation_x(0.25);
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::from_quat(rest_rotation).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftthumbproximal".to_string(), 1), ("leftthumbintermediate".to_string(), 2)]
+				.into_iter()
+				.collect(),
+		});
+		let apply_thumb_rotation = |source_rotation: Quat| {
+			let mut document = document.clone();
+			let mut frame = UNMotionFrame::new(0);
+			frame.header.coordinate_space = CoordinateSpace::UNMotion;
+			frame.left_hand = Some(HandMotion {
+				tracking_state: TrackingState::Valid,
+				confidence: 1.0,
+				wrist: None,
+				fingers: vec![FingerPose {
+					finger: Finger::Thumb,
+					joints: vec![TransformSample {
+						translation: None,
+						rotation: Some(quatf(source_rotation)),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					}],
+					confidence: 1.0,
+				}],
+			});
+			apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+			let scene = document.scene.unwrap();
+			let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+			applied * Vec3::Y
+		};
+		let apply_thumb_y_curl = |curl: f32| apply_thumb_rotation(Quat::from_rotation_y(curl));
+
+		let neutral_axis = apply_thumb_y_curl(0.0);
+		let rest_axis = rest_rotation * Vec3::Y;
+		assert!(
+			(neutral_axis - rest_axis).length() < 1e-5,
+			".unavatar thumb proximal must keep Unity rest pose when live UNMotion sends identity; got {neutral_axis:?}"
+		);
+		let expected_axis = Quat::from_rotation_y(0.5) * rest_axis;
+		let actual_axis = apply_thumb_y_curl(0.5);
+		assert!(actual_axis.angle_between(expected_axis) < 1e-4);
+
+		let z_curl_axis = apply_thumb_rotation(Quat::from_euler(EulerRot::XYZ, 0.0, 0.0, 0.5));
+		assert!(
+			z_curl_axis.y < neutral_axis.y,
+			".unavatar thumb proximal Z curl must follow VRM0/1.0.0 curl direction instead of opening outward; neutral={neutral_axis:?} curled={z_curl_axis:?}"
+		);
+	}
+
+	#[test]
+	fn unavatar_thumb_intermediate_keeps_live_unmotion_y_sign() {
+		let rest_rotation = Quat::from_rotation_z(-0.35) * Quat::from_rotation_x(0.2);
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_scale_rotation_translation(Vec3::ONE, rest_rotation, Vec3::Y).to_cols_array(),
+				children: vec![3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [
+				("leftthumbproximal".to_string(), 1),
+				("leftthumbintermediate".to_string(), 2),
+				("leftthumbdistal".to_string(), 3),
+			]
+			.into_iter()
+			.collect(),
+		});
+		let source_rotation = Quat::from_rotation_y(0.5);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.left_hand = Some(HandMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			wrist: None,
+			fingers: vec![FingerPose {
+				finger: Finger::Thumb,
+				joints: vec![
+					TransformSample {
+						translation: None,
+						rotation: Some(quatf(Quat::IDENTITY)),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					TransformSample {
+						translation: None,
+						rotation: Some(quatf(source_rotation)),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+				],
+				confidence: 1.0,
+			}],
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		let neutral_axis = rest_rotation * Vec3::Y;
+		let actual_axis = applied * Vec3::Y;
+		let expected_axis = source_rotation * neutral_axis;
+		let reversed_axis = Quat::from_rotation_y(-0.5) * neutral_axis;
+		assert!(
+			actual_axis.angle_between(expected_axis) < actual_axis.angle_between(reversed_axis),
+			".unavatar thumb intermediate must preserve live UNMotion Y curl sign; got {actual_axis:?}, expected-sign {expected_axis:?}, reversed-sign {reversed_axis:?}"
+		);
+	}
+
+	#[test]
+	fn unavatar_vmc_humanoid_uses_unity_to_gltf_basis() {
+		let rest_rotation = Quat::from_rotation_y(0.25);
+		let rest_transform = Mat4::from_scale_rotation_translation(Vec3::ONE, rest_rotation, Vec3::new(0.2, 1.0, 0.0));
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: rest_transform.to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
+		});
+		let source_rotation = Quat::from_xyzw(0.1, 0.2, 0.3, 0.9).normalize();
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::Vmc;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(HumanoidPose {
+				root: None,
+				bones: vec![BoneSample {
+					bone: HumanoidBone::LeftLowerArm,
+					transform: TransformSample {
+						translation: None,
+						rotation: Some(Quatf {
+							x: source_rotation.x,
+							y: source_rotation.y,
+							z: source_rotation.z,
+							w: source_rotation.w,
+						}),
+						scale: None,
+						linear_velocity: None,
+						angular_velocity: None,
+					},
+					confidence: 1.0,
+					source_index: Some(0),
+					state: SampleState::Valid,
+				}],
+			}),
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let applied = Mat4::from_cols_array(&scene.nodes[1].transform);
+		let unity_to_gltf_rotation = Quat::from_xyzw(source_rotation.x, -source_rotation.y, -source_rotation.z, source_rotation.w);
+		let expected_rotation = rest_rotation * unity_to_gltf_rotation;
+		let expected = Mat4::from_scale_rotation_translation(Vec3::ONE, expected_rotation, Vec3::new(0.2, 1.0, 0.0));
+		assert!(
+			(applied - expected).abs_diff_eq(Mat4::ZERO, 1e-5),
+			".unavatar VMC bone rotation must use the Unity exporter's glTF basis conversion"
+		);
+	}
+
+	#[test]
+	fn face_head_transform_drives_head_bone() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.5, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument::default();
+		document.unavatar = Some(un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::Value::Null,
+		});
+		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
+			meshes: vec![],
+			materials: vec![],
+			images: vec![],
+			image_sources: vec![],
+			skins: vec![],
+			nodes: rest_nodes.clone(),
+			roots: vec![0],
+			node_constraints: vec![],
+		});
+		document.humanoid_profile = Some(HumanoidProfile {
+			bone_node_indices: [("head".to_string(), 1)].into_iter().collect(),
+		});
+		let head_rotation = Quat::from_rotation_y(0.3);
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.face = Some(FaceMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			head: Some(TransformSample {
+				translation: None,
+				rotation: Some(Quatf {
+					x: head_rotation.x,
+					y: head_rotation.y,
+					z: head_rotation.z,
+					w: head_rotation.w,
+				}),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			}),
+			expressions: vec![],
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, translation) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let expected = Quat::from_xyzw(head_rotation.x, -head_rotation.y, -head_rotation.z, head_rotation.w);
+		assert!((applied.dot(expected).abs() - 1.0).abs() < 1e-5);
+		assert!((translation - Vec3::new(0.0, 1.5, 0.0)).length() < 1e-5);
+	}
+
+	#[test]
+	fn vrm0_face_head_transform_uses_reference_vmc_basis() {
+		let rest_nodes = vec![
+			unknown_node(),
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.5, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				meshes: vec![],
+				materials: vec![],
+				images: vec![],
+				image_sources: vec![],
+				skins: vec![],
+				nodes: rest_nodes.clone(),
+				roots: vec![0],
+				node_constraints: vec![],
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("head".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let head_rotation = Quat::from_xyzw(0.1, 0.2, 0.3, 0.9).normalize();
+		let mut frame = UNMotionFrame::new(0);
+		frame.header.coordinate_space = CoordinateSpace::UNMotion;
+		frame.face = Some(FaceMotion {
+			tracking_state: TrackingState::Valid,
+			confidence: 1.0,
+			head: Some(TransformSample {
+				translation: Some(Vec3f { x: 1.0, y: 2.0, z: 3.0 }),
+				rotation: Some(Quatf {
+					x: head_rotation.x,
+					y: head_rotation.y,
+					z: head_rotation.z,
+					w: head_rotation.w,
+				}),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			}),
+			expressions: vec![],
+		});
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.unwrap();
+		let (_, applied, translation) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let expected = Quat::from_xyzw(-head_rotation.x, -head_rotation.y, head_rotation.z, head_rotation.w);
+		assert!((applied.dot(expected).abs() - 1.0).abs() < 1e-5);
+		assert!((translation - Vec3::new(1.0, 3.5, -3.0)).length() < 1e-5);
 	}
 
 	#[test]
@@ -1727,6 +3460,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
@@ -1765,6 +3499,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
@@ -1806,6 +3541,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
@@ -1850,6 +3586,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],

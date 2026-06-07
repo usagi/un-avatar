@@ -5,17 +5,18 @@
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaImagePixelFormat, UnaImageRgba,
-	UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers,
-	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
-	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset,
+	UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
+	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
+	UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaTextureFilterMode, UnaTextureSampler,
+	UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1306,6 +1307,34 @@ fn apply_blend_shape_weight(scene: &mut UnaSceneSnapshot, node_idx: usize, name:
 	applied
 }
 
+fn expression_catalog_from_morph_target_names(scene: &UnaSceneSnapshot) -> Option<UnaExpressionCatalog> {
+	let mut binds_by_name: BTreeMap<String, Vec<UnaMorphTargetBind>> = BTreeMap::new();
+	for (mesh_index, primitives) in scene.meshes.iter().enumerate() {
+		for (primitive_index, primitive) in primitives.iter().enumerate() {
+			for (morph_target_index, name) in primitive.morph_target_names.iter().enumerate() {
+				if name.is_empty() || morph_target_index >= primitive.morph_targets.len() {
+					continue;
+				}
+				binds_by_name.entry(name.clone()).or_default().push(UnaMorphTargetBind {
+					mesh_index,
+					primitive_index,
+					morph_target_index,
+					weight_scale: 1.0,
+				});
+			}
+		}
+	}
+	if binds_by_name.is_empty() {
+		return None;
+	}
+	Some(UnaExpressionCatalog {
+		presets: binds_by_name
+			.into_iter()
+			.map(|(name, binds)| UnaExpressionPreset { name, binds })
+			.collect(),
+	})
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WardrobeApplyReport {
 	pub visibility_applied: usize,
@@ -1383,6 +1412,18 @@ fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_
 	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
 	let set = sets.iter().find(|set| set.get("id").and_then(|v| v.as_str()) == Some(set_id))?;
 	set.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)
+}
+
+fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<(&'a str, &'a [Value])> {
+	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
+	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
+	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
+	let base = sets.iter().find(|set| {
+		set.get("id").and_then(|v| v.as_str()) == Some(base_set) || set.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
+	})?;
+	let id = base.get("id").and_then(|v| v.as_str()).unwrap_or(base_set);
+	let operations = base.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)?;
+	Some((id, operations))
 }
 
 fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
@@ -2042,77 +2083,37 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 }
 
 pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> Result<WardrobeApplyReport, String> {
-	let Some(unavatar) = document.unavatar.as_ref() else {
+	let Some(unavatar) = document.unavatar.clone() else {
 		return Err("document has no .unavatar extension".to_string());
 	};
-	let Some(operations) = unavatar_wardrobe_set_operations(unavatar, set_id) else {
+	let Some(operations) = unavatar_wardrobe_set_operations(&unavatar, set_id) else {
 		return Err(format!(".unavatar wardrobe set not found: {set_id}"));
 	};
 	let Some(scene) = document.scene.as_mut() else {
 		return Err("document has no scene".to_string());
 	};
-	Ok(apply_unavatar_wardrobe_operations(scene, operations, Some(unavatar)))
+	let base_id = unavatar_base_wardrobe_set(&unavatar).map(|(id, _)| id.to_string());
+	if base_id.as_deref() == Some(set_id) {
+		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) else {
+			return Ok(WardrobeApplyReport::default());
+		};
+		let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(&unavatar));
+		return Ok(apply_unavatar_wardrobe_operations(scene, &base_operations, Some(&unavatar)));
+	}
+	if base_id.as_deref() != Some(set_id) {
+		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) {
+			let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(&unavatar));
+			let _ = apply_unavatar_wardrobe_operations(scene, &base_operations, Some(&unavatar));
+		}
+	}
+	Ok(apply_unavatar_wardrobe_operations(scene, operations, Some(&unavatar)))
 }
 
 fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
-	let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) else {
+	let Some((filtered_operations, skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, unavatar) else {
 		return;
 	};
-	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
-	let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) else {
-		return;
-	};
-	let Some(base) = sets.iter().find(|set| {
-		set.get("id").and_then(|v| v.as_str()) == Some(base_set) || set.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
-	}) else {
-		return;
-	};
-	let Some(operations) = base.get("operations").and_then(|v| v.as_array()) else {
-		return;
-	};
-
-	let node_ids = scene_node_ids(scene);
-	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
-	let paths = scene_node_paths(scene);
-	let normalized_paths = scene_node_normalized_paths(scene);
-	let mut paths_by_index = vec![None; scene.nodes.len()];
-	for (path, idx) in &paths {
-		if let Some(slot) = paths_by_index.get_mut(*idx) {
-			*slot = Some(path.clone());
-		}
-	}
-	let base_hidden_paths = operations
-		.iter()
-		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
-		.flat_map(|op| {
-			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
-			if resolved.is_empty() {
-				vec![operation_target_path(op).to_string()]
-			} else {
-				resolved
-					.into_iter()
-					.filter_map(|idx| paths_by_index.get(idx).and_then(|p| p.clone()))
-					.collect::<Vec<_>>()
-			}
-		})
-		.filter(|path| !path.is_empty())
-		.collect::<Vec<_>>();
-	let filtered_operations: Vec<Value> = operations
-		.iter()
-		.filter(|op| {
-			!base_operation_is_inherited_hidden_under_base(
-				op,
-				&base_hidden_paths,
-				&node_ids,
-				&registry_paths,
-				&paths,
-				&normalized_paths,
-				&paths_by_index,
-			)
-		})
-		.cloned()
-		.collect();
-	let skipped = operations.len().saturating_sub(filtered_operations.len());
+	let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(unavatar));
 	let applied = apply_unavatar_wardrobe_operations(scene, &filtered_operations, Some(unavatar));
 	if applied.visibility_applied > 0 || applied.visibility_missing > 0 || applied.blendshape_applied > 0 || applied.blendshape_missing > 0
 	{
@@ -2279,6 +2280,107 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			}
 		})
 		.collect()
+}
+
+fn filtered_unavatar_base_wardrobe_operations(
+	scene: &UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<(Vec<Value>, usize, Vec<Value>)> {
+	let (_, operations) = unavatar_base_wardrobe_set(unavatar)?;
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut paths_by_index = vec![None; scene.nodes.len()];
+	for (path, idx) in &paths {
+		if let Some(slot) = paths_by_index.get_mut(*idx) {
+			*slot = Some(path.clone());
+		}
+	}
+	let mut parent_by_index = vec![None; scene.nodes.len()];
+	for (parent, node) in scene.nodes.iter().enumerate() {
+		for &child in &node.children {
+			if let Some(slot) = parent_by_index.get_mut(child) {
+				*slot = Some(parent);
+			}
+		}
+	}
+	let base_hidden_indices = operations
+		.iter()
+		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
+		.flat_map(|op| lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op))
+		.collect::<BTreeSet<_>>();
+	let base_hidden_paths = operations
+		.iter()
+		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
+		.flat_map(|op| {
+			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+			if resolved.is_empty() {
+				vec![operation_target_path(op).to_string()]
+			} else {
+				resolved
+					.into_iter()
+					.filter_map(|idx| paths_by_index.get(idx).and_then(|p| p.clone()))
+					.collect::<Vec<_>>()
+			}
+		})
+		.filter(|path| !path.is_empty())
+		.collect::<Vec<_>>();
+	let mut filtered_operations = Vec::with_capacity(operations.len());
+	let mut reset_operations = Vec::new();
+	for op in operations {
+		let mut skip_inherited_hidden = false;
+		let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
+		if matches!(
+			ty,
+			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
+		) && op.get("visible").and_then(|v| v.as_bool()) == Some(false)
+		{
+			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+			if !resolved.is_empty()
+				&& resolved.iter().all(|idx| {
+					let mut parent = parent_by_index.get(*idx).copied().flatten();
+					while let Some(parent_idx) = parent {
+						if base_hidden_indices.contains(&parent_idx) {
+							return true;
+						}
+						parent = parent_by_index.get(parent_idx).copied().flatten();
+					}
+					false
+				}) {
+				skip_inherited_hidden = true;
+			}
+		}
+		if !skip_inherited_hidden {
+			skip_inherited_hidden = base_operation_is_inherited_hidden_under_base(
+				op,
+				&base_hidden_paths,
+				&node_ids,
+				&registry_paths,
+				&paths,
+				&normalized_paths,
+				&paths_by_index,
+			);
+		}
+		if skip_inherited_hidden {
+			let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
+			if matches!(
+				ty,
+				"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
+			) && op.get("visible").and_then(|v| v.as_bool()) == Some(false)
+			{
+				let mut reset = op.clone();
+				if let Some(object) = reset.as_object_mut() {
+					object.insert("visible".to_string(), Value::Bool(true));
+				}
+				reset_operations.push(reset);
+			}
+			continue;
+		}
+		filtered_operations.push(op.clone());
+	}
+	let skipped = operations.len().saturating_sub(filtered_operations.len());
+	Some((filtered_operations, skipped, reset_operations))
 }
 
 fn texture_info_uv_offset_scale(info: gltf::texture::Info<'_>) -> Option<[f32; 4]> {
@@ -4633,6 +4735,14 @@ impl AvatarImporter for GltfImporter {
 		let humanoid_profile = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
+		let expression_catalog = if unavatar.is_some() {
+			expression_catalog_from_morph_target_names(&scene)
+		} else {
+			None
+		};
+		if let Some(catalog) = &expression_catalog {
+			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
+		}
 
 		report.status = if report.lost_features.is_empty() && report.approximations.is_empty() {
 			ReportStatus::Success
@@ -4660,6 +4770,8 @@ impl AvatarImporter for GltfImporter {
 				scene: Some(scene),
 				unavatar,
 				humanoid_profile,
+				expression_weights: expression_catalog.as_ref().map(|_| UnaExpressionWeights::default()),
+				expression_catalog,
 				..Default::default()
 			},
 			report,
@@ -5097,6 +5209,64 @@ mod tests {
 	}
 
 	#[test]
+	fn imports_single_bone_skin_unavatar_through_common_scene_skinning() {
+		let mut root: Value = serde_json::from_str(include_str!("../tests/fixtures/skin_one_bone.gltf")).unwrap();
+		if let Some(buffer) = root
+			.get_mut("buffers")
+			.and_then(Value::as_array_mut)
+			.and_then(|buffers| buffers.get_mut(0))
+			.and_then(Value::as_object_mut)
+		{
+			buffer.remove("uri");
+		}
+		root["extensionsUsed"] = serde_json::json!(["UN_avatar"]);
+		root["extensions"] = serde_json::json!({
+			"UN_avatar": {
+				"specVersion": "0.1-preview",
+				"generator": "test"
+			}
+		});
+		let bin = skin_one_bone_bin_bytes();
+		let views = root
+			.get("bufferViews")
+			.and_then(Value::as_array)
+			.unwrap()
+			.iter()
+			.map(|view| {
+				let byte_offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+				let byte_length = view.get("byteLength").and_then(Value::as_u64).unwrap() as usize;
+				GltfBufferViewBytes {
+					bytes: bin[byte_offset..byte_offset + byte_length].to_vec(),
+					target: view.get("target").cloned(),
+				}
+			})
+			.collect::<Vec<_>>();
+		let bytes = rebuild_glb(&mut root, &views).unwrap();
+
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp
+			.import(
+				&mut ctx,
+				ImportInput::Bytes {
+					bytes: bytes.into(),
+					path_hint: Some(std::path::PathBuf::from("skin.unavatar")),
+				},
+				ImportOptions,
+			)
+			.unwrap();
+		let sc = got.document.scene.as_ref().unwrap();
+		assert!(got.document.unavatar.is_some());
+		assert_eq!(sc.skins.len(), 1);
+		assert_eq!(sc.nodes[0].skin, Some(0));
+		assert_eq!(sc.skins[0].joint_nodes, vec![1]);
+		assert_eq!(sc.skins[0].inverse_bind_matrices.len(), 1);
+		let prim = &sc.meshes[0][0];
+		assert_eq!(prim.joints.as_ref().unwrap().len(), 3);
+		assert_eq!(prim.weights.as_ref().unwrap().len(), 3);
+	}
+
+	#[test]
 	fn imports_unavatar_extension_from_glb() {
 		let dir = std::env::temp_dir().join(format!("un-avatar-unavatar-test-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&dir);
@@ -5218,6 +5388,20 @@ mod tests {
 									"value": 0
 								}
 							]
+						}, {
+							"id": "child_hidden",
+							"operations": [
+								{
+									"type": "subtreeEnabled",
+									"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
+									"visible": true
+								},
+								{
+									"type": "subtreeEnabled",
+									"target": {"nodeId": "node_hidden_child", "path": "Wrong Path"},
+									"visible": false
+								}
+							]
 						}]
 					}
 				}
@@ -5239,6 +5423,11 @@ mod tests {
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
+		let expressions = got.document.expression_catalog.as_ref().expect("expression catalog");
+		assert_eq!(expressions.presets.len(), 1);
+		assert_eq!(expressions.presets[0].name, "Shrink");
+		assert_eq!(expressions.presets[0].binds.len(), 1);
+		assert!(got.document.expression_weights.is_some());
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
 		assert!(scene.materials[0].liltoon_like.is_some());
 		let mtoon = scene.materials[0].mtoon.as_ref().unwrap();
@@ -5246,6 +5435,32 @@ mod tests {
 		assert_eq!(mtoon.shading_shift_factor, -0.1);
 		assert_eq!(mtoon.outline_width_mode, UnaMtoonOutlineWidthMode::WorldCoordinates);
 		assert!((mtoon.outline_width_factor - 0.0003).abs() < 1e-8);
+		let applied = apply_unavatar_wardrobe_set(&mut got.document, "visible").unwrap();
+		assert_eq!(applied.visibility_applied, 1);
+		assert_eq!(applied.visibility_missing, 0);
+		assert_eq!(applied.blendshape_applied, 1);
+		assert_eq!(applied.blendshape_missing, 0);
+		let scene = got.document.scene.as_ref().unwrap();
+		assert!(scene.nodes[1].visible);
+		assert!(scene.nodes[3].visible);
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
+		let applied = apply_unavatar_wardrobe_set(&mut got.document, "base").unwrap();
+		assert_eq!(applied.visibility_applied, 2);
+		assert_eq!(applied.visibility_missing, 0);
+		assert_eq!(applied.blendshape_applied, 1);
+		assert_eq!(applied.blendshape_missing, 0);
+		let scene = got.document.scene.as_ref().unwrap();
+		assert!(!scene.nodes[1].visible);
+		assert!(scene.nodes[3].visible);
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
+		let applied = apply_unavatar_wardrobe_set(&mut got.document, "child_hidden").unwrap();
+		assert_eq!(applied.visibility_applied, 2);
+		assert_eq!(applied.visibility_missing, 0);
+		assert_eq!(applied.blendshape_applied, 0);
+		assert_eq!(applied.blendshape_missing, 0);
+		let scene = got.document.scene.as_ref().unwrap();
+		assert!(scene.nodes[1].visible);
+		assert!(!scene.nodes[3].visible);
 		let applied = apply_unavatar_wardrobe_set(&mut got.document, "visible").unwrap();
 		assert_eq!(applied.visibility_applied, 1);
 		assert_eq!(applied.visibility_missing, 0);
