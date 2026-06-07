@@ -33,7 +33,7 @@ v1.0.0 時点の実装で確認できる重要な前提。
 - 初期実装は分割 extension 群ではなく単一 `UN_avatar` extension を正本にする。安定後に `UN_avatar_manifest` などへ分割できる JSON 構造にしておく。
 - `UNToon` は v2 では lilToon 互換を主軸に再定義する。開発中の実装名は `UnaLilToonLikeMaterial` とし、MToon / VRM material は後段で lilToon-like 表現へ変換する入力として扱う。lilToon 表現を MToon 互換の範囲に押し込めない。
 - `UNA Toon Material` は既存 `UnaMtoonMaterial` / `UnaMaterialPbr` の実装資産を必要な範囲で参照する。ただし設計上の基準は MToon-like ではなく lilToon-compatible とする。
-- PhysBone は新 physics engine として作り直すのではなく、まず既存 SpringBone runtime primitive へ近似変換する。
+- VRM SpringBone / VRC PhysBone は source format ごとの component として直接 solver へ渡さず、U.N. dynamics runtime model へ正規化する。PhysBone は新 physics engine として作り直すのではなく、まず既存 SpringBone runtime primitive へ近似変換する。
 - Expressions は現状 morph 中心。material color、texture switch、node visibility、variant は v2 で `UnaDocument` と renderer control へ拡張する対象。
 - Unity Exporter MVP は repo 内 Rust exporter の完成を待たず、Unity 側で GLB + `UN_avatar` extension を書ける構成を許容する。
 - Unity Exporter は同一 repo に内包する。ただし UPM package として隔離し、Rust workspace / Runtime / 通常 CI は Unity に依存させない。
@@ -223,9 +223,11 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - WGSL 実装では MIT License の [lilToon](https://github.com/lilxyzw/lilToon) を主要な shader behavior reference として読む。MToon 互換側は MIT License の [MToon](https://github.com/Santarh/MToon) を参照する。U.N. Avatar は独立実装だが、実質的な移植を行った箇所は third-party notice を維持する。
 - 機能単位の互換方針は [`untoon-liltoon-compatibility.md`](untoon-liltoon-compatibility.md) を正とする。画像差分から係数を闇雲に合わせず、lilToon 本家の Main / Shadow / Normal / MatCap / Reflection / Rim / Outline を順に確認して UNToon v2 へ実装する。
 
-### Milestone 6: PhysBone to U.N. dynamics
+### Milestone 6: SpringBone / PhysBone to U.N. dynamics
 
+- VRM SpringBone と VRC PhysBone を共通の U.N. dynamics runtime model へ正規化する。
 - VRC PhysBone root / collider / radius / pull / spring / stiffness / gravity の近似抽出。
+- VRM SpringBone と VRC PhysBone の source metadata は保持しつつ、solver 入力は正規化済み runtime dynamics state にする。
 - 既存 SpringBone runtime primitive へ変換する。
 - debug view と tuning UI を追加する。
 

@@ -137,7 +137,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[ ]` MA Convert Constraints
   - required: identify constraints that affect render transform and convert to Runtime-supported node constraints or report unsupported.
 - `[ ]` MA Global Collider / PhysBone Blocker
-  - required: integrate with VRC PhysBone to U.N. dynamics plan.
+  - required: capture blocker / collider intent and feed resolved state into the U.N. dynamics normalization layer.
+  - note: PhysBone behavior is not owned by the Modular Avatar resolver; it is lowered through the SpringBone / PhysBone to U.N. dynamics plan.
 - `[ ]` MA Floor Adjuster
   - required: avatar root transform / floor offset handling.
 - `[ ]` MA Platform Filter
