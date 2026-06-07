@@ -398,7 +398,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 		return rotation;
 	}
 	let rotation_in_parent = parent_world_rotation.inverse() * rotation * parent_world_rotation;
-	let parent_space_delta = if finger_key == "thumb" && segment == "proximal" {
+	let parent_space_delta = if finger_key == "thumb" {
 		rotation_in_parent.normalize()
 	} else {
 		let desired_axis = (rotation_in_parent * source_axis_in_parent).normalize_or_zero();
