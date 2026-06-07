@@ -7680,8 +7680,12 @@ impl SceneMeshes {
 				self.expression_value_scratch.push(value);
 			}
 		}
-		self.active_skin_palette_scratch.clear();
-		self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
+		if self.active_skin_palette_scratch.len() == self.skin_palettes.len() {
+			self.active_skin_palette_scratch.fill(false);
+		} else {
+			self.active_skin_palette_scratch.clear();
+			self.active_skin_palette_scratch.resize(self.skin_palettes.len(), false);
+		}
 		for draw in &self.draws {
 			if draw.active {
 				if let Some(slot) = self.active_skin_palette_scratch.get_mut(draw.skin_palette_index) {
