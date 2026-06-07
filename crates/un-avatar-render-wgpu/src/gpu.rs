@@ -3018,8 +3018,6 @@ impl GpuState {
 			}
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
-		let (gw, gh) = self.render_pixel_dims();
-		self.write_globals(gw, gh);
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
 		if let (Some(doc_arc), true) = (
 			&self.document,
