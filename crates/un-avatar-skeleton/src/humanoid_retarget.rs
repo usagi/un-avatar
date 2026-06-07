@@ -416,6 +416,12 @@ struct FingerNodeBinding {
 	successor_node_index: Option<usize>,
 }
 
+#[derive(Debug, Default)]
+struct ExpressionNameLookup {
+	exact_ascii_casefold: BTreeMap<String, String>,
+	normalized: BTreeMap<String, String>,
+}
+
 impl RetargetRestCache {
 	fn new(nodes: &[UnaSceneNode], roots: &[usize]) -> Self {
 		let (local_rotations, local_translations): (Vec<_>, Vec<_>) = nodes
@@ -476,6 +482,7 @@ pub struct HumanoidRetargetContext {
 	base_transforms: BTreeMap<usize, NodeRestTransform>,
 	body_bone_nodes: Vec<BodyBoneNodeBinding>,
 	finger_nodes: BTreeMap<FingerProfileSegment, FingerNodeBinding>,
+	expression_lookup: ExpressionNameLookup,
 	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
 
@@ -498,6 +505,7 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(|profile| precompute_finger_nodes(profile, &profile_lookup))
 			.unwrap_or_default();
+		let expression_lookup = precompute_expression_lookup(document);
 		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
 			document.scene.as_ref().map(|scene| {
 				let rest = rest_nodes.unwrap_or(&scene.nodes);
@@ -512,6 +520,7 @@ impl HumanoidRetargetContext {
 			base_transforms,
 			body_bone_nodes,
 			finger_nodes,
+			expression_lookup,
 			unavatar_adapter,
 		}
 	}
@@ -605,6 +614,24 @@ fn precompute_finger_nodes(
 		);
 	}
 	nodes
+}
+
+fn precompute_expression_lookup(document: &UnaDocument) -> ExpressionNameLookup {
+	let Some(catalog) = document.expression_catalog.as_ref() else {
+		return ExpressionNameLookup::default();
+	};
+	let mut lookup = ExpressionNameLookup::default();
+	for preset in &catalog.presets {
+		lookup
+			.exact_ascii_casefold
+			.entry(preset.name.to_ascii_lowercase())
+			.or_insert_with(|| preset.name.clone());
+		lookup
+			.normalized
+			.entry(normalize_expression_match_key(&preset.name))
+			.or_insert_with(|| preset.name.clone());
+	}
+	lookup
 }
 
 fn precompute_unavatar_rest_axes(
@@ -1602,20 +1629,31 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					// 完全一致（ASCII case 無視）優先、見つからなければ ARKit BlendShape の表記揺れに耐性のある
 					// 正規化マッチ（区切り文字除去 + 全部小文字）でリトライする。
 					// 例: VMC `mouthSmileLeft` / `MouthSmileLeft` / `Mouth_Smile_Left` を同じ preset へ。
-					let preset = cat
-						.presets
-						.iter()
-						.find(|p| p.name.eq_ignore_ascii_case(ex.name.as_str()))
+					let preset_name = context
+						.expression_lookup
+						.exact_ascii_casefold
+						.get(&ex.name.to_ascii_lowercase())
 						.or_else(|| {
 							let target = normalize_expression_match_key(&ex.name);
-							cat.presets.iter().find(|p| normalize_expression_match_key(&p.name) == target)
+							context.expression_lookup.normalized.get(&target)
+						})
+						.cloned()
+						.or_else(|| {
+							cat.presets
+								.iter()
+								.find(|p| p.name.eq_ignore_ascii_case(ex.name.as_str()))
+								.or_else(|| {
+									let target = normalize_expression_match_key(&ex.name);
+									cat.presets.iter().find(|p| normalize_expression_match_key(&p.name) == target)
+								})
+								.map(|preset| preset.name.clone())
 						});
-					if let Some(preset) = preset {
+					if let Some(preset_name) = preset_name {
 						let value = ex.value.clamp(0.0, 1.0);
-						if let Some(weight) = ew.preset_weights.get_mut(&preset.name) {
+						if let Some(weight) = ew.preset_weights.get_mut(&preset_name) {
 							*weight = value;
 						} else {
-							ew.preset_weights.insert(preset.name.clone(), value);
+							ew.preset_weights.insert(preset_name, value);
 						}
 					}
 				}

@@ -128,6 +128,8 @@ Body Humanoid bone node bindings are also compiled into the context, so body
 pose application does not resolve profile strings for each received bone sample.
 Body, face-head, and hand-wrist application share the node-index transform path;
 only compatibility fallback paths resolve profile strings at runtime.
+Expression preset name matching is also compiled into exact-casefold and
+normalized lookup tables, avoiding catalog scans for each PerfectSync sample.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
 The context also stores finger segment node bindings, including successor node
