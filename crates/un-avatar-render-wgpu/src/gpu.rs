@@ -1596,10 +1596,10 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return false;
 		};
-		let Some(sc) = &doc.scene else {
+		let runtime_model = doc.runtime_model();
+		let Some(sc) = runtime_model.scene() else {
 			return false;
 		};
-		let runtime_model = doc.runtime_model();
 		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
 		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
 		if document_changed && !expression_presets_match_catalog(&self.expression_presets, runtime_model.expression_catalog()) {
@@ -1910,7 +1910,8 @@ impl GpuState {
 			self.bone_collider_vertex_count = 0;
 			return;
 		};
-		let Some(scene) = doc.scene.as_ref() else {
+		let runtime_model = doc.runtime_model();
+		let Some(scene) = runtime_model.scene() else {
 			self.bone_collider_vertex_count = 0;
 			return;
 		};

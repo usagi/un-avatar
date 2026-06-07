@@ -9,7 +9,8 @@ fn json_number_f(v: &Value) -> Option<f32> {
 
 /// `--debug-material-dump` 用: スキン本数と、目周り候補マテリアルの UNA / VRM 生情報。
 pub fn log_material_skin_report(doc: &UnaDocument) {
-	let Some(sc) = &doc.scene else {
+	let runtime_model = doc.runtime_model();
+	let Some(sc) = runtime_model.scene() else {
 		eprintln!("[debug-material] scene なし");
 		return;
 	};

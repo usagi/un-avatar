@@ -3836,7 +3836,8 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	};
 	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref())
 		.map_err(|e| format!("skin tone matching dump: model import failed: {}: {e}", path.display()))?;
-	let Some(scene) = document.scene.as_ref() else {
+	let runtime_model = document.runtime_model();
+	let Some(scene) = runtime_model.scene() else {
 		return Err(format!("skin tone matching dump: model has no scene: {}", path.display()));
 	};
 	let debug = mesh_pass::skin_tone_matching_debug_for_scene(scene);
