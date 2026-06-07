@@ -475,8 +475,16 @@ Unity Exporter は次の出力モードを持つ。
     {
       "id": "hair_front",
       "source": "vrc_physbone",
-      "roots": [120],
+      "enabled": true,
+      "roots": [
+        {
+          "nodeId": "node-hair-front",
+          "path": "Armature/Hips/Spine/Chest/Neck/Head/HairFront"
+        }
+      ],
       "colliders": [0, 1],
+      "pull": 0.2,
+      "spring": 0.35,
       "stiffness": 0.35,
       "drag": 0.2,
       "gravity": [0.0, -0.4, 0.0],
@@ -496,6 +504,7 @@ Unity Exporter は次の出力モードを持つ。
 ```
 
 v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runtime primitive へ近似変換する。
+`roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
 
 ## 10. Provenance And License
 

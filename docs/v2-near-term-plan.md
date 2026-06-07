@@ -53,6 +53,7 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 この段階でやること:
 
 - `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、runtime dynamics view の最小形を決める。
+- Unity Exporter は現在有効な VRC PhysBone component を `.unavatar` `dynamics[]` へ近似出力し、Runtime importer が SpringBone-like group へ lower する。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
 - PhysBone behavior の詳細再現は Wardrobe hot switch と action model の後まで待つ。
 

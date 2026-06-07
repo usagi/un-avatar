@@ -1378,6 +1378,9 @@ fn unavatar_dynamics_settings(
 	let mut short_chains = 0usize;
 
 	for item in dynamics {
+		if item.get("enabled").and_then(Value::as_bool) == Some(false) {
+			continue;
+		}
 		let Some(roots) = item.get("roots").or_else(|| item.get("root")).or_else(|| item.get("rootNode")) else {
 			missing_roots += 1;
 			continue;
@@ -5034,6 +5037,11 @@ mod tests {
 					"drag": 0.2,
 					"gravity": [0.0, -0.4, 0.0],
 					"radius": 0.03
+				}, {
+					"id": "disabled_tail",
+					"source": "vrc_physbone",
+					"enabled": false,
+					"roots": [{"nodeId": "node_root", "path": "Root"}]
 				}]
 			}),
 		};

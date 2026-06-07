@@ -37,6 +37,7 @@ namespace UNAvatar.UnityExporter
                 },
                 ["humanoid"] = humanoid,
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
+                ["dynamics"] = BuildDynamicsPayload(registryRoot),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot),

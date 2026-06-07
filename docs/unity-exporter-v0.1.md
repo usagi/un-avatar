@@ -186,15 +186,17 @@ preview exporter では per-set bake を行わない。Export 対象 clone は B
 
 PhysBone は完全互換ではなく、Runtime の軽量 dynamics へ近似する。
 
-抽出候補。
+Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone` を反射で検出する。現在有効な PhysBone component だけを `UN_avatar.dynamics[]` に出力し、Runtime importer が SpringBone-like runtime group へ lower する。
+
+初期抽出。
 
 - root transform
-- endpoint / child chain
+- child chain
 - radius
-- stiffness / pull / spring / drag 相当
+- stiffness / pull / spring
 - gravity
-- colliders
-- exclusions の一部
+
+現段階では `drag` は runtime default 相当、colliders / exclusions / limits は source metadata または将来対応の対象に留める。
 
 Contacts / interactions / limits の完全再現は非目標。
 
