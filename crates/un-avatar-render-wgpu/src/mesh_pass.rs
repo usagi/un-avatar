@@ -1532,7 +1532,7 @@ fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool
 	out.clear();
 	out.resize(scene.nodes.len(), false);
 	if scene.roots.is_empty() {
-		for root in scene_visibility_roots(scene) {
+		for root in scene_parentless_visibility_roots(scene) {
 			visit(scene, root, true, out);
 		}
 	} else {
@@ -1542,10 +1542,7 @@ fn write_scene_effective_visibility(scene: &UnaSceneSnapshot, out: &mut Vec<bool
 	}
 }
 
-fn scene_visibility_roots(scene: &UnaSceneSnapshot) -> Vec<usize> {
-	if !scene.roots.is_empty() {
-		return scene.roots.clone();
-	}
+fn scene_parentless_visibility_roots(scene: &UnaSceneSnapshot) -> Vec<usize> {
 	parentless_roots(&scene.nodes)
 }
 
