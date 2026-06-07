@@ -1634,10 +1634,12 @@ impl GpuState {
 		let Ok(mut doc) = doc_arc.write() else {
 			return;
 		};
-		let Some(settings) = doc.spring_bones.clone() else {
-			return;
-		};
-		let Some(scene) = doc.scene.as_mut() else {
+		let UnaDocument {
+			scene,
+			spring_bones,
+			..
+		} = &mut *doc;
+		let (Some(scene), Some(settings)) = (scene.as_mut(), spring_bones.as_ref()) else {
 			return;
 		};
 		for node_index in settings.groups.iter().flat_map(|group| group.bone_node_indices.iter().copied()) {
