@@ -1683,7 +1683,7 @@ impl GpuState {
 		} else {
 			None
 		};
-		self.bone_colliders = colliders;
+		self.bone_colliders = if self.spring_sim.is_some() { Vec::new() } else { colliders };
 	}
 
 	fn reset_spring_bone_nodes_to_rest(&mut self) {
@@ -2590,6 +2590,7 @@ impl GpuSceneBuildContext {
 		}
 		let document_wrapped = Arc::new(RwLock::new(document));
 		let bone_collider_stats = collider_stats(&bone_colliders);
+		let bone_colliders = if spring_sim.is_some() { Vec::new() } else { bone_colliders };
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
 			rest_nodes,
