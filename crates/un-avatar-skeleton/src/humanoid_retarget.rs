@@ -1549,12 +1549,10 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
 ) {
-	let local_adapter = (frame_ctx.needs_unavatar_unmotion_adapter() && frame_ctx.unavatar_adapter.is_none())
-		.then(|| UnavatarRetargetAdapter::new(Some(profile), rest_nodes.unwrap_or(nodes), roots, &BTreeMap::new()));
 	let frame_ctx = RetargetFrameContext::new(
 		frame_ctx.coordinate_space,
 		frame_ctx.target_basis,
-		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
+		frame_ctx.unavatar_adapter,
 		frame_ctx.runtime,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
