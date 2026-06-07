@@ -39,7 +39,7 @@ pub(crate) fn write_world_from_nodes(scene: &UnaSceneSnapshot, world: &mut Vec<M
 	}
 }
 
-fn parentless_roots(nodes: &[UnaSceneNode]) -> Vec<usize> {
+pub(crate) fn parentless_roots(nodes: &[UnaSceneNode]) -> Vec<usize> {
 	let mut has_parent = vec![false; nodes.len()];
 	for node in nodes {
 		for &child in &node.children {
