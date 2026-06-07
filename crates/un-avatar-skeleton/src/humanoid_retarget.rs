@@ -1,6 +1,7 @@
 //! Humanoid リターゲット：`UNMotionFrame` → `UnaSceneSnapshot` ノード局所行列。
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
+use std::collections::BTreeMap;
 use un_avatar_core::{
 	UnaDocument, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneNode, UnaSceneSnapshot,
 };
@@ -196,14 +197,21 @@ struct RetargetFrameContext<'a> {
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
 	rest_cache: Option<&'a RetargetRestCache>,
+	profile_lookup: Option<&'a BTreeMap<String, usize>>,
 }
 
 impl<'a> RetargetFrameContext<'a> {
-	fn new(coordinate_space: CoordinateSpace, target_basis: TargetHumanoidBasis, rest_cache: Option<&'a RetargetRestCache>) -> Self {
+	fn new(
+		coordinate_space: CoordinateSpace,
+		target_basis: TargetHumanoidBasis,
+		rest_cache: Option<&'a RetargetRestCache>,
+		profile_lookup: Option<&'a BTreeMap<String, usize>>,
+	) -> Self {
 		Self {
 			coordinate_space,
 			target_basis,
 			rest_cache,
+			profile_lookup,
 		}
 	}
 
@@ -307,6 +315,7 @@ fn rest_named_child_axis_in_parent(
 
 fn rest_humanoid_child_axis_in_parent(
 	profile: &HumanoidProfile,
+	profile_lookup: Option<&BTreeMap<String, usize>>,
 	nodes: &[UnaSceneNode],
 	cache: Option<&RetargetRestCache>,
 	node_index: usize,
@@ -314,7 +323,7 @@ fn rest_humanoid_child_axis_in_parent(
 ) -> Option<(Quat, Vec3)> {
 	if let UnmotionHumanoidRole::BodyBone(bone) = role {
 		if let Some(key) = humanoid_successor_profile_key(bone) {
-			if let Some(child_index) = profile_node_index(profile, key) {
+			if let Some(child_index) = profile_node_index_with_lookup(profile, profile_lookup, key) {
 				if let Some(axis) = rest_child_axis_from_direct_child_cached(nodes, cache, node_index, child_index) {
 					return Some(axis);
 				}
@@ -380,12 +389,18 @@ impl RetargetRestCache {
 #[derive(Debug)]
 pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
+	profile_lookup: BTreeMap<String, usize>,
 	unavatar_rest_cache: Option<RetargetRestCache>,
 }
 
 impl HumanoidRetargetContext {
 	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
 		let target_basis = target_humanoid_basis(document);
+		let profile_lookup = document
+			.humanoid_profile
+			.as_ref()
+			.map(precompute_profile_lookup)
+			.unwrap_or_default();
 		let unavatar_rest_cache = if target_basis == TargetHumanoidBasis::UnavatarUnity {
 			document.scene.as_ref().map(|scene| RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots))
 		} else {
@@ -393,6 +408,7 @@ impl HumanoidRetargetContext {
 		};
 		Self {
 			target_basis,
+			profile_lookup,
 			unavatar_rest_cache,
 		}
 	}
@@ -401,8 +417,16 @@ impl HumanoidRetargetContext {
 		let rest_cache = (coordinate_space == CoordinateSpace::UNMotion)
 			.then_some(self.unavatar_rest_cache.as_ref())
 			.flatten();
-		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache)
+		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache, Some(&self.profile_lookup))
 	}
+}
+
+fn precompute_profile_lookup(profile: &HumanoidProfile) -> BTreeMap<String, usize> {
+	let mut lookup = BTreeMap::new();
+	for (key, &index) in &profile.bone_node_indices {
+		lookup.entry(normalize_profile_match_key(key)).or_insert(index);
+	}
+	lookup
 }
 
 fn adapt_unavatar_unmotion_limb_axis(
@@ -429,7 +453,9 @@ fn adapt_unavatar_unmotion_limb_axis(
 		local_cache = RetargetRestCache::new(rest, roots);
 		&local_cache
 	};
-	let Some((rest_rotation, target_axis)) = rest_humanoid_child_axis_in_parent(profile, rest, Some(cache), node_index, role) else {
+	let Some((rest_rotation, target_axis)) =
+		rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup, rest, Some(cache), node_index, role)
+	else {
 		return rotation;
 	};
 	let parent_world_rotation = cache.parent_world_rotation(node_index);
@@ -511,7 +537,7 @@ fn adapt_unavatar_unmotion_finger_axis(
 		&local_cache
 	};
 	let axis = successor_key
-		.and_then(|key| profile_node_index(profile, key))
+		.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
 		.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
 		.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index));
 	let Some((rest_rotation, target_axis)) = axis else {
@@ -546,7 +572,7 @@ fn apply_humanoid_transform_to_profile_node(
 	transform: &TransformSample,
 	role: UnmotionHumanoidRole,
 ) {
-	let Some(ni) = profile_node_index(profile, key) else {
+	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
 		return;
 	};
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, role);
@@ -596,7 +622,7 @@ fn apply_finger_transform_to_profile_node(
 	segment: &str,
 	transform: &TransformSample,
 ) {
-	let Some(ni) = profile_node_index(profile, key) else {
+	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
 		return;
 	};
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, UnmotionHumanoidRole::HandFinger);
@@ -623,14 +649,20 @@ fn apply_finger_transform_to_profile_node(
 	}
 }
 
-fn profile_node_index(profile: &HumanoidProfile, key: &str) -> Option<usize> {
+fn profile_node_index_with_lookup(
+	profile: &HumanoidProfile,
+	lookup: Option<&BTreeMap<String, usize>>,
+	key: &str,
+) -> Option<usize> {
 	profile.bone_node_indices.get(key).copied().or_else(|| {
 		let target = normalize_profile_match_key(key);
-		profile
-			.bone_node_indices
-			.iter()
-			.find(|(candidate, _)| normalize_profile_match_key(candidate) == target)
-			.map(|(_, index)| *index)
+		lookup.and_then(|lookup| lookup.get(&target).copied()).or_else(|| {
+			profile
+				.bone_node_indices
+				.iter()
+				.find(|(candidate, _)| normalize_profile_match_key(candidate) == target)
+				.map(|(_, index)| *index)
+		})
 	})
 }
 
@@ -976,7 +1008,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -997,7 +1029,12 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 ) {
 	let local_cache = (frame_ctx.needs_unavatar_unmotion_adapter() && frame_ctx.rest_cache.is_none())
 		.then(|| RetargetRestCache::new(rest_nodes.unwrap_or(nodes), roots));
-	let frame_ctx = RetargetFrameContext::new(frame_ctx.coordinate_space, frame_ctx.target_basis, frame_ctx.rest_cache.or(local_cache.as_ref()));
+	let frame_ctx = RetargetFrameContext::new(
+		frame_ctx.coordinate_space,
+		frame_ctx.target_basis,
+		frame_ctx.rest_cache.or(local_cache.as_ref()),
+		frame_ctx.profile_lookup,
+	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base_node) = rest_nodes.and_then(|rest| rest.get(ri)) {
@@ -1035,7 +1072,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			continue;
 		}
 		let key = humanoid_bone_profile_key(sample.bone);
-		let Some(ni) = profile_node_index(profile, key) else {
+		let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key) else {
 			continue;
 		};
 		let mut sample_rotation = frame_ctx.transform_rotation(&sample.transform, UnmotionHumanoidRole::BodyBone(sample.bone));
