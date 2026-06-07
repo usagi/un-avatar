@@ -588,6 +588,7 @@ struct MotionControlBufferState {
 struct MotionFrameAccumulator {
 	buckets: Vec<MotionFrameBucket>,
 	sequence: u64,
+	has_pending: bool,
 }
 
 impl MotionFrameAccumulator {
@@ -595,15 +596,17 @@ impl MotionFrameAccumulator {
 		for bucket in &mut self.buckets {
 			bucket.clear_samples();
 		}
+		self.has_pending = false;
 	}
 
 	fn push_frame(&mut self, frame: un_motion_frame::UNMotionFrame) {
 		let bucket = self.bucket_for_frame(&frame);
 		bucket.merge_frame(frame);
+		self.has_pending = true;
 	}
 
 	fn take_frames_into(&mut self, frames: &mut Vec<un_motion_frame::UNMotionFrame>) {
-		if self.buckets.is_empty() {
+		if !self.has_pending || self.buckets.is_empty() {
 			return;
 		}
 		frames.reserve(self.buckets.len());
@@ -613,6 +616,7 @@ impl MotionFrameAccumulator {
 				frames.push(frame);
 			}
 		}
+		self.has_pending = false;
 	}
 
 	fn bucket_for_frame(&mut self, frame: &un_motion_frame::UNMotionFrame) -> &mut MotionFrameBucket {
@@ -926,6 +930,23 @@ mod motion_buffer_tests {
 		let expressions = &frames[0].face.as_ref().unwrap().expressions;
 		assert_eq!(expressions.len(), 1);
 		assert_eq!(expressions[0].name, "Angry");
+	}
+
+	#[test]
+	fn motion_frame_accumulator_skips_empty_reused_buckets() {
+		let mut accumulator = MotionFrameAccumulator::default();
+		let mut frames = Vec::new();
+
+		accumulator.push_frame(expression_frame(1, "Joy", 0.25));
+		accumulator.take_frames_into(&mut frames);
+		let sequence_after_frame = accumulator.sequence;
+		frames.clear();
+
+		accumulator.take_frames_into(&mut frames);
+
+		assert!(frames.is_empty());
+		assert_eq!(accumulator.sequence, sequence_after_frame);
+		assert_eq!(accumulator.buckets.len(), 1);
 	}
 }
 
