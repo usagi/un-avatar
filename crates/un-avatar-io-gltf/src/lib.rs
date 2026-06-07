@@ -1321,26 +1321,35 @@ fn unavatar_dynamics_root_index(
 	unavatar_node_ref_index(value, node_ids, registry_paths, paths, normalized_paths)
 }
 
-fn collect_scene_child_chain(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<usize> {
-	let mut chain = vec![root_idx];
-	let mut current = root_idx;
-	loop {
+fn collect_scene_child_chains(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<Vec<usize>> {
+	if root_idx >= scene.nodes.len() {
+		return Vec::new();
+	}
+	let mut chains = Vec::new();
+	let mut stack = vec![(root_idx, vec![root_idx])];
+	while let Some((current, chain)) = stack.pop() {
 		let Some(node) = scene.nodes.get(current) else {
-			break;
+			continue;
 		};
-		let Some(&next) = node.children.iter().find(|&&child| child < scene.nodes.len()) else {
-			break;
-		};
-		if chain.contains(&next) {
-			break;
+		let mut child_count = 0usize;
+		for &child in &node.children {
+			if child >= scene.nodes.len() || chain.contains(&child) {
+				continue;
+			}
+			child_count += 1;
+			let mut next_chain = chain.clone();
+			next_chain.push(child);
+			if next_chain.len() > 64 {
+				chains.push(next_chain);
+			} else {
+				stack.push((child, next_chain));
+			}
 		}
-		chain.push(next);
-		current = next;
-		if chain.len() > 64 {
-			break;
+		if child_count == 0 {
+			chains.push(chain);
 		}
 	}
-	chain
+	chains
 }
 
 fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
@@ -1423,23 +1432,24 @@ fn unavatar_dynamics_settings(
 				missing_roots += 1;
 				continue;
 			};
-			let chain = collect_scene_child_chain(scene, root_idx);
-			if chain.len() < 2 {
-				short_chains += 1;
-				continue;
+			for chain in collect_scene_child_chains(scene, root_idx) {
+				if chain.len() < 2 {
+					short_chains += 1;
+					continue;
+				}
+				groups.push(UnaSpringBoneGroup {
+					source_kind,
+					comment: comment.clone(),
+					category: category.clone(),
+					stiffness,
+					gravity_power,
+					gravity_dir,
+					drag_force,
+					center_node: None,
+					hit_radius,
+					bone_node_indices: chain,
+				});
 			}
-			groups.push(UnaSpringBoneGroup {
-				source_kind,
-				comment: comment.clone(),
-				category: category.clone(),
-				stiffness,
-				gravity_power,
-				gravity_dir,
-				drag_force,
-				center_node: None,
-				hit_radius,
-				bone_node_indices: chain,
-			});
 		}
 	}
 
@@ -5053,6 +5063,46 @@ mod tests {
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
+	}
+
+	#[test]
+	fn unavatar_dynamics_lowers_branching_root_to_multiple_runtime_groups() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 3]),
+				test_scene_node("node_left_mid", vec![2]),
+				test_scene_node("node_left_tip", Vec::new()),
+				test_scene_node("node_right_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_left_mid", "path": "Root/LeftMid"},
+					{"nodeId": "node_left_tip", "path": "Root/LeftMid/LeftTip"},
+					{"nodeId": "node_right_tip", "path": "Root/RightTip"}
+				],
+				"dynamics": [{
+					"id": "branched_hair",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}]
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+		let mut chains: Vec<Vec<usize>> = settings.groups.iter().map(|group| group.bone_node_indices.clone()).collect();
+		chains.sort();
+
+		assert_eq!(chains, vec![vec![0, 1, 2], vec![0, 3]]);
+		assert!(settings
+			.groups
+			.iter()
+			.all(|group| group.source_kind == UnaDynamicsSourceKind::VrcPhysBone));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
