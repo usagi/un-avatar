@@ -1449,8 +1449,7 @@ impl AvatarApp {
 				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
 			}
 			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
-			if status.expression_presets.len() != presets.len() || status.expression_presets.iter().zip(presets.iter()).any(|(a, b)| a != b)
-			{
+			if status.expression_presets.as_slice() != presets {
 				status.expression_presets = presets.to_vec();
 			}
 			let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
