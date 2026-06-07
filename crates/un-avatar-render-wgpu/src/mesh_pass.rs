@@ -7907,8 +7907,13 @@ impl SceneMeshes {
 	}
 
 	pub fn set_audio_link_external_enabled(&mut self, enabled: bool) {
-		if !enabled {
-			self.audio_link_frame_params = [0.0; 4];
+		let next = if enabled {
+			[1.0, self.audio_link_frame_params[1], self.audio_link_frame_params[2], self.audio_link_frame_params[3]]
+		} else {
+			[0.0; 4]
+		};
+		if self.audio_link_frame_params != next {
+			self.audio_link_frame_params = next;
 		}
 	}
 
