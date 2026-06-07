@@ -1064,7 +1064,7 @@ fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShad
 	if shading != UnaShadingModel::LilToonLike {
 		return false;
 	}
-	material.liltoon_like.as_ref().is_some_and(|liltoon_like| {
+	material.liltoon_like_runtime().is_some_and(|liltoon_like| {
 		liltoon_like.audio_link.enabled_factor > 0.5 && liltoon_audio_link_has_active_target(&liltoon_like.audio_link)
 	})
 }
@@ -2508,14 +2508,12 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 			if d.shading == UnaShadingModel::LilToonLike {
 				return d
 					.material
-					.liltoon_like
-					.as_ref()
+					.liltoon_like_runtime()
 					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
 			}
 			d.shading == UnaShadingModel::MToonLike
 				&& d.material
-					.mtoon
-					.as_ref()
+					.mtoon_like_runtime()
 					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
 		}
 		AvatarOutlinePolicy::Off => false,
@@ -2523,10 +2521,13 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 }
 
 fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel) -> u32 {
-	let Some(liltoon_like) = material.liltoon_like.as_ref() else {
+	if shading != UnaShadingModel::LilToonLike {
+		return 0;
+	}
+	let Some(liltoon_like) = material.liltoon_like_runtime() else {
 		return 0;
 	};
-	if shading != UnaShadingModel::LilToonLike || liltoon_like.fur.enabled_factor <= 0.5 {
+	if liltoon_like.fur.enabled_factor <= 0.5 {
 		return 0;
 	}
 	liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor)
@@ -9121,6 +9122,7 @@ mod tests {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.main_color.main_texture_hsvg_factor = [0.25, 0.8, 1.2, 0.9];
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -9832,6 +9834,7 @@ mod tests {
 		liltoon_like.fur.enabled_factor = 1.0;
 		liltoon_like.fur.layer_count_factor = 2.0;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -10273,6 +10276,7 @@ mod tests {
 		liltoon_like.audio_link.enabled_factor = 1.0;
 		liltoon_like.audio_link.to_emission_factor = 1.0;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like.clone()),
 			..Default::default()
 		};
@@ -10281,6 +10285,7 @@ mod tests {
 
 		liltoon_like.audio_link.enabled_factor = 0.0;
 		let disabled = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like.clone()),
 			..Default::default()
 		};
@@ -10295,6 +10300,7 @@ mod tests {
 		liltoon_like.audio_link.to_emission_second_gradation_factor = 0.0;
 		liltoon_like.audio_link.to_vertex_factor = 0.0;
 		let no_target = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};

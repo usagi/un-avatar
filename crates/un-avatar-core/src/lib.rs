@@ -25,6 +25,12 @@ pub enum UnaShadingModel {
 	LilToonLike,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UnaRuntimeToonModel {
+	MToonLike,
+	LilToonLike,
+}
+
 impl UnaShadingModel {
 	/// WGSL `drawu.params.x` 用の判別子。
 	pub fn as_draw_discriminant(self) -> f32 {
@@ -607,6 +613,28 @@ pub struct UnaMaterialPbr {
 	/// reparsing the source glTF JSON.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub unavatar_material: Option<Value>,
+}
+
+impl UnaMaterialPbr {
+	pub fn runtime_toon_model(&self) -> Option<UnaRuntimeToonModel> {
+		match self.shading {
+			UnaShadingModel::MToonLike => Some(UnaRuntimeToonModel::MToonLike),
+			UnaShadingModel::LilToonLike => Some(UnaRuntimeToonModel::LilToonLike),
+			UnaShadingModel::LitLambert | UnaShadingModel::Unlit => None,
+		}
+	}
+
+	pub fn liltoon_like_runtime(&self) -> Option<&UnaLilToonLikeMaterial> {
+		(self.runtime_toon_model() == Some(UnaRuntimeToonModel::LilToonLike))
+			.then_some(self.liltoon_like.as_ref())
+			.flatten()
+	}
+
+	pub fn mtoon_like_runtime(&self) -> Option<&UnaMtoonMaterial> {
+		(self.runtime_toon_model() == Some(UnaRuntimeToonModel::MToonLike))
+			.then_some(self.mtoon.as_ref())
+			.flatten()
+	}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -2834,6 +2862,28 @@ mod tests {
 
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		assert!(document.runtime_model().humanoid_scene().is_some());
+	}
+
+	#[test]
+	fn material_runtime_toon_view_respects_shading_model() {
+		let mut material = UnaMaterialPbr {
+			liltoon_like: Some(UnaLilToonLikeMaterial::default()),
+			mtoon: Some(UnaMtoonMaterial::default()),
+			..Default::default()
+		};
+		assert_eq!(material.runtime_toon_model(), None);
+		assert!(material.liltoon_like_runtime().is_none());
+		assert!(material.mtoon_like_runtime().is_none());
+
+		material.shading = UnaShadingModel::LilToonLike;
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::LilToonLike));
+		assert!(material.liltoon_like_runtime().is_some());
+		assert!(material.mtoon_like_runtime().is_none());
+
+		material.shading = UnaShadingModel::MToonLike;
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::MToonLike));
+		assert!(material.liltoon_like_runtime().is_none());
+		assert!(material.mtoon_like_runtime().is_some());
 	}
 
 	#[test]
