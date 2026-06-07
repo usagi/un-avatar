@@ -834,7 +834,6 @@ fn adapt_unavatar_unmotion_limb_axis(
 	rotation: Quat,
 	nodes: &[UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
-	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
 	node_index: usize,
 	role: UnmotionHumanoidRole,
@@ -846,26 +845,20 @@ fn adapt_unavatar_unmotion_limb_axis(
 		return rotation;
 	};
 	let rest = rest_nodes.unwrap_or(nodes);
-	let local_cache;
-	let cache = if let Some(adapter) = frame_ctx.unavatar_adapter {
-		&adapter.rest_cache
-	} else {
-		local_cache = RetargetRestCache::new(rest, roots);
-		&local_cache
+	let Some(adapter) = frame_ctx.unavatar_adapter else {
+		return rotation;
 	};
-	let axis = frame_ctx
-		.unavatar_adapter
-		.and_then(|adapter| adapter.rest_axis(node_index))
-		.or_else(|| {
-			rest_humanoid_child_axis_in_parent(
-				profile,
-				frame_ctx.profile_lookup(),
-				rest,
-				Some(cache),
-				node_index,
-				role,
-			)
-		});
+	let cache = &adapter.rest_cache;
+	let axis = adapter.rest_axis(node_index).or_else(|| {
+		rest_humanoid_child_axis_in_parent(
+			profile,
+			frame_ctx.profile_lookup(),
+			rest,
+			Some(cache),
+			node_index,
+			role,
+		)
+	});
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -1042,7 +1035,6 @@ fn adapt_unavatar_unmotion_finger_axis(
 	mut rotation: Quat,
 	nodes: &[UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
-	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
 	node_index: usize,
 	side_prefix: &str,
@@ -1067,21 +1059,15 @@ fn adapt_unavatar_unmotion_finger_axis(
 		return Quat::IDENTITY;
 	}
 	let rest = rest_nodes.unwrap_or(nodes);
-	let local_cache;
-	let cache = if let Some(adapter) = frame_ctx.unavatar_adapter {
-		&adapter.rest_cache
-	} else {
-		local_cache = RetargetRestCache::new(rest, roots);
-		&local_cache
+	let Some(adapter) = frame_ctx.unavatar_adapter else {
+		return rotation;
 	};
-	let axis = frame_ctx
-		.unavatar_adapter
-		.and_then(|adapter| adapter.rest_axis(node_index))
-		.or_else(|| {
-			successor_node_index
-				.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
-				.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
-		});
+	let cache = &adapter.rest_cache;
+	let axis = adapter.rest_axis(node_index).or_else(|| {
+		successor_node_index
+			.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
+			.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
+	});
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -1108,7 +1094,6 @@ fn apply_humanoid_transform_to_profile_node(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
-	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
 	key: &str,
 	transform: &TransformSample,
@@ -1122,7 +1107,6 @@ fn apply_humanoid_transform_to_profile_node(
 		profile,
 		nodes,
 		rest_nodes,
-		roots,
 		frame_ctx,
 		ni,
 		transform,
@@ -1139,7 +1123,6 @@ fn apply_humanoid_transform_to_node_index(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
-	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
 	ni: usize,
 	transform: &TransformSample,
@@ -1150,7 +1133,7 @@ fn apply_humanoid_transform_to_node_index(
 	eye_clamp_deg: Option<f32>,
 ) {
 	let mut sample_rotation = frame_ctx.transform_rotation(transform, role);
-	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
+	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
 		if let Some(deg) = eye_clamp_deg {
 			sample_rotation = clamp_eye_rotation(sample_rotation, deg);
@@ -1163,7 +1146,6 @@ fn apply_humanoid_transform_to_node_index(
 fn apply_finger_transform_to_profile_node(
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
-	roots: &[usize],
 	frame_ctx: RetargetFrameContext<'_>,
 	node_index: usize,
 	successor_node_index: Option<usize>,
@@ -1178,7 +1160,6 @@ fn apply_finger_transform_to_profile_node(
 		sample_rotation,
 		nodes,
 		rest_nodes,
-		roots,
 		frame_ctx,
 		node_index,
 		side_prefix,
@@ -1239,7 +1220,6 @@ fn normalize_profile_match_key(name: &str) -> String {
 fn apply_hand_motion_to_scene(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
-	roots: &[usize],
 	hand: &HandMotion,
 	side_prefix: &'static str,
 	rest_nodes: Option<&[UnaSceneNode]>,
@@ -1258,7 +1238,6 @@ fn apply_hand_motion_to_scene(
 					profile,
 					nodes,
 					rest_nodes,
-					roots,
 					frame_ctx,
 					binding.node_index,
 					wrist,
@@ -1273,7 +1252,6 @@ fn apply_hand_motion_to_scene(
 					profile,
 					nodes,
 					rest_nodes,
-					roots,
 					frame_ctx,
 					key,
 					wrist,
@@ -1295,7 +1273,6 @@ fn apply_hand_motion_to_scene(
 			apply_finger_transform_to_profile_node(
 				nodes,
 				rest_nodes,
-				roots,
 				frame_ctx,
 				binding.node.node_index,
 				binding.successor_node_index,
@@ -1694,7 +1671,6 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			profile,
 			nodes,
 			rest_nodes,
-			roots,
 			frame_ctx,
 			ni,
 			&sample.transform,
@@ -1759,7 +1735,6 @@ pub fn apply_un_motion_frame_to_document_with_context(
 		apply_hand_motion_to_scene(
 			profile,
 			&mut scene.nodes,
-			&scene.roots,
 			hand,
 			"left",
 			rest_nodes,
@@ -1771,7 +1746,6 @@ pub fn apply_un_motion_frame_to_document_with_context(
 		apply_hand_motion_to_scene(
 			profile,
 			&mut scene.nodes,
-			&scene.roots,
 			hand,
 			"right",
 			rest_nodes,
@@ -1786,7 +1760,6 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					profile,
 					&mut scene.nodes,
 					rest_nodes,
-					&scene.roots,
 					frame_ctx,
 					binding.node_index,
 					head,
@@ -1801,7 +1774,6 @@ pub fn apply_un_motion_frame_to_document_with_context(
 					profile,
 					&mut scene.nodes,
 					rest_nodes,
-					&scene.roots,
 					frame_ctx,
 					"head",
 					head,
