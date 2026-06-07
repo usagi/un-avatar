@@ -2506,31 +2506,27 @@ impl GpuSceneBuildContext {
 				}
 			}
 		}
-		let bone_colliders: Vec<BoneColliderPrimitive> = {
+		let (bone_colliders, spring_sim, expression_presets): (Vec<BoneColliderPrimitive>, _, _) = {
 			let guard = document_wrapped.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			if let Some(scene) = guard.scene.as_ref() {
+			let bone_colliders = if let Some(scene) = guard.scene.as_ref() {
 				build_bone_colliders(scene, guard.humanoid_profile.as_ref(), options.bone_colliders)
 			} else {
 				Vec::new()
-			}
+			};
+			let spring_sim = if options.enable_spring_bones {
+				match (&guard.scene, &guard.spring_bones) {
+					(Some(sc), Some(sb)) => {
+						SpringBoneSimulator::new_with_config(sc, sb, bone_colliders.clone(), options.spring_bone_physics.clone())
+					}
+					_ => None,
+				}
+			} else {
+				None
+			};
+			let expression_presets = expression_preset_names(guard.expression_catalog.as_ref());
+			(bone_colliders, spring_sim, expression_presets)
 		};
 		let bone_collider_stats = collider_stats(&bone_colliders);
-		let spring_sim = if options.enable_spring_bones {
-			let guard = document_wrapped.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			match (&guard.scene, &guard.spring_bones) {
-				(Some(sc), Some(sb)) => {
-					SpringBoneSimulator::new_with_config(sc, sb, bone_colliders.clone(), options.spring_bone_physics.clone())
-				}
-				_ => None,
-			}
-		} else {
-			None
-		};
-		let expression_presets = document_wrapped
-			.read()
-			.ok()
-			.map(|doc| expression_preset_names(doc.expression_catalog.as_ref()))
-			.unwrap_or_default();
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
 			rest_nodes,
