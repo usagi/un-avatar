@@ -377,6 +377,34 @@ impl RetargetRestCache {
 	}
 }
 
+#[derive(Debug)]
+pub struct HumanoidRetargetContext {
+	target_basis: TargetHumanoidBasis,
+	unavatar_rest_cache: Option<RetargetRestCache>,
+}
+
+impl HumanoidRetargetContext {
+	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
+		let target_basis = target_humanoid_basis(document);
+		let unavatar_rest_cache = if target_basis == TargetHumanoidBasis::UnavatarUnity {
+			document.scene.as_ref().map(|scene| RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots))
+		} else {
+			None
+		};
+		Self {
+			target_basis,
+			unavatar_rest_cache,
+		}
+	}
+
+	fn frame_context(&self, coordinate_space: CoordinateSpace) -> RetargetFrameContext<'_> {
+		let rest_cache = (coordinate_space == CoordinateSpace::UNMotion)
+			.then_some(self.unavatar_rest_cache.as_ref())
+			.flatten();
+		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache)
+	}
+}
+
 fn adapt_unavatar_unmotion_limb_axis(
 	profile: &HumanoidProfile,
 	rotation: Quat,
@@ -1047,17 +1075,25 @@ pub fn apply_un_motion_frame_to_document_with_rest(
 	opts: ApplyUnMotionFrameOpts,
 	rest_nodes: Option<&[UnaSceneNode]>,
 ) {
-	let target_basis = target_humanoid_basis(document);
+	let context = HumanoidRetargetContext::for_document(document, rest_nodes);
+	apply_un_motion_frame_to_document_with_context(document, frame, opts, rest_nodes, &context);
+}
+
+/// Precompiled retarget context を使って [`UNMotionFrame`] を [`UnaDocument`] へ反映する。
+pub fn apply_un_motion_frame_to_document_with_context(
+	document: &mut UnaDocument,
+	frame: &UNMotionFrame,
+	opts: ApplyUnMotionFrameOpts,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	context: &HumanoidRetargetContext,
+) {
 	let Some(ref mut scene) = document.scene else {
 		return;
 	};
 	let Some(ref profile) = document.humanoid_profile else {
 		return;
 	};
-	let rest_cache = (frame.header.coordinate_space == CoordinateSpace::UNMotion && target_basis == TargetHumanoidBasis::UnavatarUnity)
-		.then(|| RetargetRestCache::new(rest_nodes.unwrap_or(&scene.nodes), &scene.roots));
-	let rest_cache = rest_cache.as_ref();
-	let frame_ctx = RetargetFrameContext::new(frame.header.coordinate_space, target_basis, rest_cache);
+	let frame_ctx = context.frame_context(frame.header.coordinate_space);
 	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
 	if let Some(ref body) = frame.body {
 		if let Some(ref pose) = body.humanoid {

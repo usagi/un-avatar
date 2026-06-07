@@ -979,6 +979,7 @@ pub(crate) struct GpuState {
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
 	motion_rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
+	motion_retarget_context: Option<Arc<un_avatar_skeleton::HumanoidRetargetContext>>,
 	spring_rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
 	primary_motion_source: Arc<AtomicU8>,
@@ -1358,6 +1359,7 @@ impl GpuState {
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
 			motion_rest_nodes: None,
+			motion_retarget_context: None,
 			spring_rest_nodes: None,
 			primary_motion_source,
 			unmotion_zenoh_live,
@@ -2561,7 +2563,12 @@ impl GpuState {
 				.map(|scene| scene.nodes.clone())
 				.unwrap_or_default(),
 		);
+		let retarget_context = Arc::new({
+			let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			un_avatar_skeleton::HumanoidRetargetContext::for_document(&d, Some(rest_nodes.as_slice()))
+		});
 		self.motion_rest_nodes = Some(Arc::clone(&rest_nodes));
+		self.motion_retarget_context = Some(retarget_context);
 		if let Some(addr) = vmc_address {
 			let humanoid_keys_csv = {
 				let d = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
@@ -2741,6 +2748,7 @@ impl GpuState {
 		};
 		let opts = self.motion_apply_shared.lock().map(|g| *g).unwrap_or_default();
 		let rest_nodes = self.motion_rest_nodes.as_ref().map(|nodes| nodes.as_slice());
+		let retarget_context = self.motion_retarget_context.as_deref();
 		let should_log = self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(120);
 		for frame in &self.pending_motion_frames {
 			if should_log {
@@ -2754,7 +2762,11 @@ impl GpuState {
 					),
 				);
 			}
-			un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(&mut document, frame, opts, rest_nodes);
+			if let Some(context) = retarget_context {
+				un_avatar_skeleton::apply_un_motion_frame_to_document_with_context(&mut document, frame, opts, rest_nodes, context);
+			} else {
+				un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(&mut document, frame, opts, rest_nodes);
+			}
 		}
 		self.motion_applied_frames
 			.fetch_add(self.pending_motion_frames.len() as u64, Ordering::Relaxed);

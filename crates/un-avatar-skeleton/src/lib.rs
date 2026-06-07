@@ -14,7 +14,8 @@ pub use bone_colliders::{
 };
 pub use humanoid_retarget::{
 	apply_humanoid_pose_to_scene, apply_humanoid_pose_to_scene_with_rest, apply_node_constraints_to_scene,
-	apply_un_motion_frame_to_document, apply_un_motion_frame_to_document_with_rest, humanoid_bone_profile_key, ApplyUnMotionFrameOpts,
+	apply_un_motion_frame_to_document, apply_un_motion_frame_to_document_with_context, apply_un_motion_frame_to_document_with_rest,
+	humanoid_bone_profile_key, ApplyUnMotionFrameOpts, HumanoidRetargetContext,
 };
 pub use spring_bones::{
 	SpringBoneCategoryDefinition, SpringBoneCategoryOverride, SpringBonePhysicsConfig, SpringBonePhysicsParams, SpringBoneSimulator,
