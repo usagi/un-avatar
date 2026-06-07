@@ -91,12 +91,18 @@ not enough because skinning consumes the full joint matrix.
 ## Runtime Cache Boundary
 
 Retargeting still has format-specific code in `humanoid_retarget.rs`; this is
-not the final architecture. The first cleanup step is `RetargetRestCache`.
-For `.unavatar + UNMotion` frames it stores rest-parent indices and rest-world
-rotations once per applied frame, then shares them across body, hand, finger,
-and face-head retargeting. Other formats do not build the cache. This removes
-per-bone recomputation of `scene_parent_indices` and `scene_world_matrices`
-from the `.unavatar` limb/finger adapters and makes the future split clearer:
+not the final architecture. The current cleanup boundary is
+`RetargetFrameContext` plus `RetargetRestCache`. `RetargetFrameContext` carries
+the per-frame motion coordinate space, target basis, and optional rest cache so
+body, hand, finger, and face-head retargeting do not pass those pieces around as
+separate ad hoc arguments.
+
+For `.unavatar + UNMotion` frames, `RetargetRestCache` stores rest local
+rotations/translations, rest-parent indices, and rest-world rotations once per
+applied frame. Other formats do not build the cache. This removes per-bone
+recomputation of rest `Mat4` decomposition, `scene_parent_indices`, and
+`scene_world_matrices` from the `.unavatar` limb/finger adapters and makes the
+future split clearer:
 
 - import / model-compile layer: derive rest topology, rest-world rotations, and
   source-format basis adapters
