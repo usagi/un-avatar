@@ -264,6 +264,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.humanoid_profile.as_ref()
 	}
 
+	pub fn humanoid_scene(self) -> Option<(&'a HumanoidProfile, &'a UnaSceneSnapshot)> {
+		Some((self.humanoid_profile()?, self.scene()?))
+	}
+
 	pub fn expression_catalog(self) -> Option<&'a UnaExpressionCatalog> {
 		self.document.expression_catalog.as_ref()
 	}
@@ -2818,6 +2822,18 @@ mod tests {
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm0);
 		document.vrm.as_mut().unwrap().spec_version = "1.0".to_string();
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm1);
+	}
+
+	#[test]
+	fn runtime_model_reports_humanoid_scene_only_when_both_exist() {
+		let mut document = UnaDocument::default();
+		assert!(document.runtime_model().humanoid_scene().is_none());
+
+		document.scene = Some(UnaSceneSnapshot::default());
+		assert!(document.runtime_model().humanoid_scene().is_none());
+
+		document.humanoid_profile = Some(HumanoidProfile::default());
+		assert!(document.runtime_model().humanoid_scene().is_some());
 	}
 
 	#[test]

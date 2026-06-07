@@ -371,10 +371,7 @@ struct MotionRetargetRuntime {
 impl MotionRetargetRuntime {
 	fn for_document(document: &UnaDocument, rest_nodes: Arc<Vec<UnaSceneNode>>) -> Option<Self> {
 		let runtime_model = document.runtime_model();
-		if runtime_model.humanoid_profile().is_none() {
-			return None;
-		}
-		runtime_model.scene()?;
+		runtime_model.humanoid_scene()?;
 		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
 		Some(Self { rest_nodes, context })
 	}
@@ -1703,7 +1700,8 @@ impl GpuState {
 		};
 		let runtime_model = doc.runtime_model();
 		let (colliders, stats) = if let Some(scene) = runtime_model.scene() {
-			let colliders = build_bone_colliders(scene, runtime_model.humanoid_profile(), bone_collider_config);
+			let profile = runtime_model.humanoid_profile();
+			let colliders = build_bone_colliders(scene, profile, bone_collider_config);
 			let stats = collider_stats(&colliders);
 			(colliders, stats)
 		} else {
@@ -2557,7 +2555,8 @@ impl GpuSceneBuildContext {
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let runtime_model = document.runtime_model();
 		let bone_colliders = if let Some(scene) = runtime_model.scene() {
-			build_bone_colliders(scene, runtime_model.humanoid_profile(), options.bone_colliders)
+			let profile = runtime_model.humanoid_profile();
+			build_bone_colliders(scene, profile, options.bone_colliders)
 		} else {
 			Vec::new()
 		};
