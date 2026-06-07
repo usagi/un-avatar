@@ -97,12 +97,13 @@ the per-frame motion coordinate space, target basis, and optional rest cache so
 body, hand, finger, and face-head retargeting do not pass those pieces around as
 separate ad hoc arguments.
 
-For `.unavatar + UNMotion` frames, `RetargetRestCache` stores rest local
-rotations/translations, rest-parent indices, and rest-world rotations once per
-applied frame. Other formats do not build the cache. This removes per-bone
-recomputation of rest `Mat4` decomposition, `scene_parent_indices`, and
-`scene_world_matrices` from the `.unavatar` limb/finger adapters and makes the
-future split clearer:
+For `.unavatar + UNMotion` frames, `UnavatarRetargetAdapter` owns the compiled
+format-specific adapter data. Its `RetargetRestCache` stores rest local
+rotations/translations, rest-parent indices, and rest-world rotations, and its
+node-index rest axis table stores the adapter target axes. Other formats do not
+build this adapter. This removes per-bone recomputation of rest `Mat4`
+decomposition, `scene_parent_indices`, and `scene_world_matrices` from the
+`.unavatar` limb/finger adapters and makes the future split clearer:
 
 - import / model-compile layer: derive rest topology, rest-world rotations, and
   source-format basis adapters
@@ -122,7 +123,6 @@ It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Typed finger profile keys are static table lookups, not `format!` allocations,
 so the per-frame hand path does not allocate strings for each finger segment.
-For `.unavatar + UNMotion`, the context also precomputes adapter rest axes by
-node index. Body limb and typed finger adapters then use a single node-index
-lookup instead of rediscovering Humanoid successors or first-child fallback axes
-for every frame.
+For `.unavatar + UNMotion`, body limb and typed finger adapters use the
+compiled adapter's single node-index lookup instead of rediscovering Humanoid
+successors or first-child fallback axes for every frame.

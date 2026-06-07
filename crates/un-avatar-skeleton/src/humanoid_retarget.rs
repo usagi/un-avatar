@@ -127,11 +127,7 @@ fn unavatar_unmotion_limb_uses_vrm0_like_axis(role: UnmotionHumanoidRole) -> boo
 	matches!(role, UnmotionHumanoidRole::HandWrist)
 }
 
-fn convert_unmotion_humanoid_rotation_to_target(
-	rotation: Quat,
-	target_basis: TargetHumanoidBasis,
-	role: UnmotionHumanoidRole,
-) -> Quat {
+fn convert_unmotion_humanoid_rotation_to_target(rotation: Quat, target_basis: TargetHumanoidBasis, role: UnmotionHumanoidRole) -> Quat {
 	match target_basis {
 		TargetHumanoidBasis::Vrm0 if matches!(role, UnmotionHumanoidRole::HandFinger) => rotation,
 		TargetHumanoidBasis::Vrm0 if matches!(role, UnmotionHumanoidRole::HandWrist) => rotation,
@@ -196,8 +192,7 @@ fn transform_humanoid_sample_translation(
 struct RetargetFrameContext<'a> {
 	coordinate_space: CoordinateSpace,
 	target_basis: TargetHumanoidBasis,
-	rest_cache: Option<&'a RetargetRestCache>,
-	rest_axes: Option<&'a BTreeMap<usize, (Quat, Vec3)>>,
+	unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 	profile_lookup: Option<&'a BTreeMap<String, usize>>,
 }
 
@@ -205,15 +200,13 @@ impl<'a> RetargetFrameContext<'a> {
 	fn new(
 		coordinate_space: CoordinateSpace,
 		target_basis: TargetHumanoidBasis,
-		rest_cache: Option<&'a RetargetRestCache>,
-		rest_axes: Option<&'a BTreeMap<usize, (Quat, Vec3)>>,
+		unavatar_adapter: Option<&'a UnavatarRetargetAdapter>,
 		profile_lookup: Option<&'a BTreeMap<String, usize>>,
 	) -> Self {
 		Self {
 			coordinate_space,
 			target_basis,
-			rest_cache,
-			rest_axes,
+			unavatar_adapter,
 			profile_lookup,
 		}
 	}
@@ -389,11 +382,24 @@ impl RetargetRestCache {
 }
 
 #[derive(Debug)]
+struct UnavatarRetargetAdapter {
+	rest_cache: RetargetRestCache,
+	rest_axes: BTreeMap<usize, (Quat, Vec3)>,
+}
+
+impl UnavatarRetargetAdapter {
+	fn new(profile: Option<&HumanoidProfile>, nodes: &[UnaSceneNode], roots: &[usize], profile_lookup: &BTreeMap<String, usize>) -> Self {
+		let rest_cache = RetargetRestCache::new(nodes, roots);
+		let rest_axes = precompute_unavatar_rest_axes(profile, nodes, &rest_cache, profile_lookup);
+		Self { rest_cache, rest_axes }
+	}
+}
+
+#[derive(Debug)]
 pub struct HumanoidRetargetContext {
 	target_basis: TargetHumanoidBasis,
 	profile_lookup: BTreeMap<String, usize>,
-	unavatar_rest_axes: BTreeMap<usize, (Quat, Vec3)>,
-	unavatar_rest_cache: Option<RetargetRestCache>,
+	unavatar_adapter: Option<UnavatarRetargetAdapter>,
 }
 
 impl HumanoidRetargetContext {
@@ -404,35 +410,28 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
-		let (unavatar_rest_cache, unavatar_rest_axes) = if target_basis == TargetHumanoidBasis::UnavatarUnity {
-			document
-				.scene
-				.as_ref()
-				.map(|scene| {
-					let rest = rest_nodes.unwrap_or(&scene.nodes);
-					let cache = RetargetRestCache::new(rest, &scene.roots);
-					let axes = precompute_unavatar_rest_axes(document.humanoid_profile.as_ref(), rest, &cache, &profile_lookup);
-					(Some(cache), axes)
-				})
-				.unwrap_or_default()
+		let unavatar_adapter = if target_basis == TargetHumanoidBasis::UnavatarUnity {
+			document.scene.as_ref().map(|scene| {
+				let rest = rest_nodes.unwrap_or(&scene.nodes);
+				UnavatarRetargetAdapter::new(document.humanoid_profile.as_ref(), rest, &scene.roots, &profile_lookup)
+			})
 		} else {
-			(None, BTreeMap::new())
+			None
 		};
 		Self {
 			target_basis,
 			profile_lookup,
-			unavatar_rest_axes,
-			unavatar_rest_cache,
+			unavatar_adapter,
 		}
 	}
 
 	fn frame_context(&self, coordinate_space: CoordinateSpace) -> RetargetFrameContext<'_> {
-		let rest_cache = (coordinate_space == CoordinateSpace::UNMotion)
-			.then_some(self.unavatar_rest_cache.as_ref())
-			.flatten();
-		let rest_axes = (coordinate_space == CoordinateSpace::UNMotion && self.target_basis == TargetHumanoidBasis::UnavatarUnity)
-			.then_some(&self.unavatar_rest_axes);
-		RetargetFrameContext::new(coordinate_space, self.target_basis, rest_cache, rest_axes, Some(&self.profile_lookup))
+		let unavatar_adapter = if coordinate_space == CoordinateSpace::UNMotion && self.target_basis == TargetHumanoidBasis::UnavatarUnity {
+			self.unavatar_adapter.as_ref()
+		} else {
+			None
+		};
+		RetargetFrameContext::new(coordinate_space, self.target_basis, unavatar_adapter, Some(&self.profile_lookup))
 	}
 }
 
@@ -521,15 +520,16 @@ fn adapt_unavatar_unmotion_limb_axis(
 	};
 	let rest = rest_nodes.unwrap_or(nodes);
 	let local_cache;
-	let cache = if let Some(cache) = frame_ctx.rest_cache {
-		cache
+	let cache = if let Some(adapter) = frame_ctx.unavatar_adapter {
+		&adapter.rest_cache
 	} else {
 		local_cache = RetargetRestCache::new(rest, roots);
 		&local_cache
 	};
-	let axis = frame_ctx.rest_axes.and_then(|axes| axes.get(&node_index).copied()).or_else(|| {
-		rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup, rest, Some(cache), node_index, role)
-	});
+	let axis = frame_ctx
+		.unavatar_adapter
+		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
+		.or_else(|| rest_humanoid_child_axis_in_parent(profile, frame_ctx.profile_lookup, rest, Some(cache), node_index, role));
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -552,11 +552,7 @@ fn unavatar_unmotion_finger_source_axis_in_target(side_prefix: &str, finger_key:
 	} else if finger_key == "thumb" {
 		const THUMB_FLEXION_REST_OPEN_RAD: f32 = 0.33;
 		let side = if side_prefix == "left" { 1.0 } else { -1.0 };
-		Vec3::new(
-			side * THUMB_FLEXION_REST_OPEN_RAD.cos(),
-			0.0,
-			-THUMB_FLEXION_REST_OPEN_RAD.sin(),
-		)
+		Vec3::new(side * THUMB_FLEXION_REST_OPEN_RAD.cos(), 0.0, -THUMB_FLEXION_REST_OPEN_RAD.sin())
 	} else if side_prefix == "left" {
 		Vec3::X
 	} else {
@@ -674,18 +670,21 @@ fn adapt_unavatar_unmotion_finger_axis(
 	}
 	let rest = rest_nodes.unwrap_or(nodes);
 	let local_cache;
-	let cache = if let Some(cache) = frame_ctx.rest_cache {
-		cache
+	let cache = if let Some(adapter) = frame_ctx.unavatar_adapter {
+		&adapter.rest_cache
 	} else {
 		local_cache = RetargetRestCache::new(rest, roots);
 		&local_cache
 	};
-	let axis = frame_ctx.rest_axes.and_then(|axes| axes.get(&node_index).copied()).or_else(|| {
-		successor_key
-			.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
-			.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
-			.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
-	});
+	let axis = frame_ctx
+		.unavatar_adapter
+		.and_then(|adapter| adapter.rest_axes.get(&node_index).copied())
+		.or_else(|| {
+			successor_key
+				.and_then(|key| profile_node_index_with_lookup(profile, frame_ctx.profile_lookup, key))
+				.and_then(|child_index| rest_child_axis_from_direct_child_cached(rest, Some(cache), node_index, child_index))
+				.or_else(|| rest_first_child_axis_in_parent_cached(rest, Some(cache), node_index))
+		});
 	let Some((rest_rotation, target_axis)) = axis else {
 		return rotation;
 	};
@@ -734,16 +733,7 @@ fn apply_humanoid_transform_to_profile_node(
 	} else {
 		role
 	};
-	sample_rotation = adapt_unavatar_unmotion_limb_axis(
-		profile,
-		sample_rotation,
-		nodes,
-		rest_nodes,
-		roots,
-		frame_ctx,
-		ni,
-		adapter_role,
-	);
+	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
 		let base_node = rest_nodes.and_then(|rest| rest.get(ni)).unwrap_or(node);
 		let (base_scale, base_rotation, base_translation) = node_scale_rotation_translation(base_node);
@@ -795,11 +785,7 @@ fn apply_finger_transform_to_profile_node(
 	}
 }
 
-fn profile_node_index_with_lookup(
-	profile: &HumanoidProfile,
-	lookup: Option<&BTreeMap<String, usize>>,
-	key: &str,
-) -> Option<usize> {
+fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&BTreeMap<String, usize>>, key: &str) -> Option<usize> {
 	profile.bone_node_indices.get(key).copied().or_else(|| {
 		let target = normalize_profile_match_key(key);
 		lookup.and_then(|lookup| lookup.get(&target).copied()).or_else(|| {
@@ -1156,7 +1142,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space(
 		pose,
 		skip_eye_bones,
 		rest_nodes,
-		RetargetFrameContext::new(coordinate_space, target_basis, None, None, None),
+		RetargetFrameContext::new(coordinate_space, target_basis, None, None),
 		None,
 		// 旧来動作（テスト互換）。VMC 経由のドキュメント適用は新しい opts.apply_root_translation を経由する。
 		true,
@@ -1175,13 +1161,12 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
 ) {
-	let local_cache = (frame_ctx.needs_unavatar_unmotion_adapter() && frame_ctx.rest_cache.is_none())
-		.then(|| RetargetRestCache::new(rest_nodes.unwrap_or(nodes), roots));
+	let local_adapter = (frame_ctx.needs_unavatar_unmotion_adapter() && frame_ctx.unavatar_adapter.is_none())
+		.then(|| UnavatarRetargetAdapter::new(Some(profile), rest_nodes.unwrap_or(nodes), roots, &BTreeMap::new()));
 	let frame_ctx = RetargetFrameContext::new(
 		frame_ctx.coordinate_space,
 		frame_ctx.target_basis,
-		frame_ctx.rest_cache.or(local_cache.as_ref()),
-		frame_ctx.rest_axes,
+		frame_ctx.unavatar_adapter.or(local_adapter.as_ref()),
 		frame_ctx.profile_lookup,
 	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
@@ -3210,7 +3195,12 @@ mod tests {
 
 		let scene = document.scene.unwrap();
 		let (_, applied, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
-		let expected = Quat::from_xyzw(-body_hand_rotation.x, -body_hand_rotation.y, body_hand_rotation.z, body_hand_rotation.w);
+		let expected = Quat::from_xyzw(
+			-body_hand_rotation.x,
+			-body_hand_rotation.y,
+			body_hand_rotation.z,
+			body_hand_rotation.w,
+		);
 		assert!(
 			(applied.dot(expected).abs() - 1.0).abs() < 1e-5,
 			"body-owned LeftHand rotation must not be overwritten by HandMotion.wrist"
@@ -3251,9 +3241,7 @@ mod tests {
 				node_constraints: vec![],
 			});
 			document.humanoid_profile = Some(HumanoidProfile {
-				bone_node_indices: [(hand_key.to_string(), 1), (middle_key.to_string(), 2)]
-					.into_iter()
-					.collect(),
+				bone_node_indices: [(hand_key.to_string(), 1), (middle_key.to_string(), 2)].into_iter().collect(),
 			});
 			let mut frame = UNMotionFrame::new(0);
 			frame.header.coordinate_space = CoordinateSpace::UNMotion;
