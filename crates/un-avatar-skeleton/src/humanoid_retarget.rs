@@ -8,6 +8,8 @@ use un_avatar_core::{
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
 
+type ProfileNodeLookup = Vec<(String, usize)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetHumanoidBasis {
 	Vrm0,
@@ -283,7 +285,7 @@ impl<'a> RetargetFrameContext<'a> {
 		transform_humanoid_sample_translation(sample, self.coordinate_space, self.target_basis)
 	}
 
-	fn profile_lookup(self) -> Option<&'a BTreeMap<String, usize>> {
+	fn profile_lookup(self) -> Option<&'a ProfileNodeLookup> {
 		self.runtime.map(|runtime| &runtime.profile_lookup)
 	}
 
@@ -389,7 +391,7 @@ fn rest_named_child_axis_in_parent(
 
 fn rest_humanoid_child_axis_in_parent(
 	profile: &HumanoidProfile,
-	profile_lookup: Option<&BTreeMap<String, usize>>,
+	profile_lookup: Option<&ProfileNodeLookup>,
 	nodes: &[UnaSceneNode],
 	cache: Option<&RetargetRestCache>,
 	node_index: usize,
@@ -447,7 +449,7 @@ struct NodeTransformBinding {
 impl NodeTransformBinding {
 	fn from_profile_key(
 		profile: &HumanoidProfile,
-		profile_lookup: &BTreeMap<String, usize>,
+		profile_lookup: &ProfileNodeLookup,
 		scene: &UnaSceneSnapshot,
 		rest_nodes: Option<&[UnaSceneNode]>,
 		key: &str,
@@ -493,7 +495,7 @@ impl ExpressionNameLookup {
 
 #[derive(Debug, Default)]
 struct RuntimeRetargetData {
-	profile_lookup: BTreeMap<String, usize>,
+	profile_lookup: ProfileNodeLookup,
 	root_base: Option<NodeTransformBinding>,
 	body_bone_nodes: [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT],
 	hand_nodes: [HandNodeBindings; 2],
@@ -505,7 +507,7 @@ struct RetargetCompileInput<'a> {
 	profile: Option<&'a HumanoidProfile>,
 	scene: Option<&'a UnaSceneSnapshot>,
 	rest_nodes: Option<&'a [UnaSceneNode]>,
-	profile_lookup: &'a BTreeMap<String, usize>,
+	profile_lookup: &'a ProfileNodeLookup,
 }
 
 impl RetargetRestCache {
@@ -554,7 +556,7 @@ struct UnavatarRetargetAdapter {
 }
 
 impl UnavatarRetargetAdapter {
-	fn new(profile: Option<&HumanoidProfile>, nodes: &[UnaSceneNode], roots: &[usize], profile_lookup: &BTreeMap<String, usize>) -> Self {
+	fn new(profile: Option<&HumanoidProfile>, nodes: &[UnaSceneNode], roots: &[usize], profile_lookup: &ProfileNodeLookup) -> Self {
 		let rest_cache = RetargetRestCache::new(nodes, roots);
 		let rest_axes = precompute_unavatar_rest_axes(profile, nodes, &rest_cache, profile_lookup);
 		Self { rest_cache, rest_axes }
@@ -630,12 +632,22 @@ impl HumanoidRetargetContext {
 	}
 }
 
-fn precompute_profile_lookup(profile: &HumanoidProfile) -> BTreeMap<String, usize> {
-	let mut lookup = BTreeMap::new();
-	for (key, &index) in &profile.bone_node_indices {
-		lookup.entry(normalize_profile_match_key(key)).or_insert(index);
-	}
+fn precompute_profile_lookup(profile: &HumanoidProfile) -> ProfileNodeLookup {
+	let mut lookup: ProfileNodeLookup = profile
+		.bone_node_indices
+		.iter()
+		.map(|(key, &index)| (normalize_profile_match_key(key), index))
+		.collect();
+	lookup.sort_by(|(a, _), (b, _)| a.cmp(b));
+	lookup.dedup_by(|(a, _), (b, _)| a == b);
 	lookup
+}
+
+fn profile_lookup_node_index(lookup: &ProfileNodeLookup, key: &str) -> Option<usize> {
+	lookup
+		.binary_search_by(|(candidate, _)| candidate.as_str().cmp(key))
+		.ok()
+		.map(|index| lookup[index].1)
 }
 
 fn precompute_root_base(scene: Option<&UnaSceneSnapshot>, rest_nodes: Option<&[UnaSceneNode]>) -> Option<NodeTransformBinding> {
@@ -748,7 +760,7 @@ fn precompute_unavatar_rest_axes(
 	profile: Option<&HumanoidProfile>,
 	nodes: &[UnaSceneNode],
 	cache: &RetargetRestCache,
-	profile_lookup: &BTreeMap<String, usize>,
+	profile_lookup: &ProfileNodeLookup,
 ) -> Vec<(usize, (Quat, Vec3))> {
 	let Some(profile) = profile else {
 		return Vec::new();
@@ -1189,11 +1201,11 @@ fn write_retargeted_local_transform(
 	.to_cols_array();
 }
 
-fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&BTreeMap<String, usize>>, key: &str) -> Option<usize> {
+fn profile_node_index_with_lookup(profile: &HumanoidProfile, lookup: Option<&ProfileNodeLookup>, key: &str) -> Option<usize> {
 	profile.bone_node_indices.get(key).copied().or_else(|| {
 		let target = normalize_profile_match_key(key);
 		if let Some(lookup) = lookup {
-			return lookup.get(&target).copied();
+			return profile_lookup_node_index(lookup, &target);
 		}
 		profile
 			.bone_node_indices
