@@ -1384,18 +1384,6 @@ fn scene_world_matrices(nodes: &[UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
 	world
 }
 
-fn scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<Option<usize>> {
-	let mut parents = vec![None; nodes.len()];
-	for (parent, node) in nodes.iter().enumerate() {
-		for &child in &node.children {
-			if child < parents.len() {
-				parents[child] = Some(parent);
-			}
-		}
-	}
-	parents
-}
-
 fn compact_scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<usize> {
 	let mut parents = vec![NO_PARENT; nodes.len()];
 	for (parent, node) in nodes.iter().enumerate() {
@@ -1455,7 +1443,7 @@ fn apply_aim_constraint(
 	nodes: &mut [UnaSceneNode],
 	roots: &[usize],
 	rest_nodes: &[UnaSceneNode],
-	parents: &[Option<usize>],
+	parents: &[usize],
 	c: &UnaNodeConstraint,
 	axis: UnaNodeConstraintAimAxis,
 ) {
@@ -1471,7 +1459,8 @@ fn apply_aim_constraint(
 	}
 	let parent_world_rotation = parents
 		.get(c.target_node)
-		.and_then(|parent| parent.map(|p| world[p]))
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
 		.map(|m| m.to_scale_rotation_translation().1)
 		.unwrap_or(Quat::IDENTITY);
 	let (_, dst_rest_rotation, _) = node_scale_rotation_translation(&rest_nodes[c.target_node]);
@@ -1507,7 +1496,7 @@ pub fn apply_node_constraints_to_scene(
 			UnaNodeConstraintKind::Rotation => apply_rotation_constraint(nodes, rest_nodes, c),
 			UnaNodeConstraintKind::Roll { axis } => apply_roll_constraint(nodes, rest_nodes, c, axis),
 			UnaNodeConstraintKind::Aim { axis } => {
-				let parents = parents.get_or_insert_with(|| scene_parent_indices(nodes));
+				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
 				apply_aim_constraint(nodes, roots, rest_nodes, parents, c, axis);
 			}
 		}
