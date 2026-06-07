@@ -447,7 +447,7 @@ struct ExpressionNameLookup {
 #[derive(Debug, Default)]
 struct RuntimeRetargetData {
 	profile_lookup: BTreeMap<String, usize>,
-	base_transforms: BTreeMap<usize, NodeRestTransform>,
+	root_base: Option<NodeTransformBinding>,
 	body_bone_nodes: [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT],
 	hand_nodes: [HandNodeBindings; 2],
 	expression_lookup: ExpressionNameLookup,
@@ -521,21 +521,21 @@ impl HumanoidRetargetContext {
 			.as_ref()
 			.map(precompute_profile_lookup)
 			.unwrap_or_default();
-		let base_transforms = precompute_base_transforms(document.humanoid_profile.as_ref(), document.scene.as_ref(), rest_nodes);
+		let root_base = precompute_root_base(document.scene.as_ref(), rest_nodes);
 		let body_bone_nodes = document
 			.humanoid_profile
 			.as_ref()
-			.map(|profile| precompute_body_bone_nodes(profile, &profile_lookup, &base_transforms))
+			.map(|profile| precompute_body_bone_nodes(profile, &profile_lookup, document.scene.as_ref(), rest_nodes))
 			.unwrap_or_default();
 		let hand_nodes = document
 			.humanoid_profile
 			.as_ref()
-			.map(|profile| precompute_hand_nodes(profile, &profile_lookup, &base_transforms))
+			.map(|profile| precompute_hand_nodes(profile, &profile_lookup, document.scene.as_ref(), rest_nodes))
 			.unwrap_or_default();
 		let expression_lookup = precompute_expression_lookup(document);
 		let runtime = RuntimeRetargetData {
 			profile_lookup,
-			base_transforms,
+			root_base,
 			body_bone_nodes,
 			hand_nodes,
 			expression_lookup,
@@ -578,42 +578,38 @@ fn precompute_profile_lookup(profile: &HumanoidProfile) -> BTreeMap<String, usiz
 	lookup
 }
 
-fn precompute_base_transforms(
-	profile: Option<&HumanoidProfile>,
-	scene: Option<&UnaSceneSnapshot>,
-	rest_nodes: Option<&[UnaSceneNode]>,
-) -> BTreeMap<usize, NodeRestTransform> {
+fn precompute_root_base(scene: Option<&UnaSceneSnapshot>, rest_nodes: Option<&[UnaSceneNode]>) -> Option<NodeTransformBinding> {
 	let Some(scene) = scene else {
-		return BTreeMap::new();
+		return None;
 	};
+	let node_index = *scene.roots.first()?;
+	node_base_transform_from_scene(scene, rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
+}
+
+fn node_base_transform_from_scene(
+	scene: &UnaSceneSnapshot,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	node_index: usize,
+) -> Option<NodeRestTransform> {
 	let nodes = rest_nodes.unwrap_or(&scene.nodes);
-	let mut transforms = BTreeMap::new();
-	if let Some(&root) = scene.roots.first() {
-		if let Some(node) = nodes.get(root) {
-			transforms.insert(root, NodeRestTransform::from_node(node));
-		}
-	}
-	if let Some(profile) = profile {
-		for &node_index in profile.bone_node_indices.values() {
-			if let Some(node) = nodes.get(node_index) {
-				transforms.entry(node_index).or_insert_with(|| NodeRestTransform::from_node(node));
-			}
-		}
-	}
-	transforms
+	nodes.get(node_index).map(NodeRestTransform::from_node)
 }
 
 fn precompute_body_bone_nodes(
 	profile: &HumanoidProfile,
 	profile_lookup: &BTreeMap<String, usize>,
-	base_transforms: &BTreeMap<usize, NodeRestTransform>,
+	scene: Option<&UnaSceneSnapshot>,
+	rest_nodes: Option<&[UnaSceneNode]>,
 ) -> [Option<NodeTransformBinding>; HUMANOID_PROFILE_BONE_COUNT] {
 	debug_assert_eq!(HUMANOID_PROFILE_BONES.len(), HUMANOID_PROFILE_BONE_COUNT);
 	let mut nodes = [None; HUMANOID_PROFILE_BONE_COUNT];
+	let Some(scene) = scene else {
+		return nodes;
+	};
 	for &bone in HUMANOID_PROFILE_BONES {
 		let key = humanoid_bone_profile_key(bone);
 		if let Some(node_index) = profile_node_index_with_lookup(profile, Some(profile_lookup), key) {
-			if let Some(base) = base_transforms.get(&node_index).copied() {
+			if let Some(base) = node_base_transform_from_scene(scene, rest_nodes, node_index) {
 				nodes[humanoid_bone_index(bone)] = Some(NodeTransformBinding { node_index, base });
 			}
 		}
@@ -624,13 +620,17 @@ fn precompute_body_bone_nodes(
 fn precompute_hand_nodes(
 	profile: &HumanoidProfile,
 	profile_lookup: &BTreeMap<String, usize>,
-	base_transforms: &BTreeMap<usize, NodeRestTransform>,
+	scene: Option<&UnaSceneSnapshot>,
+	rest_nodes: Option<&[UnaSceneNode]>,
 ) -> [HandNodeBindings; 2] {
 	let mut hands = [HandNodeBindings::default(); 2];
+	let Some(scene) = scene else {
+		return hands;
+	};
 	for (side_index, side_prefix) in ["left", "right"].into_iter().enumerate() {
 		if let Some(key) = hand_profile_key(side_prefix) {
 			hands[side_index].wrist = profile_node_index_with_lookup(profile, Some(profile_lookup), key)
-				.and_then(|node_index| base_transforms.get(&node_index).copied().map(|base| NodeTransformBinding { node_index, base }));
+				.and_then(|node_index| node_base_transform_from_scene(scene, rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base }));
 		}
 	}
 	for &(side_prefix, finger_key, segment) in FINGER_PROFILE_SEGMENTS {
@@ -651,7 +651,7 @@ fn precompute_hand_nodes(
 		};
 		let successor_node_index = finger_successor_profile_key(side_prefix, finger_key, segment)
 			.and_then(|successor_key| profile_node_index_with_lookup(profile, Some(profile_lookup), successor_key));
-		if let Some(base) = base_transforms.get(&node_index).copied() {
+		if let Some(base) = node_base_transform_from_scene(scene, rest_nodes, node_index) {
 			hands[side_index].fingers[finger_index][segment_index] = Some(FingerNodeBinding {
 				node: NodeTransformBinding { node_index, base },
 				successor_node_index,
@@ -1053,7 +1053,7 @@ fn apply_humanoid_transform_to_node_index(
 	};
 	sample_rotation = adapt_unavatar_unmotion_limb_axis(profile, sample_rotation, nodes, rest_nodes, roots, frame_ctx, ni, adapter_role);
 	if let Some(node) = nodes.get_mut(ni) {
-		let base = compiled_base.unwrap_or_else(|| base_node_transform(ni, node, rest_nodes, frame_ctx));
+		let base = compiled_base.unwrap_or_else(|| base_node_transform(ni, node, rest_nodes));
 		if let Some(deg) = eye_clamp_deg {
 			sample_rotation = clamp_eye_rotation(sample_rotation, deg);
 		}
@@ -1099,7 +1099,7 @@ fn apply_finger_transform_to_profile_node(
 		successor_node_index,
 	);
 	if let Some(node) = nodes.get_mut(node_index) {
-		let base = compiled_base.unwrap_or_else(|| base_node_transform(node_index, node, rest_nodes, frame_ctx));
+		let base = compiled_base.unwrap_or_else(|| base_node_transform(node_index, node, rest_nodes));
 		let sample_translation = frame_ctx.transform_translation(transform);
 		node.transform = Mat4::from_scale_rotation_translation(
 			base.scale,
@@ -1229,15 +1229,7 @@ fn base_node_transform(
 	node_index: usize,
 	node: &UnaSceneNode,
 	rest_nodes: Option<&[UnaSceneNode]>,
-	frame_ctx: RetargetFrameContext<'_>,
 ) -> NodeRestTransform {
-	if let Some(base) = frame_ctx
-		.runtime
-		.map(|runtime| &runtime.base_transforms)
-		.and_then(|transforms| transforms.get(&node_index).copied())
-	{
-		return base;
-	}
 	let base_node = rest_nodes.and_then(|rest| rest.get(node_index)).unwrap_or(node);
 	NodeRestTransform::from_node(base_node)
 }
@@ -1535,10 +1527,15 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			if rest_nodes.and_then(|rest| rest.get(ri)).is_some()
 				|| frame_ctx
 					.runtime
-					.map(|runtime| &runtime.base_transforms)
-					.is_some_and(|transforms| transforms.contains_key(&ri))
+					.and_then(|runtime| runtime.root_base)
+					.is_some_and(|binding| binding.node_index == ri)
 			{
-				let base = base_node_transform(ri, node, rest_nodes, frame_ctx);
+				let base = frame_ctx
+					.runtime
+					.and_then(|runtime| runtime.root_base)
+					.filter(|binding| binding.node_index == ri)
+					.map(|binding| binding.base)
+					.unwrap_or_else(|| base_node_transform(ri, node, rest_nodes));
 				let sample_rotation = frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root);
 				// translation は opt-in 時のみ rest に加算する。OFF 時は rest pose の base_translation を温存。
 				let translation = if apply_root_translation {

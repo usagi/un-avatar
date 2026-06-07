@@ -117,13 +117,14 @@ than looking at the original document format during every frame application.
 when motion receivers are started, next to the immutable rest-node snapshot, and
 then calls `apply_un_motion_frame_to_document_with_context` for each pending
 motion frame. It owns `RuntimeRetargetData`, the compiled runtime lookup bundle
-for profile keys, base transforms, body/finger node bindings, and expression
-name matching. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
+for profile keys, root/base-node bindings, body/finger node bindings, and
+expression name matching. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
 API available for tests and tools while avoiding repeated target-basis detection
 and repeated `.unavatar` rest-cache construction in the renderer hot path.
-It also stores base TRS for the root and Humanoid-profile nodes, so the renderer
-hot path can write rest-relative local transforms without decomposing each rest
-node matrix again.
+It also stores root base TRS and per-node base TRS inside body/hand bindings, so
+the renderer hot path can write rest-relative local transforms without
+decomposing each rest node matrix again or keeping a duplicate base-transform
+map for every Humanoid node.
 It also precomputes normalized Humanoid profile keys so fallback key matching
 does not scan and normalize the whole profile for every bone and finger lookup.
 Body Humanoid bone node bindings are also compiled into a fixed bone-index
