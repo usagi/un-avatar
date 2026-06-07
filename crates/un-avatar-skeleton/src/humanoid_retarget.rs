@@ -8,6 +8,8 @@ use un_avatar_core::{
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
 
+use crate::scene_roots::scene_roots_or_parentless;
+
 type StringIndexLookup = Vec<(String, usize)>;
 type ProfileNodeLookup = StringIndexLookup;
 type ExpressionLookupEntries = StringIndexLookup;
@@ -1378,7 +1380,7 @@ fn scene_world_matrices(nodes: &[UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
 			visit(nodes, child, w, world);
 		}
 	}
-	for &root in roots {
+	for &root in scene_roots_or_parentless(nodes, roots).iter() {
 		visit(nodes, root, Mat4::IDENTITY, &mut world);
 	}
 	world
