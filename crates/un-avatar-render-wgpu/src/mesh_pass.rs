@@ -445,6 +445,7 @@ fn baseline_fallback_mesh_shader_source() -> String {
 pub(crate) const MAX_BONES: usize = 512;
 
 const BONE_MATRIX_SIZE: u64 = (16 * std::mem::size_of::<f32>()) as u64;
+const STATIC_IDENTITY_SKIN_PALETTE_NODE: usize = usize::MAX;
 const MORPH_WEIGHT_BUFFER_MIN_SIZE: u64 = 16;
 const MORPH_DELTA_BUFFER_MIN_SIZE: u64 = 16;
 
@@ -1594,6 +1595,13 @@ fn skin_palette_matrix_capacity(skin: Option<&un_avatar_core::UnaSkin>) -> usize
 	skin.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
 		.unwrap_or(1)
 		.max(1)
+}
+
+fn skin_palette_key_for_node(world_node_index: usize, skin_index: Option<usize>) -> SkinPaletteKey {
+	SkinPaletteKey {
+		world_node_index: skin_index.map_or(STATIC_IDENTITY_SKIN_PALETTE_NODE, |_| world_node_index),
+		skin_index,
+	}
 }
 
 fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
@@ -6434,10 +6442,7 @@ impl SceneMeshes {
 				} = exp;
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
 				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
-				let skin_palette_key = SkinPaletteKey {
-					world_node_index: ni,
-					skin_index: node.skin,
-				};
+				let skin_palette_key = skin_palette_key_for_node(ni, node.skin);
 				let skin_palette_index = Self::skin_palette_index(
 					device,
 					queue,
@@ -7374,13 +7379,13 @@ impl SceneMeshes {
 			}],
 		});
 		let index = skin_palettes.len();
-		let raw_capacity = matrix_raw_capacity(matrix_capacity);
 		let static_identity = key.skin_index.is_none();
 		let (raw, uploaded) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
 			(Vec::new(), Vec::new())
 		} else {
+			let raw_capacity = matrix_raw_capacity(matrix_capacity);
 			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
 		};
 		skin_palettes.push(SkinPalette {
@@ -8777,6 +8782,12 @@ mod tests {
 			skeleton_node: None,
 		};
 		assert_eq!(skin_palette_matrix_capacity(Some(&skin)), 1);
+	}
+
+	#[test]
+	fn skinless_palette_key_is_shared_identity() {
+		assert_eq!(skin_palette_key_for_node(1, None), skin_palette_key_for_node(42, None));
+		assert_ne!(skin_palette_key_for_node(1, Some(0)), skin_palette_key_for_node(42, Some(0)));
 	}
 
 	#[test]
