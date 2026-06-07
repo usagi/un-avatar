@@ -989,7 +989,7 @@ fn opaque_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 }
 
 fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
-	let Some(liltoon_like) = material.liltoon_like.as_ref() else {
+	let Some(liltoon_like) = material.liltoon_like_runtime() else {
 		return false;
 	};
 	(liltoon_like.blend_state.source_factor - 1.0).abs() < 0.001
@@ -1013,8 +1013,7 @@ fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bo
 
 fn material_render_queue_number(material: &UnaMaterialPbr, alpha_mode: UnaAlphaMode) -> i32 {
 	if let Some(render_queue) = material
-		.liltoon_like
-		.as_ref()
+		.liltoon_like_runtime()
 		.and_then(|liltoon_like| liltoon_like.rendering.render_queue_number)
 	{
 		return render_queue;
@@ -1039,7 +1038,7 @@ fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -
 }
 
 fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
-	material.liltoon_like.as_ref().is_some_and(|u| {
+	material.liltoon_like_runtime().is_some_and(|u| {
 		(u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
 			|| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
 			&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
@@ -1075,8 +1074,7 @@ fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 
 fn material_uses_liltoon_gem_prepass(material: &UnaMaterialPbr) -> bool {
 	material
-		.liltoon_like
-		.as_ref()
+		.liltoon_like_runtime()
 		.is_some_and(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem)
 }
 
@@ -1105,8 +1103,7 @@ fn transparent_backpass_enabled(
 fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> bool {
 	let liltoon_backpass_enabled = draw
 		.material
-		.liltoon_like
-		.as_ref()
+		.liltoon_like_runtime()
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	transparent_backpass_enabled(
 		draw.alpha_mode,
@@ -9060,6 +9057,7 @@ mod tests {
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
 		liltoon_like.rendering.render_queue_number = Some(2900);
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Opaque,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -9077,6 +9075,7 @@ mod tests {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.rendering.render_queue_number = Some(2461);
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Blend,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -9207,6 +9206,7 @@ mod tests {
 		liltoon_like.reflection.gem_particle_color_factor = [2.0, 3.0, 4.0, 0.5];
 		liltoon_like.blend_state.destination_factor = 1.0;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -9228,6 +9228,7 @@ mod tests {
 			..Default::default()
 		};
 		let gem_material = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(gem.clone()),
 			..Default::default()
 		};
@@ -9235,6 +9236,7 @@ mod tests {
 
 		gem.blend_state.destination_factor = 1.0;
 		let additive = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(gem),
 			..Default::default()
 		};
@@ -9243,6 +9245,7 @@ mod tests {
 		let mut transparent = un_avatar_core::UnaLilToonLikeMaterial::default();
 		transparent.blend_state.destination_factor = 1.0;
 		let non_gem = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(transparent),
 			..Default::default()
 		};
