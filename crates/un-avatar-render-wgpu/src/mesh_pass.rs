@@ -7671,13 +7671,13 @@ impl SceneMeshes {
 		}
 		self.expression_value_scratch.clear();
 		if expr_weights.is_some() || expression_overrides.is_some() {
-			self.expression_value_scratch.reserve(self.expression_names.len());
-			for name in &self.expression_names {
+			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
+			for (index, name) in self.expression_names.iter().enumerate() {
 				let value = expression_overrides
 					.and_then(|overrides| overrides.get(name).copied())
 					.or_else(|| expr_weights.and_then(|weights| weights.preset_weights.get(name).copied()))
 					.unwrap_or(0.0);
-				self.expression_value_scratch.push(value);
+				self.expression_value_scratch[index] = value;
 			}
 		}
 		if self.active_skin_palette_scratch.len() == self.skin_palettes.len() {
