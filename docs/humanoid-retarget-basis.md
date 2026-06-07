@@ -121,6 +121,9 @@ for profile keys, root/base-node bindings, body/finger node bindings, and
 expression name matching. This keeps the legacy `apply_un_motion_frame_to_document_with_rest`
 API available for tests and tools while avoiding repeated target-basis detection
 and repeated `.unavatar` rest-cache construction in the renderer hot path.
+Renderer state keeps the immutable rest-node snapshot and
+`HumanoidRetargetContext` together as one motion retarget runtime, so frame
+application cannot accidentally mix a context with a different rest snapshot.
 It also stores root base TRS and per-node base TRS inside body/hand bindings, so
 the renderer hot path can write rest-relative local transforms without
 decomposing each rest node matrix again or keeping a duplicate base-transform
