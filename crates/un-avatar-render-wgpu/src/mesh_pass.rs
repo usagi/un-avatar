@@ -945,37 +945,17 @@ pub(crate) struct SceneMeshRuntimeRequirements {
 	pub(crate) audio_link_texture: bool,
 }
 
-fn scene_mesh_runtime_requirements_for_draws(draws: &[MeshDraw]) -> SceneMeshRuntimeRequirements {
-	SceneMeshRuntimeRequirements {
-		audio_link_texture: draws
-			.iter()
-			.any(|draw| draw.active && material_needs_audio_link_texture(&draw.material, draw.shading)),
-	}
-}
-
-fn active_draw_indices_for_draws(draws: &[MeshDraw]) -> Vec<usize> {
-	draws
-		.iter()
-		.enumerate()
-		.filter_map(|(index, draw)| draw.active.then_some(index))
-		.collect()
-}
-
-fn active_draws_need_screen_refraction(draws: &[MeshDraw]) -> bool {
-	draws
-		.iter()
-		.any(|draw| draw.active && material_needs_screen_refraction(&draw.material))
-}
-
-fn active_skin_palette_indices_for_draws(draws: &[MeshDraw]) -> Vec<usize> {
-	let mut indices: Vec<usize> = draws
-		.iter()
-		.filter(|draw| draw.active)
-		.map(|draw| draw.skin_palette_index)
-		.collect();
-	indices.sort_unstable();
-	indices.dedup();
-	indices
+#[derive(Default)]
+struct SceneMeshDrawState {
+	outline_draw_indices: Vec<usize>,
+	fur_draw_indices: Vec<usize>,
+	opaque_batches: Vec<DrawBatch>,
+	transparent_backpass_draw_indices: Vec<usize>,
+	blended_batches: Vec<DrawBatch>,
+	active_draw_indices: Vec<usize>,
+	needs_screen_refraction: bool,
+	active_skin_palette_indices: Vec<usize>,
+	runtime_requirements: SceneMeshRuntimeRequirements,
 }
 
 #[inline]
@@ -1141,10 +1121,18 @@ fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with
 		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
 }
 
-fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>, Vec<usize>, Vec<DrawBatch>, Vec<usize>, Vec<DrawBatch>) {
-	let mut outline_draw_indices = Vec::with_capacity(draws.len());
-	let mut fur_draw_indices = Vec::with_capacity(draws.len());
-	let mut transparent_backpass_draw_indices = Vec::with_capacity(draws.len());
+fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
+	let mut state = SceneMeshDrawState {
+		outline_draw_indices: Vec::with_capacity(draws.len()),
+		fur_draw_indices: Vec::with_capacity(draws.len()),
+		opaque_batches: Vec::new(),
+		transparent_backpass_draw_indices: Vec::with_capacity(draws.len()),
+		blended_batches: Vec::new(),
+		active_draw_indices: Vec::with_capacity(draws.len()),
+		needs_screen_refraction: false,
+		active_skin_palette_indices: Vec::with_capacity(draws.len()),
+		runtime_requirements: SceneMeshRuntimeRequirements::default(),
+	};
 	let batch_capacity = (draws.len() / 10).max(1);
 	let mut opaque_batches = vec![
 		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
@@ -1163,16 +1151,24 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		if !draw.active {
 			continue;
 		}
+		state.active_draw_indices.push(draw_index);
+		state.active_skin_palette_indices.push(draw.skin_palette_index);
+		if material_needs_screen_refraction(&draw.material) {
+			state.needs_screen_refraction = true;
+		}
+		if material_needs_audio_link_texture(&draw.material, draw.shading) {
+			state.runtime_requirements.audio_link_texture = true;
+		}
 		let shading = effective_mesh_shading(draw, opts);
 		if !opts.disable_mtoon_outlines
 			&& draw_has_outline(draw, opts)
 			&& matches!(draw.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
 		{
-			outline_draw_indices.push(draw_index);
+			state.outline_draw_indices.push(draw_index);
 		}
 		let has_fur = draw_has_fur(draw, opts);
 		if has_fur {
-			fur_draw_indices.push(draw_index);
+			state.fur_draw_indices.push(draw_index);
 		}
 
 		let shading_index = match shading {
@@ -1220,21 +1216,19 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> (Vec<usize>
 		append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
 	}
 
-	group_draw_indices_by_skin_palette(draws, &mut outline_draw_indices);
-	group_draw_indices_by_skin_palette(draws, &mut fur_draw_indices);
-	group_draw_indices_by_skin_palette(draws, &mut transparent_backpass_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut state.outline_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut state.fur_draw_indices);
+	group_draw_indices_by_skin_palette(draws, &mut state.transparent_backpass_draw_indices);
 	for batch in &mut opaque_batches {
 		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
 	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
-	(
-		outline_draw_indices,
-		fur_draw_indices,
-		opaque_batches,
-		transparent_backpass_draw_indices,
-		blended_batches,
-	)
+	state.opaque_batches = opaque_batches;
+	state.blended_batches = blended_batches;
+	state.active_skin_palette_indices.sort_unstable();
+	state.active_skin_palette_indices.dedup();
+	state
 }
 
 pub(crate) struct SceneMeshes {
@@ -7249,13 +7243,8 @@ impl SceneMeshes {
 			}
 		}
 
-		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
-			build_draw_order(&draws, &opts);
+		let draw_state = build_draw_order(&draws, &opts);
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
-		let active_draw_indices = active_draw_indices_for_draws(&draws);
-		let needs_screen_refraction = active_draws_need_screen_refraction(&draws);
-		let active_skin_palette_indices = active_skin_palette_indices_for_draws(&draws);
-		let runtime_requirements = scene_mesh_runtime_requirements_for_draws(&draws);
 		let expression_value_capacity = expression_names.len();
 
 		Ok(Self {
@@ -7290,16 +7279,16 @@ impl SceneMeshes {
 			_cube_textures: cube_textures,
 			draws,
 			skin_palettes,
-			outline_draw_indices,
-			fur_draw_indices,
-			opaque_batches,
-			transparent_backpass_draw_indices,
-			blended_batches,
-			active_draw_indices,
-			needs_screen_refraction,
-			active_skin_palette_indices,
+			outline_draw_indices: draw_state.outline_draw_indices,
+			fur_draw_indices: draw_state.fur_draw_indices,
+			opaque_batches: draw_state.opaque_batches,
+			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices,
+			blended_batches: draw_state.blended_batches,
+			active_draw_indices: draw_state.active_draw_indices,
+			needs_screen_refraction: draw_state.needs_screen_refraction,
+			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			texture_summary,
-			runtime_requirements,
+			runtime_requirements: draw_state.runtime_requirements,
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
 			has_morph_draws,
@@ -7574,20 +7563,16 @@ impl SceneMeshes {
 	}
 
 	fn rebuild_draw_order(&mut self) {
-		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
-			build_draw_order(&self.draws, &self.opts);
-		self.outline_draw_indices = outline_draw_indices;
-		self.fur_draw_indices = fur_draw_indices;
-		self.opaque_batches = opaque_batches;
-		self.transparent_backpass_draw_indices = transparent_backpass_draw_indices;
-		self.blended_batches = blended_batches;
-	}
-
-	fn refresh_cached_draw_state(&mut self) {
-		self.active_draw_indices = active_draw_indices_for_draws(&self.draws);
-		self.needs_screen_refraction = active_draws_need_screen_refraction(&self.draws);
-		self.active_skin_palette_indices = active_skin_palette_indices_for_draws(&self.draws);
-		self.runtime_requirements = scene_mesh_runtime_requirements_for_draws(&self.draws);
+		let draw_state = build_draw_order(&self.draws, &self.opts);
+		self.outline_draw_indices = draw_state.outline_draw_indices;
+		self.fur_draw_indices = draw_state.fur_draw_indices;
+		self.opaque_batches = draw_state.opaque_batches;
+		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices;
+		self.blended_batches = draw_state.blended_batches;
+		self.active_draw_indices = draw_state.active_draw_indices;
+		self.needs_screen_refraction = draw_state.needs_screen_refraction;
+		self.active_skin_palette_indices = draw_state.active_skin_palette_indices;
+		self.runtime_requirements = draw_state.runtime_requirements;
 	}
 
 	pub fn set_avatar_rim(&mut self, queue: &wgpu::Queue, rim: AvatarRimOptions) {
@@ -7781,9 +7766,7 @@ impl SceneMeshes {
 		let debug_zero_morphs = self.opts.debug_zero_morphs;
 		if refresh_scene_morph_defaults {
 			self.refresh_morph_defaults_from_scene(scene);
-			if self.refresh_draw_visibility_from_scene(scene) > 0 {
-				self.rebuild_draw_order();
-			}
+			self.refresh_draw_visibility_from_scene(scene);
 		}
 		self.expression_value_scratch.clear();
 		if self.has_morph_draws && (expr_weights.is_some() || expression_overrides.is_some()) {
@@ -7910,7 +7893,7 @@ impl SceneMeshes {
 			}
 		}
 		if changed > 0 {
-			self.refresh_cached_draw_state();
+			self.rebuild_draw_order();
 		}
 		changed
 	}
