@@ -895,6 +895,7 @@ struct MeshDraw {
 	bind_material: wgpu::BindGroup,
 	bind_outline_material: wgpu::BindGroup,
 	skin_palette_index: usize,
+	skin_palette_static_identity: bool,
 	_morph_meta_buffer: wgpu::Buffer,
 	morph_weight_buffer: wgpu::Buffer,
 	_morph_delta_buffer: wgpu::Buffer,
@@ -1153,7 +1154,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 			continue;
 		}
 		state.active_draw_indices.push(draw_index);
-		state.active_skin_palette_indices.push(draw.skin_palette_index);
+		if !draw.skin_palette_static_identity {
+			state.active_skin_palette_indices.push(draw.skin_palette_index);
+		}
 		if material_needs_screen_refraction(&draw.material) {
 			state.needs_screen_refraction = true;
 		}
@@ -7231,6 +7234,7 @@ impl SceneMeshes {
 					bind_material,
 					bind_outline_material,
 					skin_palette_index,
+					skin_palette_static_identity: skin_palette_key.skin_index.is_none(),
 					_morph_meta_buffer: morph_resources.meta_buffer,
 					morph_weight_buffer: morph_resources.weight_buffer,
 					_morph_delta_buffer: morph_resources.delta_buffer,
