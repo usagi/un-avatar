@@ -672,7 +672,8 @@ fn precompute_root_base(input: RetargetCompileInput<'_>) -> Option<NodeTransform
 	let Some(scene) = input.scene else {
 		return None;
 	};
-	let node_index = *scene.roots.first()?;
+	let roots = scene_roots_or_parentless(&scene.nodes, &scene.roots);
+	let node_index = *roots.first()?;
 	node_base_transform_from_scene(scene, input.rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
 }
 
@@ -1629,7 +1630,8 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
 ) {
-	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
+	let resolved_roots = scene_roots_or_parentless(nodes, roots);
+	if let (Some(ref root_t), Some(&ri)) = (&pose.root, resolved_roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base) = root_base_transform(ri, node, rest_nodes, frame_ctx) {
 				let sample_rotation = frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root);
@@ -1984,6 +1986,30 @@ mod tests {
 			nodes[2].transform[12..16].try_into().unwrap(),
 		]);
 		assert!(m2.w_axis.truncate().length() < 1e-5);
+	}
+
+	#[test]
+	fn root_pose_falls_back_to_parentless_scene_root() {
+		let mut nodes = vec![unknown_node(); 2];
+		nodes[0].children.push(1);
+		let profile = HumanoidProfile::default();
+		let pose = HumanoidPose {
+			root: Some(TransformSample {
+				translation: Some(Vec3f { x: 1.0, y: 0.0, z: 0.0 }),
+				rotation: None,
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			}),
+			bones: Vec::new(),
+		};
+
+		apply_humanoid_pose_to_scene(&profile, &mut nodes, &[], &pose, false);
+
+		let root = Mat4::from_cols_array(&nodes[0].transform);
+		let child = Mat4::from_cols_array(&nodes[1].transform);
+		assert!((root.w_axis.truncate() - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5);
+		assert!(child.w_axis.truncate().length() < 1e-5);
 	}
 
 	#[test]
