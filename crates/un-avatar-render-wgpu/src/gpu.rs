@@ -2515,10 +2515,7 @@ impl GpuSceneBuildContext {
 			aa,
 			shader_variant_tier,
 		} = self;
-		let mut document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
-		if document.expression_catalog.as_ref().is_some_and(|c| !c.presets.is_empty()) {
-			document.expression_weights.get_or_insert_with(Default::default);
-		}
+		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let rest_nodes = document.scene.as_ref().map(|scene| Arc::new(scene.nodes.clone()));
 		let bone_colliders = if let Some(scene) = document.scene.as_ref() {
 			build_bone_colliders(scene, document.humanoid_profile.as_ref(), options.bone_colliders)
