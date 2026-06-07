@@ -295,7 +295,6 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) phase: f32,
 }
 
-#[derive(Clone)]
 pub(crate) struct DocumentAttachOptions {
 	pub(crate) mesh_diagnostics: SceneMeshLoadOpts,
 	pub(crate) texture_max_dimension: Option<u32>,
