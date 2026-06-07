@@ -1241,6 +1241,7 @@ pub(crate) struct SceneMeshes {
 	texture_summary: TextureUploadSummary,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
+	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
 }
 
@@ -7152,6 +7153,7 @@ impl SceneMeshes {
 		let (outline_draw_indices, fur_draw_indices, opaque_batches, transparent_backpass_draw_indices, blended_batches) =
 			build_draw_order(&draws, &opts);
 		let skin_palette_count = skin_palettes.len();
+		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
 
 		Ok(Self {
 			pipeline_outline_toon,
@@ -7194,6 +7196,7 @@ impl SceneMeshes {
 			texture_summary,
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(catalog.map_or(0, |catalog| catalog.presets.len())),
+			has_morph_draws,
 			opts,
 		})
 	}
@@ -7670,7 +7673,7 @@ impl SceneMeshes {
 			}
 		}
 		self.expression_value_scratch.clear();
-		if expr_weights.is_some() || expression_overrides.is_some() {
+		if self.has_morph_draws && (expr_weights.is_some() || expression_overrides.is_some()) {
 			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
 			for (index, name) in self.expression_names.iter().enumerate() {
 				let value = expression_overrides
