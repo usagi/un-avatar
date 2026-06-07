@@ -660,9 +660,9 @@ impl MotionFrameBucket {
 		let left_finger_capacity = frame.left_hand.as_ref().map_or(0, |hand| hand.fingers.len());
 		let right_finger_capacity = frame.right_hand.as_ref().map_or(0, |hand| hand.fingers.len());
 		Self {
-			header: frame.header.clone(),
+			header: un_motion_frame::MotionHeader::new(0),
 			sources: Vec::with_capacity(frame.sources.len()),
-			metadata: frame.metadata.clone(),
+			metadata: un_motion_frame::MotionMetadata::default(),
 			body_tracking_state: un_motion_frame::TrackingState::Unknown,
 			body_confidence: 0.0,
 			body_root: None,
