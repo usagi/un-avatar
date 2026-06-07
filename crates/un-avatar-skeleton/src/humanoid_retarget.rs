@@ -1611,12 +1611,6 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	eye_clamp_deg: Option<f32>,
 	apply_root_translation: bool,
 ) {
-	let frame_ctx = RetargetFrameContext::new(
-		frame_ctx.coordinate_space,
-		frame_ctx.target_basis,
-		frame_ctx.unavatar_adapter,
-		frame_ctx.runtime,
-	);
 	if let (Some(ref root_t), Some(&ri)) = (&pose.root, roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base) = root_base_transform(ri, node, rest_nodes, frame_ctx) {
