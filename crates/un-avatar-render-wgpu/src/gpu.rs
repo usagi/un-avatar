@@ -592,7 +592,9 @@ struct MotionFrameAccumulator {
 
 impl MotionFrameAccumulator {
 	fn clear(&mut self) {
-		self.buckets.clear();
+		for bucket in &mut self.buckets {
+			bucket.clear_samples();
+		}
 	}
 
 	fn push_frame(&mut self, frame: un_motion_frame::UNMotionFrame) {
@@ -605,9 +607,9 @@ impl MotionFrameAccumulator {
 			return;
 		}
 		frames.reserve(self.buckets.len());
-		for bucket in self.buckets.drain(..) {
+		for bucket in &mut self.buckets {
 			self.sequence = self.sequence.wrapping_add(1);
-			if let Some(frame) = bucket.into_frame(self.sequence) {
+			if let Some(frame) = bucket.take_frame(self.sequence) {
 				frames.push(frame);
 			}
 		}
@@ -741,19 +743,42 @@ impl MotionFrameBucket {
 		}
 	}
 
-	fn into_frame(mut self, sequence: u64) -> Option<un_motion_frame::UNMotionFrame> {
+	fn clear_samples(&mut self) {
+		self.sources.clear();
+		self.metadata = un_motion_frame::MotionMetadata::default();
+		self.body_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.body_confidence = 0.0;
+		self.body_root = None;
+		self.body_bones.clear();
+		self.face_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.face_confidence = 0.0;
+		self.face_head = None;
+		self.expressions.clear();
+		self.eyes = None;
+		self.left_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.left_confidence = 0.0;
+		self.left_wrist = None;
+		self.left_fingers.clear();
+		self.right_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.right_confidence = 0.0;
+		self.right_wrist = None;
+		self.right_fingers.clear();
+		self.signals.clear();
+	}
+
+	fn take_frame(&mut self, sequence: u64) -> Option<un_motion_frame::UNMotionFrame> {
 		let mut frame = un_motion_frame::UNMotionFrame::new(sequence);
 		self.header.sequence = sequence;
-		frame.header = self.header;
-		frame.sources = self.sources;
-		frame.metadata = self.metadata;
+		frame.header = self.header.clone();
+		frame.sources = std::mem::take(&mut self.sources);
+		frame.metadata = std::mem::take(&mut self.metadata);
 		if self.body_root.is_some() || !self.body_bones.is_empty() {
 			frame.body = Some(un_motion_frame::BodyMotion {
 				tracking_state: self.body_tracking_state,
 				confidence: self.body_confidence,
 				humanoid: Some(un_motion_frame::HumanoidPose {
-					root: self.body_root,
-					bones: self.body_bones,
+					root: self.body_root.take(),
+					bones: std::mem::take(&mut self.body_bones),
 				}),
 			});
 		}
@@ -761,28 +786,28 @@ impl MotionFrameBucket {
 			frame.face = Some(un_motion_frame::FaceMotion {
 				tracking_state: self.face_tracking_state,
 				confidence: self.face_confidence,
-				head: self.face_head,
-				expressions: self.expressions,
+				head: self.face_head.take(),
+				expressions: std::mem::take(&mut self.expressions),
 			});
 		}
-		frame.eyes = self.eyes;
+		frame.eyes = self.eyes.take();
 		if self.left_wrist.is_some() || !self.left_fingers.is_empty() {
 			frame.left_hand = Some(un_motion_frame::HandMotion {
 				tracking_state: self.left_tracking_state,
 				confidence: self.left_confidence,
-				wrist: self.left_wrist,
-				fingers: self.left_fingers,
+				wrist: self.left_wrist.take(),
+				fingers: std::mem::take(&mut self.left_fingers),
 			});
 		}
 		if self.right_wrist.is_some() || !self.right_fingers.is_empty() {
 			frame.right_hand = Some(un_motion_frame::HandMotion {
 				tracking_state: self.right_tracking_state,
 				confidence: self.right_confidence,
-				wrist: self.right_wrist,
-				fingers: self.right_fingers,
+				wrist: self.right_wrist.take(),
+				fingers: std::mem::take(&mut self.right_fingers),
 			});
 		}
-		frame.signals = self.signals;
+		frame.signals = std::mem::take(&mut self.signals);
 		if frame.body.is_none()
 			&& frame.face.is_none()
 			&& frame.eyes.is_none()
@@ -878,6 +903,26 @@ mod motion_buffer_tests {
 		buffer.push_frame(expression_frame(2, "Angry", 0.5));
 		buffer.take_pending_frames_into(&mut frames);
 		assert_eq!(frames.len(), 1);
+		let expressions = &frames[0].face.as_ref().unwrap().expressions;
+		assert_eq!(expressions.len(), 1);
+		assert_eq!(expressions[0].name, "Angry");
+	}
+
+	#[test]
+	fn motion_frame_accumulator_reuses_buckets_after_read() {
+		let mut accumulator = MotionFrameAccumulator::default();
+		let mut frames = Vec::new();
+
+		accumulator.push_frame(expression_frame(1, "Joy", 0.25));
+		accumulator.take_frames_into(&mut frames);
+		assert_eq!(frames.len(), 1);
+		assert_eq!(accumulator.buckets.len(), 1);
+
+		frames.clear();
+		accumulator.push_frame(expression_frame(2, "Angry", 0.5));
+		accumulator.take_frames_into(&mut frames);
+		assert_eq!(frames.len(), 1);
+		assert_eq!(accumulator.buckets.len(), 1);
 		let expressions = &frames[0].face.as_ref().unwrap().expressions;
 		assert_eq!(expressions.len(), 1);
 		assert_eq!(expressions[0].name, "Angry");
