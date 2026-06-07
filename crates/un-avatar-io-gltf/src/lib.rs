@@ -12,11 +12,11 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset,
-	UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
-	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
-	UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaTextureFilterMode, UnaTextureSampler,
-	UnaTextureWrapMode, UnaUnavatarExtension,
+	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog,
+	UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode,
+	UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas,
+	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1280,6 +1280,177 @@ fn lookup_operation_target(
 	lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op)
 		.into_iter()
 		.next()
+}
+
+fn unavatar_dynamics_source_kind(value: &Value) -> UnaDynamicsSourceKind {
+	let source = value
+		.get("source")
+		.or_else(|| value.get("sourceKind"))
+		.or_else(|| value.get("source_kind"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	match source {
+		source if source.eq_ignore_ascii_case("vrc_physbone") || source.eq_ignore_ascii_case("physbone") => {
+			UnaDynamicsSourceKind::VrcPhysBone
+		}
+		source
+			if source.eq_ignore_ascii_case("vrm_spring_bone")
+				|| source.eq_ignore_ascii_case("vrm_springbone")
+				|| source.eq_ignore_ascii_case("spring_bone")
+				|| source.eq_ignore_ascii_case("springbone") =>
+		{
+			UnaDynamicsSourceKind::VrmSpringBone
+		}
+		_ => UnaDynamicsSourceKind::Unknown,
+	}
+}
+
+fn unavatar_dynamics_root_index(
+	value: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Option<usize> {
+	if let Some(index) = json_usize(Some(value)) {
+		return Some(index);
+	}
+	if let Some(node_id) = value.as_str().filter(|value| !value.is_empty()) {
+		return node_ids.get(node_id).copied();
+	}
+	unavatar_node_ref_index(value, node_ids, registry_paths, paths, normalized_paths)
+}
+
+fn collect_scene_child_chain(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<usize> {
+	let mut chain = vec![root_idx];
+	let mut current = root_idx;
+	loop {
+		let Some(node) = scene.nodes.get(current) else {
+			break;
+		};
+		let Some(&next) = node.children.iter().find(|&&child| child < scene.nodes.len()) else {
+			break;
+		};
+		if chain.contains(&next) {
+			break;
+		}
+		chain.push(next);
+		current = next;
+		if chain.len() > 64 {
+			break;
+		}
+	}
+	chain
+}
+
+fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
+	let gravity = json_vec3(
+		value
+			.get("gravity")
+			.or_else(|| value.get("gravityVector"))
+			.or_else(|| value.get("gravity_vector")),
+	)
+	.unwrap_or([0.0, -1.0, 0.0]);
+	let gravity_vec = Vec3::from(gravity);
+	let vector_power = gravity_vec.length();
+	let explicit_power = json_f32(value.get("gravityPower").or_else(|| value.get("gravity_power")));
+	let power = explicit_power.unwrap_or(vector_power);
+	let dir = if gravity_vec.length_squared() > 1e-12 {
+		gravity_vec.normalize().to_array()
+	} else {
+		[0.0, -1.0, 0.0]
+	};
+	(power, dir)
+}
+
+fn unavatar_dynamics_settings(
+	scene: &UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+	report: &mut ImportReport,
+) -> Option<UnaSpringBoneSettings> {
+	let dynamics = unavatar.source.get("dynamics").and_then(Value::as_array)?;
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut groups = Vec::new();
+	let mut missing_roots = 0usize;
+	let mut short_chains = 0usize;
+
+	for item in dynamics {
+		let Some(roots) = item.get("roots").or_else(|| item.get("root")).or_else(|| item.get("rootNode")) else {
+			missing_roots += 1;
+			continue;
+		};
+		let root_values: Cow<'_, [Value]> = if let Some(array) = roots.as_array() {
+			Cow::Borrowed(array.as_slice())
+		} else {
+			Cow::Owned(vec![roots.clone()])
+		};
+		let source_kind = unavatar_dynamics_source_kind(item);
+		let category = item
+			.get("category")
+			.and_then(Value::as_str)
+			.filter(|value| !value.is_empty())
+			.unwrap_or("")
+			.to_string();
+		let comment = item
+			.get("id")
+			.or_else(|| item.get("name"))
+			.and_then(Value::as_str)
+			.unwrap_or("")
+			.to_string();
+		let stiffness = json_f32(item.get("stiffness").or_else(|| item.get("spring")).or_else(|| item.get("pull"))).unwrap_or(1.0);
+		let drag_force = json_f32(
+			item.get("drag")
+				.or_else(|| item.get("dragForce"))
+				.or_else(|| item.get("drag_force")),
+		)
+		.unwrap_or(0.4);
+		let hit_radius = json_f32(
+			item.get("radius")
+				.or_else(|| item.get("hitRadius"))
+				.or_else(|| item.get("hit_radius")),
+		)
+		.unwrap_or(0.02);
+		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
+
+		for root in root_values.iter() {
+			let Some(root_idx) = unavatar_dynamics_root_index(root, &node_ids, &registry_paths, &paths, &normalized_paths) else {
+				missing_roots += 1;
+				continue;
+			};
+			let chain = collect_scene_child_chain(scene, root_idx);
+			if chain.len() < 2 {
+				short_chains += 1;
+				continue;
+			}
+			groups.push(UnaSpringBoneGroup {
+				source_kind,
+				comment: comment.clone(),
+				category: category.clone(),
+				stiffness,
+				gravity_power,
+				gravity_dir,
+				drag_force,
+				center_node: None,
+				hit_radius,
+				bone_node_indices: chain,
+			});
+		}
+	}
+
+	if missing_roots > 0 || short_chains > 0 {
+		report.push_info(format!(
+			".unavatar dynamics: skipped missing_roots={missing_roots} short_chains={short_chains}"
+		));
+	}
+	if groups.is_empty() {
+		None
+	} else {
+		report.push_info(format!(".unavatar dynamics: lowered_groups={}", groups.len()));
+		Some(UnaSpringBoneSettings { groups })
+	}
 }
 
 fn apply_blend_shape_weight(scene: &mut UnaSceneSnapshot, node_idx: usize, name: &str, value: f32) -> bool {
@@ -4740,6 +4911,9 @@ impl AvatarImporter for GltfImporter {
 		} else {
 			None
 		};
+		let spring_bones = unavatar
+			.as_ref()
+			.and_then(|unavatar| unavatar_dynamics_settings(&scene, unavatar, &mut report));
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
 		}
@@ -4772,6 +4946,7 @@ impl AvatarImporter for GltfImporter {
 				humanoid_profile,
 				expression_weights: expression_catalog.as_ref().map(|_| UnaExpressionWeights::default()),
 				expression_catalog,
+				spring_bones,
 				..Default::default()
 			},
 			report,
@@ -4821,6 +4996,55 @@ mod tests {
 			v.extend_from_slice(&x.to_le_bytes());
 		}
 		v
+	}
+
+	fn test_scene_node(id: &str, children: Vec<usize>) -> UnaSceneNode {
+		UnaSceneNode {
+			name: Some(id.to_string()),
+			source_node_id: Some(id.to_string()),
+			visible: true,
+			transform: Mat4::IDENTITY.to_cols_array(),
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
+	#[test]
+	fn unavatar_dynamics_lowers_vrc_physbone_to_runtime_group() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_tip", "path": "Root/Tip"}
+				],
+				"dynamics": [{
+					"id": "hair_front",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"stiffness": 0.35,
+					"drag": 0.2,
+					"gravity": [0.0, -0.4, 0.0],
+					"radius": 0.03
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
+		assert_eq!(settings.groups[0].hit_radius, 0.03);
+		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
