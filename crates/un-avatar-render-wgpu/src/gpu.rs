@@ -331,8 +331,8 @@ pub(crate) struct PreparedDocumentScene {
 }
 
 struct MotionRetargetRuntime {
-	rest_nodes: Arc<Vec<UnaSceneNode>>,
-	context: Arc<un_avatar_skeleton::HumanoidRetargetContext>,
+	rest_nodes: Vec<UnaSceneNode>,
+	context: un_avatar_skeleton::HumanoidRetargetContext,
 }
 
 impl MotionRetargetRuntime {
@@ -341,11 +341,8 @@ impl MotionRetargetRuntime {
 			return None;
 		}
 		let scene = document.scene.as_ref()?;
-		let rest_nodes: Arc<Vec<UnaSceneNode>> = Arc::new(scene.nodes.clone());
-		let context = Arc::new(un_avatar_skeleton::HumanoidRetargetContext::for_document(
-			document,
-			Some(rest_nodes.as_slice()),
-		));
+		let rest_nodes = scene.nodes.clone();
+		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
 		Some(Self { rest_nodes, context })
 	}
 
