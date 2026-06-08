@@ -101,6 +101,10 @@ struct DiagnoseTimingSummary {
 struct DiagnoseRuntimeSummary {
 	source_kind: UnaRuntimeSourceKind,
 	humanoid_basis: UnaHumanoidRuntimeBasis,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	active_wardrobe_set: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	last_action_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2431,6 +2435,8 @@ fn build_diagnose_report(
 	let runtime = DiagnoseRuntimeSummary {
 		source_kind: runtime_model.source_kind(),
 		humanoid_basis: runtime_model.humanoid_basis(),
+		active_wardrobe_set: runtime_model.active_wardrobe_set().map(str::to_owned),
+		last_action_id: runtime_model.last_action_id().map(str::to_owned),
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
@@ -2711,8 +2717,8 @@ fn run_diagnose(
 		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
 	);
 	println!(
-		"runtime: source={:?} humanoid_basis={:?}",
-		report.runtime.source_kind, report.runtime.humanoid_basis
+		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} last_action_id={:?}",
+		report.runtime.source_kind, report.runtime.humanoid_basis, report.runtime.active_wardrobe_set, report.runtime.last_action_id
 	);
 	if let Some(actions) = &report.actions {
 		println!(
