@@ -225,6 +225,8 @@ enum RendererControlEvent {
 		action_id: Option<String>,
 		supervisor_command: Option<String>,
 		expression_menu_path: Option<String>,
+		parameter_name: Option<String>,
+		parameter_value: Option<f32>,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -418,6 +420,10 @@ enum RendererControlCommand {
 		supervisor_command: Option<String>,
 		#[serde(default, alias = "expressionMenuPath")]
 		expression_menu_path: Option<String>,
+		#[serde(default, alias = "parameterName")]
+		parameter_name: Option<String>,
+		#[serde(default, alias = "parameterValue")]
+		parameter_value: Option<f32>,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -2431,11 +2437,19 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				action_id,
 				supervisor_command,
 				expression_menu_path,
+				parameter_name,
+				parameter_value,
 				result,
 			} => {
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => {
-						gpu.activate_runtime_action(action_id.as_deref(), supervisor_command.as_deref(), expression_menu_path.as_deref())
+						gpu.activate_runtime_action(
+							action_id.as_deref(),
+							supervisor_command.as_deref(),
+							expression_menu_path.as_deref(),
+							parameter_name.as_deref(),
+							parameter_value,
+						)
 					}
 					None => Err("renderer is not initialized".to_string()),
 				};
@@ -3399,7 +3413,9 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			action_id,
 			supervisor_command,
 			expression_menu_path,
-		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command, expression_menu_path),
+			parameter_name,
+			parameter_value,
+		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command, expression_menu_path, parameter_name, parameter_value),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -3429,6 +3445,8 @@ fn dispatch_activate_action_command(
 	action_id: Option<String>,
 	supervisor_command: Option<String>,
 	expression_menu_path: Option<String>,
+	parameter_name: Option<String>,
+	parameter_value: Option<f32>,
 ) -> String {
 	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
 	let supervisor_command = supervisor_command
@@ -3437,14 +3455,22 @@ fn dispatch_activate_action_command(
 	let expression_menu_path = expression_menu_path
 		.map(|value| value.trim().to_string())
 		.filter(|value| !value.is_empty());
-	if action_id.is_none() && supervisor_command.is_none() && expression_menu_path.is_none() {
-		return "err action_id, supervisor_command, or expression_menu_path required".to_string();
+	let parameter_name = parameter_name
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if parameter_value.is_some() && parameter_name.is_none() {
+		return "err parameter_name required when parameter_value is provided".to_string();
+	}
+	if action_id.is_none() && supervisor_command.is_none() && expression_menu_path.is_none() && parameter_name.is_none() {
+		return "err action_id, supervisor_command, expression_menu_path, or parameter_name required".to_string();
 	}
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::ActivateAction {
 		action_id,
 		supervisor_command,
 		expression_menu_path,
+		parameter_name,
+		parameter_value,
 		result: Arc::clone(&result),
 	};
 	if proxy.send_event(event).is_err() {
@@ -4320,6 +4346,8 @@ mod tests {
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			parameter_name,
+			parameter_value,
 		} = command
 		else {
 			panic!("expected activate_action command");
@@ -4327,6 +4355,8 @@ mod tests {
 		assert_eq!(action_id.as_deref(), Some("wardrobe:field_drape"));
 		assert_eq!(supervisor_command, None);
 		assert_eq!(expression_menu_path, None);
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
 	}
 
 	#[test]
@@ -4337,6 +4367,8 @@ mod tests {
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			parameter_name,
+			parameter_value,
 		} = command
 		else {
 			panic!("expected activate_action command");
@@ -4344,6 +4376,29 @@ mod tests {
 		assert_eq!(action_id, None);
 		assert_eq!(supervisor_command, None);
 		assert_eq!(expression_menu_path.as_deref(), Some("Wardrobe/Field Drape"));
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_parameter_value() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","parameterName":"JacketColor","parameterValue":1.0}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+		assert_eq!(parameter_name.as_deref(), Some("JacketColor"));
+		assert_eq!(parameter_value, Some(1.0));
 	}
 
 	#[test]

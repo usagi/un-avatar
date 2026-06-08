@@ -2772,6 +2772,8 @@ impl GpuState {
 		action_id: Option<&str>,
 		command: Option<&str>,
 		expression_menu_path: Option<&str>,
+		parameter_name: Option<&str>,
+		parameter_value: Option<f32>,
 	) -> Result<RuntimeActionActivation, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2797,7 +2799,18 @@ impl GpuState {
 							|trigger| matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { path: trigger_path } if trigger_path == path),
 						)
 					});
-					matches_action_id || matches_supervisor_command || matches_expression_menu_path
+					let matches_parameter_value = parameter_name.is_some_and(|name| {
+						action.triggers.iter().any(|trigger| {
+							matches!(
+								trigger,
+								UnaRuntimeActionTrigger::ParameterValue {
+									name: trigger_name,
+									value: trigger_value,
+								} if trigger_name == name && parameter_value.is_none_or(|value| (value - *trigger_value).abs() <= 0.005)
+							)
+						})
+					});
+					matches_action_id || matches_supervisor_command || matches_expression_menu_path || matches_parameter_value
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
 			(action.id.clone(), action.effects.clone())
