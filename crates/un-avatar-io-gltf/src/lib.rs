@@ -17,8 +17,9 @@ use un_avatar_core::{
 	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
 	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
 	UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsMut, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
-	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
+	UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+	UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2105,6 +2106,15 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 					.to_string();
 				effects.push(UnaRuntimeActionEffect::MaterialScalar { target, parameter, value });
 			}
+			"materialSlot" | "material_slot" => {
+				let Some(target) = unavatar_runtime_material_slot_target(op) else {
+					continue;
+				};
+				let Some(material) = unavatar_runtime_material_slot_material(op) else {
+					continue;
+				};
+				effects.push(UnaRuntimeActionEffect::MaterialSlot { target, material });
+			}
 			"expressionWeight" | "expression_weight" | "blendShapeWeight" => {
 				let Some(name) = op
 					.get("expression")
@@ -2211,6 +2221,86 @@ fn unavatar_runtime_material_target(op: &Value) -> Option<UnaRuntimeMaterialTarg
 		return None;
 	}
 	Some(UnaRuntimeMaterialTarget { material_index, name })
+}
+
+fn unavatar_runtime_material_ref(value: &Value) -> Option<UnaRuntimeMaterialTarget> {
+	if let Some(name) = value.as_str().filter(|value| !value.is_empty()) {
+		return Some(UnaRuntimeMaterialTarget {
+			material_index: None,
+			name: Some(name.to_string()),
+		});
+	}
+	let material_index = value
+		.get("materialIndex")
+		.or_else(|| value.get("material_index"))
+		.or_else(|| value.get("index"))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok());
+	let name = value
+		.get("materialName")
+		.or_else(|| value.get("material_name"))
+		.or_else(|| value.get("name"))
+		.or_else(|| value.get("material"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if material_index.is_none() && name.is_none() {
+		return None;
+	}
+	Some(UnaRuntimeMaterialTarget { material_index, name })
+}
+
+fn unavatar_runtime_material_slot_target(op: &Value) -> Option<UnaRuntimeMaterialSlotTarget> {
+	let target = op.get("target").unwrap_or(op);
+	let source_node_id = target
+		.get("nodeId")
+		.or_else(|| target.get("sourceNodeId"))
+		.or_else(|| target.get("source_node_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let path = operation_target_path(op);
+	let path = (!path.is_empty()).then(|| path.to_string());
+	if source_node_id.is_none() && path.is_none() {
+		return None;
+	}
+	let primitive_index = target
+		.get("primitiveIndex")
+		.or_else(|| target.get("primitive_index"))
+		.or_else(|| target.get("materialSlot"))
+		.or_else(|| target.get("material_slot"))
+		.or_else(|| target.get("slot"))
+		.or_else(|| op.get("primitiveIndex"))
+		.or_else(|| op.get("primitive_index"))
+		.or_else(|| op.get("materialSlot"))
+		.or_else(|| op.get("material_slot"))
+		.or_else(|| op.get("slot"))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok());
+	Some(UnaRuntimeMaterialSlotTarget {
+		node: UnaRuntimeNodeTarget {
+			node_index: None,
+			source_node_id,
+			path,
+		},
+		primitive_index,
+	})
+}
+
+fn unavatar_runtime_material_slot_material(op: &Value) -> Option<UnaRuntimeMaterialTarget> {
+	if let Some(material) = op
+		.get("material")
+		.or_else(|| op.get("toMaterial"))
+		.or_else(|| op.get("to_material"))
+		.or_else(|| op.get("to"))
+		.or_else(|| op.get("replacementMaterial"))
+		.or_else(|| op.get("replacement_material"))
+	{
+		if let Some(target) = unavatar_runtime_material_ref(material) {
+			return Some(target);
+		}
+	}
+	unavatar_runtime_material_target(op)
 }
 
 fn value_vec4(value: &Value) -> Option<[f32; 4]> {
@@ -6952,6 +7042,14 @@ mod tests {
 				"parameter": "_Smoothness",
 				"value": 0.75
 			}, {
+				"op": "materialSlot",
+				"target": {
+					"nodeId": "node_renderer",
+					"path": "Root/Renderer",
+					"primitiveIndex": 1
+				},
+				"material": {"name": "Alt"}
+			}, {
 				"op": "expressionWeight",
 				"name": "Blink",
 				"weight": 0.5
@@ -6994,6 +7092,20 @@ mod tests {
 					},
 					parameter: "_Smoothness".to_string(),
 					value: 0.75,
+				},
+				UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							node_index: None,
+							source_node_id: Some("node_renderer".to_string()),
+							path: Some("Root/Renderer".to_string()),
+						},
+						primitive_index: Some(1),
+					},
+					material: UnaRuntimeMaterialTarget {
+						material_index: None,
+						name: Some("Alt".to_string()),
+					},
 				},
 				UnaRuntimeActionEffect::ExpressionWeight {
 					name: "Blink".to_string(),
