@@ -398,6 +398,23 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_gem_refraction_runs_even_when_strength_is_zero() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * refraction_strength"),
+			"lilToon Gem must sample refraction with the authored strength"
+		);
+		assert!(
+			mesh.contains("let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma)"),
+			"lilToon Gem chromatic aberration must still affect G when refraction strength is zero"
+		);
+		assert!(
+			!mesh.contains("if (abs(refraction_strength) > 0.00001) {\n\t\t\t\tlet refraction_fresnel"),
+			"lilToon Gem refraction is not gated by _RefractionStrength in upstream lilToon"
+		);
+	}
+
+	#[test]
 	fn liltoon_refraction_uses_material_alpha_for_refracted_mix() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(

@@ -2113,7 +2113,7 @@ impl UnaLilToonLikeMaterial {
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
-		(self.is_gem_profile() || self.is_refraction_profile()) && self.reflection.gem_refraction_strength_factor.abs() > 0.00001
+		self.is_gem_profile() || (self.is_refraction_profile() && self.reflection.gem_refraction_strength_factor.abs() > 0.00001)
 	}
 
 	pub fn uses_reflection_source_cube(&self) -> bool {
@@ -3828,12 +3828,13 @@ mod tests {
 		assert!(material.needs_screen_refraction());
 
 		material.reflection.gem_refraction_strength_factor = 0.0;
-		assert!(!material.needs_screen_refraction());
-		material.reflection.gem_refraction_strength_factor = 0.25;
+		assert!(material.needs_screen_refraction());
 
 		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonRefraction;
 		assert!(!material.is_gem_profile());
 		assert!(material.is_refraction_profile());
+		assert!(!material.needs_screen_refraction());
+		material.reflection.gem_refraction_strength_factor = 0.25;
 		assert!(material.needs_screen_refraction());
 	}
 
