@@ -5929,7 +5929,10 @@ impl SceneMeshes {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
 				}
-				let Some(exp) = expand_primitive(buf, !opts.debug_zero_morphs) else {
+				// Wardrobe / expression updates mutate scene default morph weights after GPU upload.
+				// Baking defaults into vertices here would make later wardrobe morphs double-apply
+				// against already-morphed positions.
+				let Some(exp) = expand_primitive(buf, false) else {
 					continue;
 				};
 				let ExpandedPrimitive {
