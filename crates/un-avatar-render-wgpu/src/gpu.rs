@@ -2663,7 +2663,7 @@ impl GpuSceneBuildContext {
 		} else {
 			None
 		};
-		let expression_presets = expression_preset_names(runtime_model.humanoid_retarget_inputs().expression_catalog);
+		let expression_presets = expression_preset_names(runtime_model.expression_catalog());
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
@@ -3158,12 +3158,11 @@ impl GpuState {
 		) {
 			if let Ok(g) = doc_arc.read() {
 				let runtime_model = g.runtime_model();
-				let retarget_inputs = runtime_model.humanoid_retarget_inputs();
 				let roots_str = runtime_model
 					.scene()
 					.map(|s| format!("{:?}", s.roots))
 					.unwrap_or_else(|| "none".to_string());
-				let keys = humanoid_profile_keys_csv(retarget_inputs.profile);
+				let keys = humanoid_profile_keys_csv(runtime_model.humanoid_profile());
 				self.debug_log.line(
 					"scene",
 					format!(
@@ -3178,8 +3177,7 @@ impl GpuState {
 			self.debug_morph && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
 		) {
 			if let Ok(g) = doc_arc.read() {
-				let retarget_inputs = g.runtime_model().humanoid_retarget_inputs();
-				let n_presets = retarget_inputs.expression_catalog.map(|c| c.presets.len()).unwrap_or(0);
+				let n_presets = g.runtime_model().expression_catalog().map(|c| c.presets.len()).unwrap_or(0);
 				if let Some(ew) = g.expression_weights.as_ref() {
 					let top = format_top_expression_weights(&ew.preset_weights, 16);
 					self.debug_log.line(
