@@ -1044,6 +1044,20 @@ mod motion_buffer_tests {
 		frame
 	}
 
+	fn test_node(transform: [f32; 16]) -> UnaSceneNode {
+		UnaSceneNode {
+			name: None,
+			source_node_id: None,
+			visible: true,
+			transform,
+			children: Vec::new(),
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
 	#[test]
 	fn motion_buffer_keeps_latest_value_per_key_until_frame_read() {
 		let buffer = MotionControlBuffer::default();
@@ -1121,6 +1135,33 @@ mod motion_buffer_tests {
 			.collect();
 
 		assert_eq!(format_top_expression_weights(&weights, 2), "Joy=-0.900, Angry=0.600");
+	}
+
+	#[test]
+	fn reset_runtime_dynamics_nodes_restores_authored_dynamic_nodes_only() {
+		let current = [1.0; 16];
+		let rest = [2.0; 16];
+		let untouched = [3.0; 16];
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![test_node(current), test_node(untouched)],
+			..Default::default()
+		};
+		let rest_nodes = vec![test_node(rest), test_node(untouched)];
+		let settings = un_avatar_core::UnaSpringBoneSettings {
+			groups: vec![un_avatar_core::UnaSpringBoneGroup {
+				bone_node_indices: vec![0, 9],
+				..Default::default()
+			}],
+			colliders: Vec::new(),
+		};
+
+		assert!(reset_runtime_dynamics_nodes_to_rest(
+			&mut scene,
+			settings.runtime_dynamics(),
+			&rest_nodes,
+		));
+		assert_eq!(scene.nodes[0].transform, rest);
+		assert_eq!(scene.nodes[1].transform, untouched);
 	}
 }
 
