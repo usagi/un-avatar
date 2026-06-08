@@ -7135,6 +7135,9 @@ impl SceneMeshes {
 			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			changed += 1;
 		}
+		if changed > 0 {
+			self.rebuild_draw_order();
+		}
 		changed
 	}
 
