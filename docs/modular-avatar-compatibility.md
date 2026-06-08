@@ -95,7 +95,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, `matchScale`, and MA-like duplicate child name suffixing. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting. Numeric tests cover duplicate target child names and missing target reporting.
   - remaining: regression-check `field_drape` visually and add broader fixture coverage for component interactions.
 - `[~]` MA Replace Object
-  - done: Runtime resolver moves the replacement object into the original object's parent slot, migrates original children under the replacement while preserving world pose, hides the original node, and remaps Runtime node references such as skin joints, skin root, probe anchor, and node constraints to the replacement.
+  - done: Runtime resolver moves the replacement object into the original object's parent slot, migrates original children under the replacement while preserving world pose, hides the original node, and remaps Runtime node references such as skin joints, skin root, probe anchor, and node constraints to the replacement. Replacement nodes get a derived resolved node id without changing their source node id.
   - remaining: Exporter schema parity for object/component reference remap diagnostics and recursive / conflicting replacement fixture coverage.
 - `[ ]` MA Move Independently
   - required: grouped transform parent remapping, if it affects visible render graph.
@@ -162,8 +162,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 - `[ ]` `UN_avatar.modularAvatar` extension block
   - required fields: `schemaVersion`, `components`, `references`, `armatureMappings`, `meshMutations`, `materialOverrides`, `diagnostics`.
-- `[ ]` stable IDs for source and resolved nodes
-  - required: source node id remains wardrobe operation target; resolved graph can create derived node ids/cache keys.
+- `[~]` stable IDs for source and resolved nodes
+  - done: Scene nodes carry source node ids separately from runtime resolved node ids. Runtime node targets can resolve by source id, resolved id, path, or index while preserving source id priority for wardrobe-authored targets. MA Replace Object assigns a derived resolved node id to the replacement node, and CLI diagnose exposes resolved node ids.
+  - remaining: exporter schema parity for resolved ids created by other resolver stages and derived mesh/cache node ids.
 - `[x]` resolver cache key
   - done: runtime resolver cache key exposes selected wardrobe set, active asset groups, Modular Avatar component payload hash, material source hash, mesh render identity hash, and resolver version through core, CLI diagnose, and renderer status.
   - note: resolved graph cache storage and full vertex payload cache keys are renderer implementation work, not part of the metadata surface checklist.
