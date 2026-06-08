@@ -12,7 +12,9 @@ use std::{
 };
 
 use glam::{Mat4, Vec3, Vec4};
-use un_avatar_core::{UnaDocument, UnaExpressionCatalog, UnaRuntimeDynamicsCounts, UnaSceneNode};
+use un_avatar_core::{
+	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts, UnaSceneNode,
+};
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
 	SpringBonePhysicsConfig, SpringBoneSimulator,
@@ -2666,6 +2668,52 @@ impl GpuState {
 		drop(doc);
 		self.invalidate_applied_document_state();
 		Ok(())
+	}
+
+	pub(crate) fn activate_runtime_action(&mut self, action_id: Option<&str>, command: Option<&str>) -> Result<Option<String>, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let effects = {
+			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			let Some(actions) = doc.runtime_model().runtime_actions() else {
+				return Err("document has no runtime actions".to_string());
+			};
+			let action = actions
+				.actions
+				.iter()
+				.find(|action| {
+					action_id.is_some_and(|id| action.id == id)
+						|| command.is_some_and(|command| {
+							action.triggers.iter().any(
+								|trigger| matches!(trigger, UnaRuntimeActionTrigger::SupervisorCommand { command: trigger_command } if trigger_command == command),
+							)
+						})
+				})
+				.ok_or_else(|| "runtime action not found".to_string())?;
+			action.effects.clone()
+		};
+		let mut active_wardrobe_set = None;
+		for effect in effects {
+			match effect {
+				UnaRuntimeActionEffect::WardrobeSet { set_id } => {
+					self.apply_wardrobe_set(&set_id)?;
+					active_wardrobe_set = Some(
+						crate::model_loader::require_wardrobe_set_id(&set_id)
+							.map(str::to_owned)
+							.unwrap_or(set_id),
+					);
+				}
+				UnaRuntimeActionEffect::NodeVisibility { .. }
+				| UnaRuntimeActionEffect::ExpressionWeight { .. }
+				| UnaRuntimeActionEffect::MaterialColor { .. }
+				| UnaRuntimeActionEffect::MaterialScalar { .. }
+				| UnaRuntimeActionEffect::DynamicsEnabled { .. } => {
+					return Err("runtime action effect is not connected yet".to_string());
+				}
+			}
+		}
+		Ok(active_wardrobe_set)
 	}
 
 	pub(crate) fn scene_build_context(&self) -> GpuSceneBuildContext {

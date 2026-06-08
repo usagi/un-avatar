@@ -91,6 +91,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_window",
 	"screenshot",
 	"set_wardrobe",
+	"activate_action",
 	"set_expression_override",
 	"clear_expression_overrides",
 	"set_look_at",
@@ -218,6 +219,11 @@ enum RendererControlEvent {
 	},
 	SetWardrobe {
 		set_id: String,
+		result: CommandResultSlot,
+	},
+	ActivateAction {
+		action_id: Option<String>,
+		supervisor_command: Option<String>,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -403,6 +409,12 @@ enum RendererControlCommand {
 	},
 	SetWardrobe {
 		set_id: String,
+	},
+	ActivateAction {
+		#[serde(default)]
+		action_id: Option<String>,
+		#[serde(default)]
+		supervisor_command: Option<String>,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -648,6 +660,7 @@ impl RendererControlCommand {
 			},
 			Self::Screenshot { .. } => unreachable!("Screenshot は runtime_control_response で個別に処理する"),
 			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
+			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -2402,6 +2415,23 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(outcome);
 				}
 			}
+			RendererControlEvent::ActivateAction {
+				action_id,
+				supervisor_command,
+				result,
+			} => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.activate_runtime_action(action_id.as_deref(), supervisor_command.as_deref()),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(Some(active_set_id)) = &outcome {
+					self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome.map(|_| ()));
+				}
+			}
 			RendererControlEvent::SceneState { result } => {
 				let state = if self.startup_failed.is_some() {
 					SCENE_STATE_FAILED
@@ -3340,6 +3370,10 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
 		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
+		Ok(RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -3362,6 +3396,30 @@ fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, s
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_wardrobe")
+}
+
+fn dispatch_activate_action_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	action_id: Option<String>,
+	supervisor_command: Option<String>,
+) -> String {
+	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let supervisor_command = supervisor_command
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if action_id.is_none() && supervisor_command.is_none() {
+		return "err action_id or supervisor_command required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::ActivateAction {
+		action_id,
+		supervisor_command,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "activate_action")
 }
 
 fn dispatch_scene_state_command(proxy: &EventLoopProxy<RendererControlEvent>) -> String {
@@ -4221,6 +4279,20 @@ mod tests {
 			panic!("expected set_wardrobe command");
 		};
 		assert_eq!(set_id, "field_drape");
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id.as_deref(), Some("wardrobe:field_drape"));
+		assert_eq!(supervisor_command, None);
 	}
 
 	#[test]
