@@ -73,8 +73,8 @@ impl std::fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
-/// `RendererControlEvent::Screenshot` の同期結果をコントロールチャネルへ返すための共有スロット。
-type ScreenshotResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
+/// `RendererControlEvent` の同期 command 結果をコントロールチャネルへ返すための共有スロット。
+type CommandResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
 type SceneStateResultSlot = Arc<Mutex<Option<String>>>;
 
 const SCENE_STATE_SPLASH: &str = "splash";
@@ -180,11 +180,11 @@ enum RendererControlEvent {
 	},
 	Screenshot {
 		path: std::path::PathBuf,
-		result: ScreenshotResultSlot,
+		result: CommandResultSlot,
 	},
 	SetWardrobe {
 		set_id: String,
-		result: ScreenshotResultSlot,
+		result: CommandResultSlot,
 	},
 	SceneState {
 		result: SceneStateResultSlot,
@@ -3348,7 +3348,7 @@ fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, s
 	if set_id.trim().is_empty() {
 		return "err wardrobe set id required".to_string();
 	}
-	let result: ScreenshotResultSlot = Arc::new(Mutex::new(None));
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::SetWardrobe {
 		set_id,
 		result: Arc::clone(&result),
@@ -3399,7 +3399,7 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 	if path.trim().is_empty() {
 		return "err screenshot path required".to_string();
 	}
-	let result: ScreenshotResultSlot = Arc::new(Mutex::new(None));
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::Screenshot {
 		path: std::path::PathBuf::from(path),
 		result: Arc::clone(&result),
