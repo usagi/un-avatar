@@ -103,6 +103,8 @@ struct DiagnoseRuntimeSummary {
 	humanoid_basis: UnaHumanoidRuntimeBasis,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	active_wardrobe_set: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	active_asset_groups: Vec<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	last_action_id: Option<String>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -2457,6 +2459,7 @@ fn build_diagnose_report(
 		source_kind: runtime_model.source_kind(),
 		humanoid_basis: runtime_model.humanoid_basis(),
 		active_wardrobe_set: runtime_model.active_wardrobe_set().map(str::to_owned),
+		active_asset_groups: runtime_model.active_asset_groups().to_vec(),
 		last_action_id: runtime_model.last_action_id().map(str::to_owned),
 		parameter_values: runtime_model.runtime_parameter_values().clone(),
 	};
@@ -2765,10 +2768,11 @@ fn run_diagnose(
 		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
 	);
 	println!(
-		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} last_action_id={:?} parameter_values={}",
+		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} active_asset_groups={:?} last_action_id={:?} parameter_values={}",
 		report.runtime.source_kind,
 		report.runtime.humanoid_basis,
 		report.runtime.active_wardrobe_set,
+		report.runtime.active_asset_groups,
 		report.runtime.last_action_id,
 		report.runtime.parameter_values.len()
 	);

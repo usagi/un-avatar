@@ -2149,6 +2149,34 @@ fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_
 	set.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)
 }
 
+fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &str) -> Vec<String> {
+	let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) else {
+		return Vec::new();
+	};
+	let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) else {
+		return Vec::new();
+	};
+	let Some(set) = sets.iter().find(|set| set.get("id").and_then(|v| v.as_str()) == Some(set_id)) else {
+		return Vec::new();
+	};
+	let mut seen = BTreeSet::new();
+	set.get("assetGroups")
+		.or_else(|| set.get("asset_groups"))
+		.and_then(Value::as_array)
+		.into_iter()
+		.flatten()
+		.filter_map(Value::as_str)
+		.filter(|group| !group.is_empty())
+		.filter_map(|group| {
+			if seen.insert(group.to_string()) {
+				Some(group.to_string())
+			} else {
+				None
+			}
+		})
+		.collect()
+}
+
 fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<(&'a str, &'a [Value])> {
 	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
 	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
@@ -3862,6 +3890,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(operations) = unavatar_wardrobe_set_operations(&unavatar, set_id) else {
 		return Err(format!(".unavatar wardrobe set not found: {set_id}"));
 	};
+	let active_asset_groups = unavatar_wardrobe_set_asset_groups(&unavatar, set_id);
 	let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
 		return Err("document has no scene".to_string());
 	};
@@ -3872,6 +3901,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 		else {
 			drop(runtime);
 			document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
+			document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
 			return Ok(WardrobeApplyReport::default());
 		};
 		reset_scene_visibility(runtime.scene);
@@ -3879,6 +3909,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 		let report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
 		drop(runtime);
 		document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
+		document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
 		return Ok(report);
 	}
 	if base_id.as_deref() != Some(set_id) {
@@ -3891,6 +3922,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), operations, Some(&unavatar));
 	drop(runtime);
 	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
+	document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
 	Ok(report)
 }
 
@@ -10666,9 +10698,11 @@ mod tests {
 						"baseSet": "base",
 						"sets": [{
 							"id": "base",
+							"assetGroups": ["avatar:base"],
 							"operations": []
 						}, {
 							"id": "no_hair_physics",
+							"assetGroups": ["outfit:hair", "physics:hair", "outfit:hair"],
 							"operations": [
 								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:hair"}, "enabled": false},
 								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:missing"}, "enabled": false}
@@ -10696,11 +10730,16 @@ mod tests {
 		assert_eq!(applied.missing_dynamics_ids, vec!["physbone:missing"]);
 		assert!(!doc.spring_bones.as_ref().unwrap().groups[0].enabled);
 		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("no_hair_physics"));
+		assert_eq!(
+			doc.runtime_model().active_asset_groups(),
+			&["outfit:hair".to_string(), "physics:hair".to_string()]
+		);
 
 		let applied = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
 		assert_eq!(applied.dynamics_applied, 0);
 		assert_eq!(applied.dynamics_missing, 0);
 		assert!(doc.spring_bones.as_ref().unwrap().groups[0].enabled);
 		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("base"));
+		assert_eq!(doc.runtime_model().active_asset_groups(), &["avatar:base".to_string()]);
 	}
 }

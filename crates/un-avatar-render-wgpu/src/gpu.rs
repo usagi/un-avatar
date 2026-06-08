@@ -2676,6 +2676,16 @@ impl GpuState {
 		doc.runtime_model().active_wardrobe_set().map(str::to_owned)
 	}
 
+	pub(crate) fn active_asset_groups(&self) -> Vec<String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model().active_asset_groups().to_vec()
+	}
+
 	pub(crate) fn last_action_id(&self) -> Option<String> {
 		let doc_arc = self.document.as_ref()?;
 		let doc = doc_arc.read().ok()?;

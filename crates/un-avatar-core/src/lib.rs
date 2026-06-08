@@ -184,6 +184,10 @@ pub struct UnaRuntimeState {
 	/// this is runtime state so hot-switch clients can observe the active resolver choice.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub active_wardrobe_set: Option<String>,
+	/// Asset groups required by the currently resolved wardrobe set. Source declarations remain in `.unavatar`;
+	/// this records the transient selection for renderer cache planning.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub active_asset_groups: Vec<String>,
 	/// Last successfully activated runtime action. Action definitions remain in `UnaRuntimeActionSet`;
 	/// this field only records transient runtime state for status/diagnostics.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -771,6 +775,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.runtime_state().active_wardrobe_set.as_deref()
 	}
 
+	pub fn active_asset_groups(self) -> &'a [String] {
+		&self.runtime_state().active_asset_groups
+	}
+
 	pub fn last_action_id(self) -> Option<&'a str> {
 		self.runtime_state().last_action_id.as_deref()
 	}
@@ -830,6 +838,10 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_active_wardrobe_set(&mut self, set_id: Option<String>) {
 		self.runtime_state_mut().active_wardrobe_set = set_id;
+	}
+
+	pub fn set_active_asset_groups(&mut self, asset_groups: Vec<String>) {
+		self.runtime_state_mut().active_asset_groups = asset_groups;
 	}
 
 	pub fn set_last_action_id(&mut self, action_id: Option<String>) {
@@ -4141,15 +4153,26 @@ mod tests {
 			.set_active_wardrobe_set(Some("field_drape".to_string()));
 		document
 			.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:field_drape".to_string(), "texture:red".to_string()]);
+		document
+			.runtime_model_mut()
 			.set_last_action_id(Some("wardrobe:field_drape".to_string()));
 		document.runtime_model_mut().set_runtime_parameter_value("Outfit", 2.0);
 		assert_eq!(document.runtime_model().active_wardrobe_set(), Some("field_drape"));
+		assert_eq!(
+			document.runtime_model().active_asset_groups(),
+			&["outfit:field_drape".to_string(), "texture:red".to_string()]
+		);
 		assert_eq!(document.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
 
 		let json = serde_json::to_string(&document).unwrap();
 		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
 		assert_eq!(decoded.runtime_model().active_wardrobe_set(), Some("field_drape"));
+		assert_eq!(
+			decoded.runtime_model().active_asset_groups(),
+			&["outfit:field_drape".to_string(), "texture:red".to_string()]
+		);
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
 	}
