@@ -4987,20 +4987,15 @@ impl SceneMeshes {
 			],
 		});
 
-		let full_material_entries = mesh_material_layout_entries(MeshShaderVariantTier::HighCapability);
-		let full_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("mesh_material"),
-			entries: &full_material_entries,
+		let material_entries = mesh_material_layout_entries(shader_variant_tier);
+		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some(if shader_variant_tier.is_high_capability() {
+				"mesh_material"
+			} else {
+				"mesh_material_baseline_fallback"
+			}),
+			entries: &material_entries,
 		});
-		let baseline_material_entries = mesh_material_layout_entries(MeshShaderVariantTier::BaselineFallback);
-		let baseline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("mesh_material_baseline_fallback"),
-			entries: &baseline_material_entries,
-		});
-		let material_layout = match shader_variant_tier {
-			MeshShaderVariantTier::HighCapability => &full_material_layout,
-			MeshShaderVariantTier::BaselineFallback => &baseline_material_layout,
-		};
 		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_outline_material"),
 			entries: &mesh_outline_material_layout_entries(),
@@ -5062,7 +5057,7 @@ impl SceneMeshes {
 			label: Some("mesh"),
 			bind_group_layouts: &[
 				Some(&frame_layout),
-				Some(material_layout),
+				Some(&material_layout),
 				Some(&skin_bind_group_layout),
 				Some(&morph_bind_group_layout),
 			],
@@ -6511,7 +6506,7 @@ impl SceneMeshes {
 				}
 				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
 					label: Some("mesh_mat"),
-					layout: material_layout,
+					layout: &material_layout,
 					entries: &bind_material_entries,
 				});
 				let bind_outline_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
