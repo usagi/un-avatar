@@ -2338,26 +2338,43 @@ fn unavatar_node_ref_index(
 fn decompose_finite(m: Mat4) -> (Vec3, Quat, Vec3) {
 	let (scale, rotation, translation) = m.to_scale_rotation_translation();
 	let scale = if scale.is_finite() { scale } else { Vec3::ONE };
-	let rotation = if rotation.is_finite() { rotation } else { Quat::IDENTITY };
+	let rotation = if rotation.is_finite() && rotation.length_squared() > 0.0 {
+		rotation.normalize()
+	} else {
+		Quat::IDENTITY
+	};
 	let translation = if translation.is_finite() { translation } else { Vec3::ZERO };
 	(scale, rotation, translation)
 }
 
 fn bone_proxy_local_transform(mode: &str, match_scale: bool, target_world: Mat4, old_world: Mat4) -> Mat4 {
 	let target_inverse = inverse_finite_or_identity(target_world);
-	let (_old_scale, old_rotation, old_translation) = decompose_finite(old_world);
-	let local = match mode {
-		"AsChildAtRoot" | "Unset" | "" => Mat4::IDENTITY,
-		"AsChildKeepPosition" => target_inverse * Mat4::from_translation(old_translation),
-		"AsChildKeepRotation" => target_inverse * Mat4::from_quat(old_rotation),
-		"AsChildKeepWorldPose" => target_inverse * old_world,
-		_ => target_inverse * old_world,
+	let (preserved_local_scale, _, _) = decompose_finite(target_inverse * old_world);
+	let (_, old_rotation, old_translation) = decompose_finite(old_world);
+	let (local_scale, local_rotation, local_translation) = match mode {
+		"AsChildAtRoot" | "Unset" | "" => (preserved_local_scale, Quat::IDENTITY, Vec3::ZERO),
+		"AsChildKeepPosition" => (
+			preserved_local_scale,
+			Quat::IDENTITY,
+			target_inverse.transform_point3(old_translation),
+		),
+		"AsChildKeepRotation" => {
+			let (_, target_rotation, _) = decompose_finite(target_world);
+			(preserved_local_scale, target_rotation.inverse() * old_rotation, Vec3::ZERO)
+		}
+		"AsChildKeepWorldPose" => {
+			let (scale, rotation, translation) = decompose_finite(target_inverse * old_world);
+			(scale, rotation, translation)
+		}
+		_ => {
+			let (scale, rotation, translation) = decompose_finite(target_inverse * old_world);
+			(scale, rotation, translation)
+		}
 	};
 	if match_scale {
-		let (_scale, rotation, translation) = decompose_finite(local);
-		Mat4::from_scale_rotation_translation(Vec3::ONE, rotation, translation)
+		Mat4::from_scale_rotation_translation(Vec3::ONE, local_rotation, local_translation)
 	} else {
-		local
+		Mat4::from_scale_rotation_translation(local_scale, local_rotation, local_translation)
 	}
 }
 
@@ -7970,6 +7987,58 @@ mod tests {
 		let materials = build_materials(&gltf.document);
 
 		assert_eq!(materials[0].uv_offset_scale, [0.25, -0.5, 2.0, 3.0]);
+	}
+
+	fn assert_vec3_near(actual: Vec3, expected: Vec3) {
+		assert!(actual.abs_diff_eq(expected, 0.0001), "actual={actual:?} expected={expected:?}");
+	}
+
+	fn assert_quat_near(actual: Quat, expected: Quat) {
+		assert!(
+			actual.abs_diff_eq(expected, 0.0001) || actual.abs_diff_eq(-expected, 0.0001),
+			"actual={actual:?} expected={expected:?}"
+		);
+	}
+
+	#[test]
+	fn modular_avatar_bone_proxy_attachment_modes_match_processor_semantics() {
+		let target_rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+		let old_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+		let target_world = Mat4::from_scale_rotation_translation(Vec3::new(2.0, 2.0, 2.0), target_rotation, Vec3::new(1.0, 2.0, 3.0));
+		let old_world = Mat4::from_scale_rotation_translation(Vec3::new(0.5, 0.75, 1.25), old_rotation, Vec3::new(5.0, 7.0, 11.0));
+
+		let at_root = target_world * bone_proxy_local_transform("AsChildAtRoot", false, target_world, old_world);
+		let (_scale, rotation, translation) = decompose_finite(at_root);
+		assert_vec3_near(translation, Vec3::new(1.0, 2.0, 3.0));
+		assert_quat_near(rotation, target_rotation);
+
+		let keep_position = target_world * bone_proxy_local_transform("AsChildKeepPosition", false, target_world, old_world);
+		let (_scale, rotation, translation) = decompose_finite(keep_position);
+		assert_vec3_near(translation, Vec3::new(5.0, 7.0, 11.0));
+		assert_quat_near(rotation, target_rotation);
+
+		let keep_rotation = target_world * bone_proxy_local_transform("AsChildKeepRotation", false, target_world, old_world);
+		let (_scale, rotation, translation) = decompose_finite(keep_rotation);
+		assert_vec3_near(translation, Vec3::new(1.0, 2.0, 3.0));
+		assert_quat_near(rotation, old_rotation);
+
+		let keep_world = target_world * bone_proxy_local_transform("AsChildKeepWorldPose", false, target_world, old_world);
+		let (_scale, rotation, translation) = decompose_finite(keep_world);
+		assert_vec3_near(translation, Vec3::new(5.0, 7.0, 11.0));
+		assert_quat_near(rotation, old_rotation);
+	}
+
+	#[test]
+	fn modular_avatar_bone_proxy_match_scale_forces_local_scale_one() {
+		let target_world = Mat4::from_scale_rotation_translation(
+			Vec3::new(2.0, 3.0, 4.0),
+			Quat::from_rotation_x(std::f32::consts::FRAC_PI_4),
+			Vec3::new(1.0, 2.0, 3.0),
+		);
+		let old_world = Mat4::from_scale_rotation_translation(Vec3::new(0.5, 0.75, 1.25), Quat::IDENTITY, Vec3::new(5.0, 7.0, 11.0));
+		let local = bone_proxy_local_transform("AsChildKeepWorldPose", true, target_world, old_world);
+		let (scale, _, _) = decompose_finite(local);
+		assert_vec3_near(scale, Vec3::ONE);
 	}
 
 	#[test]
