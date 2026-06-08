@@ -392,6 +392,14 @@ struct DiagnoseDynamicsGroupSummary {
 	drag_force: f32,
 	gravity_power: f32,
 	gravity_dir: [f32; 3],
+	#[serde(skip_serializing_if = "Option::is_none")]
+	limit_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	max_angle_x: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	max_angle_z: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	max_stretch: Option<f32>,
 	hit_radius: f32,
 }
 
@@ -1443,6 +1451,13 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				drag_force: group.drag_force,
 				gravity_power: group.gravity_power,
 				gravity_dir: group.gravity_dir,
+				limit_type: group
+					.limit
+					.as_ref()
+					.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone())),
+				max_angle_x: group.limit.as_ref().map(|limit| limit.max_angle_x),
+				max_angle_z: group.limit.as_ref().map(|limit| limit.max_angle_z),
+				max_stretch: group.limit.as_ref().map(|limit| limit.max_stretch),
 				hit_radius: group.hit_radius,
 			}
 		})

@@ -13,10 +13,11 @@ use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
 	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape,
-	UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba,
-	UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers,
-	UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
-	UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
+	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
+	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot,
+	UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+	UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1543,6 +1544,41 @@ fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
 	(power, dir)
 }
 
+fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
+	let source_params = value.get("sourceParams").or_else(|| value.get("source_params"));
+	let limit_type = source_params
+		.and_then(|params| params.get("limitType").or_else(|| params.get("limit_type")))
+		.or_else(|| value.get("limitType").or_else(|| value.get("limit_type")))
+		.and_then(Value::as_str)
+		.unwrap_or("")
+		.to_string();
+	let max_angle_x = source_params
+		.and_then(|params| params.get("maxAngleX").or_else(|| params.get("max_angle_x")))
+		.or_else(|| value.get("maxAngleX").or_else(|| value.get("max_angle_x")))
+		.and_then(|value| json_f32(Some(value)))
+		.unwrap_or(0.0);
+	let max_angle_z = source_params
+		.and_then(|params| params.get("maxAngleZ").or_else(|| params.get("max_angle_z")))
+		.or_else(|| value.get("maxAngleZ").or_else(|| value.get("max_angle_z")))
+		.and_then(|value| json_f32(Some(value)))
+		.unwrap_or(0.0);
+	let max_stretch = source_params
+		.and_then(|params| params.get("maxStretch").or_else(|| params.get("max_stretch")))
+		.or_else(|| value.get("maxStretch").or_else(|| value.get("max_stretch")))
+		.and_then(|value| json_f32(Some(value)))
+		.unwrap_or(0.0);
+	if limit_type.is_empty() && max_angle_x == 0.0 && max_angle_z == 0.0 && max_stretch == 0.0 {
+		None
+	} else {
+		Some(UnaDynamicsLimit {
+			limit_type,
+			max_angle_x,
+			max_angle_z,
+			max_stretch,
+		})
+	}
+}
+
 fn unavatar_dynamics_settings(
 	scene: &mut UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
@@ -1601,6 +1637,7 @@ fn unavatar_dynamics_settings(
 		)
 		.unwrap_or(0.02);
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
+		let limit = unavatar_dynamics_limit(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
 			item.get("ignoreTransforms")
 				.or_else(|| item.get("ignore_transforms"))
@@ -1648,6 +1685,7 @@ fn unavatar_dynamics_settings(
 					drag_force,
 					center_node: None,
 					hit_radius,
+					limit: limit.clone(),
 					bone_node_indices: chain,
 				});
 			}
@@ -5262,6 +5300,10 @@ mod tests {
 					"radius": 0.03,
 					"sourceParams": {
 						"allowCollision": true,
+						"limitType": "Angle",
+						"maxAngleX": 45.0,
+						"maxAngleZ": 30.0,
+						"maxStretch": 0.2,
 						"colliders": [{
 							"root": {"nodeId": "node_root", "path": "Root"},
 							"shapeType": "Sphere",
@@ -5305,6 +5347,11 @@ mod tests {
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
+		let limit = settings.groups[0].limit.as_ref().expect("limit");
+		assert_eq!(limit.limit_type, "Angle");
+		assert_eq!(limit.max_angle_x, 45.0);
+		assert_eq!(limit.max_angle_z, 30.0);
+		assert_eq!(limit.max_stretch, 0.2);
 		assert_eq!(settings.colliders.len(), 2);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.colliders[0].node, 0);

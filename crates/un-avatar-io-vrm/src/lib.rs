@@ -1019,6 +1019,7 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				drag_force: drag,
 				center_node,
 				hit_radius,
+				limit: None,
 				bone_node_indices: chain,
 			});
 		}
@@ -1076,6 +1077,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 			drag_force: drag,
 			center_node: None,
 			hit_radius,
+			limit: None,
 			bone_node_indices: bones,
 		});
 	}
