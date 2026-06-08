@@ -921,7 +921,7 @@ fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelin
 fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	let zwrite = draw
 		.material
-		.liltoon_like_source_profile()
+		.liltoon_like_runtime()
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	if zwrite {
 		DrawPipelineKind::TransparentToonBackpass
@@ -1200,7 +1200,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 	transparent_backpass_enabled(
 		draw.alpha_mode,
 		draw.material
-			.mtoon_source_profile()
+			.mtoon_like_runtime()
 			.is_some_and(|mtoon| mtoon.transparent_with_z_write),
 		shading,
 		liltoon_backpass_enabled,
