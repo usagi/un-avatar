@@ -435,12 +435,20 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.scene.as_ref()
 	}
 
+	pub fn scene_nodes(self) -> Option<&'a [UnaSceneNode]> {
+		self.scene().map(|scene| scene.nodes.as_slice())
+	}
+
 	pub fn humanoid_profile(self) -> Option<&'a HumanoidProfile> {
 		self.document.humanoid_profile.as_ref()
 	}
 
 	pub fn humanoid_scene(self) -> Option<(&'a HumanoidProfile, &'a UnaSceneSnapshot)> {
 		Some((self.humanoid_profile()?, self.scene()?))
+	}
+
+	pub fn has_humanoid_scene(self) -> bool {
+		self.humanoid_scene().is_some()
 	}
 
 	pub fn scene_profile_dynamics(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a HumanoidProfile>, UnaRuntimeDynamics<'a>)> {
@@ -3057,13 +3065,18 @@ mod tests {
 	#[test]
 	fn runtime_model_reports_humanoid_scene_only_when_both_exist() {
 		let mut document = UnaDocument::default();
+		assert!(document.runtime_model().scene_nodes().is_none());
 		assert!(document.runtime_model().humanoid_scene().is_none());
+		assert!(!document.runtime_model().has_humanoid_scene());
 
 		document.scene = Some(UnaSceneSnapshot::default());
+		assert!(document.runtime_model().scene_nodes().is_some());
 		assert!(document.runtime_model().humanoid_scene().is_none());
+		assert!(!document.runtime_model().has_humanoid_scene());
 
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		assert!(document.runtime_model().humanoid_scene().is_some());
+		assert!(document.runtime_model().has_humanoid_scene());
 	}
 
 	#[test]

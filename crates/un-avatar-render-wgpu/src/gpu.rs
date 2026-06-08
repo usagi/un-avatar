@@ -384,7 +384,9 @@ struct MotionRetargetRuntime {
 impl MotionRetargetRuntime {
 	fn for_document(document: &UnaDocument, rest_nodes: Arc<Vec<UnaSceneNode>>) -> Option<Self> {
 		let runtime_model = document.runtime_model();
-		runtime_model.humanoid_scene()?;
+		if !runtime_model.has_humanoid_scene() {
+			return None;
+		}
 		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
 		Some(Self { rest_nodes, context })
 	}
@@ -1756,8 +1758,8 @@ impl GpuState {
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
 		self.spring_sim = if enabled {
-			if let Some(scene) = runtime_model.scene() {
-				SpringBoneSimulator::new_with_runtime_dynamics(scene, runtime_model.dynamics(), colliders.clone(), spring_bone_physics)
+			if let Some((scene, _, dynamics)) = runtime_model.scene_profile_dynamics() {
+				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, colliders.clone(), spring_bone_physics)
 			} else {
 				None
 			}
@@ -2603,22 +2605,17 @@ impl GpuSceneBuildContext {
 			Vec::new()
 		};
 		let spring_sim = if options.enable_spring_bones {
-			if let Some(sc) = runtime_model.scene() {
-				SpringBoneSimulator::new_with_runtime_dynamics(
-					sc,
-					runtime_model.dynamics(),
-					bone_colliders.clone(),
-					options.spring_bone_physics.clone(),
-				)
+			if let Some((scene, _, dynamics)) = runtime_model.scene_profile_dynamics() {
+				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, bone_colliders.clone(), options.spring_bone_physics.clone())
 			} else {
 				None
 			}
 		} else {
 			None
 		};
-		let needs_rest_nodes = runtime_model.humanoid_profile().is_some() || spring_sim.is_some();
+		let needs_rest_nodes = runtime_model.has_humanoid_scene() || spring_sim.is_some();
 		let rest_nodes = if needs_rest_nodes {
-			runtime_model.scene().map(|scene| Arc::new(scene.nodes.clone()))
+			runtime_model.scene_nodes().map(|nodes| Arc::new(nodes.to_vec()))
 		} else {
 			None
 		};
