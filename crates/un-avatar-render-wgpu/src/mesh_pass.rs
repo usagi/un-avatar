@@ -4775,6 +4775,17 @@ fn mesh_draw_material_gpu(
 	}
 }
 
+fn mesh_draw_material_gpu_runtime(
+	mat: &UnaMaterialPbr,
+	default_mtoon: &UnaMtoonMaterial,
+	opts: &SceneMeshLoadOpts,
+	mesh_index: usize,
+	prim_index: usize,
+) -> MeshDrawMaterialGpu {
+	let mtoon = mat.mtoon.as_ref().unwrap_or(default_mtoon);
+	mesh_draw_material_gpu(mat, mtoon, opts, mesh_index, prim_index)
+}
+
 fn liltoon_blend_mode_gpu(mode: un_avatar_core::UnaLilToonLikeBlendMode) -> f32 {
 	match mode {
 		un_avatar_core::UnaLilToonLikeBlendMode::Normal => 0.0,
@@ -6791,7 +6802,7 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
-				let draw_material = mesh_draw_material_gpu(mat, mtoon, &opts, mesh_i, prim_i);
+				let draw_material = mesh_draw_material_gpu_runtime(mat, &default_mtoon, &opts, mesh_i, prim_i);
 				let draw_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 					label: Some("mesh_draw_material"),
 					contents: bytemuck::bytes_of(&draw_material),
@@ -7619,8 +7630,8 @@ impl SceneMeshes {
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
 		let default_mtoon = UnaMtoonMaterial::default();
 		for draw in &self.draws {
-			let mtoon = draw.material.mtoon.as_ref().unwrap_or(&default_mtoon);
-			let material = mesh_draw_material_gpu(&draw.material, mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+			let material =
+				mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
 			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material));
 		}
 	}
