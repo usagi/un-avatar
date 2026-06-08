@@ -3081,7 +3081,7 @@ fn compute_fur_cards_card_sources_from_triangles(
 	triangles: &[ComputeFurCardsSourceTriangleGpu],
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 ) -> Option<Vec<ComputeFurCardsCardSourceGpu>> {
-	let liltoon_fur = material.liltoon_like_source_profile().map(|liltoon_like| &liltoon_like.fur);
+	let liltoon_fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
 	let layer_num = liltoon_fur.map(|fur| fur.layer_count_factor).unwrap_or(1.0);
 	let fur_length = liltoon_fur.map(|fur| fur.vector_factor[3].max(0.0)).unwrap_or(0.0);
 	let segment_count = liltoon_fur_segment_count(layer_num);
@@ -3178,7 +3178,7 @@ fn create_compute_fur_cards_compute_pipeline(
 #[allow(dead_code)]
 fn compute_fur_cards_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
 	material
-		.liltoon_like_source_profile()
+		.liltoon_like_runtime()
 		.map(|liltoon_like| liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor))
 		.unwrap_or(1)
 		.max(1)
@@ -3191,7 +3191,7 @@ fn compute_fur_cards_generate_params_from_material(
 	_cards_per_triangle: u32,
 	generated: ComputeFurCardsBufferRequirements,
 ) -> ComputeFurCardsGenerateParamsGpu {
-	let fur = material.liltoon_like_source_profile().map(|liltoon_like| &liltoon_like.fur);
+	let fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
 	let vector = fur.map(|f| f.vector_factor).unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let fur_length = vector[3].max(0.0);
 	let cards_per_triangle = fur.map(|f| liltoon_fur_segment_count(f.layer_count_factor)).unwrap_or(0);
@@ -8496,6 +8496,7 @@ mod tests {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.matcap.second_shadow_mask_factor = 0.42;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -8513,6 +8514,7 @@ mod tests {
 		liltoon_like.rim.directional_range_factor = -0.75;
 		liltoon_like.rim.indirect_range_factor = -0.25;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -8988,6 +8990,7 @@ mod tests {
 		liltoon_like.fur.layer_count_factor = 3.0;
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.04];
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -9056,6 +9059,7 @@ mod tests {
 		liltoon_like.fur.layer_count_factor = 3.0;
 		liltoon_like.fur.vector_factor = [0.0, 0.0, 1.0, 0.04];
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
@@ -9106,6 +9110,7 @@ mod tests {
 		liltoon_like.fur.vertex_color_to_vector_factor = 1.0;
 		liltoon_like.fur.cutout_length_factor = 0.4;
 		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
 			uv_offset_scale: [0.25, -0.5, 2.0, 3.0],
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
