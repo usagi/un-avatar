@@ -358,7 +358,15 @@ struct DiagnoseActionItemSummary {
 	trigger_count: usize,
 	effect_count: usize,
 	trigger_kinds: BTreeMap<String, usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	parameter_triggers: Vec<DiagnoseActionParameterTrigger>,
 	effect_kinds: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionParameterTrigger {
+	name: String,
+	value: f32,
 }
 
 #[derive(Serialize)]
@@ -2427,6 +2435,7 @@ fn build_diagnose_report(
 				trigger_count: action.triggers.len(),
 				effect_count: action.effects.len(),
 				trigger_kinds: runtime_action_trigger_kind_counts(action.triggers.iter()),
+				parameter_triggers: runtime_action_parameter_triggers(action.triggers.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 			})
 			.collect(),
@@ -2615,6 +2624,21 @@ fn runtime_action_trigger_kind_counts<'a>(triggers: impl IntoIterator<Item = &'a
 	counts
 }
 
+fn runtime_action_parameter_triggers<'a>(
+	triggers: impl IntoIterator<Item = &'a UnaRuntimeActionTrigger>,
+) -> Vec<DiagnoseActionParameterTrigger> {
+	triggers
+		.into_iter()
+		.filter_map(|trigger| match trigger {
+			UnaRuntimeActionTrigger::ParameterValue { name, value } => Some(DiagnoseActionParameterTrigger {
+				name: name.clone(),
+				value: *value,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
 fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
 	let mut counts = BTreeMap::new();
 	for effect in effects {
@@ -2731,6 +2755,15 @@ fn run_diagnose(
 				"action[{}]: label={:?} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",
 				action.id, action.label, action.trigger_count, action.effect_count, action.trigger_kinds, action.effect_kinds
 			);
+			if !action.parameter_triggers.is_empty() {
+				let triggers = action
+					.parameter_triggers
+					.iter()
+					.map(|trigger| format!("{}={}", trigger.name, trigger.value))
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].parameter_triggers: {}", action.id, triggers);
+			}
 		}
 	} else {
 		println!("actions: none");
