@@ -12,14 +12,14 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape,
-	UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
-	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
-	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
-	UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
-	UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
-	UnaUnavatarExtension,
+	apply_runtime_material_color, apply_runtime_material_scalar, Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode,
+	UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind,
+	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
+	UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind,
+	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet,
+	UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget,
+	UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode,
+	UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1846,11 +1846,14 @@ pub struct WardrobeApplyReport {
 	pub blendshape_missing: usize,
 	pub dynamics_applied: usize,
 	pub dynamics_missing: usize,
+	pub material_applied: usize,
+	pub material_missing: usize,
 	pub material_slot_applied: usize,
 	pub material_slot_missing: usize,
 	pub missing_visibility_paths: Vec<String>,
 	pub missing_blendshapes: Vec<String>,
 	pub missing_dynamics_ids: Vec<String>,
+	pub missing_materials: Vec<String>,
 	pub missing_material_slots: Vec<String>,
 }
 
@@ -1948,6 +1951,22 @@ fn apply_unavatar_wardrobe_operations(
 					report.missing_dynamics_ids.push(target_id.to_string());
 				}
 			}
+			"materialColor" | "material_color" => {
+				if apply_unavatar_material_color_operation(scene, op) {
+					report.material_applied += 1;
+				} else {
+					report.material_missing += 1;
+					report.missing_materials.push(path.to_string());
+				}
+			}
+			"materialScalar" | "material_scalar" => {
+				if apply_unavatar_material_scalar_operation(scene, op) {
+					report.material_applied += 1;
+				} else {
+					report.material_missing += 1;
+					report.missing_materials.push(path.to_string());
+				}
+			}
 			"materialSlot" | "material_slot" => {
 				if apply_unavatar_material_slot_operation(scene, op) {
 					report.material_slot_applied += 1;
@@ -1984,6 +2003,50 @@ fn apply_unavatar_material_slot_operation(scene: &mut UnaSceneSnapshot, op: &Val
 	};
 	primitive.material_index = Some(material_index);
 	true
+}
+
+fn apply_unavatar_material_color_operation(scene: &mut UnaSceneSnapshot, op: &Value) -> bool {
+	let Some(target) = unavatar_runtime_material_target(op) else {
+		return false;
+	};
+	let Some(material_index) = unavatar_scene_material_index(scene, &target) else {
+		return false;
+	};
+	let Some(color) = op.get("color").or_else(|| op.get("value")).and_then(value_vec4) else {
+		return false;
+	};
+	let parameter = op
+		.get("parameter")
+		.or_else(|| op.get("property"))
+		.or_else(|| op.get("name"))
+		.and_then(Value::as_str)
+		.unwrap_or("_Color");
+	scene
+		.materials
+		.get_mut(material_index)
+		.is_some_and(|material| apply_runtime_material_color(material, parameter, color).is_ok())
+}
+
+fn apply_unavatar_material_scalar_operation(scene: &mut UnaSceneSnapshot, op: &Value) -> bool {
+	let Some(target) = unavatar_runtime_material_target(op) else {
+		return false;
+	};
+	let Some(material_index) = unavatar_scene_material_index(scene, &target) else {
+		return false;
+	};
+	let Some(value) = op.get("value").and_then(Value::as_f64).map(|value| value as f32) else {
+		return false;
+	};
+	let parameter = op
+		.get("parameter")
+		.or_else(|| op.get("property"))
+		.or_else(|| op.get("name"))
+		.and_then(Value::as_str)
+		.unwrap_or("_Alpha");
+	scene
+		.materials
+		.get_mut(material_index)
+		.is_some_and(|material| apply_runtime_material_scalar(material, parameter, value).is_ok())
 }
 
 fn resolve_unavatar_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
@@ -3670,17 +3733,21 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 		|| applied.blendshape_missing > 0
 		|| applied.dynamics_applied > 0
 		|| applied.dynamics_missing > 0
+		|| applied.material_applied > 0
+		|| applied.material_missing > 0
 		|| applied.material_slot_applied > 0
 		|| applied.material_slot_missing > 0
 	{
 		report.push_info(format!(
-			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_slot_applied={}, material_slot_missing={}, inherited_hidden_skipped={}",
+			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_applied={}, material_missing={}, material_slot_applied={}, material_slot_missing={}, inherited_hidden_skipped={}",
 			applied.visibility_applied,
 			applied.visibility_missing,
 			applied.blendshape_applied,
 			applied.blendshape_missing,
 			applied.dynamics_applied,
 			applied.dynamics_missing,
+			applied.material_applied,
+			applied.material_missing,
 			applied.material_slot_applied,
 			applied.material_slot_missing,
 			skipped
@@ -7865,6 +7932,50 @@ mod tests {
 		assert_eq!(applied.material_slot_missing, 1);
 		assert_eq!(scene.meshes[0][0].material_index, Some(0));
 		assert_eq!(scene.meshes[0][1].material_index, Some(1));
+	}
+
+	#[test]
+	fn wardrobe_material_operations_apply_color_and_scalar_overrides() {
+		let mut scene = UnaSceneSnapshot {
+			materials: vec![
+				UnaMaterialPbr {
+					name: Some("Body".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Accent".to_string()),
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+		let operations = vec![
+			serde_json::json!({
+				"op": "materialColor",
+				"target": {"materialName": "Accent"},
+				"parameter": "_EmissionColor",
+				"color": [2.0, 0.5, -1.0, 1.0]
+			}),
+			serde_json::json!({
+				"op": "materialScalar",
+				"materialIndex": 1,
+				"parameter": "_Smoothness",
+				"value": 0.75
+			}),
+			serde_json::json!({
+				"op": "materialScalar",
+				"materialIndex": 1,
+				"parameter": "_Unsupported",
+				"value": 1.0
+			}),
+		];
+
+		let applied = apply_unavatar_wardrobe_operations(&mut scene, None, &operations, None);
+
+		assert_eq!(applied.material_applied, 2);
+		assert_eq!(applied.material_missing, 1);
+		assert_eq!(scene.materials[1].emissive_factor, [2.0, 0.5, 0.0]);
+		assert_eq!(scene.materials[1].roughness_factor, 0.25);
 	}
 
 	#[test]

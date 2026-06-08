@@ -895,7 +895,7 @@ fn runtime_material_parameter_key(parameter: &str) -> String {
 		.collect()
 }
 
-fn apply_runtime_material_color(material: &mut UnaMaterialPbr, parameter: &str, color: [f32; 4]) -> Result<(), String> {
+pub fn apply_runtime_material_color(material: &mut UnaMaterialPbr, parameter: &str, color: [f32; 4]) -> Result<(), String> {
 	let key = runtime_material_parameter_key(parameter);
 	match key.as_str() {
 		"" | "color" | "basecolor" | "maincolor" => {
@@ -910,7 +910,7 @@ fn apply_runtime_material_color(material: &mut UnaMaterialPbr, parameter: &str, 
 	}
 }
 
-fn apply_runtime_material_scalar(material: &mut UnaMaterialPbr, parameter: &str, value: f32) -> Result<(), String> {
+pub fn apply_runtime_material_scalar(material: &mut UnaMaterialPbr, parameter: &str, value: f32) -> Result<(), String> {
 	if !value.is_finite() {
 		return Err(format!("runtime material scalar parameter `{parameter}` received non-finite value"));
 	}
