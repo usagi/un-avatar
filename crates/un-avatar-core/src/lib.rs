@@ -144,6 +144,8 @@ pub struct UnaSpringBoneGroup {
 	pub hit_radius: f32,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub limit: Option<UnaDynamicsLimit>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub interaction: Option<UnaDynamicsInteraction>,
 	/// glTF ノードインデックスのチェーン（親→子）。
 	pub bone_node_indices: Vec<usize>,
 }
@@ -158,6 +160,14 @@ pub struct UnaDynamicsLimit {
 	pub max_angle_z: f32,
 	#[serde(default)]
 	pub max_stretch: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaDynamicsInteraction {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub allow_grabbing: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub allow_posing: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

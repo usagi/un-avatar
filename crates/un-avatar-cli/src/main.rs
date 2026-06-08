@@ -400,6 +400,10 @@ struct DiagnoseDynamicsGroupSummary {
 	max_angle_z: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	max_stretch: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	allow_grabbing: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	allow_posing: Option<bool>,
 	hit_radius: f32,
 }
 
@@ -1458,6 +1462,8 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				max_angle_x: group.limit.as_ref().map(|limit| limit.max_angle_x),
 				max_angle_z: group.limit.as_ref().map(|limit| limit.max_angle_z),
 				max_stretch: group.limit.as_ref().map(|limit| limit.max_stretch),
+				allow_grabbing: group.interaction.as_ref().and_then(|interaction| interaction.allow_grabbing),
+				allow_posing: group.interaction.as_ref().and_then(|interaction| interaction.allow_posing),
 				hit_radius: group.hit_radius,
 			}
 		})
@@ -2469,8 +2475,12 @@ fn run_diagnose(
 				max_stretch
 			),
 		};
+		let interaction = match (group.allow_grabbing, group.allow_posing) {
+			(None, None) => String::new(),
+			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
+		};
 		println!(
-			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.bone_count,
@@ -2481,6 +2491,7 @@ fn run_diagnose(
 			group.gravity_power,
 			group.hit_radius,
 			limit,
+			interaction,
 			group.comment
 		);
 	}

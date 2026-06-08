@@ -532,7 +532,7 @@ v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runti
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
 `sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
 `sourceParams.colliders` は VRC PhysBone collider の保存情報であり、Sphere / Capsule は local collider として SpringBone solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
-`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、diagnostics にも出すが、v0.1 初期の solver 挙動にはまだ反映しない。grabbing / posing は source feature count として diagnostics に出す。
+`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、diagnostics にも出すが、v0.1 初期の solver 挙動にはまだ反映しない。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
 
 ## 10. Provenance And License
 

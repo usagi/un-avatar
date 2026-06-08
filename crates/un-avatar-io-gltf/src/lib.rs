@@ -13,11 +13,11 @@ use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
 	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape,
-	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
-	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot,
-	UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
-	UnaUnavatarExtension,
+	UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
+	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
+	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
+	UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings,
+	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1544,8 +1544,12 @@ fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
 	(power, dir)
 }
 
+fn unavatar_dynamics_source_params(value: &Value) -> Option<&Value> {
+	value.get("sourceParams").or_else(|| value.get("source_params"))
+}
+
 fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
-	let source_params = value.get("sourceParams").or_else(|| value.get("source_params"));
+	let source_params = unavatar_dynamics_source_params(value);
 	let limit_type = source_params
 		.and_then(|params| params.get("limitType").or_else(|| params.get("limit_type")))
 		.or_else(|| value.get("limitType").or_else(|| value.get("limit_type")))
@@ -1575,6 +1579,26 @@ fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 			max_angle_x,
 			max_angle_z,
 			max_stretch,
+		})
+	}
+}
+
+fn unavatar_dynamics_interaction(value: &Value) -> Option<UnaDynamicsInteraction> {
+	let source_params = unavatar_dynamics_source_params(value);
+	let allow_grabbing = source_params
+		.and_then(|params| params.get("allowGrabbing").or_else(|| params.get("allow_grabbing")))
+		.or_else(|| value.get("allowGrabbing").or_else(|| value.get("allow_grabbing")))
+		.and_then(Value::as_bool);
+	let allow_posing = source_params
+		.and_then(|params| params.get("allowPosing").or_else(|| params.get("allow_posing")))
+		.or_else(|| value.get("allowPosing").or_else(|| value.get("allow_posing")))
+		.and_then(Value::as_bool);
+	if allow_grabbing.is_none() && allow_posing.is_none() {
+		None
+	} else {
+		Some(UnaDynamicsInteraction {
+			allow_grabbing,
+			allow_posing,
 		})
 	}
 }
@@ -1638,6 +1662,7 @@ fn unavatar_dynamics_settings(
 		.unwrap_or(0.02);
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
 		let limit = unavatar_dynamics_limit(item);
+		let interaction = unavatar_dynamics_interaction(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
 			item.get("ignoreTransforms")
 				.or_else(|| item.get("ignore_transforms"))
@@ -1686,6 +1711,7 @@ fn unavatar_dynamics_settings(
 					center_node: None,
 					hit_radius,
 					limit: limit.clone(),
+					interaction: interaction.clone(),
 					bone_node_indices: chain,
 				});
 			}
@@ -5300,6 +5326,8 @@ mod tests {
 					"radius": 0.03,
 					"sourceParams": {
 						"allowCollision": true,
+						"allowGrabbing": true,
+						"allowPosing": false,
 						"limitType": "Angle",
 						"maxAngleX": 45.0,
 						"maxAngleZ": 30.0,
@@ -5352,6 +5380,9 @@ mod tests {
 		assert_eq!(limit.max_angle_x, 45.0);
 		assert_eq!(limit.max_angle_z, 30.0);
 		assert_eq!(limit.max_stretch, 0.2);
+		let interaction = settings.groups[0].interaction.as_ref().expect("interaction");
+		assert_eq!(interaction.allow_grabbing, Some(true));
+		assert_eq!(interaction.allow_posing, Some(false));
 		assert_eq!(settings.colliders.len(), 2);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.colliders[0].node, 0);
