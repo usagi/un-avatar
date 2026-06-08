@@ -6033,8 +6033,7 @@ impl SceneMeshes {
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
-				let mi = buf.material_index.unwrap_or(0);
-				let mat = scene.materials.get(mi).unwrap_or(&default_material);
+				let mat = buf.material_index.and_then(|mi| scene.materials.get(mi)).unwrap_or(&default_material);
 				if material_is_fully_invisible_for_draw(mat, &opts) {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
@@ -7110,20 +7109,17 @@ impl SceneMeshes {
 	}
 
 	pub fn refresh_draw_materials_from_scene(&mut self, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
+		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
 		let mut changed = 0;
 		for draw in &mut self.draws {
-			let Some(material_index) = scene
-				.meshes
-				.get(draw.mesh_index)
-				.and_then(|mesh| mesh.get(draw.primitive_index))
-				.and_then(|primitive| primitive.material_index)
-			else {
+			let Some(primitive) = scene.meshes.get(draw.mesh_index).and_then(|mesh| mesh.get(draw.primitive_index)) else {
 				continue;
 			};
-			let Some(material) = scene.materials.get(material_index) else {
-				continue;
-			};
+			let material = primitive
+				.material_index
+				.and_then(|material_index| scene.materials.get(material_index))
+				.unwrap_or(&default_material);
 			if draw.material == *material {
 				continue;
 			}
