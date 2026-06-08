@@ -6998,6 +6998,35 @@ impl SceneMeshes {
 		}
 	}
 
+	pub fn refresh_draw_materials_from_scene(&mut self, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
+		let default_mtoon = UnaMtoonMaterial::default();
+		let mut changed = 0;
+		for draw in &mut self.draws {
+			let Some(material_index) = scene
+				.meshes
+				.get(draw.mesh_index)
+				.and_then(|mesh| mesh.get(draw.primitive_index))
+				.and_then(|primitive| primitive.material_index)
+			else {
+				continue;
+			};
+			let Some(material) = scene.materials.get(material_index) else {
+				continue;
+			};
+			if draw.material == *material {
+				continue;
+			}
+			draw.material = material.clone();
+			draw.shading = material.shading;
+			draw.alpha_mode = material.alpha_mode;
+			let material_gpu =
+				mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
+			changed += 1;
+		}
+		changed
+	}
+
 	#[inline]
 	fn pipeline_for_kind(&self, kind: DrawPipelineKind) -> &wgpu::RenderPipeline {
 		match kind {

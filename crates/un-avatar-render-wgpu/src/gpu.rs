@@ -1786,6 +1786,9 @@ impl GpuState {
 		let refresh_scene_morph_defaults = document_changed;
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
+		if document_changed {
+			sm.refresh_draw_materials_from_scene(&self.queue, runtime.scene);
+		}
 		sm.update_draw_transforms(
 			&self.queue,
 			runtime.scene,
@@ -2699,6 +2702,38 @@ impl GpuState {
 		Ok(())
 	}
 
+	fn set_runtime_material_color(
+		&mut self,
+		target: &un_avatar_core::UnaRuntimeMaterialTarget,
+		parameter: &str,
+		color: [f32; 4],
+	) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		doc.runtime_model_mut().set_material_color(target, parameter, color)?;
+		drop(doc);
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
+	fn set_runtime_material_scalar(
+		&mut self,
+		target: &un_avatar_core::UnaRuntimeMaterialTarget,
+		parameter: &str,
+		value: f32,
+	) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		doc.runtime_model_mut().set_material_scalar(target, parameter, value)?;
+		drop(doc);
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	pub(crate) fn activate_runtime_action(&mut self, action_id: Option<&str>, command: Option<&str>) -> Result<Option<String>, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2742,8 +2777,11 @@ impl GpuState {
 				UnaRuntimeActionEffect::NodeVisibility { target, visible } => {
 					self.set_runtime_node_visible(&target, visible)?;
 				}
-				UnaRuntimeActionEffect::MaterialColor { .. } | UnaRuntimeActionEffect::MaterialScalar { .. } => {
-					return Err("runtime action effect is not connected yet".to_string());
+				UnaRuntimeActionEffect::MaterialColor { target, parameter, color } => {
+					self.set_runtime_material_color(&target, &parameter, color)?;
+				}
+				UnaRuntimeActionEffect::MaterialScalar { target, parameter, value } => {
+					self.set_runtime_material_scalar(&target, &parameter, value)?;
 				}
 			}
 		}

@@ -728,6 +728,29 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		node.visible = visible;
 		true
 	}
+
+	pub fn set_material_color(&mut self, target: &UnaRuntimeMaterialTarget, parameter: &str, color: [f32; 4]) -> Result<(), String> {
+		let Some(material) = self.resolve_material_mut(target) else {
+			return Err(format!("runtime material target not found: {target:?}"));
+		};
+		apply_runtime_material_color(material, parameter, color)
+	}
+
+	pub fn set_material_scalar(&mut self, target: &UnaRuntimeMaterialTarget, parameter: &str, value: f32) -> Result<(), String> {
+		let Some(material) = self.resolve_material_mut(target) else {
+			return Err(format!("runtime material target not found: {target:?}"));
+		};
+		apply_runtime_material_scalar(material, parameter, value)
+	}
+
+	fn resolve_material_mut(&mut self, target: &UnaRuntimeMaterialTarget) -> Option<&mut UnaMaterialPbr> {
+		let scene = self.document.scene.as_mut()?;
+		if let Some(index) = target.material_index.filter(|index| *index < scene.materials.len()) {
+			return scene.materials.get_mut(index);
+		}
+		let name = target.name.as_deref().filter(|name| !name.is_empty())?;
+		scene.materials.iter_mut().find(|material| material.name.as_deref() == Some(name))
+	}
 }
 
 fn resolve_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
@@ -785,6 +808,61 @@ fn runtime_scene_node_paths(scene: &UnaSceneSnapshot) -> std::collections::BTree
 		}
 	}
 	out
+}
+
+fn runtime_material_parameter_key(parameter: &str) -> String {
+	parameter
+		.trim()
+		.trim_start_matches('_')
+		.chars()
+		.filter(|ch| *ch != '_' && *ch != '-' && !ch.is_whitespace())
+		.flat_map(char::to_lowercase)
+		.collect()
+}
+
+fn apply_runtime_material_color(material: &mut UnaMaterialPbr, parameter: &str, color: [f32; 4]) -> Result<(), String> {
+	let key = runtime_material_parameter_key(parameter);
+	match key.as_str() {
+		"" | "color" | "basecolor" | "maincolor" => {
+			material.base_color_factor = color.map(|value| value.clamp(0.0, 1.0));
+			Ok(())
+		}
+		"emissive" | "emission" | "emissivecolor" | "emissioncolor" => {
+			material.emissive_factor = [color[0].max(0.0), color[1].max(0.0), color[2].max(0.0)];
+			Ok(())
+		}
+		_ => Err(format!("runtime material color parameter `{parameter}` is not supported")),
+	}
+}
+
+fn apply_runtime_material_scalar(material: &mut UnaMaterialPbr, parameter: &str, value: f32) -> Result<(), String> {
+	if !value.is_finite() {
+		return Err(format!("runtime material scalar parameter `{parameter}` received non-finite value"));
+	}
+	let key = runtime_material_parameter_key(parameter);
+	match key.as_str() {
+		"alpha" | "opacity" => {
+			material.base_color_factor[3] = value.clamp(0.0, 1.0);
+			Ok(())
+		}
+		"metallic" | "metallicfactor" => {
+			material.metallic_factor = value.clamp(0.0, 1.0);
+			Ok(())
+		}
+		"roughness" | "roughnessfactor" => {
+			material.roughness_factor = value.clamp(0.0, 1.0);
+			Ok(())
+		}
+		"smoothness" | "smoothnessfactor" => {
+			material.roughness_factor = 1.0 - value.clamp(0.0, 1.0);
+			Ok(())
+		}
+		"cutoff" | "alphacutoff" | "alphacutofffactor" => {
+			material.alpha_cutoff = value.clamp(0.0, 1.0);
+			Ok(())
+		}
+		_ => Err(format!("runtime material scalar parameter `{parameter}` is not supported")),
+	}
 }
 
 /// `.unavatar` 固有 metadata。現段階では raw JSON を正本として保持し、runtime 対応が進むごとに構造化する。
@@ -3528,6 +3606,85 @@ mod tests {
 			},
 			true,
 		));
+	}
+
+	#[test]
+	fn runtime_model_mut_applies_basic_material_overrides() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				materials: vec![
+					UnaMaterialPbr {
+						name: Some("Body".to_string()),
+						..Default::default()
+					},
+					UnaMaterialPbr {
+						name: Some("Accent".to_string()),
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		document
+			.runtime_model_mut()
+			.set_material_color(
+				&UnaRuntimeMaterialTarget {
+					material_index: Some(0),
+					name: Some("Accent".to_string()),
+				},
+				"_Color",
+				[1.2, 0.5, -0.1, 0.25],
+			)
+			.unwrap();
+		assert_eq!(
+			document.scene.as_ref().unwrap().materials[0].base_color_factor,
+			[1.0, 0.5, 0.0, 0.25]
+		);
+		assert_eq!(
+			document.scene.as_ref().unwrap().materials[1].base_color_factor,
+			[1.0, 1.0, 1.0, 1.0]
+		);
+
+		document
+			.runtime_model_mut()
+			.set_material_color(
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Accent".to_string()),
+				},
+				"_EmissionColor",
+				[2.0, 1.0, -1.0, 0.5],
+			)
+			.unwrap();
+		assert_eq!(document.scene.as_ref().unwrap().materials[1].emissive_factor, [2.0, 1.0, 0.0]);
+
+		document
+			.runtime_model_mut()
+			.set_material_scalar(
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Accent".to_string()),
+				},
+				"_Smoothness",
+				0.75,
+			)
+			.unwrap();
+		assert_eq!(document.scene.as_ref().unwrap().materials[1].roughness_factor, 0.25);
+
+		let err = document
+			.runtime_model_mut()
+			.set_material_scalar(
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Accent".to_string()),
+				},
+				"_Unsupported",
+				1.0,
+			)
+			.expect_err("unsupported material scalar should fail");
+		assert!(err.contains("not supported"));
 	}
 
 	#[test]
