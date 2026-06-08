@@ -3356,21 +3356,7 @@ fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, s
 	if proxy.send_event(event).is_err() {
 		return "err event-loop-closed".to_string();
 	}
-	let deadline = Instant::now() + Duration::from_secs(2);
-	loop {
-		if let Ok(guard) = result.lock() {
-			if let Some(outcome) = guard.as_ref() {
-				return match outcome {
-					Ok(()) => "ok".to_string(),
-					Err(e) => format!("err {e}"),
-				};
-			}
-		}
-		if Instant::now() >= deadline {
-			return "err set_wardrobe timeout".to_string();
-		}
-		thread::sleep(Duration::from_millis(20));
-	}
+	wait_command_result(result, Duration::from_secs(2), "set_wardrobe")
 }
 
 fn dispatch_scene_state_command(proxy: &EventLoopProxy<RendererControlEvent>) -> String {
@@ -3407,7 +3393,11 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 	if proxy.send_event(event).is_err() {
 		return "err event-loop-closed".to_string();
 	}
-	let deadline = Instant::now() + Duration::from_secs(10);
+	wait_command_result(result, Duration::from_secs(10), "screenshot")
+}
+
+fn wait_command_result(result: CommandResultSlot, timeout: Duration, command_name: &str) -> String {
+	let deadline = Instant::now() + timeout;
 	loop {
 		if let Ok(guard) = result.lock() {
 			if let Some(outcome) = guard.as_ref() {
@@ -3418,7 +3408,7 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 			}
 		}
 		if Instant::now() >= deadline {
-			return "err screenshot timeout".to_string();
+			return format!("err {command_name} timeout");
 		}
 		thread::sleep(Duration::from_millis(20));
 	}
