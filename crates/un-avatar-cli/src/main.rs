@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
 	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
-	UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	UnaRuntimeActionEffect, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -342,6 +342,7 @@ struct DiagnoseActionSummary {
 	action_count: usize,
 	trigger_count: usize,
 	effect_count: usize,
+	effect_kinds: BTreeMap<String, usize>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
 
@@ -351,6 +352,7 @@ struct DiagnoseActionItemSummary {
 	label: String,
 	trigger_count: usize,
 	effect_count: usize,
+	effect_kinds: BTreeMap<String, usize>,
 }
 
 #[derive(Serialize)]
@@ -2364,6 +2366,7 @@ fn build_diagnose_report(
 		action_count: actions.actions.len(),
 		trigger_count: actions.actions.iter().map(|action| action.triggers.len()).sum(),
 		effect_count: actions.actions.iter().map(|action| action.effects.len()).sum(),
+		effect_kinds: runtime_action_effect_kind_counts(actions.actions.iter().flat_map(|action| action.effects.iter())),
 		actions: actions
 			.actions
 			.iter()
@@ -2372,6 +2375,7 @@ fn build_diagnose_report(
 				label: action.label.clone(),
 				trigger_count: action.triggers.len(),
 				effect_count: action.effects.len(),
+				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 			})
 			.collect(),
 	});
@@ -2527,6 +2531,25 @@ fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyPr
 	})
 }
 
+fn runtime_action_effect_kind(effect: &UnaRuntimeActionEffect) -> &'static str {
+	match effect {
+		UnaRuntimeActionEffect::WardrobeSet { .. } => "wardrobe_set",
+		UnaRuntimeActionEffect::NodeVisibility { .. } => "node_visibility",
+		UnaRuntimeActionEffect::ExpressionWeight { .. } => "expression_weight",
+		UnaRuntimeActionEffect::MaterialColor { .. } => "material_color",
+		UnaRuntimeActionEffect::MaterialScalar { .. } => "material_scalar",
+		UnaRuntimeActionEffect::DynamicsEnabled { .. } => "dynamics_enabled",
+	}
+}
+
+fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
+	let mut counts = BTreeMap::new();
+	for effect in effects {
+		*counts.entry(runtime_action_effect_kind(effect).to_string()).or_insert(0) += 1;
+	}
+	counts
+}
+
 fn run_diagnose(
 	plugin_dirs: &[PathBuf],
 	path: PathBuf,
@@ -2623,13 +2646,13 @@ fn run_diagnose(
 	);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={}",
-			actions.action_count, actions.trigger_count, actions.effect_count
+			"actions: actions={} triggers={} effects={} effect_kinds={:?}",
+			actions.action_count, actions.trigger_count, actions.effect_count, actions.effect_kinds
 		);
 		for action in actions.actions.iter().take(16) {
 			println!(
-				"action[{}]: label={:?} triggers={} effects={}",
-				action.id, action.label, action.trigger_count, action.effect_count
+				"action[{}]: label={:?} triggers={} effects={} effect_kinds={:?}",
+				action.id, action.label, action.trigger_count, action.effect_count, action.effect_kinds
 			);
 		}
 	} else {
