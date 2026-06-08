@@ -32,6 +32,36 @@ namespace UNAvatar.UnityExporter
             return payload;
         }
 
+        private Dictionary<string, object> BuildDynamicsReportSummary(GameObject root)
+        {
+            var groups = BuildDynamicsPayload(root);
+            var samples = new List<object>();
+            for (var i = 0; i < groups.Count && samples.Count < 32; i++)
+            {
+                if (groups[i] is Dictionary<string, object> group)
+                {
+                    samples.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = group.TryGetValue("id", out var id) ? id : "",
+                        ["source"] = group.TryGetValue("source", out var source) ? source : "",
+                        ["component"] = group.TryGetValue("component", out var component) ? component : null,
+                        ["roots"] = group.TryGetValue("roots", out var roots) ? roots : new List<object>(),
+                        ["stiffness"] = group.TryGetValue("stiffness", out var stiffness) ? stiffness : 0.0f,
+                        ["spring"] = group.TryGetValue("spring", out var spring) ? spring : 0.0f,
+                        ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
+                        ["gravity"] = group.TryGetValue("gravity", out var gravity) ? gravity : new List<object>(),
+                        ["radius"] = group.TryGetValue("radius", out var radius) ? radius : 0.0f
+                    });
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["groupCount"] = groups.Count,
+                ["sampleLimit"] = 32,
+                ["samples"] = samples
+            };
+        }
+
         private static bool IsVrcPhysBoneComponent(Component component)
         {
             if (component == null)

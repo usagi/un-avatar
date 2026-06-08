@@ -91,6 +91,7 @@ namespace UNAvatar.UnityExporter
             string output,
             bool bakeAttempted,
             bool bakeSucceeded,
+            GameObject registryRoot,
             WardrobeSnapshotDraft exportBaseSnapshot,
             List<WardrobeSetDraft> exportWardrobeSets,
             List<ExportedTextureRecord> exportedTextures)
@@ -137,6 +138,7 @@ namespace UNAvatar.UnityExporter
                 ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
+                ["dynamics"] = BuildDynamicsReportSummary(registryRoot),
                 ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
