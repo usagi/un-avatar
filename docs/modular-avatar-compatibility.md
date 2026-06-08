@@ -111,8 +111,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - required: mesh vertex / primitive filtering, generated mesh cache key.
 - `[ ]` MA Shape Changer
   - required: blendshape-driven mesh filtering or morph defaults.
-- `[ ]` MA Remove Vertex Color
-  - required: vertex color stripping or material input fallback.
+- `[~]` MA Remove Vertex Color
+  - done: Runtime resolver applies `Mode=Remove` to renderer meshes under the nearest Remove Vertex Color component, honors nested `DontRemove`, strips `colors_0`, clones shared mesh buffers before mutation so subtree-external renderers keep their vertex colors, and reports removed node / primitive counts.
+  - remaining: exporter schema parity for every serialized mode spelling and fixture coverage through full `.unavatar` import/export.
 - `[ ]` vertex filters: by blendshape, mask, bone, axis
   - required: common filter representation before Mesh Cutter / Shape Changer.
 

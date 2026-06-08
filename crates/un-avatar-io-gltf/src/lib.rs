@@ -3788,9 +3788,119 @@ fn apply_unavatar_replace_objects(
 	(applied, missing, skipped, invalid)
 }
 
+fn modular_avatar_remove_vertex_color_removes(component: &Value) -> bool {
+	let Some(mode) = component
+		.get("fields")
+		.and_then(|fields| fields.get("Mode").or_else(|| fields.get("mode")))
+		.or_else(|| component.get("Mode").or_else(|| component.get("mode")))
+	else {
+		return true;
+	};
+	match mode {
+		Value::String(mode) => !matches!(mode.as_str(), "DontRemove" | "dontRemove" | "dont_remove" | "1"),
+		Value::Number(mode) => mode.as_u64() != Some(1),
+		_ => true,
+	}
+}
+
+fn apply_unavatar_remove_vertex_color(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize, usize) {
+	let mut removers = BTreeMap::<usize, bool>::new();
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarRemoveVertexColor") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(target_ref) = component.get("target").or_else(|| component.get("resolvedTarget")) else {
+			missing += 1;
+			continue;
+		};
+		let Some(target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let remove = modular_avatar_remove_vertex_color_removes(component);
+		removers.insert(target, remove);
+	}
+	if removers.is_empty() {
+		return (0, 0, missing, skipped);
+	}
+
+	let parents = scene_parent_indices(scene);
+	let mesh_user_counts = scene
+		.nodes
+		.iter()
+		.filter_map(|node| node.mesh)
+		.fold(BTreeMap::<usize, usize>::new(), |mut counts, mesh| {
+			*counts.entry(mesh).or_default() += 1;
+			counts
+		});
+	let mut removed_nodes = 0usize;
+	let mut removed_primitives = 0usize;
+	for node_idx in 0..scene.nodes.len() {
+		let mut cursor = Some(node_idx);
+		let mut nearest_remove = None;
+		while let Some(idx) = cursor {
+			if let Some(&remove) = removers.get(&idx) {
+				nearest_remove = Some(remove);
+				break;
+			}
+			cursor = parents.get(idx).copied().flatten();
+		}
+		if nearest_remove != Some(true) {
+			continue;
+		}
+		let Some(mesh_idx) = scene.nodes.get(node_idx).and_then(|node| node.mesh) else {
+			continue;
+		};
+		let target_mesh_idx = if mesh_user_counts.get(&mesh_idx).copied().unwrap_or(0) > 1 {
+			let Some(mesh) = scene.meshes.get(mesh_idx).cloned() else {
+				continue;
+			};
+			scene.meshes.push(mesh);
+			let cloned_idx = scene.meshes.len() - 1;
+			if let Some(node) = scene.nodes.get_mut(node_idx) {
+				node.mesh = Some(cloned_idx);
+			}
+			cloned_idx
+		} else {
+			mesh_idx
+		};
+		let Some(mesh) = scene.meshes.get_mut(target_mesh_idx) else {
+			continue;
+		};
+		let mut node_removed = false;
+		for primitive in mesh {
+			if primitive.colors_0.take().is_some() {
+				removed_primitives += 1;
+				node_removed = true;
+			}
+		}
+		if node_removed {
+			removed_nodes += 1;
+		}
+	}
+	(removed_nodes, removed_primitives, missing, skipped)
+}
+
 fn modular_avatar_component_support(short_type: &str) -> &'static str {
 	match short_type {
-		"ModularAvatarBoneProxy" | "ModularAvatarMergeArmature" | "ModularAvatarMeshSettings" | "ModularAvatarReplaceObject" => "resolver",
+		"ModularAvatarBoneProxy"
+		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMeshSettings"
+		| "ModularAvatarRemoveVertexColor"
+		| "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
 		_ => "unsupported",
 	}
@@ -3851,6 +3961,13 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
+	let (remove_vcol_nodes, remove_vcol_primitives, remove_vcol_missing, remove_vcol_skipped) =
+		apply_unavatar_remove_vertex_color(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if remove_vcol_nodes > 0 || remove_vcol_primitives > 0 || remove_vcol_missing > 0 || remove_vcol_skipped > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: remove_vertex_color_nodes={remove_vcol_nodes}, remove_vertex_color_primitives={remove_vcol_primitives}, remove_vertex_color_missing={remove_vcol_missing}, remove_vertex_color_skipped={remove_vcol_skipped}"
+		));
+	}
 	let (mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing) =
 		apply_unavatar_mesh_settings(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
 	if mesh_settings_root_bones > 0 || mesh_settings_probe_anchors > 0 || mesh_settings_bounds > 0 || mesh_settings_missing > 0 {
@@ -9859,6 +9976,27 @@ mod tests {
 		}
 	}
 
+	fn test_colored_primitive() -> UnaMeshBuffers {
+		UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: Some(vec![[0.25, 0.5, 0.75, 1.0]]),
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		}
+	}
+
 	#[test]
 	fn unavatar_path_diagnostics_reports_ambiguous_paths() {
 		let mut scene = UnaSceneSnapshot {
@@ -9973,6 +10111,117 @@ mod tests {
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("ModularAvatarMeshCutter:1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
+	}
+
+	#[test]
+	fn modular_avatar_remove_vertex_color_clones_shared_mesh_for_target_subtree() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Remove".to_string()),
+					source_node_id: Some("node_remove".to_string()),
+					resolved_node_id: None,
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OutsideRenderer".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![test_colored_primitive()]],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarRemoveVertexColor",
+			"enabled": true,
+			"target": {"nodeId": "node_remove", "path": "Root/Remove"},
+			"fields": {"Mode": "Remove"}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let (nodes, primitives, missing, skipped) =
+			apply_unavatar_remove_vertex_color(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!((nodes, primitives, missing, skipped), (1, 1, 0, 0));
+		assert_eq!(scene.nodes[2].mesh, Some(1));
+		assert_eq!(scene.nodes[3].mesh, Some(0));
+		assert!(scene.meshes[0][0].colors_0.is_some());
+		assert!(scene.meshes[1][0].colors_0.is_none());
+	}
+
+	#[test]
+	fn modular_avatar_remove_vertex_color_honors_nearest_dont_remove() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Remove".to_string()),
+					source_node_id: Some("node_remove".to_string()),
+					resolved_node_id: None,
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Keep".to_string()),
+					source_node_id: Some("node_keep".to_string()),
+					resolved_node_id: None,
+					children: vec![3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Renderer".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![test_colored_primitive()]],
+			..Default::default()
+		};
+		let components = vec![
+			serde_json::json!({
+				"shortType": "ModularAvatarRemoveVertexColor",
+				"enabled": true,
+				"target": {"nodeId": "node_remove", "path": "Root/Remove"},
+				"fields": {"Mode": "Remove"}
+			}),
+			serde_json::json!({
+				"shortType": "ModularAvatarRemoveVertexColor",
+				"enabled": true,
+				"target": {"nodeId": "node_keep", "path": "Root/Remove/Keep"},
+				"fields": {"Mode": 1}
+			}),
+		];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let (nodes, primitives, missing, skipped) =
+			apply_unavatar_remove_vertex_color(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!((nodes, primitives, missing, skipped), (0, 0, 0, 0));
+		assert!(scene.meshes[0][0].colors_0.is_some());
 	}
 
 	#[test]
