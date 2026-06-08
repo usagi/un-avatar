@@ -415,7 +415,7 @@ impl UnaDocument {
 		UnaRuntimeModelMut { document: self }
 	}
 
-	pub fn runtime_scene_and_dynamics_mut(&mut self) -> Option<(&mut UnaSceneSnapshot, UnaRuntimeDynamics<'_>)> {
+	pub fn runtime_scene_and_dynamics_mut(&mut self) -> Option<UnaRuntimeSceneDynamicsMut<'_>> {
 		self.runtime_model_mut().scene_and_dynamics_mut()
 	}
 }
@@ -473,6 +473,12 @@ pub struct UnaRuntimeSceneDynamics<'a> {
 pub struct UnaRuntimeSceneExpressions<'a> {
 	pub scene: &'a UnaSceneSnapshot,
 	pub expression_catalog: Option<&'a UnaExpressionCatalog>,
+}
+
+#[derive(Debug)]
+pub struct UnaRuntimeSceneDynamicsMut<'a> {
+	pub scene: &'a mut UnaSceneSnapshot,
+	pub dynamics: UnaRuntimeDynamics<'a>,
 }
 
 impl<'a> UnaRuntimeModel<'a> {
@@ -568,14 +574,14 @@ impl<'a> UnaRuntimeModel<'a> {
 }
 
 impl<'a> UnaRuntimeModelMut<'a> {
-	pub fn scene_and_dynamics_mut(self) -> Option<(&'a mut UnaSceneSnapshot, UnaRuntimeDynamics<'a>)> {
+	pub fn scene_and_dynamics_mut(self) -> Option<UnaRuntimeSceneDynamicsMut<'a>> {
 		let UnaDocument { scene, spring_bones, .. } = self.document;
-		Some((
-			scene.as_mut()?,
-			UnaRuntimeDynamics {
+		Some(UnaRuntimeSceneDynamicsMut {
+			scene: scene.as_mut()?,
+			dynamics: UnaRuntimeDynamics {
 				spring_bones: spring_bones.as_ref(),
 			},
-		))
+		})
 	}
 
 	pub fn humanoid_scene_mut(&mut self) -> Option<(&mut UnaSceneSnapshot, &HumanoidProfile)> {
@@ -3243,9 +3249,9 @@ mod tests {
 				.insert("Blink".to_string(), 0.5);
 		}
 		{
-			let (scene, dynamics) = document.runtime_scene_and_dynamics_mut().unwrap();
-			assert_eq!(scene.roots, vec![7]);
-			assert_eq!(dynamics.group_count(), 1);
+			let runtime = document.runtime_scene_and_dynamics_mut().unwrap();
+			assert_eq!(runtime.scene.roots, vec![7]);
+			assert_eq!(runtime.dynamics.group_count(), 1);
 		}
 		assert_eq!(
 			document
