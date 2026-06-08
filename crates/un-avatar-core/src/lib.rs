@@ -207,7 +207,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMeshSettings"
 		| "ModularAvatarRemoveVertexColor"
 		| "ModularAvatarReplaceObject" => "resolver",
-		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
+		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
 		_ => "unsupported",
 	}
 }
@@ -4639,6 +4639,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBoneProxy"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarRemoveVertexColor"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "unsupported");
 	}
 

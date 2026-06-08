@@ -120,8 +120,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Materials / Reactive Objects
 
 - `[~]` MA Object Toggle
-  - done: exporter extracts some toggle/menu candidates as variants.
-  - remaining: treat these as wardrobe operations source, not full MA bake replacement.
+  - done: exporter extracts some toggle/menu candidates as variants. Runtime action importer also lowers structured `ModularAvatarObjectToggle` component payloads into `NodeVisibility` effects, using scene-aware object reference resolution when a scene snapshot is available and preserving explicit MenuItem path / parameter triggers.
+  - remaining: full reactive object integration with inherited active-state conditions, inverted conditions, and continuous animator-style evaluation.
 - `[~]` MA Material Swap
   - done: Runtime action importer expands structured Material Swap root / From / To payload into `MaterialSlot` effects by matching current scene primitive material slots under the selected root. Null `From` / `To` materials are represented as empty material slots. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger; explicit MenuItem control parameter/value metadata is preserved as a `ParameterValue` trigger. Renderer control accepts `set_parameter`, records runtime parameter state even without a matching action, and applies matching `ParameterValue` actions through the same runtime action path.
   - note: upstream `QuickSwapMode` is an Inspector candidate-selection helper for editing the `To` material; runtime reaction registration consumes the serialized `Swaps` From / To list, so no runtime QuickSwap emulation is planned.

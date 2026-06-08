@@ -2411,8 +2411,111 @@ fn unavatar_modular_avatar_component_runtime_action(
 	match short_type {
 		"ModularAvatarMaterialSetter" => unavatar_material_setter_runtime_action(component, component_index, scene, unavatar),
 		"ModularAvatarMaterialSwap" => unavatar_material_swap_runtime_action(component, component_index, scene?, unavatar),
+		"ModularAvatarObjectToggle" => unavatar_object_toggle_runtime_action(component, component_index, scene, unavatar),
 		_ => None,
 	}
+}
+
+fn unavatar_object_toggle_runtime_action(
+	component: &Value,
+	component_index: usize,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeAction> {
+	let objects = component
+		.get("fields")
+		.and_then(|fields| {
+			fields
+				.get("Objects")
+				.or_else(|| fields.get("objects"))
+				.or_else(|| fields.get("m_objects"))
+		})
+		.or_else(|| component.get("objects").or_else(|| component.get("m_objects")))
+		.and_then(Value::as_array)?;
+	let mut effects = Vec::new();
+	for object in objects {
+		let Some(target) = unavatar_object_toggle_node_target(object, scene, unavatar) else {
+			continue;
+		};
+		let Some(visible) = object
+			.get("Active")
+			.or_else(|| object.get("active"))
+			.or_else(|| object.get("visible"))
+			.or_else(|| object.get("enabled"))
+			.and_then(Value::as_bool)
+		else {
+			continue;
+		};
+		effects.push(UnaRuntimeActionEffect::NodeVisibility { target, visible });
+	}
+	if effects.is_empty() {
+		return None;
+	}
+	let component_id = component
+		.get("id")
+		.or_else(|| component.get("componentId"))
+		.or_else(|| component.get("component_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| component_index.to_string());
+	let label = unavatar_modular_avatar_component_label(component, "Object Toggle");
+	let command = format!("ma:object_toggle:{component_id}");
+	Some(UnaRuntimeAction {
+		id: command.clone(),
+		label,
+		triggers: unavatar_modular_avatar_component_triggers(component, command),
+		effects,
+	})
+}
+
+fn unavatar_object_toggle_node_target(
+	object: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeNodeTarget> {
+	let target_ref = object
+		.get("Object")
+		.or_else(|| object.get("object"))
+		.or_else(|| object.get("target"))
+		.unwrap_or(object);
+	let source_node_id = target_ref
+		.get("nodeId")
+		.or_else(|| target_ref.get("sourceNodeId"))
+		.or_else(|| target_ref.get("source_node_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let path = target_ref
+		.get("path")
+		.or_else(|| target_ref.get("referencePath"))
+		.or_else(|| target_ref.get("reference_path"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if source_node_id.is_none() && path.is_none() {
+		return None;
+	}
+	if let Some(scene) = scene {
+		let node_ids = scene_node_ids(scene);
+		let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+		let paths = scene_node_paths(scene);
+		let normalized_paths = scene_node_normalized_paths(scene);
+		let node_index = modular_avatar_reference_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths)?;
+		let node = scene.nodes.get(node_index)?;
+		return Some(UnaRuntimeNodeTarget {
+			node_index: None,
+			source_node_id: node.source_node_id.clone(),
+			resolved_node_id: node.resolved_node_id.clone(),
+			path: scene_node_path_for_index(scene, node_index),
+		});
+	}
+	Some(UnaRuntimeNodeTarget {
+		node_index: None,
+		source_node_id,
+		resolved_node_id: None,
+		path,
+	})
 }
 
 fn unavatar_material_setter_runtime_action(
@@ -8209,6 +8312,89 @@ mod tests {
 					material_index: None,
 					name: Some("Jacket Red".to_string()),
 				}),
+			}]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_import_modular_avatar_object_toggle() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Hat".to_string()),
+					source_node_id: Some("node_hat".to_string()),
+					resolved_node_id: Some("resolved_hat".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarObjectToggle",
+						"enabled": true,
+						"id": "hat-toggle",
+						"fields": {
+							"menuItem": {
+								"label": "Hat",
+								"path": "Clothes/Hat",
+								"Control": {
+									"Parameter": {"Name": "Hat"},
+									"Value": 1
+								}
+							},
+							"Objects": [{
+								"Object": {
+									"nodeId": "node_hat",
+									"path": "Outdated/Hat"
+								},
+								"Active": false
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene)).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "ma:object_toggle:hat-toggle");
+		assert_eq!(actions.actions[0].label, "Hat");
+		assert_eq!(
+			actions.actions[0].triggers,
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "ma:object_toggle:hat-toggle".to_string()
+				},
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: "Clothes/Hat".to_string()
+				},
+				UnaRuntimeActionTrigger::ParameterValue {
+					name: "Hat".to_string(),
+					value: 1.0
+				}
+			]
+		);
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::NodeVisibility {
+				target: UnaRuntimeNodeTarget {
+					node_index: None,
+					source_node_id: Some("node_hat".to_string()),
+					resolved_node_id: Some("resolved_hat".to_string()),
+					path: Some("Root/Hat".to_string()),
+				},
+				visible: false,
 			}]
 		);
 	}
