@@ -151,6 +151,10 @@ pub struct UnaRuntimeState {
 	/// this is runtime state so hot-switch clients can observe the active resolver choice.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub active_wardrobe_set: Option<String>,
+	/// Last successfully activated runtime action. Action definitions remain in `UnaRuntimeActionSet`;
+	/// this field only records transient runtime state for status/diagnostics.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub last_action_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -706,6 +710,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.runtime_state().active_wardrobe_set.as_deref()
 	}
 
+	pub fn last_action_id(self) -> Option<&'a str> {
+		self.runtime_state().last_action_id.as_deref()
+	}
+
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
 		Some(UnaRuntimeSceneExpressions {
 			scene: self.scene()?,
@@ -757,6 +765,10 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_active_wardrobe_set(&mut self, set_id: Option<String>) {
 		self.runtime_state_mut().active_wardrobe_set = set_id;
+	}
+
+	pub fn set_last_action_id(&mut self, action_id: Option<String>) {
+		self.runtime_state_mut().last_action_id = action_id;
 	}
 
 	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
@@ -3996,15 +4008,21 @@ mod tests {
 	fn runtime_state_tracks_active_wardrobe_set() {
 		let mut document = UnaDocument::default();
 		assert_eq!(document.runtime_model().active_wardrobe_set(), None);
+		assert_eq!(document.runtime_model().last_action_id(), None);
 
 		document
 			.runtime_model_mut()
 			.set_active_wardrobe_set(Some("field_drape".to_string()));
+		document
+			.runtime_model_mut()
+			.set_last_action_id(Some("wardrobe:field_drape".to_string()));
 		assert_eq!(document.runtime_model().active_wardrobe_set(), Some("field_drape"));
+		assert_eq!(document.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 
 		let json = serde_json::to_string(&document).unwrap();
 		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
 		assert_eq!(decoded.runtime_model().active_wardrobe_set(), Some("field_drape"));
+		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 	}
 
 	#[test]

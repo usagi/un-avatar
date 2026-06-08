@@ -56,6 +56,12 @@ pub(crate) struct MeshShaderResourcePlan {
 	pub(crate) required_limits: wgpu::Limits,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeActionActivation {
+	pub(crate) action_id: String,
+	pub(crate) active_wardrobe_set: Option<String>,
+}
+
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
 	if adapter_limits.max_sampled_textures_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
 		&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
@@ -2668,6 +2674,12 @@ impl GpuState {
 		doc.runtime_model().active_wardrobe_set().map(str::to_owned)
 	}
 
+	pub(crate) fn last_action_id(&self) -> Option<String> {
+		let doc_arc = self.document.as_ref()?;
+		let doc = doc_arc.read().ok()?;
+		doc.runtime_model().last_action_id().map(str::to_owned)
+	}
+
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2760,11 +2772,12 @@ impl GpuState {
 		action_id: Option<&str>,
 		command: Option<&str>,
 		expression_menu_path: Option<&str>,
-	) -> Result<Option<String>, String> {
+	) -> Result<RuntimeActionActivation, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
-		let effects = {
+		let doc_arc = Arc::clone(doc_arc);
+		let (resolved_action_id, effects) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let Some(actions) = doc.runtime_model().runtime_actions() else {
 				return Err("document has no runtime actions".to_string());
@@ -2787,7 +2800,7 @@ impl GpuState {
 					matches_action_id || matches_supervisor_command || matches_expression_menu_path
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
-			action.effects.clone()
+			(action.id.clone(), action.effects.clone())
 		};
 		let mut active_wardrobe_set = None;
 		for effect in effects {
@@ -2820,7 +2833,12 @@ impl GpuState {
 				}
 			}
 		}
-		Ok(active_wardrobe_set)
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		doc.runtime_model_mut().set_last_action_id(Some(resolved_action_id.clone()));
+		Ok(RuntimeActionActivation {
+			action_id: resolved_action_id,
+			active_wardrobe_set,
+		})
 	}
 
 	pub(crate) fn scene_build_context(&self) -> GpuSceneBuildContext {

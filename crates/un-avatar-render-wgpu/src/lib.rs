@@ -1627,6 +1627,15 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_last_action(&self, action_id: Option<String>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.last_action_id = action_id;
+		}
+	}
+
 	fn update_runtime_startup(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -2430,8 +2439,11 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					}
 					None => Err("renderer is not initialized".to_string()),
 				};
-				if let Ok(Some(active_set_id)) = &outcome {
-					self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+				if let Ok(activation) = &outcome {
+					if let Some(active_set_id) = &activation.active_wardrobe_set {
+						self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+					}
+					self.update_runtime_last_action(Some(activation.action_id.clone()));
 				}
 				if outcome.is_ok() {
 					self.request_redraw();
@@ -2803,6 +2815,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.clear_startup_progress();
 						self.update_runtime_texture_summary(actual_texture_summary);
 						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
+						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
@@ -2953,6 +2966,8 @@ struct RendererRuntimeSnapshot {
 	texture_summary: Option<mesh_pass::TextureUploadSummary>,
 	#[serde(default)]
 	active_wardrobe_set: Option<String>,
+	#[serde(default)]
+	last_action_id: Option<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3085,6 +3100,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		processed_texture_cache: opts.processed_texture_cache,
 		texture_summary: None,
 		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
+		last_action_id: None,
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4237,6 +4253,7 @@ mod tests {
 			snapshot.get("active_wardrobe_set").and_then(|value| value.as_str()),
 			Some("field_drape")
 		);
+		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
 		assert!(snapshot
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
