@@ -570,10 +570,10 @@ pub struct HumanoidRetargetContext {
 
 impl HumanoidRetargetContext {
 	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
-		let runtime_model = document.runtime_model();
-		let target_basis = runtime_model.humanoid_basis();
-		let profile = runtime_model.humanoid_profile();
-		let scene = runtime_model.scene();
+		let inputs = document.runtime_model().humanoid_retarget_inputs();
+		let target_basis = inputs.humanoid_basis;
+		let profile = inputs.profile;
+		let scene = inputs.scene;
 		let profile_lookup = profile.map(precompute_profile_lookup).unwrap_or_default();
 		let compile_input = RetargetCompileInput {
 			profile,
@@ -584,7 +584,7 @@ impl HumanoidRetargetContext {
 		let root_base = precompute_root_base(compile_input);
 		let body_bone_nodes = precompute_body_bone_nodes(compile_input);
 		let hand_nodes = precompute_hand_nodes(compile_input);
-		let expression_lookup = precompute_expression_lookup(runtime_model.expression_catalog());
+		let expression_lookup = precompute_expression_lookup(inputs.expression_catalog);
 		let runtime = RuntimeRetargetData {
 			profile_lookup,
 			root_base,

@@ -402,6 +402,14 @@ pub struct UnaRuntimeModel<'a> {
 	document: &'a UnaDocument,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct UnaRuntimeRetargetInputs<'a> {
+	pub humanoid_basis: UnaHumanoidRuntimeBasis,
+	pub profile: Option<&'a HumanoidProfile>,
+	pub scene: Option<&'a UnaSceneSnapshot>,
+	pub expression_catalog: Option<&'a UnaExpressionCatalog>,
+}
+
 impl<'a> UnaRuntimeModel<'a> {
 	pub fn document(self) -> &'a UnaDocument {
 		self.document
@@ -461,6 +469,15 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn scene_expression_catalog(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a UnaExpressionCatalog>)> {
 		Some((self.scene()?, self.expression_catalog()))
+	}
+
+	pub fn humanoid_retarget_inputs(self) -> UnaRuntimeRetargetInputs<'a> {
+		UnaRuntimeRetargetInputs {
+			humanoid_basis: self.humanoid_basis(),
+			profile: self.humanoid_profile(),
+			scene: self.scene(),
+			expression_catalog: self.expression_catalog(),
+		}
 	}
 
 	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
@@ -3077,6 +3094,10 @@ mod tests {
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		assert!(document.runtime_model().humanoid_scene().is_some());
 		assert!(document.runtime_model().has_humanoid_scene());
+		let retarget_inputs = document.runtime_model().humanoid_retarget_inputs();
+		assert_eq!(retarget_inputs.humanoid_basis, UnaHumanoidRuntimeBasis::Vrm0);
+		assert!(retarget_inputs.profile.is_some());
+		assert!(retarget_inputs.scene.is_some());
 	}
 
 	#[test]
