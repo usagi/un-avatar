@@ -2871,6 +2871,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 		else {
 			return Ok(WardrobeApplyReport::default());
 		};
+		reset_scene_visibility(runtime.scene);
 		let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
 		return Ok(apply_unavatar_wardrobe_operations(
 			runtime.scene,
@@ -2881,6 +2882,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	}
 	if base_id.as_deref() != Some(set_id) {
 		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar) {
+			reset_scene_visibility(runtime.scene);
 			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
 			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
 		}
@@ -2897,6 +2899,7 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 	let Some((filtered_operations, skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, unavatar) else {
 		return;
 	};
+	reset_scene_visibility(scene);
 	let _ = apply_unavatar_wardrobe_operations(scene, None, &reset_operations, Some(unavatar));
 	let applied = apply_unavatar_wardrobe_operations(scene, None, &filtered_operations, Some(unavatar));
 	if applied.visibility_applied > 0
@@ -2916,6 +2919,12 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 			applied.dynamics_missing,
 			skipped
 		));
+	}
+}
+
+fn reset_scene_visibility(scene: &mut UnaSceneSnapshot) {
+	for node in &mut scene.nodes {
+		node.visible = true;
 	}
 }
 
@@ -6415,6 +6424,11 @@ mod tests {
 								},
 								{
 									"type": "subtreeEnabled",
+									"target": {"path": "UnityInactive"},
+									"visible": false
+								},
+								{
+									"type": "subtreeEnabled",
 									"target": {"path": "Hidden"},
 									"visible": false
 								},
@@ -6518,7 +6532,7 @@ mod tests {
 		assert!(scene.nodes[3].visible);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
 		let applied = apply_unavatar_wardrobe_set(&mut got.document, "base").unwrap();
-		assert_eq!(applied.visibility_applied, 2);
+		assert_eq!(applied.visibility_applied, 3);
 		assert_eq!(applied.visibility_missing, 0);
 		assert_eq!(applied.blendshape_applied, 1);
 		assert_eq!(applied.blendshape_missing, 0);
@@ -6550,8 +6564,8 @@ mod tests {
 			.report
 			.messages
 			.iter()
-			.any(|m| m.contains(".unavatar unity active state: visibility_applied=1")));
-		assert!(got.report.messages.iter().any(|m| m.contains("inherited_hidden_skipped=1")));
+			.any(|m| m.contains(".unavatar unity active state: visibility_applied=0")));
+		assert!(got.report.messages.iter().any(|m| m.contains("inherited_hidden_skipped=2")));
 		assert!(got
 			.report
 			.messages
