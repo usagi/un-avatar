@@ -1272,6 +1272,62 @@ fn lookup_operation_targets_all(
 	lookup_scene_path_all(paths, normalized_paths, operation_target_path(op))
 }
 
+fn normalized_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
+	if ancestor.is_empty() {
+		return false;
+	}
+	let path = normalize_unavatar_path(path);
+	let ancestor = normalize_unavatar_path(ancestor);
+	path == ancestor || path.starts_with(&format!("{ancestor}/"))
+}
+
+fn operation_target_registry_path<'a>(registry_paths: &'a BTreeMap<String, String>, op: &'a Value) -> &'a str {
+	operation_target_node_id(op)
+		.and_then(|node_id| registry_paths.get(node_id).map(String::as_str))
+		.filter(|path| !path.is_empty())
+		.unwrap_or_else(|| operation_target_path(op))
+}
+
+fn collect_current_subtree(scene: &UnaSceneSnapshot, root: usize, out: &mut BTreeSet<usize>) {
+	if root >= scene.nodes.len() || !out.insert(root) {
+		return;
+	}
+	if let Some(node) = scene.nodes.get(root) {
+		for &child in &node.children {
+			collect_current_subtree(scene, child, out);
+		}
+	}
+}
+
+fn lookup_operation_subtree_targets_all(
+	scene: &UnaSceneSnapshot,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	op: &Value,
+) -> Vec<usize> {
+	let mut out = BTreeSet::new();
+	for root in lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op) {
+		collect_current_subtree(scene, root, &mut out);
+	}
+	let target_path = operation_target_registry_path(registry_paths, op);
+	if !target_path.is_empty() {
+		for (idx, node) in scene.nodes.iter().enumerate() {
+			let Some(source_node_id) = node.source_node_id.as_deref() else {
+				continue;
+			};
+			let Some(source_path) = registry_paths.get(source_node_id) else {
+				continue;
+			};
+			if normalized_path_is_same_or_descendant(source_path, target_path) {
+				out.insert(idx);
+			}
+		}
+	}
+	out.into_iter().collect()
+}
+
 fn lookup_operation_target(
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
@@ -1810,7 +1866,24 @@ fn apply_unavatar_wardrobe_operations(
 		let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
 		let path = operation_target_path(op);
 		match ty {
-			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility" => {
+			"subtreeEnabled" | "subtreeVisibility" => {
+				let Some(visible) = op.get("visible").and_then(|v| v.as_bool()) else {
+					continue;
+				};
+				let indices = lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op);
+				if !indices.is_empty() {
+					for idx in indices {
+						if let Some(node) = scene.nodes.get_mut(idx) {
+							node.visible = visible;
+						}
+					}
+					report.visibility_applied += 1;
+				} else {
+					report.visibility_missing += 1;
+					report.missing_visibility_paths.push(path.to_string());
+				}
+			}
+			"nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility" => {
 				let Some(visible) = op.get("visible").and_then(|v| v.as_bool()) else {
 					continue;
 				};
@@ -3030,13 +3103,13 @@ fn filtered_unavatar_base_wardrobe_operations(
 	let base_hidden_indices = operations
 		.iter()
 		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
-		.flat_map(|op| lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op))
+		.flat_map(|op| lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op))
 		.collect::<BTreeSet<_>>();
 	let base_hidden_paths = operations
 		.iter()
 		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
 		.flat_map(|op| {
-			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+			let resolved = lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op);
 			if resolved.is_empty() {
 				vec![operation_target_path(op).to_string()]
 			} else {
@@ -6398,7 +6471,7 @@ mod tests {
 		assert!(scene.nodes[0].visible);
 		assert_eq!(scene.nodes[1].source_node_id.as_deref(), Some("node_hidden"));
 		assert!(!scene.nodes[1].visible);
-		assert!(scene.nodes[3].visible);
+		assert!(!scene.nodes[3].visible);
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
@@ -6451,7 +6524,7 @@ mod tests {
 		assert_eq!(applied.blendshape_missing, 0);
 		let scene = got.document.scene.as_ref().unwrap();
 		assert!(!scene.nodes[1].visible);
-		assert!(scene.nodes[3].visible);
+		assert!(!scene.nodes[3].visible);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
 		let applied = apply_unavatar_wardrobe_set(&mut got.document, "child_hidden").unwrap();
 		assert_eq!(applied.visibility_applied, 2);
@@ -6485,6 +6558,100 @@ mod tests {
 			.iter()
 			.any(|m| m.contains(".unavatar humanoid: resolved_bones=1")));
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn wardrobe_subtree_visibility_uses_original_export_paths_after_reparent() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Outfit".to_string()),
+					source_node_id: Some("node_outfit".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_head".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Hat".to_string()),
+					source_node_id: Some("node_hat".to_string()),
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_outfit", "path": "Outfit"},
+					{"nodeId": "node_head", "path": "Armature/Head"},
+					{"nodeId": "node_hat", "path": "Outfit/Armature/Head/Hat"}
+				],
+				"wardrobe": {
+					"baseSet": "base",
+					"sets": [{
+						"id": "base",
+						"operations": [{
+							"type": "subtreeEnabled",
+							"target": {"nodeId": "node_outfit", "path": "Outfit"},
+							"visible": false
+						}]
+					}, {
+						"id": "outfit",
+						"operations": [{
+							"type": "subtreeEnabled",
+							"target": {"nodeId": "node_outfit", "path": "Outfit"},
+							"visible": true
+						}]
+					}]
+				}
+			}),
+		};
+
+		let base = unavatar_wardrobe_set_operations(&unavatar, "base").unwrap();
+		let applied = apply_unavatar_wardrobe_operations(&mut scene, None, base, Some(&unavatar));
+		assert_eq!(applied.visibility_applied, 1);
+		assert!(!scene.nodes[1].visible);
+		assert!(!scene.nodes[3].visible);
+
+		let outfit = unavatar_wardrobe_set_operations(&unavatar, "outfit").unwrap();
+		let applied = apply_unavatar_wardrobe_operations(&mut scene, None, outfit, Some(&unavatar));
+		assert_eq!(applied.visibility_applied, 1);
+		assert!(scene.nodes[1].visible);
+		assert!(scene.nodes[3].visible);
 	}
 
 	#[test]
