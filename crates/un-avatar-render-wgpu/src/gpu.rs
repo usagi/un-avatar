@@ -2670,6 +2670,22 @@ impl GpuState {
 		Ok(())
 	}
 
+	fn set_runtime_dynamics_enabled(&mut self, source_id: &str, enabled: bool) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let Some(mut runtime) = doc.runtime_scene_and_dynamics_mut() else {
+			return Err("document has no runtime scene".to_string());
+		};
+		if !runtime.dynamics.set_group_enabled_by_source_id(source_id, enabled) {
+			return Err(format!("runtime dynamics source_id `{source_id}` not found"));
+		}
+		drop(doc);
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	pub(crate) fn activate_runtime_action(&mut self, action_id: Option<&str>, command: Option<&str>) -> Result<Option<String>, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2704,11 +2720,13 @@ impl GpuState {
 							.unwrap_or(set_id),
 					);
 				}
+				UnaRuntimeActionEffect::DynamicsEnabled { source_id, enabled } => {
+					self.set_runtime_dynamics_enabled(&source_id, enabled)?;
+				}
 				UnaRuntimeActionEffect::NodeVisibility { .. }
 				| UnaRuntimeActionEffect::ExpressionWeight { .. }
 				| UnaRuntimeActionEffect::MaterialColor { .. }
-				| UnaRuntimeActionEffect::MaterialScalar { .. }
-				| UnaRuntimeActionEffect::DynamicsEnabled { .. } => {
+				| UnaRuntimeActionEffect::MaterialScalar { .. } => {
 					return Err("runtime action effect is not connected yet".to_string());
 				}
 			}
