@@ -2426,6 +2426,8 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				};
 				if let Ok(Some(active_set_id)) = &outcome {
 					self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+				}
+				if outcome.is_ok() {
 					self.request_redraw();
 				}
 				if let Ok(mut guard) = result.lock() {

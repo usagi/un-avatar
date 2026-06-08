@@ -2723,8 +2723,10 @@ impl GpuState {
 				UnaRuntimeActionEffect::DynamicsEnabled { source_id, enabled } => {
 					self.set_runtime_dynamics_enabled(&source_id, enabled)?;
 				}
+				UnaRuntimeActionEffect::ExpressionWeight { name, weight } => {
+					self.set_expression_override(&name, weight);
+				}
 				UnaRuntimeActionEffect::NodeVisibility { .. }
-				| UnaRuntimeActionEffect::ExpressionWeight { .. }
 				| UnaRuntimeActionEffect::MaterialColor { .. }
 				| UnaRuntimeActionEffect::MaterialScalar { .. } => {
 					return Err("runtime action effect is not connected yet".to_string());
