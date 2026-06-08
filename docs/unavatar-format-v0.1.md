@@ -421,6 +421,7 @@ operation の `target` は保存上 `nodeId` を正とし、`path` を表示と 
 
 - `nodeId`: exporter が node に付与する stable id。同名 object や `Armature.1` の衝突を避ける。
 - `path`: Unity hierarchy path。UI 表示、手動修復、diagnostics 用。
+- `dynamicsEnable` は node target ではなく `{ "dynamicsId": "..." }` を使う。`dynamicsId` は `dynamics[].id` を参照する。
 
 ### Operation Precedence
 

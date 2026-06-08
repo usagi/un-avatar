@@ -1535,6 +1535,74 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 	counts
 }
 
+fn unavatar_dynamics_source_ids(doc: &UnaDocument) -> BTreeSet<String> {
+	let Some(unavatar) = doc.unavatar.as_ref() else {
+		return BTreeSet::new();
+	};
+	let Some(dynamics) = unavatar.source.get("dynamics").and_then(|value| value.as_array()) else {
+		return BTreeSet::new();
+	};
+	dynamics
+		.iter()
+		.filter_map(|item| item.get("id").and_then(|value| value.as_str()))
+		.filter(|id| !id.is_empty())
+		.map(str::to_string)
+		.collect()
+}
+
+fn wardrobe_dynamics_enable_targets(doc: &UnaDocument) -> Vec<String> {
+	let Some(unavatar) = doc.unavatar.as_ref() else {
+		return Vec::new();
+	};
+	let Some(sets) = unavatar
+		.source
+		.get("wardrobe")
+		.and_then(|wardrobe| wardrobe.get("sets"))
+		.and_then(|value| value.as_array())
+	else {
+		return Vec::new();
+	};
+	let mut targets = Vec::new();
+	for set in sets {
+		let Some(operations) = set.get("operations").and_then(|value| value.as_array()) else {
+			continue;
+		};
+		for op in operations {
+			let ty = op
+				.get("type")
+				.or_else(|| op.get("op"))
+				.and_then(|value| value.as_str())
+				.unwrap_or("");
+			if ty != "dynamicsEnable" {
+				continue;
+			}
+			if let Some(target_id) = wardrobe_dynamics_target_id(op) {
+				targets.push(target_id.to_string());
+			}
+		}
+	}
+	targets
+}
+
+fn wardrobe_dynamics_target_id(op: &serde_json::Value) -> Option<&str> {
+	let target = op.get("target");
+	target
+		.and_then(|target| {
+			target
+				.get("dynamicsId")
+				.or_else(|| target.get("dynamics_id"))
+				.or_else(|| target.get("sourceId"))
+				.or_else(|| target.get("source_id"))
+				.or_else(|| target.get("id"))
+		})
+		.or_else(|| op.get("dynamicsId").or_else(|| op.get("dynamics_id")))
+		.or_else(|| op.get("sourceId").or_else(|| op.get("source_id")))
+		.or_else(|| op.get("dynamics"))
+		.or(target)
+		.and_then(|value| value.as_str())
+		.filter(|id| !id.is_empty())
+}
+
 fn dynamics_source_params(value: &serde_json::Value) -> Option<&serde_json::Value> {
 	value.get("sourceParams").or_else(|| value.get("source_params"))
 }
@@ -2237,6 +2305,14 @@ fn build_diagnose_report(
 		warnings.push(format!(
 			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
 		));
+	}
+	let dynamics_source_ids = unavatar_dynamics_source_ids(&doc);
+	for target_id in wardrobe_dynamics_enable_targets(&doc) {
+		if !dynamics_source_ids.contains(&target_id) {
+			warnings.push(format!(
+				"wardrobe dynamicsEnable target {target_id:?} does not match any .unavatar dynamics id"
+			));
+		}
 	}
 	let dynamics_source_features = dynamics_source_feature_counts(&doc);
 	let dynamics = DiagnoseDynamicsSummary {
@@ -3174,6 +3250,55 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups")));
+	}
+
+	#[test]
+	fn diagnose_report_warns_on_missing_wardrobe_dynamics_target() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot::default()),
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1".into(),
+				source: serde_json::json!({
+					"dynamics": [
+						{"id": "physbone:hair", "source": "vrc_physbone", "roots": [0]}
+					],
+					"wardrobe": {
+						"sets": [{
+							"id": "base",
+							"operations": [
+								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:hair"}, "enabled": true},
+								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:missing"}, "enabled": false}
+							]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:missing\"")));
+		assert!(!report
+			.warnings
+			.iter()
+			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:hair\"")));
 	}
 
 	#[test]
