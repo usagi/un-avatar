@@ -947,6 +947,14 @@ pub(crate) struct SceneMeshRuntimeRequirements {
 	pub(crate) fur: bool,
 }
 
+impl SceneMeshRuntimeRequirements {
+	fn include(&mut self, other: Self) {
+		self.audio_link_texture |= other.audio_link_texture;
+		self.screen_refraction |= other.screen_refraction;
+		self.fur |= other.fur;
+	}
+}
+
 #[derive(Default)]
 struct SceneMeshDrawState {
 	outline_draw_indices: Vec<usize>,
@@ -1169,12 +1177,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 			state.active_skin_palette_indices.push(draw.skin_palette_index);
 		}
 		let requirements = material_runtime_requirements(&draw.material, draw.shading, opts);
+		state.runtime_requirements.include(requirements);
 		if requirements.screen_refraction {
 			state.needs_screen_refraction = true;
-			state.runtime_requirements.screen_refraction = true;
-		}
-		if requirements.audio_link_texture {
-			state.runtime_requirements.audio_link_texture = true;
 		}
 		let shading = effective_mesh_shading(draw, opts);
 		if !opts.disable_mtoon_outlines
@@ -1186,7 +1191,6 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 		let has_fur = requirements.fur;
 		if has_fur {
 			state.fur_draw_indices.push(draw_index);
-			state.runtime_requirements.fur = true;
 		}
 
 		let shading_index = match shading {
@@ -8996,6 +9000,12 @@ mod tests {
 		assert!(!mtoon_requirements.audio_link_texture);
 		assert!(mtoon_requirements.screen_refraction);
 		assert!(!mtoon_requirements.fur);
+
+		let mut merged = mtoon_requirements;
+		merged.include(requirements);
+		assert!(merged.audio_link_texture);
+		assert!(merged.screen_refraction);
+		assert!(merged.fur);
 	}
 
 	#[test]
