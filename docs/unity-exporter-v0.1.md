@@ -217,6 +217,7 @@ Report に含めるもの。
 - exported renderer count / mesh count / material count / texture count
 - generated wardrobe sets
 - wardrobe source mapping
+- dynamics source samples including PhysBone collider, limit, and interaction metadata
 - texture source / fallback summary
 - approximations
 - unsupported features

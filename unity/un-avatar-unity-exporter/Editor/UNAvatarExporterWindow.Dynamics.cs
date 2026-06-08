@@ -55,7 +55,9 @@ namespace UNAvatar.UnityExporter
                         ["spring"] = group.TryGetValue("spring", out var spring) ? spring : 0.0f,
                         ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
                         ["gravity"] = group.TryGetValue("gravity", out var gravity) ? gravity : new List<object>(),
-                        ["radius"] = group.TryGetValue("radius", out var radius) ? radius : 0.0f
+                        ["radius"] = group.TryGetValue("radius", out var radius) ? radius : 0.0f,
+                        ["limit"] = SourceLimitSample(group),
+                        ["interaction"] = SourceInteractionSample(group)
                     });
                 }
             }
@@ -65,6 +67,38 @@ namespace UNAvatar.UnityExporter
                 ["sampleLimit"] = 32,
                 ["samples"] = samples
             };
+        }
+
+        private static Dictionary<string, object> SourceLimitSample(Dictionary<string, object> group)
+        {
+            var sourceParams = SourceParams(group);
+            return new Dictionary<string, object>
+            {
+                ["limitType"] = sourceParams != null && sourceParams.TryGetValue("limitType", out var limitType) ? limitType : "",
+                ["maxAngleX"] = sourceParams != null && sourceParams.TryGetValue("maxAngleX", out var maxAngleX) ? maxAngleX : 0.0f,
+                ["maxAngleZ"] = sourceParams != null && sourceParams.TryGetValue("maxAngleZ", out var maxAngleZ) ? maxAngleZ : 0.0f,
+                ["maxStretch"] = sourceParams != null && sourceParams.TryGetValue("maxStretch", out var maxStretch) ? maxStretch : 0.0f
+            };
+        }
+
+        private static Dictionary<string, object> SourceInteractionSample(Dictionary<string, object> group)
+        {
+            var sourceParams = SourceParams(group);
+            return new Dictionary<string, object>
+            {
+                ["allowCollision"] = sourceParams != null && sourceParams.TryGetValue("allowCollision", out var allowCollision) ? allowCollision : false,
+                ["allowGrabbing"] = sourceParams != null && sourceParams.TryGetValue("allowGrabbing", out var allowGrabbing) ? allowGrabbing : false,
+                ["allowPosing"] = sourceParams != null && sourceParams.TryGetValue("allowPosing", out var allowPosing) ? allowPosing : false
+            };
+        }
+
+        private static Dictionary<string, object> SourceParams(Dictionary<string, object> group)
+        {
+            if (!group.TryGetValue("sourceParams", out var rawSourceParams) || !(rawSourceParams is Dictionary<string, object> sourceParams))
+            {
+                return null;
+            }
+            return sourceParams;
         }
 
         private static bool IsVrcPhysBoneComponent(Component component)
@@ -140,7 +174,8 @@ namespace UNAvatar.UnityExporter
 
         private static int SourceColliderCount(Dictionary<string, object> group)
         {
-            if (!group.TryGetValue("sourceParams", out var rawSourceParams) || !(rawSourceParams is Dictionary<string, object> sourceParams))
+            var sourceParams = SourceParams(group);
+            if (sourceParams == null)
             {
                 return 0;
             }
@@ -154,7 +189,8 @@ namespace UNAvatar.UnityExporter
         private static List<object> SourceColliderSamples(Dictionary<string, object> group, int limit)
         {
             var samples = new List<object>();
-            if (!group.TryGetValue("sourceParams", out var rawSourceParams) || !(rawSourceParams is Dictionary<string, object> sourceParams))
+            var sourceParams = SourceParams(group);
+            if (sourceParams == null)
             {
                 return samples;
             }
