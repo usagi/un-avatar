@@ -509,6 +509,24 @@ fn build_runtime_physics_for_document(
 	}
 }
 
+fn reset_runtime_dynamics_nodes_to_rest(
+	scene: &mut un_avatar_core::UnaSceneSnapshot,
+	dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
+	rest_nodes: &[UnaSceneNode],
+) -> bool {
+	let Some(settings) = dynamics.spring_bones() else {
+		return false;
+	};
+	let mut changed = false;
+	for node_index in settings.groups.iter().flat_map(|group| group.bone_node_indices.iter().copied()) {
+		if let (Some(dst), Some(src)) = (scene.nodes.get_mut(node_index), rest_nodes.get(node_index)) {
+			dst.transform = src.transform;
+			changed = true;
+		}
+	}
+	changed
+}
+
 pub(crate) struct GpuSceneBuildContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
@@ -1831,13 +1849,8 @@ impl GpuState {
 		let Some((scene, dynamics)) = doc.runtime_scene_and_dynamics_mut() else {
 			return;
 		};
-		let Some(settings) = dynamics.spring_bones() else {
+		if !reset_runtime_dynamics_nodes_to_rest(scene, dynamics, rest_nodes) {
 			return;
-		};
-		for node_index in settings.groups.iter().flat_map(|group| group.bone_node_indices.iter().copied()) {
-			if let (Some(dst), Some(src)) = (scene.nodes.get_mut(node_index), rest_nodes.get(node_index)) {
-				dst.transform = src.transform;
-			}
 		}
 		self.applied_document_revision = 0;
 		self.document_revision.fetch_add(1, Ordering::Release);
