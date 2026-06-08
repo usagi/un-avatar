@@ -7410,6 +7410,82 @@ mod tests {
 	}
 
 	#[test]
+	fn import_marks_inverted_modular_avatar_action_component_partial_success() {
+		let bin = triangle_bin_bytes();
+		let json = format!(
+			r#"{{
+				"asset": {{"version": "2.0"}},
+				"scene": 0,
+				"scenes": [{{"nodes": [0]}}],
+				"meshes": [{{
+					"primitives": [{{
+						"attributes": {{"POSITION": 0}},
+						"indices": 1
+					}}]
+				}}],
+				"accessors": [
+					{{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-1, 0, 0], "max": [1, 1, 0]}},
+					{{"bufferView": 1, "componentType": 5125, "count": 3, "type": "SCALAR"}}
+				],
+				"bufferViews": [
+					{{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+					{{"buffer": 0, "byteOffset": 36, "byteLength": 12}}
+				],
+				"buffers": [{{"byteLength": {bin_len}}}],
+				"nodes": [{{"name": "Root", "mesh": 0, "extras": {{"UN_avatar_node": {{"nodeId": "node_root", "path": "Root"}}}}}}],
+				"extensionsUsed": ["UN_avatar"],
+				"extensions": {{
+					"UN_avatar": {{
+						"specVersion": "0.1-preview",
+						"modularAvatar": {{
+							"schemaVersion": "0.1-preview",
+							"components": [{{
+								"shortType": "ModularAvatarObjectToggle",
+								"enabled": true,
+								"fields": {{
+									"m_inverted": true,
+									"objects": [{{
+										"object": {{"nodeId": "node_root", "path": "Root"}},
+										"active": false
+									}}]
+								}}
+							}}]
+						}}
+					}}
+				}}
+			}}"#,
+			bin_len = bin.len()
+		);
+		let bytes = glb_bytes_with_bin(&json, &bin);
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp
+			.import(
+				&mut ctx,
+				ImportInput::Bytes {
+					bytes: bytes.into(),
+					path_hint: Some(std::path::PathBuf::from("inverted-ma-action.glb")),
+				},
+				ImportOptions,
+			)
+			.unwrap();
+
+		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
+		assert_eq!(got.report.lost_features.len(), 0);
+		assert_eq!(got.report.approximations.len(), 1);
+		assert_eq!(
+			got.report.approximations[0].feature,
+			"ModularAvatar.ModularAvatarObjectToggle.Inverted"
+		);
+		let actions = got.document.runtime_actions.as_ref().expect("runtime actions");
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "ma:object_toggle:0");
+		assert!(got.report.diagnostics.iter().any(|diagnostic| {
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("inverted_ignored=1")
+		}));
+	}
+
+	#[test]
 	fn root_json_texture_samplers_map_to_image_sources() {
 		let root = serde_json::json!({
 			"images": [
