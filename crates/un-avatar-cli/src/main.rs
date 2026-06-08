@@ -1505,6 +1505,7 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 		if source_params
 			.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
+			.or_else(|| item.get("allowCollision").or_else(|| item.get("allow_collision")))
 			.and_then(|value| value.as_bool())
 			== Some(false)
 		{
@@ -3079,9 +3080,9 @@ mod tests {
 							"roots": [999],
 							"allowGrabbing": true,
 							"allowPosing": true,
+							"allowCollision": false,
 							"sourceParams": {
 								"maxStretch": 0.25,
-								"allowCollision": false,
 								"colliders": [
 									{"insideBounds": true}
 								]

@@ -1389,9 +1389,10 @@ fn unavatar_dynamics_colliders(
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
 ) -> Vec<UnaDynamicsCollider> {
-	let source_params = value.get("sourceParams").or_else(|| value.get("source_params"));
+	let source_params = unavatar_dynamics_source_params(value);
 	if source_params
 		.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
+		.or_else(|| value.get("allowCollision").or_else(|| value.get("allow_collision")))
 		.and_then(Value::as_bool)
 		== Some(false)
 	{
@@ -5351,8 +5352,8 @@ mod tests {
 					"id": "no_collision_tail",
 					"source": "vrc_physbone",
 					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"allowCollision": false,
 					"sourceParams": {
-						"allowCollision": false,
 						"colliders": [{
 							"root": {"nodeId": "node_root", "path": "Root"},
 							"shapeType": "Sphere",
