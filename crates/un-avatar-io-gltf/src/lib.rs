@@ -1555,6 +1555,7 @@ fn ensure_unavatar_dynamics_endpoint_child(
 	scene.nodes.push(UnaSceneNode {
 		name: Some(format!("{root_name} Endpoint")),
 		source_node_id: None,
+		resolved_node_id: None,
 		visible: true,
 		transform: Mat4::from_translation(Vec3::from(endpoint)).to_cols_array(),
 		children: Vec::new(),
@@ -2107,6 +2108,16 @@ fn resolve_unavatar_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRu
 			return Some(index);
 		}
 	}
+	if let Some(resolved_node_id) = target.resolved_node_id.as_deref().filter(|value| !value.is_empty()) {
+		if let Some((index, _)) = scene
+			.nodes
+			.iter()
+			.enumerate()
+			.find(|(_, node)| node.resolved_node_id.as_deref() == Some(resolved_node_id))
+		{
+			return Some(index);
+		}
+	}
 	if let Some(path) = target.path.as_deref().filter(|value| !value.is_empty()) {
 		let paths = scene_node_paths(scene);
 		let normalized_paths = scene_node_normalized_paths(scene);
@@ -2279,6 +2290,7 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 					target: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id,
+						resolved_node_id: None,
 						path,
 					},
 					visible,
@@ -2509,6 +2521,7 @@ fn unavatar_material_setter_slot_target(
 			node: UnaRuntimeNodeTarget {
 				node_index: None,
 				source_node_id: node.source_node_id.clone(),
+				resolved_node_id: None,
 				path: scene_node_path_for_index(scene, node_index),
 			},
 			primitive_index,
@@ -2518,6 +2531,7 @@ fn unavatar_material_setter_slot_target(
 		node: UnaRuntimeNodeTarget {
 			node_index: None,
 			source_node_id,
+			resolved_node_id: None,
 			path,
 		},
 		primitive_index,
@@ -2598,6 +2612,7 @@ fn unavatar_material_swap_runtime_action(
 						node: UnaRuntimeNodeTarget {
 							node_index: None,
 							source_node_id: node.source_node_id.clone(),
+							resolved_node_id: None,
 							path: scene_node_path_for_index(scene, node_index),
 						},
 						primitive_index: Some(primitive_index),
@@ -2878,6 +2893,7 @@ fn unavatar_runtime_material_slot_target(op: &Value) -> Option<UnaRuntimeMateria
 		node: UnaRuntimeNodeTarget {
 			node_index: None,
 			source_node_id,
+			resolved_node_id: None,
 			path,
 		},
 		primitive_index,
@@ -3295,6 +3311,24 @@ fn remap_scene_node_references(scene: &mut UnaSceneSnapshot, old_node: usize, ne
 	}
 }
 
+fn replace_object_resolved_node_id(scene: &UnaSceneSnapshot, original: usize, replacement: usize) -> String {
+	let original_id = scene
+		.nodes
+		.get(original)
+		.and_then(|node| node.source_node_id.as_deref())
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| format!("node#{original}"));
+	let replacement_id = scene
+		.nodes
+		.get(replacement)
+		.and_then(|node| node.source_node_id.as_deref())
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| format!("node#{replacement}"));
+	format!("ma:replace_object:{original_id}:{replacement_id}")
+}
+
 fn replace_scene_object(scene: &mut UnaSceneSnapshot, original: usize, replacement: usize, initial_world: &[Mat4]) -> bool {
 	if original >= scene.nodes.len() || replacement >= scene.nodes.len() || original == replacement {
 		return false;
@@ -3320,8 +3354,10 @@ fn replace_scene_object(scene: &mut UnaSceneSnapshot, original: usize, replaceme
 	let parent_world = original_parent
 		.and_then(|parent| initial_world.get(parent).copied())
 		.unwrap_or(Mat4::IDENTITY);
+	let resolved_node_id = replace_object_resolved_node_id(scene, original, replacement);
 	if let Some(node) = scene.nodes.get_mut(replacement) {
 		node.transform = (inverse_finite_or_identity(parent_world) * replacement_world).to_cols_array();
+		node.resolved_node_id = Some(resolved_node_id);
 	}
 	if let Some(parent) = original_parent {
 		if let Some(parent_node) = scene.nodes.get_mut(parent) {
@@ -6441,6 +6477,7 @@ pub fn scene_snapshot_from_gltf(
 		nodes.push(UnaSceneNode {
 			name: node.name().map(|s| s.to_string()),
 			source_node_id: unavatar_node_id(&node),
+			resolved_node_id: None,
 			visible: true,
 			transform: transform_cols(node.transform()),
 			children,
@@ -6704,6 +6741,7 @@ mod tests {
 		UnaSceneNode {
 			name: Some(id.to_string()),
 			source_node_id: Some(id.to_string()),
+			resolved_node_id: None,
 			visible: true,
 			transform: Mat4::IDENTITY.to_cols_array(),
 			children,
@@ -7581,6 +7619,7 @@ mod tests {
 				target: UnaRuntimeNodeTarget {
 					node_index: None,
 					source_node_id: Some("node_hidden".to_string()),
+					resolved_node_id: None,
 					path: Some("Wrong Path".to_string()),
 				},
 				visible: true,
@@ -7720,6 +7759,7 @@ mod tests {
 						node: UnaRuntimeNodeTarget {
 							node_index: None,
 							source_node_id: Some("node_renderer".to_string()),
+							resolved_node_id: None,
 							path: Some("Root/Renderer".to_string()),
 						},
 						primitive_index: Some(1),
@@ -7803,6 +7843,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: Some("node_jacket".to_string()),
+						resolved_node_id: None,
 						path: Some("Root/Jacket".to_string()),
 					},
 					primitive_index: Some(1),
@@ -7827,6 +7868,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Jacket".to_string()),
 					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -7868,6 +7910,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: Some("node_jacket".to_string()),
+						resolved_node_id: None,
 						path: Some("Root/Jacket".to_string()),
 					},
 					primitive_index: Some(0),
@@ -7967,18 +8010,21 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OutfitRoot".to_string()),
 					source_node_id: Some("node_outfit_root".to_string()),
+					resolved_node_id: None,
 					children: vec![2],
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("Jacket".to_string()),
 					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
 					mesh: Some(0),
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("Outside".to_string()),
 					source_node_id: Some("node_outside".to_string()),
+					resolved_node_id: None,
 					mesh: Some(1),
 					..test_node(Vec::new())
 				},
@@ -8024,6 +8070,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: Some("node_jacket".to_string()),
+						resolved_node_id: None,
 						path: Some("Root/OutfitRoot/Jacket".to_string()),
 					},
 					primitive_index: Some(0),
@@ -8075,6 +8122,7 @@ mod tests {
 			nodes: vec![UnaSceneNode {
 				name: Some("Renderer".to_string()),
 				source_node_id: Some("node_renderer".to_string()),
+				resolved_node_id: None,
 				mesh: Some(0),
 				..test_node(Vec::new())
 			}],
@@ -8111,6 +8159,7 @@ mod tests {
 						node: UnaRuntimeNodeTarget {
 							node_index: None,
 							source_node_id: Some("node_renderer".to_string()),
+							resolved_node_id: None,
 							path: Some("Renderer".to_string()),
 						},
 						primitive_index: Some(0),
@@ -8125,6 +8174,7 @@ mod tests {
 						node: UnaRuntimeNodeTarget {
 							node_index: None,
 							source_node_id: Some("node_renderer".to_string()),
+							resolved_node_id: None,
 							path: Some("Renderer".to_string()),
 						},
 						primitive_index: Some(1),
@@ -8176,6 +8226,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Jacket".to_string()),
 					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
 					mesh: Some(0),
 					..test_node(Vec::new())
 				},
@@ -8213,6 +8264,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -8224,6 +8276,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Outfit".to_string()),
 					source_node_id: Some("node_outfit".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: Vec::new(),
@@ -8235,6 +8288,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_head".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![3],
@@ -8246,6 +8300,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Hat".to_string()),
 					source_node_id: Some("node_hat".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: Vec::new(),
@@ -8341,6 +8396,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Renderer".to_string()),
 					source_node_id: Some("node_renderer".to_string()),
+					resolved_node_id: None,
 					mesh: Some(0),
 					..test_node(Vec::new())
 				},
@@ -9740,6 +9796,7 @@ mod tests {
 		UnaSceneNode {
 			name: None,
 			source_node_id: None,
+			resolved_node_id: None,
 			visible: true,
 			transform: Mat4::IDENTITY.to_cols_array(),
 			children,
@@ -9762,11 +9819,13 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Item".to_string()),
 					source_node_id: Some("node_item_a".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("Item".to_string()),
 					source_node_id: Some("node_item_b".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -9851,17 +9910,20 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_head".to_string()),
+					resolved_node_id: None,
 					children: vec![2],
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("Proxy".to_string()),
 					source_node_id: Some("node_existing_proxy".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("Proxy".to_string()),
 					source_node_id: Some("node_proxy".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -9907,6 +9969,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Proxy".to_string()),
 					source_node_id: Some("node_proxy".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -9956,6 +10019,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Original".to_string()),
 					source_node_id: Some("node_original".to_string()),
+					resolved_node_id: None,
 					transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
 					children: vec![3],
 					mesh: Some(0),
@@ -9964,6 +10028,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Replacement".to_string()),
 					source_node_id: Some("node_replacement".to_string()),
+					resolved_node_id: None,
 					transform: Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0)).to_cols_array(),
 					children: vec![4],
 					..test_node(Vec::new())
@@ -9971,12 +10036,14 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OriginalChild".to_string()),
 					source_node_id: Some("node_original_child".to_string()),
+					resolved_node_id: None,
 					transform: Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array(),
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("ReplacementChild".to_string()),
 					source_node_id: Some("node_replacement_child".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
@@ -10012,6 +10079,11 @@ mod tests {
 
 		assert_eq!(scene.nodes[0].children, vec![2, 5]);
 		assert_eq!(scene.nodes[2].children, vec![4, 3]);
+		assert_eq!(scene.nodes[2].source_node_id.as_deref(), Some("node_replacement"));
+		assert_eq!(
+			scene.nodes[2].resolved_node_id.as_deref(),
+			Some("ma:replace_object:node_original:node_replacement")
+		);
 		assert!(scene.nodes[1].children.is_empty());
 		assert!(!scene.nodes[1].visible);
 		assert!((after[2].transform_point3(Vec3::ZERO) - before[2].transform_point3(Vec3::ZERO)).length() < 1e-5);
@@ -10034,12 +10106,14 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OriginalParent".to_string()),
 					source_node_id: Some("node_original".to_string()),
+					resolved_node_id: None,
 					children: vec![2],
 					..test_node(Vec::new())
 				},
 				UnaSceneNode {
 					name: Some("ReplacementChild".to_string()),
 					source_node_id: Some("node_replacement".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -10084,6 +10158,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Replacement".to_string()),
 					source_node_id: Some("node_replacement".to_string()),
+					resolved_node_id: None,
 					..test_node(Vec::new())
 				},
 			],
@@ -10121,6 +10196,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -10132,6 +10208,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_head".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
 					children: Vec::new(),
@@ -10143,6 +10220,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Proxy".to_string()),
 					source_node_id: Some("node_proxy".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)).to_cols_array(),
 					children: Vec::new(),
@@ -10190,6 +10268,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -10201,6 +10280,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_head".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
 					children: Vec::new(),
@@ -10212,6 +10292,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("ParentProxy".to_string()),
 					source_node_id: Some("node_parent_proxy".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 10.0, 0.0)).to_cols_array(),
 					children: vec![3],
@@ -10223,6 +10304,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("ChildProxy".to_string()),
 					source_node_id: Some("node_child_proxy".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
 					children: Vec::new(),
@@ -10287,6 +10369,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -10298,6 +10381,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("TargetBone".to_string()),
 					source_node_id: Some("node_target".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: target_world.to_cols_array(),
 					children: Vec::new(),
@@ -10309,6 +10393,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("SourceBone".to_string()),
 					source_node_id: Some("node_source".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: source_world.to_cols_array(),
 					children: Vec::new(),
@@ -10369,6 +10454,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -10380,6 +10466,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_target_head".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: target_world.to_cols_array(),
 					children: Vec::new(),
@@ -10391,6 +10478,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Head".to_string()),
 					source_node_id: Some("node_source_head".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: source_world.to_cols_array(),
 					children: vec![3],
@@ -10402,6 +10490,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("HatRoot".to_string()),
 					source_node_id: Some("node_hat_root".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: aux_local.to_cols_array(),
 					children: Vec::new(),
@@ -10465,6 +10554,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Armature".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2],
@@ -10476,6 +10566,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Hips".to_string()),
 					source_node_id: Some("main_hips".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: main_hips_world.to_cols_array(),
 					children: Vec::new(),
@@ -10487,6 +10578,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OutfitArmature".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![3],
@@ -10498,6 +10590,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Hips".to_string()),
 					source_node_id: Some("outfit_hips".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: outfit_hips_world.to_cols_array(),
 					children: vec![4],
@@ -10509,6 +10602,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("ShirtRoot".to_string()),
 					source_node_id: Some("outfit_shirt_root".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: outfit_aux_local.to_cols_array(),
 					children: Vec::new(),
@@ -10556,6 +10650,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Root".to_string()),
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![1, 2, 3],
@@ -10567,6 +10662,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Outfit".to_string()),
 					source_node_id: Some("node_outfit".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: vec![4],
@@ -10578,6 +10674,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("Hips".to_string()),
 					source_node_id: Some("node_hips".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
 					children: Vec::new(),
@@ -10589,6 +10686,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OtherMesh".to_string()),
 					source_node_id: Some("node_other_mesh".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: Vec::new(),
@@ -10600,6 +10698,7 @@ mod tests {
 				UnaSceneNode {
 					name: Some("OutfitMesh".to_string()),
 					source_node_id: Some("node_outfit_mesh".to_string()),
+					resolved_node_id: None,
 					visible: true,
 					transform: Mat4::IDENTITY.to_cols_array(),
 					children: Vec::new(),

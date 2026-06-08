@@ -457,6 +457,8 @@ pub struct UnaRuntimeNodeTarget {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub source_node_id: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub resolved_node_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub path: Option<String>,
 }
 
@@ -1120,6 +1122,16 @@ fn resolve_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNode
 			return Some(index);
 		}
 	}
+	if let Some(resolved_node_id) = target.resolved_node_id.as_deref().filter(|value| !value.is_empty()) {
+		if let Some((index, _)) = scene
+			.nodes
+			.iter()
+			.enumerate()
+			.find(|(_, node)| node.resolved_node_id.as_deref() == Some(resolved_node_id))
+		{
+			return Some(index);
+		}
+	}
 	if let Some(path) = target.path.as_deref().filter(|value| !value.is_empty()) {
 		if let Some(index) = runtime_scene_node_paths(scene).get(path).copied() {
 			return Some(index);
@@ -1426,6 +1438,10 @@ pub struct UnaSceneNode {
 	/// path は表示と古いファイル向け fallback に使う。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub source_node_id: Option<String>,
+	/// Runtime resolver が作る派生 graph node id。source id は authoring target として保持し、
+	/// resolved id は cache/debug のために別管理する。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub resolved_node_id: Option<String>,
 	/// Runtime visibility. `.unavatar` wardrobe base / set operations can turn whole subtrees off before upload/draw.
 	#[serde(default = "default_true")]
 	pub visible: bool,
@@ -3747,6 +3763,7 @@ mod tests {
 		UnaSceneNode {
 			name: None,
 			source_node_id: None,
+			resolved_node_id: None,
 			visible: true,
 			transform: [
 				1.0, 0.0, 0.0, 0.0, //
@@ -3909,11 +3926,13 @@ mod tests {
 					UnaSceneNode {
 						name: Some("Child".to_string()),
 						source_node_id: Some("node_child".to_string()),
+						resolved_node_id: Some("runtime:child".to_string()),
 						..test_node(Vec::new())
 					},
 					UnaSceneNode {
 						name: Some("Fallback".to_string()),
 						source_node_id: Some("node_fallback".to_string()),
+						resolved_node_id: None,
 						..test_node(Vec::new())
 					},
 				],
@@ -3927,6 +3946,7 @@ mod tests {
 			&UnaRuntimeNodeTarget {
 				node_index: Some(2),
 				source_node_id: Some("node_child".to_string()),
+				resolved_node_id: None,
 				path: None,
 			},
 			false,
@@ -3938,6 +3958,18 @@ mod tests {
 			&UnaRuntimeNodeTarget {
 				node_index: None,
 				source_node_id: None,
+				resolved_node_id: Some("runtime:child".to_string()),
+				path: None,
+			},
+			false,
+		));
+		assert!(!document.scene.as_ref().unwrap().nodes[1].visible);
+
+		assert!(document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id: None,
+				resolved_node_id: None,
 				path: Some("Root/Child".to_string()),
 			},
 			true,
@@ -3948,6 +3980,7 @@ mod tests {
 			&UnaRuntimeNodeTarget {
 				node_index: Some(2),
 				source_node_id: None,
+				resolved_node_id: None,
 				path: Some("missing".to_string()),
 			},
 			false,
@@ -3958,6 +3991,7 @@ mod tests {
 			&UnaRuntimeNodeTarget {
 				node_index: Some(99),
 				source_node_id: None,
+				resolved_node_id: None,
 				path: None,
 			},
 			true,
@@ -4080,6 +4114,7 @@ mod tests {
 					UnaSceneNode {
 						name: Some("Root".to_string()),
 						source_node_id: None,
+						resolved_node_id: None,
 						visible: true,
 						transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
 						children: vec![1],
@@ -4091,6 +4126,7 @@ mod tests {
 					UnaSceneNode {
 						name: Some("Renderer".to_string()),
 						source_node_id: Some("node_renderer".to_string()),
+						resolved_node_id: None,
 						visible: true,
 						transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
 						children: Vec::new(),
@@ -4113,6 +4149,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: Some("node_renderer".to_string()),
+						resolved_node_id: None,
 						path: None,
 					},
 					primitive_index: Some(1),
@@ -4133,6 +4170,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: None,
+						resolved_node_id: None,
 						path: Some("Root/Renderer".to_string()),
 					},
 					primitive_index: None,
@@ -4152,6 +4190,7 @@ mod tests {
 					node: UnaRuntimeNodeTarget {
 						node_index: None,
 						source_node_id: None,
+						resolved_node_id: None,
 						path: Some("Root/Renderer".to_string()),
 					},
 					primitive_index: Some(1),

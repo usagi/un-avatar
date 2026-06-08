@@ -174,6 +174,8 @@ struct DiagnoseVisibleMeshNodeSummary {
 	path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	source_node_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	resolved_node_id: Option<String>,
 	mesh: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	skin: Option<usize>,
@@ -2301,6 +2303,7 @@ fn build_diagnose_report(
 					name: node.name.clone(),
 					path: node_paths_by_index.get(idx).cloned().flatten(),
 					source_node_id: node.source_node_id.clone(),
+					resolved_node_id: node.resolved_node_id.clone(),
 					mesh,
 					skin: node.skin,
 					materials: visible_mesh_materials(sc, mesh),
@@ -3450,6 +3453,7 @@ mod tests {
 				nodes: vec![un_avatar_core::UnaSceneNode {
 					name: None,
 					source_node_id: None,
+					resolved_node_id: None,
 					visible: true,
 					transform: identity_transform(),
 					children: Vec::new(),
