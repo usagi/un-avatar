@@ -4866,7 +4866,7 @@ fn mesh_draw_material_gpu_runtime(
 	mesh_index: usize,
 	prim_index: usize,
 ) -> MeshDrawMaterialGpu {
-	let mtoon = mat.mtoon_source_profile().unwrap_or(default_mtoon);
+	let mtoon = mat.mtoon_like_runtime().unwrap_or(default_mtoon);
 	mesh_draw_material_gpu(mat, mtoon, opts, mesh_index, prim_index)
 }
 
@@ -5970,8 +5970,8 @@ impl SceneMeshes {
 					}),
 				};
 
-				let mtoon = mat.mtoon_source_profile().unwrap_or(&default_mtoon);
-				let liltoon_like = mat.liltoon_like_source_profile();
+				let mtoon = mat.mtoon_like_runtime().unwrap_or(&default_mtoon);
+				let liltoon_like = mat.liltoon_like_runtime();
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let shade_texture_index = liltoon_like
