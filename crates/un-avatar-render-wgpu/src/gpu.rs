@@ -14,8 +14,8 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaSceneNode};
 use un_avatar_skeleton::{
-	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, SpringBonePhysicsConfig,
-	SpringBoneSimulator,
+	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
+	SpringBonePhysicsConfig, SpringBoneSimulator,
 };
 use winit::window::Window;
 
@@ -453,6 +453,42 @@ impl MotionRetargetRuntime {
 			Some(self.rest_nodes.as_slice()),
 			&self.context,
 		);
+	}
+}
+
+struct RuntimePhysicsBuild {
+	spring_sim: Option<SpringBoneSimulator>,
+	bone_colliders: Vec<BoneColliderPrimitive>,
+	stats: BoneColliderStats,
+}
+
+fn build_runtime_physics_for_document(
+	document: &UnaDocument,
+	enable_spring_bones: bool,
+	bone_collider_config: BoneColliderConfig,
+	spring_bone_physics: &SpringBonePhysicsConfig,
+) -> RuntimePhysicsBuild {
+	let runtime_model = document.runtime_model();
+	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
+	let bone_colliders = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
+		build_runtime_bone_colliders(scene, profile, bone_collider_config, dynamics)
+	} else {
+		Vec::new()
+	};
+	let stats = collider_stats(&bone_colliders);
+	let spring_sim = if enable_spring_bones {
+		if let Some((scene, _, dynamics)) = scene_profile_dynamics {
+			SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, bone_colliders.clone(), spring_bone_physics.clone())
+		} else {
+			None
+		}
+	} else {
+		None
+	};
+	RuntimePhysicsBuild {
+		spring_sim,
+		bone_colliders,
+		stats,
 	}
 }
 
@@ -1768,31 +1804,19 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return;
 		};
-		let runtime_model = doc.runtime_model();
-		let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
-		let (colliders, stats) = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
-			let colliders = build_runtime_bone_colliders(scene, profile, bone_collider_config, dynamics);
-			let stats = collider_stats(&colliders);
-			(colliders, stats)
-		} else {
-			(Vec::new(), collider_stats(&[]))
-		};
-		self.bone_collider_count = stats.count;
-		self.bone_collider_source = stats.source;
+		let physics = build_runtime_physics_for_document(&doc, enabled, bone_collider_config, &spring_bone_physics);
+		self.bone_collider_count = physics.stats.count;
+		self.bone_collider_source = physics.stats.source;
 		self.bone_collider_vertex_buffer = None;
 		self.bone_collider_vertex_capacity = 0;
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
-		self.spring_sim = if enabled {
-			if let Some((scene, _, dynamics)) = scene_profile_dynamics {
-				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, colliders.clone(), spring_bone_physics)
-			} else {
-				None
-			}
+		self.spring_sim = physics.spring_sim;
+		self.bone_colliders = if self.spring_sim.is_some() {
+			Vec::new()
 		} else {
-			None
+			physics.bone_colliders
 		};
-		self.bone_colliders = if self.spring_sim.is_some() { Vec::new() } else { colliders };
 	}
 
 	fn reset_spring_bone_nodes_to_rest(&mut self) {
@@ -2625,22 +2649,13 @@ impl GpuSceneBuildContext {
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let runtime_model = document.runtime_model();
-		let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
-		let bone_colliders = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
-			build_runtime_bone_colliders(scene, profile, options.bone_colliders, dynamics)
-		} else {
-			Vec::new()
-		};
-		let spring_sim = if options.enable_spring_bones {
-			if let Some((scene, _, dynamics)) = scene_profile_dynamics {
-				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, bone_colliders.clone(), options.spring_bone_physics.clone())
-			} else {
-				None
-			}
-		} else {
-			None
-		};
-		let needs_rest_nodes = runtime_model.has_humanoid_scene() || spring_sim.is_some();
+		let physics = build_runtime_physics_for_document(
+			&document,
+			options.enable_spring_bones,
+			options.bone_colliders,
+			&options.spring_bone_physics,
+		);
+		let needs_rest_nodes = runtime_model.has_humanoid_scene() || physics.spring_sim.is_some();
 		let rest_nodes = if needs_rest_nodes {
 			runtime_model.scene_nodes().map(|nodes| Arc::new(nodes.to_vec()))
 		} else {
@@ -2698,17 +2713,20 @@ impl GpuSceneBuildContext {
 			}
 		}
 		let document_wrapped = Arc::new(RwLock::new(document));
-		let bone_collider_stats = collider_stats(&bone_colliders);
-		let bone_colliders = if spring_sim.is_some() { Vec::new() } else { bone_colliders };
+		let bone_colliders = if physics.spring_sim.is_some() {
+			Vec::new()
+		} else {
+			physics.bone_colliders
+		};
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
 			rest_nodes,
 			scene_meshes,
 			texture_summary,
-			spring_sim,
+			spring_sim: physics.spring_sim,
 			bone_colliders,
-			bone_collider_count: bone_collider_stats.count,
-			bone_collider_source: bone_collider_stats.source,
+			bone_collider_count: physics.stats.count,
+			bone_collider_source: physics.stats.source,
 			runtime_requirements,
 			expression_presets,
 		})
