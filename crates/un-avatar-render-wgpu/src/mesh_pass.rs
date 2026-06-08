@@ -1079,13 +1079,13 @@ fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
 }
 
 fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bool) -> DrawPipelineKind {
-	if matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) && liltoon_uses_additive_color_blend(&draw.material) {
+	if shading.is_toon_like() && liltoon_uses_additive_color_blend(&draw.material) {
 		if zwrite {
 			DrawPipelineKind::BlendToonAddZWrite
 		} else {
 			DrawPipelineKind::BlendToonAdd
 		}
-	} else if zwrite && matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike) {
+	} else if zwrite && shading.is_toon_like() {
 		DrawPipelineKind::BlendToonZWrite
 	} else {
 		blend_pipeline_for_shading(shading)
@@ -1139,7 +1139,7 @@ fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonL
 }
 
 fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShadingModel) -> bool {
-	if shading != UnaShadingModel::LilToonLike {
+	if !shading.is_liltoon_like() {
 		return false;
 	}
 	material.liltoon_like_runtime().is_some_and(|liltoon_like| {
@@ -1186,10 +1186,7 @@ fn transparent_backpass_enabled(
 	shading: UnaShadingModel,
 	liltoon_backpass_enabled: bool,
 ) -> bool {
-	alpha_mode == UnaAlphaMode::Blend
-		&& transparent_with_z_write
-		&& liltoon_backpass_enabled
-		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && liltoon_backpass_enabled && shading.is_toon_like()
 }
 
 fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> bool {
@@ -1208,9 +1205,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 }
 
 fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
-	alpha_mode == UnaAlphaMode::Blend
-		&& transparent_with_z_write
-		&& matches!(shading, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && shading.is_toon_like()
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
@@ -2597,13 +2592,13 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 			if !matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask) {
 				return false;
 			}
-			if d.shading == UnaShadingModel::LilToonLike {
+			if d.shading.is_liltoon_like() {
 				return d
 					.material
 					.liltoon_like_runtime()
 					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
 			}
-			d.shading == UnaShadingModel::MToonLike
+			d.shading.is_mtoon_like()
 				&& d.material
 					.mtoon_like_runtime()
 					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
@@ -2613,7 +2608,7 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 }
 
 fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel) -> u32 {
-	if shading != UnaShadingModel::LilToonLike {
+	if !shading.is_liltoon_like() {
 		return 0;
 	}
 	let Some(liltoon_like) = material.liltoon_like_runtime() else {

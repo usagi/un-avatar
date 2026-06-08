@@ -41,6 +41,18 @@ impl UnaShadingModel {
 			UnaShadingModel::LilToonLike => 3.0,
 		}
 	}
+
+	pub fn is_toon_like(self) -> bool {
+		matches!(self, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
+	}
+
+	pub fn is_liltoon_like(self) -> bool {
+		matches!(self, UnaShadingModel::LilToonLike)
+	}
+
+	pub fn is_mtoon_like(self) -> bool {
+		matches!(self, UnaShadingModel::MToonLike)
+	}
 }
 
 /// glTF `alphaMode` 相当（`MASK` は `alphaCutoff` による切り抜き）。
