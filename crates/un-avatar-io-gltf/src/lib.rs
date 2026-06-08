@@ -2422,16 +2422,7 @@ fn unavatar_object_toggle_runtime_action(
 	scene: Option<&UnaSceneSnapshot>,
 	unavatar: &UnaUnavatarExtension,
 ) -> Option<UnaRuntimeAction> {
-	let objects = component
-		.get("fields")
-		.and_then(|fields| {
-			fields
-				.get("Objects")
-				.or_else(|| fields.get("objects"))
-				.or_else(|| fields.get("m_objects"))
-		})
-		.or_else(|| component.get("objects").or_else(|| component.get("m_objects")))
-		.and_then(Value::as_array)?;
+	let objects = unavatar_modular_avatar_component_array(component, &["Objects", "objects", "m_objects"])?;
 	let mut effects = Vec::new();
 	for object in objects {
 		let Some(target) = unavatar_object_toggle_node_target(object, scene, unavatar) else {
@@ -2451,14 +2442,7 @@ fn unavatar_object_toggle_runtime_action(
 	if effects.is_empty() {
 		return None;
 	}
-	let component_id = component
-		.get("id")
-		.or_else(|| component.get("componentId"))
-		.or_else(|| component.get("component_id"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.map(str::to_string)
-		.unwrap_or_else(|| component_index.to_string());
+	let component_id = unavatar_modular_avatar_component_id(component, component_index);
 	let label = unavatar_modular_avatar_component_label(component, "Object Toggle");
 	let command = format!("ma:object_toggle:{component_id}");
 	Some(UnaRuntimeAction {
@@ -2524,18 +2508,10 @@ fn unavatar_material_setter_runtime_action(
 	scene: Option<&UnaSceneSnapshot>,
 	unavatar: &UnaUnavatarExtension,
 ) -> Option<UnaRuntimeAction> {
-	let objects = component
-		.get("fields")
-		.and_then(|fields| {
-			fields
-				.get("Objects")
-				.or_else(|| fields.get("objects"))
-				.or_else(|| fields.get("m_objects"))
-				.or_else(|| fields.get("materialSwitchObjects"))
-				.or_else(|| fields.get("material_switch_objects"))
-		})
-		.or_else(|| component.get("objects").or_else(|| component.get("m_objects")))
-		.and_then(Value::as_array)?;
+	let objects = unavatar_modular_avatar_component_array(
+		component,
+		&["Objects", "objects", "m_objects", "materialSwitchObjects", "material_switch_objects"],
+	)?;
 	let mut effects = Vec::new();
 	for object in objects {
 		let Some(target) = unavatar_material_setter_slot_target(object, scene, unavatar) else {
@@ -2554,14 +2530,7 @@ fn unavatar_material_setter_runtime_action(
 	if effects.is_empty() {
 		return None;
 	}
-	let component_id = component
-		.get("id")
-		.or_else(|| component.get("componentId"))
-		.or_else(|| component.get("component_id"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.map(str::to_string)
-		.unwrap_or_else(|| component_index.to_string());
+	let component_id = unavatar_modular_avatar_component_id(component, component_index);
 	let label = unavatar_modular_avatar_component_label(component, "Material Setter");
 	let command = format!("ma:material_setter:{component_id}");
 	Some(UnaRuntimeAction {
@@ -2641,16 +2610,7 @@ fn unavatar_material_swap_runtime_action(
 	scene: &UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
 ) -> Option<UnaRuntimeAction> {
-	let swaps = component
-		.get("fields")
-		.and_then(|fields| {
-			fields
-				.get("Swaps")
-				.or_else(|| fields.get("swaps"))
-				.or_else(|| fields.get("m_swaps"))
-		})
-		.or_else(|| component.get("swaps").or_else(|| component.get("m_swaps")))
-		.and_then(Value::as_array)?;
+	let swaps = unavatar_modular_avatar_component_array(component, &["Swaps", "swaps", "m_swaps"])?;
 	let root = component
 		.get("fields")
 		.and_then(|fields| fields.get("Root").or_else(|| fields.get("root")).or_else(|| fields.get("m_root")))
@@ -2722,14 +2682,7 @@ fn unavatar_material_swap_runtime_action(
 	if effects.is_empty() {
 		return None;
 	}
-	let component_id = component
-		.get("id")
-		.or_else(|| component.get("componentId"))
-		.or_else(|| component.get("component_id"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.map(str::to_string)
-		.unwrap_or_else(|| component_index.to_string());
+	let component_id = unavatar_modular_avatar_component_id(component, component_index);
 	let label = unavatar_modular_avatar_component_label(component, "Material Swap");
 	let command = format!("ma:material_swap:{component_id}");
 	Some(UnaRuntimeAction {
@@ -2738,6 +2691,25 @@ fn unavatar_material_swap_runtime_action(
 		triggers: unavatar_modular_avatar_component_triggers(component, command),
 		effects,
 	})
+}
+
+fn unavatar_modular_avatar_component_id(component: &Value, component_index: usize) -> String {
+	component
+		.get("id")
+		.or_else(|| component.get("componentId"))
+		.or_else(|| component.get("component_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| component_index.to_string())
+}
+
+fn unavatar_modular_avatar_component_array<'a>(component: &'a Value, names: &[&str]) -> Option<&'a Vec<Value>> {
+	component
+		.get("fields")
+		.and_then(|fields| names.iter().find_map(|name| fields.get(*name)))
+		.or_else(|| names.iter().find_map(|name| component.get(*name)))
+		.and_then(Value::as_array)
 }
 
 fn unavatar_modular_avatar_component_triggers(component: &Value, command: String) -> Vec<UnaRuntimeActionTrigger> {
