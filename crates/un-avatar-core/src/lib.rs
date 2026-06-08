@@ -248,6 +248,19 @@ pub struct UnaRuntimeDynamics<'a> {
 	spring_bones: Option<&'a UnaSpringBoneSettings>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnaRuntimeDynamicsCounts {
+	pub groups: usize,
+	pub enabled_groups: usize,
+	pub vrm_spring_bone_groups: usize,
+	pub vrc_physbone_groups: usize,
+	pub unknown_groups: usize,
+	pub colliders: usize,
+	pub vrm_spring_bone_colliders: usize,
+	pub vrc_physbone_colliders: usize,
+	pub unknown_colliders: usize,
+}
+
 impl<'a> UnaRuntimeDynamics<'a> {
 	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
 		self.spring_bones
@@ -287,6 +300,20 @@ impl<'a> UnaRuntimeDynamics<'a> {
 					.count()
 			})
 			.unwrap_or(0)
+	}
+
+	pub fn counts(self) -> UnaRuntimeDynamicsCounts {
+		UnaRuntimeDynamicsCounts {
+			groups: self.group_count(),
+			enabled_groups: self.enabled_group_count(),
+			vrm_spring_bone_groups: self.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
+			vrc_physbone_groups: self.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
+			unknown_groups: self.source_group_count(UnaDynamicsSourceKind::Unknown),
+			colliders: self.collider_count(),
+			vrm_spring_bone_colliders: self.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone),
+			vrc_physbone_colliders: self.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone),
+			unknown_colliders: self.source_collider_count(UnaDynamicsSourceKind::Unknown),
+		}
 	}
 }
 
@@ -3194,6 +3221,13 @@ mod tests {
 		assert_eq!(dynamics.enabled_group_count(), 2);
 		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone), 1);
 		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone), 1);
+
+		let counts = dynamics.counts();
+		assert_eq!(counts.groups, 2);
+		assert_eq!(counts.enabled_groups, 2);
+		assert_eq!(counts.vrm_spring_bone_groups, 1);
+		assert_eq!(counts.vrc_physbone_groups, 1);
+		assert_eq!(counts.unknown_groups, 0);
 	}
 
 	#[test]

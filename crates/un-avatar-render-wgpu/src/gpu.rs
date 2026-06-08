@@ -12,7 +12,7 @@ use std::{
 };
 
 use glam::{Mat4, Vec3, Vec4};
-use un_avatar_core::{UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaSceneNode};
+use un_avatar_core::{UnaDocument, UnaExpressionCatalog, UnaSceneNode};
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
 	SpringBonePhysicsConfig, SpringBoneSimulator,
@@ -1672,17 +1672,17 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return DynamicsRuntimeCounts::default();
 		};
-		let dynamics = doc.runtime_model().dynamics();
+		let dynamics = doc.runtime_model().dynamics().counts();
 		DynamicsRuntimeCounts {
-			groups: dynamics.group_count() as u32,
-			enabled_groups: dynamics.enabled_group_count() as u32,
-			vrm_spring_bone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
-			vrc_physbone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
-			unknown_groups: dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,
-			colliders: dynamics.collider_count() as u32,
-			vrm_spring_bone_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
-			vrc_physbone_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
-			unknown_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown) as u32,
+			groups: dynamics.groups as u32,
+			enabled_groups: dynamics.enabled_groups as u32,
+			vrm_spring_bone_groups: dynamics.vrm_spring_bone_groups as u32,
+			vrc_physbone_groups: dynamics.vrc_physbone_groups as u32,
+			unknown_groups: dynamics.unknown_groups as u32,
+			colliders: dynamics.colliders as u32,
+			vrm_spring_bone_colliders: dynamics.vrm_spring_bone_colliders as u32,
+			vrc_physbone_colliders: dynamics.vrc_physbone_colliders as u32,
+			unknown_colliders: dynamics.unknown_colliders as u32,
 		}
 	}
 
