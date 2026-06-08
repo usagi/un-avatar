@@ -133,6 +133,23 @@ pub struct UnaRuntimeActionSet {
 	pub actions: Vec<UnaRuntimeAction>,
 }
 
+pub const UNA_RUNTIME_ACTION_PARAMETER_EPSILON: f32 = 0.005;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UnaRuntimeActionQuery<'a> {
+	pub action_id: Option<&'a str>,
+	pub supervisor_command: Option<&'a str>,
+	pub expression_menu_path: Option<&'a str>,
+	pub parameter_name: Option<&'a str>,
+	pub parameter_value: Option<f32>,
+}
+
+impl UnaRuntimeActionSet {
+	pub fn find_action(&self, query: UnaRuntimeActionQuery<'_>) -> Option<&UnaRuntimeAction> {
+		self.actions.iter().find(|action| action.matches_query(query))
+	}
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeAction {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -143,6 +160,13 @@ pub struct UnaRuntimeAction {
 	pub triggers: Vec<UnaRuntimeActionTrigger>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub effects: Vec<UnaRuntimeActionEffect>,
+}
+
+impl UnaRuntimeAction {
+	pub fn matches_query(&self, query: UnaRuntimeActionQuery<'_>) -> bool {
+		query.action_id.is_some_and(|id| self.id == id)
+			|| self.triggers.iter().any(|trigger| trigger.matches_query(query))
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -181,6 +205,29 @@ pub enum UnaRuntimeActionTrigger {
 		name: String,
 		value: f32,
 	},
+}
+
+impl UnaRuntimeActionTrigger {
+	pub fn matches_query(&self, query: UnaRuntimeActionQuery<'_>) -> bool {
+		match self {
+			UnaRuntimeActionTrigger::ExpressionMenu { path } => {
+				query.expression_menu_path.is_some_and(|query_path| path == query_path)
+			}
+			UnaRuntimeActionTrigger::KeyboardShortcut { .. } => false,
+			UnaRuntimeActionTrigger::SupervisorCommand { command } => {
+				query.supervisor_command.is_some_and(|query_command| command == query_command)
+			}
+			UnaRuntimeActionTrigger::AnimationEvent { .. } => false,
+			UnaRuntimeActionTrigger::ParameterValue { name, value } => {
+				query.parameter_name.is_some_and(|query_name| {
+					name == query_name
+						&& query
+							.parameter_value
+							.is_some_and(|query_value| (query_value - *value).abs() <= UNA_RUNTIME_ACTION_PARAMETER_EPSILON)
+				})
+			}
+		}
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -4007,6 +4054,55 @@ mod tests {
 	fn runtime_action_model_defaults_to_absent_for_legacy_documents() {
 		let decoded: UnaDocument = serde_json::from_str("{}").unwrap();
 		assert!(decoded.runtime_model().runtime_actions().is_none());
+	}
+
+	#[test]
+	fn runtime_action_query_matches_ids_and_triggers() {
+		let actions = UnaRuntimeActionSet {
+			actions: vec![UnaRuntimeAction {
+				id: "wardrobe:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				triggers: vec![
+					UnaRuntimeActionTrigger::ExpressionMenu {
+						path: "Wardrobe/Field Drape".to_string(),
+					},
+					UnaRuntimeActionTrigger::ParameterValue {
+						name: "Outfit".to_string(),
+						value: 2.0,
+					},
+				],
+				effects: vec![UnaRuntimeActionEffect::WardrobeSet {
+					set_id: "field_drape".to_string(),
+				}],
+			}],
+		};
+
+		assert!(actions
+			.find_action(UnaRuntimeActionQuery {
+				action_id: Some("wardrobe:field_drape"),
+				..Default::default()
+			})
+			.is_some());
+		assert!(actions
+			.find_action(UnaRuntimeActionQuery {
+				expression_menu_path: Some("Wardrobe/Field Drape"),
+				..Default::default()
+			})
+			.is_some());
+		assert!(actions
+			.find_action(UnaRuntimeActionQuery {
+				parameter_name: Some("Outfit"),
+				parameter_value: Some(2.004),
+				..Default::default()
+			})
+			.is_some());
+		assert!(actions
+			.find_action(UnaRuntimeActionQuery {
+				parameter_name: Some("Outfit"),
+				parameter_value: Some(2.006),
+				..Default::default()
+			})
+			.is_none());
 	}
 
 	#[test]

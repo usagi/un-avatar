@@ -13,7 +13,7 @@ use std::{
 
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{
-	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts, UnaSceneNode,
+	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaSceneNode,
 };
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -2785,32 +2785,12 @@ impl GpuState {
 				return Err("document has no runtime actions".to_string());
 			};
 			let action = actions
-				.actions
-				.iter()
-				.find(|action| {
-					let matches_action_id = action_id.is_some_and(|id| action.id == id);
-					let matches_supervisor_command = command.is_some_and(|command| {
-						action.triggers.iter().any(
-							|trigger| matches!(trigger, UnaRuntimeActionTrigger::SupervisorCommand { command: trigger_command } if trigger_command == command),
-						)
-					});
-					let matches_expression_menu_path = expression_menu_path.is_some_and(|path| {
-						action.triggers.iter().any(
-							|trigger| matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { path: trigger_path } if trigger_path == path),
-						)
-					});
-					let matches_parameter_value = parameter_name.is_some_and(|name| {
-						action.triggers.iter().any(|trigger| {
-							matches!(
-								trigger,
-								UnaRuntimeActionTrigger::ParameterValue {
-									name: trigger_name,
-									value: trigger_value,
-								} if trigger_name == name && parameter_value.is_some_and(|value| (value - *trigger_value).abs() <= 0.005)
-							)
-						})
-					});
-					matches_action_id || matches_supervisor_command || matches_expression_menu_path || matches_parameter_value
+				.find_action(UnaRuntimeActionQuery {
+					action_id,
+					supervisor_command: command,
+					expression_menu_path,
+					parameter_name,
+					parameter_value,
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
 			(action.id.clone(), action.effects.clone())
