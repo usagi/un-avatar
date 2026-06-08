@@ -25,6 +25,13 @@
 
 この段階では中程度に留める。美観だけを理由に、動いている subsystem を大きく作り直さない。
 
+現在の進捗:
+
+- `UnaRuntimeModel` / `UnaRuntimeModelMut` は scene、humanoid、expression、runtime dynamics を読む境界として導入済み。
+- renderer、skeleton retarget、CLI diagnose は、frame loop / solver / diagnostics で source-format field を直接読む箇所を減らし、runtime accessor 経由へ寄せている。
+- `UnaRuntimeDynamics` は SpringBone / PhysBone source settings を直接渡す逃げ道を閉じ、groups / colliders / counts / dynamic node iterator の view として solver / renderer に渡す。
+- まだ `UnaDocument` 自体は source data と runtime state を同居させる transitional container であり、Wardrobe hot switch 前に resolved wardrobe state / action state / dynamics enabled state の所有境界をさらに分ける。
+
 優先領域:
 
 - immutable source package data と runtime state を分ける。
