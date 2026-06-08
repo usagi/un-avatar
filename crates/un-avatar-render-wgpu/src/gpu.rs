@@ -12,7 +12,7 @@ use std::{
 };
 
 use glam::{Mat4, Vec3, Vec4};
-use un_avatar_core::{UnaDocument, UnaExpressionCatalog, UnaSceneNode};
+use un_avatar_core::{UnaDocument, UnaExpressionCatalog, UnaRuntimeDynamicsCounts, UnaSceneNode};
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
 	SpringBonePhysicsConfig, SpringBoneSimulator,
@@ -108,6 +108,22 @@ pub struct DynamicsRuntimeCounts {
 	pub vrm_spring_bone_colliders: u32,
 	pub vrc_physbone_colliders: u32,
 	pub unknown_colliders: u32,
+}
+
+impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
+	fn from(counts: UnaRuntimeDynamicsCounts) -> Self {
+		Self {
+			groups: counts.groups as u32,
+			enabled_groups: counts.enabled_groups as u32,
+			vrm_spring_bone_groups: counts.vrm_spring_bone_groups as u32,
+			vrc_physbone_groups: counts.vrc_physbone_groups as u32,
+			unknown_groups: counts.unknown_groups as u32,
+			colliders: counts.colliders as u32,
+			vrm_spring_bone_colliders: counts.vrm_spring_bone_colliders as u32,
+			vrc_physbone_colliders: counts.vrc_physbone_colliders as u32,
+			unknown_colliders: counts.unknown_colliders as u32,
+		}
+	}
 }
 
 fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document: &UnaDocument) -> String {
@@ -1672,18 +1688,7 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return DynamicsRuntimeCounts::default();
 		};
-		let dynamics = doc.runtime_model().dynamics().counts();
-		DynamicsRuntimeCounts {
-			groups: dynamics.groups as u32,
-			enabled_groups: dynamics.enabled_groups as u32,
-			vrm_spring_bone_groups: dynamics.vrm_spring_bone_groups as u32,
-			vrc_physbone_groups: dynamics.vrc_physbone_groups as u32,
-			unknown_groups: dynamics.unknown_groups as u32,
-			colliders: dynamics.colliders as u32,
-			vrm_spring_bone_colliders: dynamics.vrm_spring_bone_colliders as u32,
-			vrc_physbone_colliders: dynamics.vrc_physbone_colliders as u32,
-			unknown_colliders: dynamics.unknown_colliders as u32,
-		}
+		doc.runtime_model().dynamics().counts().into()
 	}
 
 	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
