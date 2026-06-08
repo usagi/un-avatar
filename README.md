@@ -120,10 +120,11 @@ npm run dev
 
 ## Acknowledgements
 
-U.N. Avatar の toon rendering は独立した Rust / wgpu / WGSL 実装ですが、互換性検証と shader behavior の理解にあたり、MIT License で公開されている次の先行プロジェクトを重要な参考実装として扱います。
+U.N. Avatar の toon rendering、material compatibility、Wardrobe / avatar assembly behavior は独立した Rust / wgpu / WGSL / Unity Exporter 実装ですが、互換性検証と behavior の理解にあたり、MIT License で公開されている次の先行プロジェクトを重要な参考実装として扱います。
 
 - [lilToon](https://github.com/lilxyzw/lilToon): UNToon v2 / lilToon-compatible rendering の主要な参考実装
 - [MToon](https://github.com/Santarh/MToon): VRM / MToon material compatibility の参考実装
+- [Modular Avatar](https://github.com/bdunderscore/modular-avatar): `.unavatar` Wardrobe / MergeArmature / BoneProxy / ObjectToggle behavior の主要な参考実装
 
 これらの project 名は互換性の説明と謝辞のために記載しています。U.N. Avatar は各 project の公式派生物または公式実装ではありません。
 

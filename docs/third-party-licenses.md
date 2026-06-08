@@ -1,10 +1,10 @@
 # Third-Party Licenses
 
-UN Avatar の配布物に同梱する第三者コンポーネントのライセンス表示をまとめる。リリースパッケージでは、この文書または同等内容を `LICENSES/` に含める。
+U.N. Avatar の配布物に同梱する第三者コンポーネント、および互換性検証のために参照する第三者プロジェクトのライセンス表示をまとめる。リリースパッケージでは、この文書または同等内容を `LICENSES/` に含める。
 
 ## Reference Implementations
 
-U.N. Avatar の toon rendering / UNToon 実装は Rust / wgpu / WGSL で独立実装する。ただし、互換性検証、shader behavior の理解、必要な範囲での移植にあたり、次の MIT licensed project を参考実装として扱う。
+U.N. Avatar の toon rendering / UNToon / Wardrobe 実装は Rust / wgpu / WGSL / Unity Exporter で独立実装する。ただし、互換性検証、shader behavior、avatar assembly behavior の理解、必要な範囲での移植にあたり、次の MIT licensed project を参考実装として扱う。
 
 ### lilToon
 
@@ -26,9 +26,10 @@ U.N. Avatar の toon rendering / UNToon 実装は Rust / wgpu / WGSL で独立�
 
 - Project: Modular Avatar
 - Repository: <https://github.com/bdunderscore/modular-avatar>
-- Use in UN Avatar: `.unavatar` Wardrobe Split resolver / Modular Avatar bake behavior reference
-- License: MIT License
-- License URL: <https://github.com/bdunderscore/modular-avatar/blob/main/LICENSE.md>
+- Use in UN Avatar: `.unavatar` Wardrobe / MergeArmature / BoneProxy / ObjectToggle / VRC menu-compatible behavior reference
+- License: MIT License for source files, with upstream `COPYING.md` noting additional redistribution restrictions for official `Editor/images` assets
+- Copyright: Copyright (c) 2022 bd_
+- License URL: <https://github.com/bdunderscore/modular-avatar/blob/main/COPYING.md>
 
 現時点では、これらの project 名は互換性の説明と謝辞を目的とする。将来、実質的な source code の移植または substantial portions の取り込みを行う場合は、該当 copyright notice と MIT License text を配布物の `LICENSES/` に保持する。
 
