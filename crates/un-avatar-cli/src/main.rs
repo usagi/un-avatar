@@ -388,6 +388,7 @@ struct DiagnoseUnavatarSummary {
 	source_type: Option<String>,
 	extension_node_count: usize,
 	variant_count: usize,
+	dynamics_entry_count: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
@@ -1762,6 +1763,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		source_type: json_string(source.get("manifest").and_then(|m| m.get("sourceType"))),
 		extension_node_count: source.get("nodes").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		variant_count: source.get("variants").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
+		dynamics_entry_count: source.get("dynamics").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
@@ -2340,8 +2342,8 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?}",
-			unavatar.spec_version, unavatar.generator, unavatar.manifest_name, unavatar.source_type
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={}",
+			unavatar.spec_version, unavatar.generator, unavatar.manifest_name, unavatar.source_type, unavatar.dynamics_entry_count
 		);
 		println!(
 			"wardrobe: base={:?} sets={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
