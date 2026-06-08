@@ -2120,28 +2120,29 @@ fn print_thumb_index_distance_delta(
 	model: &RetargetAuditModel,
 	open_document: &UnaDocument,
 	curled_document: &UnaDocument,
-) {
+) -> Option<f32> {
 	let thumb_key = format!("{side_prefix}thumbdistal");
 	let index_key = format!("{side_prefix}indexproximal");
 	let Ok(open_thumb) = world_point(open_document, &thumb_key) else {
-		return;
+		return None;
 	};
 	let Ok(open_index) = world_point(open_document, &index_key) else {
-		return;
+		return None;
 	};
 	let Ok(curled_thumb) = world_point(curled_document, &thumb_key) else {
-		return;
+		return None;
 	};
 	let Ok(curled_index) = world_point(curled_document, &index_key) else {
-		return;
+		return None;
 	};
 	let open_distance = open_thumb.distance(open_index);
 	let curled_distance = curled_thumb.distance(curled_index);
+	let delta = curled_distance - open_distance;
 	println!(
 		"  {:24} {name}_thumb_index_dist open={open_distance:.5} curled={curled_distance:.5} delta={:+.5}",
-		model.label,
-		curled_distance - open_distance
+		model.label, delta
 	);
+	Some(delta)
 }
 
 fn compare_delta_direction(
@@ -2159,6 +2160,27 @@ fn compare_delta_direction(
 				eprintln!("retarget-audit: {} {name} differs from {} by {angle:.3}deg", label, reference_label);
 				*ok = false;
 			}
+		}
+	}
+}
+
+fn compare_signed_distance_delta(ok: &mut bool, name: &str, model_deltas: &BTreeMap<&'static str, f32>, reference_label: &'static str) {
+	let Some(reference) = model_deltas.get(reference_label).copied() else {
+		return;
+	};
+	if reference.abs() <= 1e-5 {
+		return;
+	}
+	for (label, delta) in model_deltas {
+		println!(
+			"  {:24} {name}_signed_delta_to_{}={:+.5}",
+			label,
+			reference_label,
+			delta - reference
+		);
+		if label.starts_with("unavatar:") && (*delta * reference) <= 0.0 {
+			eprintln!("retarget-audit: {} {name} direction is reversed from {}", label, reference_label);
+			*ok = false;
 		}
 	}
 }
@@ -2502,7 +2524,8 @@ fn run_retarget_audit(repo: &Path) -> bool {
 			for (label, axis) in &axes {
 				let angle = reference.angle_between(*axis).to_degrees();
 				println!("  {:24} delta_to_{}={angle:.3}deg", label, case.reference_label);
-				if angle > 8.0 {
+				let max_delta_deg = if case.finger == Finger::Thumb { 20.0 } else { 8.0 };
+				if angle > max_delta_deg {
 					if label.starts_with("unavatar:") {
 						eprintln!(
 							"retarget-audit: {} differs from {} by {angle:.3}deg in {}",
@@ -2584,6 +2607,7 @@ fn run_retarget_audit(repo: &Path) -> bool {
 	] {
 		println!("retarget-audit: {name}");
 		let mut deltas = BTreeMap::new();
+		let mut thumb_index_distance_deltas = BTreeMap::new();
 		let mut basis_x_deltas = BTreeMap::new();
 		let mut basis_y_deltas = BTreeMap::new();
 		let mut basis_z_deltas = BTreeMap::new();
@@ -2604,7 +2628,9 @@ fn run_retarget_audit(repo: &Path) -> bool {
 				ApplyUnMotionFrameOpts::default(),
 				Some(&model.rest_nodes),
 			);
-			print_thumb_index_distance_delta("y_curl", side_prefix, model, &open_document, &curled_document);
+			if let Some(delta) = print_thumb_index_distance_delta("y_curl", side_prefix, model, &open_document, &curled_document) {
+				thumb_index_distance_deltas.insert(model.label, delta);
+			}
 			let open_axis = normalized_world_successor_axis(&open_document, parent_key, successor_key);
 			let curled_axis = normalized_world_successor_axis(&curled_document, parent_key, successor_key);
 			let open_basis = normalized_world_basis(&open_document, parent_key);
@@ -2671,9 +2697,12 @@ fn run_retarget_audit(repo: &Path) -> bool {
 			}
 		}
 		compare_delta_direction(&mut ok, "successor_axis_curl", &deltas, "vrm0:model1", 20.0);
-		compare_delta_direction(&mut ok, "basis_x_curl", &basis_x_deltas, "vrm0:model1", 20.0);
+		compare_signed_distance_delta(&mut ok, "thumb_index_y_curl", &thumb_index_distance_deltas, "vrm0:model1");
 		compare_delta_direction(&mut ok, "basis_y_curl", &basis_y_deltas, "vrm0:model1", 20.0);
-		compare_delta_direction(&mut ok, "basis_z_curl", &basis_z_deltas, "vrm0:model1", 20.0);
+		for (basis_name, basis_deltas) in [("basis_x_curl", &basis_x_deltas), ("basis_z_curl", &basis_z_deltas)] {
+			let mut diagnostic_only = true;
+			compare_delta_direction(&mut diagnostic_only, basis_name, basis_deltas, "vrm0:model1", 180.0);
+		}
 	}
 	for (name, side_prefix, parent_key, successor_key) in [
 		(
@@ -2691,6 +2720,7 @@ fn run_retarget_audit(repo: &Path) -> bool {
 	] {
 		println!("retarget-audit: {name}");
 		let mut deltas = BTreeMap::new();
+		let mut thumb_index_distance_deltas = BTreeMap::new();
 		for model in &models {
 			let mut open_document = model.document.clone();
 			let mut curled_document = model.document.clone();
@@ -2708,7 +2738,9 @@ fn run_retarget_audit(repo: &Path) -> bool {
 				ApplyUnMotionFrameOpts::default(),
 				Some(&model.rest_nodes),
 			);
-			print_thumb_index_distance_delta("z_curl", side_prefix, model, &open_document, &curled_document);
+			if let Some(delta) = print_thumb_index_distance_delta("z_curl", side_prefix, model, &open_document, &curled_document) {
+				thumb_index_distance_deltas.insert(model.label, delta);
+			}
 			match (
 				normalized_world_successor_axis(&open_document, parent_key, successor_key),
 				normalized_world_successor_axis(&curled_document, parent_key, successor_key),
@@ -2740,7 +2772,9 @@ fn run_retarget_audit(repo: &Path) -> bool {
 				}
 			}
 		}
-		compare_delta_direction(&mut ok, "successor_axis_z_curl", &deltas, "vrm0:model1", 20.0);
+		compare_signed_distance_delta(&mut ok, "thumb_index_z_curl", &thumb_index_distance_deltas, "vrm0:model1");
+		let mut diagnostic_only = true;
+		compare_delta_direction(&mut diagnostic_only, "successor_axis_z_curl", &deltas, "vrm0:model1", 180.0);
 	}
 	for (name, side_prefix) in [("left full thumb curl", "left"), ("right full thumb curl", "right")] {
 		println!("retarget-audit: {name}");

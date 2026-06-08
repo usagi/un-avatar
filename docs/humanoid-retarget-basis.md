@@ -84,9 +84,10 @@ not use the long-finger child-axis adapter: live UNMF/Z carries thumb yaw
 directly, and adapting those joints as long fingers turns small open-hand
 residual yaw into visible over-curl. `cargo xtask retarget-audit` compares
 `model1.vrm`, a VRM1 fixture, and `mizuki-split.unavatar` for the same
-`curl=0.0 -> 0.8` UNMF/Z samples. The audit checks both successor-axis movement
-and the parent joint's world-basis movement; successor-axis-only agreement is
-not enough because skinning consumes the full joint matrix.
+`curl=0.0 -> 0.8` UNMF/Z samples. For thumb regression, the audit fails on
+successor-axis disagreement and on reversed thumb-tip / index-finger distance
+direction. Parent joint basis deltas remain diagnostic output because different
+avatar rest thumb poses are not expected to share the same world basis.
 
 ## Runtime Cache Boundary
 
