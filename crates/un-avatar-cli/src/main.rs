@@ -2295,7 +2295,8 @@ fn build_diagnose_report(
 		}
 	};
 
-	let humanoid = doc.humanoid_profile.as_ref().map(|profile| {
+	let runtime_model = doc.runtime_model();
+	let humanoid = runtime_model.humanoid_profile().map(|profile| {
 		let keys: Vec<String> = profile.bone_node_indices.keys().cloned().collect();
 		DiagnoseHumanoidSummary {
 			bone_count: profile.bone_node_indices.len(),
@@ -2309,7 +2310,7 @@ fn build_diagnose_report(
 	}
 
 	let expression_apply_probe = expression_apply_probe(&doc);
-	let expressions = doc.expression_catalog.as_ref().map(|catalog| DiagnoseExpressionSummary {
+	let expressions = runtime_model.expression_catalog().map(|catalog| DiagnoseExpressionSummary {
 		preset_count: catalog.presets.len(),
 		presets: catalog
 			.presets
@@ -2322,7 +2323,6 @@ fn build_diagnose_report(
 		apply_probe: expression_apply_probe,
 	});
 
-	let runtime_model = doc.runtime_model();
 	let runtime = DiagnoseRuntimeSummary {
 		source_kind: runtime_model.source_kind(),
 		humanoid_basis: runtime_model.humanoid_basis(),
@@ -2396,7 +2396,7 @@ fn build_diagnose_report(
 
 fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyProbe> {
 	let mut doc = doc.clone();
-	doc.expression_catalog.as_ref()?;
+	doc.runtime_model().expression_catalog()?;
 	let mut frame = un_motion_frame::UNMotionFrame::new(0);
 	frame.face = Some(un_motion_frame::FaceMotion {
 		tracking_state: un_motion_frame::TrackingState::Valid,
