@@ -2459,8 +2459,18 @@ fn run_diagnose(
 		report.dynamics.source_posing_enabled_count
 	);
 	for group in report.dynamics.groups.iter().take(16) {
+		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {
+			(None, None, None, None) => String::new(),
+			(limit_type, max_angle_x, max_angle_z, max_stretch) => format!(
+				" limit={:?}/x={:?}/z={:?}/stretch={:?}",
+				limit_type.as_deref(),
+				max_angle_x,
+				max_angle_z,
+				max_stretch
+			),
+		};
 		println!(
-			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={} comment={:?}",
+			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.bone_count,
@@ -2470,6 +2480,7 @@ fn run_diagnose(
 			group.drag_force,
 			group.gravity_power,
 			group.hit_radius,
+			limit,
 			group.comment
 		);
 	}
