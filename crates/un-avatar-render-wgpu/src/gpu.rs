@@ -1744,7 +1744,8 @@ impl GpuState {
 			return;
 		};
 		let runtime_model = doc.runtime_model();
-		let (colliders, stats) = if let Some((scene, profile, dynamics)) = runtime_model.scene_profile_dynamics() {
+		let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
+		let (colliders, stats) = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
 			let colliders = build_runtime_bone_colliders(scene, profile, bone_collider_config, dynamics);
 			let stats = collider_stats(&colliders);
 			(colliders, stats)
@@ -1758,7 +1759,7 @@ impl GpuState {
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
 		self.spring_sim = if enabled {
-			if let Some((scene, _, dynamics)) = runtime_model.scene_profile_dynamics() {
+			if let Some((scene, _, dynamics)) = scene_profile_dynamics {
 				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, colliders.clone(), spring_bone_physics)
 			} else {
 				None
@@ -2599,13 +2600,14 @@ impl GpuSceneBuildContext {
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let runtime_model = document.runtime_model();
-		let bone_colliders = if let Some((scene, profile, dynamics)) = runtime_model.scene_profile_dynamics() {
+		let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
+		let bone_colliders = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
 			build_runtime_bone_colliders(scene, profile, options.bone_colliders, dynamics)
 		} else {
 			Vec::new()
 		};
 		let spring_sim = if options.enable_spring_bones {
-			if let Some((scene, _, dynamics)) = runtime_model.scene_profile_dynamics() {
+			if let Some((scene, _, dynamics)) = scene_profile_dynamics {
 				SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, bone_colliders.clone(), options.spring_bone_physics.clone())
 			} else {
 				None
