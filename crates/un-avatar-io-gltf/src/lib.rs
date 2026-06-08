@@ -3903,8 +3903,10 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	let mut unsupported = 0usize;
 	let mut disabled = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
+	let mut unsupported_active_types = BTreeMap::<String, usize>::new();
 	for component in components {
-		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+		let component_disabled = component.get("enabled").and_then(Value::as_bool) == Some(false);
+		if component_disabled {
 			disabled += 1;
 		}
 		let short_type = component
@@ -3918,8 +3920,19 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			_ => {
 				unsupported += 1;
 				*unsupported_types.entry(short_type.to_string()).or_default() += 1;
+				if !component_disabled {
+					*unsupported_active_types.entry(short_type.to_string()).or_default() += 1;
+				}
 			}
 		}
+	}
+	for (short_type, count) in &unsupported_active_types {
+		report.lost_features.push(un_avatar_core::LostFeature {
+			feature: format!("ModularAvatar.{short_type}"),
+			detail: Some(format!(
+				"{count} unsupported Modular Avatar component(s) were preserved as source payload but not applied"
+			)),
+		});
 	}
 	let unsupported_types = unsupported_types
 		.into_iter()
@@ -10099,6 +10112,8 @@ mod tests {
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("ModularAvatarMeshCutter:1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
+		assert_eq!(report.lost_features.len(), 1);
+		assert_eq!(report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
 	}
 
 	#[test]
