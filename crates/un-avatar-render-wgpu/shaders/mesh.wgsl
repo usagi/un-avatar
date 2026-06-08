@@ -2335,7 +2335,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			if (drawu.gem_params.y > 0.5) {
 				refract_color = refract_color * base;
 			}
-			lit = mix(refract_color, lit, clamp(out_a, 0.0, 1.0));
+			lit = mix(refract_color, lit, clamp(a, 0.0, 1.0));
 			out_a = 1.0;
 		}
 	}

@@ -398,6 +398,19 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_refraction_uses_material_alpha_for_refracted_mix() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("lit = mix(refract_color, lit, clamp(a, 0.0, 1.0));"),
+			"lilToon Refraction must use fd.col.a equivalent for background refraction blending"
+		);
+		assert!(
+			!mesh.contains("lit = mix(refract_color, lit, clamp(out_a, 0.0, 1.0));"),
+			"opaque render output alpha must not replace the material alpha used by lilToon Refraction"
+		);
+	}
+
+	#[test]
 	fn liltoon_reflection_apply_transparency_is_transparent_only() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
