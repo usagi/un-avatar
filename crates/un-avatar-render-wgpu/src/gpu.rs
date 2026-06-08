@@ -48,6 +48,12 @@ pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
+#[derive(Clone, Debug)]
+pub(crate) struct MeshShaderResourcePlan {
+	pub(crate) tier: MeshShaderVariantTier,
+	pub(crate) required_limits: wgpu::Limits,
+}
+
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
 	if adapter_limits.max_sampled_textures_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
 		&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
@@ -84,6 +90,13 @@ pub(crate) fn mesh_shader_required_limits_for_adapter(adapter_limits: &wgpu::Lim
 		}
 	}
 	limits
+}
+
+pub(crate) fn mesh_shader_resource_plan_for_adapter(adapter_limits: &wgpu::Limits) -> MeshShaderResourcePlan {
+	MeshShaderResourcePlan {
+		tier: mesh_shader_variant_tier_for_limits(adapter_limits),
+		required_limits: mesh_shader_required_limits_for_adapter(adapter_limits),
+	}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1246,8 +1259,9 @@ impl GpuState {
 		.map_err(|e| format!("request_adapter: {e}"))?;
 
 		let adapter_limits = adapter.limits();
-		let limits = mesh_shader_required_limits_for_adapter(&adapter_limits);
-		let shader_variant_tier = mesh_shader_variant_tier_for_limits(&adapter_limits);
+		let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+		let limits = mesh_shader_plan.required_limits.clone();
+		let shader_variant_tier = mesh_shader_plan.tier;
 		if shader_variant_tier == MeshShaderVariantTier::BaselineFallback {
 			eprintln!(
 				"un-avatar-renderer: GPU sampled texture/sampler limits are below the high-capability lilToon-compatible shader target; using baseline fallback variant (adapter sampled={} samplers={}, target sampled={} samplers={})",
@@ -4111,7 +4125,7 @@ fn create_startup_splash_pipeline(
 #[cfg(test)]
 mod tests {
 	use super::{
-		mesh_shader_required_limits_for_adapter, mesh_shader_variant_tier_for_limits, transparent_alpha_mode,
+		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, transparent_alpha_mode,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 	};
@@ -4132,13 +4146,14 @@ mod tests {
 			mesh_shader_variant_tier_for_limits(&baseline),
 			MeshShaderVariantTier::BaselineFallback
 		);
-		let baseline_required = mesh_shader_required_limits_for_adapter(&baseline);
+		let baseline_plan = mesh_shader_resource_plan_for_adapter(&baseline);
+		assert_eq!(baseline_plan.tier, MeshShaderVariantTier::BaselineFallback);
 		assert_eq!(
-			baseline_required.max_sampled_textures_per_shader_stage,
+			baseline_plan.required_limits.max_sampled_textures_per_shader_stage,
 			BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE
 		);
 		assert_eq!(
-			baseline_required.max_samplers_per_shader_stage,
+			baseline_plan.required_limits.max_samplers_per_shader_stage,
 			BASELINE_FALLBACK_SAMPLERS_PER_STAGE
 		);
 
@@ -4149,13 +4164,14 @@ mod tests {
 			mesh_shader_variant_tier_for_limits(&high_capability),
 			MeshShaderVariantTier::HighCapability
 		);
-		let high_required = mesh_shader_required_limits_for_adapter(&high_capability);
+		let high_plan = mesh_shader_resource_plan_for_adapter(&high_capability);
+		assert_eq!(high_plan.tier, MeshShaderVariantTier::HighCapability);
 		assert_eq!(
-			high_required.max_sampled_textures_per_shader_stage,
+			high_plan.required_limits.max_sampled_textures_per_shader_stage,
 			HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
 		);
 		assert_eq!(
-			high_required.max_samplers_per_shader_stage,
+			high_plan.required_limits.max_samplers_per_shader_stage,
 			HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
 		);
 	}

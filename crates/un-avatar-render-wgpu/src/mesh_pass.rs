@@ -8053,8 +8053,9 @@ mod tests {
 		};
 
 		let adapter_limits = adapter.limits();
-		let shader_variant_tier = crate::gpu::mesh_shader_variant_tier_for_limits(&adapter_limits);
-		let limits = crate::gpu::mesh_shader_required_limits_for_adapter(&adapter_limits);
+		let shader_plan = crate::gpu::mesh_shader_resource_plan_for_adapter(&adapter_limits);
+		let shader_variant_tier = shader_plan.tier;
+		let limits = shader_plan.required_limits;
 
 		let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 			label: Some("mesh-pipeline-interface-test"),
