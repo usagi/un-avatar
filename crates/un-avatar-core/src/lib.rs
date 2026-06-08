@@ -208,6 +208,8 @@ pub struct UnaRuntimeResolverCacheKey {
 	pub active_asset_groups: Vec<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub modular_avatar_components_hash: Option<u64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub material_source_hash: Option<u64>,
 	pub resolver_version: u32,
 }
 
@@ -218,9 +220,54 @@ impl UnaRuntimeResolverCacheKey {
 			wardrobe_set: state.active_wardrobe_set.clone(),
 			active_asset_groups: state.active_asset_groups.clone(),
 			modular_avatar_components_hash: document.unavatar.as_ref().and_then(unavatar_modular_avatar_components_hash),
+			material_source_hash: document.scene.as_ref().and_then(scene_material_source_hash),
 			resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 		}
 	}
+}
+
+fn scene_material_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
+	if scene.materials.is_empty() {
+		return None;
+	}
+	let materials = scene
+		.materials
+		.iter()
+		.map(|material| {
+			let mut out = serde_json::Map::new();
+			if let Some(name) = &material.name {
+				out.insert("name".to_string(), Value::String(name.clone()));
+			}
+			out.insert("shading".to_string(), serde_json::to_value(material.shading).unwrap_or(Value::Null));
+			out.insert(
+				"baseColorTexture".to_string(),
+				material
+					.base_color_texture_index
+					.map_or(Value::Null, |index| Value::from(index as u64)),
+			);
+			out.insert(
+				"normalTexture".to_string(),
+				material.normal_texture_index.map_or(Value::Null, |index| Value::from(index as u64)),
+			);
+			out.insert(
+				"emissiveTexture".to_string(),
+				material
+					.emissive_texture_index
+					.map_or(Value::Null, |index| Value::from(index as u64)),
+			);
+			if let Some(unavatar_material) = &material.unavatar_material {
+				out.insert("unavatarMaterial".to_string(), unavatar_material.clone());
+			}
+			if let Some(liltoon_like) = &material.liltoon_like {
+				out.insert("liltoonLike".to_string(), serde_json::to_value(liltoon_like).unwrap_or(Value::Null));
+			}
+			if let Some(mtoon) = &material.mtoon {
+				out.insert("mtoon".to_string(), serde_json::to_value(mtoon).unwrap_or(Value::Null));
+			}
+			Value::Object(out)
+		})
+		.collect();
+	Some(stable_json_hash(&Value::Array(materials)))
 }
 
 fn unavatar_modular_avatar_components_hash(unavatar: &UnaUnavatarExtension) -> Option<u64> {
@@ -4246,6 +4293,7 @@ mod tests {
 				wardrobe_set: Some("field_drape".to_string()),
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
 				modular_avatar_components_hash: None,
+				material_source_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4259,6 +4307,7 @@ mod tests {
 				wardrobe_set: Some("field_drape".to_string()),
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
 				modular_avatar_components_hash: None,
+				material_source_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4316,6 +4365,43 @@ mod tests {
 		assert_ne!(
 			document.runtime_model().resolver_cache_key().modular_avatar_components_hash,
 			first.modular_avatar_components_hash
+		);
+	}
+
+	#[test]
+	fn runtime_resolver_cache_key_hashes_material_source_profile() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				materials: vec![UnaMaterialPbr {
+					name: Some("Jacket".to_string()),
+					shading: UnaShadingModel::LilToonLike,
+					base_color_texture_index: Some(3),
+					unavatar_material: Some(serde_json::json!({
+						"shader": "lilToon",
+						"floatParams": {"_Cutoff": 0.5}
+					})),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let first = document.runtime_model().resolver_cache_key();
+		assert!(first.material_source_hash.is_some());
+
+		apply_runtime_material_color(&mut document.scene.as_mut().unwrap().materials[0], "_Color", [0.2, 0.3, 0.4, 0.5]).unwrap();
+		assert_eq!(
+			document.runtime_model().resolver_cache_key().material_source_hash,
+			first.material_source_hash
+		);
+
+		document.scene.as_mut().unwrap().materials[0].unavatar_material = Some(serde_json::json!({
+			"shader": "lilToon",
+			"floatParams": {"_Cutoff": 0.1}
+		}));
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().material_source_hash,
+			first.material_source_hash
 		);
 	}
 
