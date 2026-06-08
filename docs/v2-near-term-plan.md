@@ -125,6 +125,18 @@ MVP control command:
 
 この action model の上に、後から VRC Expression Menu の Toggle、Button、SubMenu、simple Puppet controls を載せる。
 
+現在対応済み:
+
+- `UnaRuntimeActionSet` / `UnaRuntimeAction` / trigger / effect schema を core に追加した。
+- `.unavatar` wardrobe sets は、base set を除き `WardrobeSet` effect を持つ runtime action candidate へ import される。
+- CLI diagnose は runtime action 件数、trigger 件数、effect 件数、action id / label を観測できる。
+
+次の段階:
+
+- runtime control command から action id / supervisor command を解決して effect を適用する。
+- Modular Avatar / VRC Expression Menu metadata から ExpressionMenu trigger と action label/path を取り込む。
+- Node visibility、expression weight、dynamics enable、material override effect を renderer の既存 hot switch / expression override / dynamics mutation 経路へ接続する。
+
 ## PhysBone Placement
 
 PhysBone behavior implementation は runtime state cleanup、runtime dynamics normalization、Wardrobe hot switch の後に置く。
