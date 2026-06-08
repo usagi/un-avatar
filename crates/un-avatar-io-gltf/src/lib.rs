@@ -7580,6 +7580,42 @@ mod tests {
 	}
 
 	#[test]
+	fn imports_unavatar_extension_from_gltf_path() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-gltf-extension-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let gltf_path = dir.join("triangle.gltf");
+		let mut root: Value = serde_json::from_str(include_str!("../tests/fixtures/triangle.gltf")).unwrap();
+		root["extensionsUsed"] = serde_json::json!(["UN_avatar"]);
+		root["extensions"] = serde_json::json!({
+			"UN_avatar": {
+				"specVersion": "0.1-preview",
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMeshCutter",
+						"enabled": true
+					}]
+				}
+			}
+		});
+		std::fs::File::create(&gltf_path)
+			.unwrap()
+			.write_all(serde_json::to_string(&root).unwrap().as_bytes())
+			.unwrap();
+		std::fs::write(dir.join("triangle.bin"), triangle_bin_bytes()).unwrap();
+
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp.import(&mut ctx, ImportInput::Path(gltf_path), ImportOptions).unwrap();
+
+		assert!(got.document.unavatar.is_some());
+		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
+		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
 	fn imports_single_bone_skin_gltf() {
 		let dir = std::env::temp_dir().join(format!("un-avatar-gltf-skin-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&dir);
