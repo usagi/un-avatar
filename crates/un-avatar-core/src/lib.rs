@@ -274,10 +274,6 @@ pub struct UnaRuntimeDynamicsCounts {
 }
 
 impl<'a> UnaRuntimeDynamics<'a> {
-	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
-		self.spring_bones
-	}
-
 	pub fn groups(self) -> &'a [UnaSpringBoneGroup] {
 		self.spring_bones.map(|settings| settings.groups.as_slice()).unwrap_or(&[])
 	}
@@ -555,10 +551,6 @@ impl<'a> UnaRuntimeModel<'a> {
 			scene: self.scene(),
 			expression_catalog: self.expression_catalog(),
 		}
-	}
-
-	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
-		self.document.spring_bones.as_ref()
 	}
 
 	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
