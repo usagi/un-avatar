@@ -495,7 +495,20 @@ Unity Exporter は次の出力モードを持つ。
       "stiffness": 0.35,
       "drag": 0.2,
       "gravity": [0.0, -0.4, 0.0],
-      "radius": 0.03
+      "radius": 0.03,
+      "sourceParams": {
+        "colliders": [
+          {
+            "shapeType": "Sphere",
+            "root": {
+              "nodeId": "node-head",
+              "path": "Armature/Hips/Spine/Chest/Neck/Head"
+            },
+            "radius": 0.08,
+            "position": [0.0, 0.1, 0.0]
+          }
+        ]
+      }
     }
   ],
   "colliders": [
@@ -513,6 +526,7 @@ Unity Exporter は次の出力モードを持つ。
 v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runtime primitive へ近似変換する。
 `roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
+`sourceParams.colliders` は VRC PhysBone collider の保存情報であり、v0.1 初期では solver collider へはまだ接続しない。
 
 ## 10. Provenance And License
 

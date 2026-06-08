@@ -197,8 +197,9 @@ Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone`
 - radius
 - stiffness / pull / spring
 - gravity
+- source collider metadata
 
-現段階では `drag` は runtime default 相当、colliders / limits は source metadata または将来対応の対象に留める。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。
+現段階では `drag` は runtime default 相当、limits は source metadata または将来対応の対象に留める。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。PhysBone collider は `sourceParams.colliders` に保存するが、runtime solver collider としてはまだ接続しない。
 
 Contacts / interactions / limits の完全再現は非目標。
 

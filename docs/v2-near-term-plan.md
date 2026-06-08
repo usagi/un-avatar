@@ -54,8 +54,8 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 
 - `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、runtime dynamics view の最小形を決める。
 - Unity Exporter は現在有効な VRC PhysBone component を `.unavatar` `dynamics[]` へ近似出力し、Runtime importer が SpringBone-like group へ lower する。
-- 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `radius` / `pull` / `spring` / `stiffness` / `gravity` の最小抽出と lower、branch root の複数 group 化、CLI diagnostics。
-- 残り: VRC PhysBone collider / endpointPosition / limit / collision / grabbing / posing の再現、wardrobe / action state と連動した runtime enable state。
+- 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `radius` / `pull` / `spring` / `stiffness` / `gravity` の最小抽出と lower、source collider metadata 保存、branch root の複数 group 化、CLI diagnostics。
+- 残り: VRC PhysBone collider の runtime solver 接続 / endpointPosition / limit / collision / grabbing / posing の再現、wardrobe / action state と連動した runtime enable state。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
 - PhysBone behavior の詳細再現は Wardrobe hot switch と action model の後まで待つ。
 

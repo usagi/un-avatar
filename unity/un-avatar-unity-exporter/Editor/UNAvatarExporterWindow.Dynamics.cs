@@ -49,6 +49,7 @@ namespace UNAvatar.UnityExporter
                         ["roots"] = group.TryGetValue("roots", out var roots) ? roots : new List<object>(),
                         ["ignoreTransforms"] = group.TryGetValue("ignoreTransforms", out var ignoreTransforms) ? ignoreTransforms : new List<object>(),
                         ["multiChildType"] = group.TryGetValue("multiChildType", out var multiChildType) ? multiChildType : "",
+                        ["sourceColliderCount"] = SourceColliderCount(group),
                         ["stiffness"] = group.TryGetValue("stiffness", out var stiffness) ? stiffness : 0.0f,
                         ["spring"] = group.TryGetValue("spring", out var spring) ? spring : 0.0f,
                         ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
@@ -108,11 +109,11 @@ namespace UNAvatar.UnityExporter
                 ["drag"] = 0.4f,
                 ["gravity"] = new List<object> { 0.0f, -gravity, 0.0f },
                 ["radius"] = radius,
-                ["sourceParams"] = BuildVrcPhysBoneSourceParams(type, component)
+                ["sourceParams"] = BuildVrcPhysBoneSourceParams(root, type, component)
             };
         }
 
-        private static Dictionary<string, object> BuildVrcPhysBoneSourceParams(Type type, Component component)
+        private Dictionary<string, object> BuildVrcPhysBoneSourceParams(Transform root, Type type, Component component)
         {
             return new Dictionary<string, object>
             {
@@ -131,7 +132,70 @@ namespace UNAvatar.UnityExporter
                 ["maxAngleZ"] = ReadFloatMember(type, component, "maxAngleZ", 0.0f),
                 ["allowCollision"] = ReadBoolMember(type, component, "allowCollision", false),
                 ["allowGrabbing"] = ReadBoolMember(type, component, "allowGrabbing", false),
-                ["allowPosing"] = ReadBoolMember(type, component, "allowPosing", false)
+                ["allowPosing"] = ReadBoolMember(type, component, "allowPosing", false),
+                ["colliders"] = BuildVrcPhysBoneColliderPayloads(root, ReadComponentListMember(type, component, "colliders"))
+            };
+        }
+
+        private static int SourceColliderCount(Dictionary<string, object> group)
+        {
+            if (!group.TryGetValue("sourceParams", out var rawSourceParams) || !(rawSourceParams is Dictionary<string, object> sourceParams))
+            {
+                return 0;
+            }
+            if (!sourceParams.TryGetValue("colliders", out var rawColliders) || !(rawColliders is List<object> colliders))
+            {
+                return 0;
+            }
+            return colliders.Count;
+        }
+
+        private List<object> BuildVrcPhysBoneColliderPayloads(Transform root, List<Component> colliders)
+        {
+            var json = new List<object>(colliders != null ? colliders.Count : 0);
+            if (colliders == null)
+            {
+                return json;
+            }
+            foreach (var collider in colliders)
+            {
+                if (IsVrcPhysBoneColliderComponent(collider))
+                {
+                    json.Add(BuildVrcPhysBoneColliderPayload(root, collider));
+                }
+            }
+            return json;
+        }
+
+        private static bool IsVrcPhysBoneColliderComponent(Component component)
+        {
+            if (component == null)
+            {
+                return false;
+            }
+            var type = component.GetType();
+            return type.Name == "VRCPhysBoneCollider" ||
+                string.Equals(type.FullName, "VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider", StringComparison.Ordinal);
+        }
+
+        private Dictionary<string, object> BuildVrcPhysBoneColliderPayload(Transform root, Component collider)
+        {
+            var type = collider.GetType();
+            var rootTransform = ReadMember(type, collider, "rootTransform") as Transform;
+            if (rootTransform == null)
+            {
+                rootTransform = collider.transform;
+            }
+            return new Dictionary<string, object>
+            {
+                ["component"] = TransformTargetJson(root, collider.transform),
+                ["root"] = TransformTargetJson(root, rootTransform),
+                ["shapeType"] = ReadMember(type, collider, "shapeType")?.ToString() ?? "",
+                ["radius"] = ReadFloatMember(type, collider, "radius", 0.0f),
+                ["height"] = ReadFloatMember(type, collider, "height", 0.0f),
+                ["position"] = Vector3Json(ReadVector3Member(type, collider, "position", Vector3.zero)),
+                ["rotation"] = QuaternionJson(ReadQuaternionMember(type, collider, "rotation", Quaternion.identity)),
+                ["insideBounds"] = ReadBoolMember(type, collider, "insideBounds", false)
             };
         }
 
@@ -157,6 +221,28 @@ namespace UNAvatar.UnityExporter
             return new List<object> { value.x, value.y, value.z };
         }
 
+        private static List<object> QuaternionJson(Quaternion value)
+        {
+            return new List<object> { value.x, value.y, value.z, value.w };
+        }
+
+        private static List<Component> ReadComponentListMember(Type type, object instance, string name)
+        {
+            var value = ReadMember(type, instance, name);
+            var components = new List<Component>();
+            if (value is IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                {
+                    if (item is Component component)
+                    {
+                        components.Add(component);
+                    }
+                }
+            }
+            return components;
+        }
+
         private static List<Transform> ReadTransformListMember(Type type, object instance, string name)
         {
             var value = ReadMember(type, instance, name);
@@ -178,6 +264,12 @@ namespace UNAvatar.UnityExporter
         {
             var value = ReadMember(type, instance, name);
             return value is Vector3 vector ? vector : fallback;
+        }
+
+        private static Quaternion ReadQuaternionMember(Type type, object instance, string name, Quaternion fallback)
+        {
+            var value = ReadMember(type, instance, name);
+            return value is Quaternion quaternion ? quaternion : fallback;
         }
 
         private static float ReadFloatMember(Type type, object instance, string name, float fallback)
