@@ -333,13 +333,13 @@ namespace UNAvatar.UnityExporter
         private static Vector3 ReadVector3Member(Type type, object instance, string name, Vector3 fallback)
         {
             var value = ReadMember(type, instance, name);
-            return value is Vector3 vector ? vector : fallback;
+            return value is Vector3 vector && IsFinite(vector) ? vector : fallback;
         }
 
         private static Quaternion ReadQuaternionMember(Type type, object instance, string name, Quaternion fallback)
         {
             var value = ReadMember(type, instance, name);
-            return value is Quaternion quaternion ? quaternion : fallback;
+            return value is Quaternion quaternion && IsFinite(quaternion) ? quaternion : fallback;
         }
 
         private static float ReadFloatMember(Type type, object instance, string name, float fallback)
@@ -375,6 +375,21 @@ namespace UNAvatar.UnityExporter
         private static float SanitizeFloat(float value, float fallback)
         {
             return float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsFinite(Quaternion value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z) && IsFinite(value.w);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static bool ReadBoolMember(Type type, object instance, string name, bool fallback)
