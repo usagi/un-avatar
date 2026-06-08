@@ -363,6 +363,17 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 			group.enabled = true;
 		}
 	}
+
+	pub fn set_group_enabled_by_source_id(&mut self, source_id: &str, enabled: bool) -> bool {
+		let mut applied = false;
+		for group in self.groups_mut() {
+			if group.source_id == source_id {
+				group.enabled = enabled;
+				applied = true;
+			}
+		}
+		applied
+	}
 }
 
 impl UnaSpringBoneSettings {
@@ -3282,6 +3293,42 @@ mod tests {
 				.and_then(|weights| weights.preset_weights.get("Blink").copied()),
 			Some(0.5)
 		);
+	}
+
+	#[test]
+	fn runtime_dynamics_mut_sets_groups_by_source_id() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![
+					UnaSpringBoneGroup {
+						source_id: "physbone:hair".to_string(),
+						enabled: true,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: "physbone:hair".to_string(),
+						enabled: true,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: "physbone:tail".to_string(),
+						enabled: true,
+						..Default::default()
+					},
+				],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+
+		let mut runtime = document.runtime_scene_and_dynamics_mut().unwrap();
+		assert!(runtime.dynamics.set_group_enabled_by_source_id("physbone:hair", false));
+		assert!(!runtime.dynamics.set_group_enabled_by_source_id("physbone:missing", false));
+		let groups = runtime.dynamics.as_readonly().groups();
+		assert!(!groups[0].enabled);
+		assert!(!groups[1].enabled);
+		assert!(groups[2].enabled);
 	}
 
 	#[test]

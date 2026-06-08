@@ -1860,14 +1860,7 @@ fn apply_unavatar_wardrobe_operations(
 					report.missing_dynamics_ids.push(target_id.to_string());
 					continue;
 				};
-				let mut applied = false;
-				for group in dynamics.groups_mut() {
-					if group.source_id == target_id {
-						group.enabled = enabled;
-						applied = true;
-					}
-				}
-				if applied {
+				if dynamics.set_group_enabled_by_source_id(target_id, enabled) {
 					report.dynamics_applied += 1;
 				} else {
 					report.dynamics_missing += 1;
