@@ -1495,7 +1495,12 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 			.or_else(|| item.get("maxAngleZ").or_else(|| item.get("max_angle_z")))
 			.and_then(json_number_f64)
 			.unwrap_or(0.0);
-		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 {
+		let max_stretch = source_params
+			.and_then(|params| params.get("maxStretch").or_else(|| params.get("max_stretch")))
+			.or_else(|| item.get("maxStretch").or_else(|| item.get("max_stretch")))
+			.and_then(json_number_f64)
+			.unwrap_or(0.0);
+		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 || max_stretch.abs() > 0.0 {
 			counts.limit_count += 1;
 		}
 		if source_params
@@ -1507,6 +1512,7 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 		if source_params
 			.and_then(|params| params.get("allowGrabbing").or_else(|| params.get("allow_grabbing")))
+			.or_else(|| item.get("allowGrabbing").or_else(|| item.get("allow_grabbing")))
 			.and_then(|value| value.as_bool())
 			== Some(true)
 		{
@@ -1514,6 +1520,7 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 		if source_params
 			.and_then(|params| params.get("allowPosing").or_else(|| params.get("allow_posing")))
+			.or_else(|| item.get("allowPosing").or_else(|| item.get("allow_posing")))
 			.and_then(|value| value.as_bool())
 			== Some(true)
 		{
@@ -3070,12 +3077,11 @@ mod tests {
 						{
 							"source": "vrc_physbone",
 							"roots": [999],
+							"allowGrabbing": true,
+							"allowPosing": true,
 							"sourceParams": {
-								"limitType": "Angle",
-								"maxAngleX": 45.0,
+								"maxStretch": 0.25,
 								"allowCollision": false,
-								"allowGrabbing": true,
-								"allowPosing": true,
 								"colliders": [
 									{"insideBounds": true}
 								]
