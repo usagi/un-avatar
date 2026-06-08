@@ -1297,7 +1297,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 						transparent_forward_zwrite_enabled(
 							draw.alpha_mode,
 							draw.material
-								.mtoon_source_profile()
+								.mtoon_like_runtime()
 								.is_some_and(|mtoon| mtoon.transparent_with_z_write),
 							shading,
 						),
@@ -7042,7 +7042,7 @@ impl SceneMeshes {
 			for &draw_index in &self.transparent_backpass_draw_indices {
 				let zwrite = self.draws[draw_index]
 					.material
-					.liltoon_like_source_profile()
+					.liltoon_like_runtime()
 					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 				if backpass_zwrite != Some(zwrite) {
 					pass.set_pipeline(if zwrite {
