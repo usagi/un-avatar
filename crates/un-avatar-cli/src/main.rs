@@ -1479,59 +1479,33 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 	};
 	let mut counts = DynamicsSourceFeatureCounts::default();
 	for item in dynamics {
-		let source_params = item.get("sourceParams").or_else(|| item.get("source_params"));
-		let limit_type = source_params
-			.and_then(|params| params.get("limitType").or_else(|| params.get("limit_type")))
-			.or_else(|| item.get("limitType").or_else(|| item.get("limit_type")))
+		let source_params = dynamics_source_params(item);
+		let limit_type = dynamics_source_value(item, source_params, "limitType", "limit_type")
 			.and_then(|value| value.as_str())
 			.unwrap_or("");
-		let max_angle_x = source_params
-			.and_then(|params| params.get("maxAngleX").or_else(|| params.get("max_angle_x")))
-			.or_else(|| item.get("maxAngleX").or_else(|| item.get("max_angle_x")))
+		let max_angle_x = dynamics_source_value(item, source_params, "maxAngleX", "max_angle_x")
 			.and_then(json_number_f64)
 			.unwrap_or(0.0);
-		let max_angle_z = source_params
-			.and_then(|params| params.get("maxAngleZ").or_else(|| params.get("max_angle_z")))
-			.or_else(|| item.get("maxAngleZ").or_else(|| item.get("max_angle_z")))
+		let max_angle_z = dynamics_source_value(item, source_params, "maxAngleZ", "max_angle_z")
 			.and_then(json_number_f64)
 			.unwrap_or(0.0);
-		let max_stretch = source_params
-			.and_then(|params| params.get("maxStretch").or_else(|| params.get("max_stretch")))
-			.or_else(|| item.get("maxStretch").or_else(|| item.get("max_stretch")))
+		let max_stretch = dynamics_source_value(item, source_params, "maxStretch", "max_stretch")
 			.and_then(json_number_f64)
 			.unwrap_or(0.0);
 		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 || max_stretch.abs() > 0.0 {
 			counts.limit_count += 1;
 		}
-		if source_params
-			.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
-			.or_else(|| item.get("allowCollision").or_else(|| item.get("allow_collision")))
-			.and_then(|value| value.as_bool())
-			== Some(false)
+		if dynamics_source_value(item, source_params, "allowCollision", "allow_collision").and_then(|value| value.as_bool()) == Some(false)
 		{
 			counts.collision_disabled_count += 1;
 		}
-		if source_params
-			.and_then(|params| params.get("allowGrabbing").or_else(|| params.get("allow_grabbing")))
-			.or_else(|| item.get("allowGrabbing").or_else(|| item.get("allow_grabbing")))
-			.and_then(|value| value.as_bool())
-			== Some(true)
-		{
+		if dynamics_source_value(item, source_params, "allowGrabbing", "allow_grabbing").and_then(|value| value.as_bool()) == Some(true) {
 			counts.grabbing_enabled_count += 1;
 		}
-		if source_params
-			.and_then(|params| params.get("allowPosing").or_else(|| params.get("allow_posing")))
-			.or_else(|| item.get("allowPosing").or_else(|| item.get("allow_posing")))
-			.and_then(|value| value.as_bool())
-			== Some(true)
-		{
+		if dynamics_source_value(item, source_params, "allowPosing", "allow_posing").and_then(|value| value.as_bool()) == Some(true) {
 			counts.posing_enabled_count += 1;
 		}
-		if let Some(colliders) = source_params
-			.and_then(|params| params.get("colliders"))
-			.or_else(|| item.get("colliders"))
-			.and_then(|value| value.as_array())
-		{
+		if let Some(colliders) = dynamics_source_value(item, source_params, "colliders", "colliders").and_then(|value| value.as_array()) {
 			counts.inside_bounds_collider_count += colliders
 				.iter()
 				.filter(|collider| {
@@ -1545,6 +1519,21 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 	}
 	counts
+}
+
+fn dynamics_source_params(value: &serde_json::Value) -> Option<&serde_json::Value> {
+	value.get("sourceParams").or_else(|| value.get("source_params"))
+}
+
+fn dynamics_source_value<'a>(
+	value: &'a serde_json::Value,
+	source_params: Option<&'a serde_json::Value>,
+	camel_key: &str,
+	snake_key: &str,
+) -> Option<&'a serde_json::Value> {
+	source_params
+		.and_then(|params| params.get(camel_key).or_else(|| params.get(snake_key)))
+		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
 }
 
 fn json_number_f64(value: &serde_json::Value) -> Option<f64> {

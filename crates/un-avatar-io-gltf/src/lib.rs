@@ -1390,18 +1390,10 @@ fn unavatar_dynamics_colliders(
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
 ) -> Vec<UnaDynamicsCollider> {
 	let source_params = unavatar_dynamics_source_params(value);
-	if source_params
-		.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
-		.or_else(|| value.get("allowCollision").or_else(|| value.get("allow_collision")))
-		.and_then(Value::as_bool)
-		== Some(false)
-	{
+	if unavatar_dynamics_source_value(value, source_params, "allowCollision", "allow_collision").and_then(Value::as_bool) == Some(false) {
 		return Vec::new();
 	}
-	let colliders = source_params
-		.and_then(|params| params.get("colliders"))
-		.or_else(|| value.get("colliders"))
-		.and_then(Value::as_array);
+	let colliders = unavatar_dynamics_source_value(value, source_params, "colliders", "colliders").and_then(Value::as_array);
 	let Some(colliders) = colliders else {
 		return Vec::new();
 	};
@@ -1437,15 +1429,8 @@ fn unavatar_dynamics_colliders(
 }
 
 fn unavatar_dynamics_endpoint_position(value: &Value) -> Option<[f32; 3]> {
-	let endpoint = value
-		.get("endpointPosition")
-		.or_else(|| value.get("endpoint_position"))
-		.or_else(|| {
-			value
-				.get("sourceParams")
-				.or_else(|| value.get("source_params"))
-				.and_then(|params| params.get("endpointPosition").or_else(|| params.get("endpoint_position")))
-		});
+	let source_params = unavatar_dynamics_source_params(value);
+	let endpoint = unavatar_dynamics_source_value(value, source_params, "endpointPosition", "endpoint_position");
 	let endpoint = unity_vec3_to_unavatar_runtime(json_vec3(endpoint)?);
 	let length_sq = endpoint[0] * endpoint[0] + endpoint[1] * endpoint[1] + endpoint[2] * endpoint[2];
 	(length_sq > 1e-12).then_some(endpoint)
@@ -1549,27 +1534,30 @@ fn unavatar_dynamics_source_params(value: &Value) -> Option<&Value> {
 	value.get("sourceParams").or_else(|| value.get("source_params"))
 }
 
+fn unavatar_dynamics_source_value<'a>(
+	value: &'a Value,
+	source_params: Option<&'a Value>,
+	camel_key: &str,
+	snake_key: &str,
+) -> Option<&'a Value> {
+	source_params
+		.and_then(|params| params.get(camel_key).or_else(|| params.get(snake_key)))
+		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
+}
+
 fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 	let source_params = unavatar_dynamics_source_params(value);
-	let limit_type = source_params
-		.and_then(|params| params.get("limitType").or_else(|| params.get("limit_type")))
-		.or_else(|| value.get("limitType").or_else(|| value.get("limit_type")))
+	let limit_type = unavatar_dynamics_source_value(value, source_params, "limitType", "limit_type")
 		.and_then(Value::as_str)
 		.unwrap_or("")
 		.to_string();
-	let max_angle_x = source_params
-		.and_then(|params| params.get("maxAngleX").or_else(|| params.get("max_angle_x")))
-		.or_else(|| value.get("maxAngleX").or_else(|| value.get("max_angle_x")))
+	let max_angle_x = unavatar_dynamics_source_value(value, source_params, "maxAngleX", "max_angle_x")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
-	let max_angle_z = source_params
-		.and_then(|params| params.get("maxAngleZ").or_else(|| params.get("max_angle_z")))
-		.or_else(|| value.get("maxAngleZ").or_else(|| value.get("max_angle_z")))
+	let max_angle_z = unavatar_dynamics_source_value(value, source_params, "maxAngleZ", "max_angle_z")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
-	let max_stretch = source_params
-		.and_then(|params| params.get("maxStretch").or_else(|| params.get("max_stretch")))
-		.or_else(|| value.get("maxStretch").or_else(|| value.get("max_stretch")))
+	let max_stretch = unavatar_dynamics_source_value(value, source_params, "maxStretch", "max_stretch")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
 	if limit_type.is_empty() && max_angle_x == 0.0 && max_angle_z == 0.0 && max_stretch == 0.0 {
@@ -1586,14 +1574,8 @@ fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 
 fn unavatar_dynamics_interaction(value: &Value) -> Option<UnaDynamicsInteraction> {
 	let source_params = unavatar_dynamics_source_params(value);
-	let allow_grabbing = source_params
-		.and_then(|params| params.get("allowGrabbing").or_else(|| params.get("allow_grabbing")))
-		.or_else(|| value.get("allowGrabbing").or_else(|| value.get("allow_grabbing")))
-		.and_then(Value::as_bool);
-	let allow_posing = source_params
-		.and_then(|params| params.get("allowPosing").or_else(|| params.get("allow_posing")))
-		.or_else(|| value.get("allowPosing").or_else(|| value.get("allow_posing")))
-		.and_then(Value::as_bool);
+	let allow_grabbing = unavatar_dynamics_source_value(value, source_params, "allowGrabbing", "allow_grabbing").and_then(Value::as_bool);
+	let allow_posing = unavatar_dynamics_source_value(value, source_params, "allowPosing", "allow_posing").and_then(Value::as_bool);
 	if allow_grabbing.is_none() && allow_posing.is_none() {
 		None
 	} else {
