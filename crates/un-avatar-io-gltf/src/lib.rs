@@ -2105,6 +2105,41 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 					.to_string();
 				effects.push(UnaRuntimeActionEffect::MaterialScalar { target, parameter, value });
 			}
+			"expressionWeight" | "expression_weight" | "blendShapeWeight" => {
+				let Some(name) = op
+					.get("expression")
+					.or_else(|| op.get("preset"))
+					.or_else(|| op.get("name"))
+					.and_then(Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				let Some(weight) = op
+					.get("weight")
+					.or_else(|| op.get("value"))
+					.and_then(Value::as_f64)
+					.map(|value| value as f32)
+				else {
+					continue;
+				};
+				effects.push(UnaRuntimeActionEffect::ExpressionWeight {
+					name: name.to_string(),
+					weight,
+				});
+			}
+			"dynamicsEnable" | "dynamics_enabled" | "dynamicsEnabled" => {
+				let Some(enabled) = op.get("enabled").or_else(|| op.get("visible")).and_then(Value::as_bool) else {
+					continue;
+				};
+				let Some(source_id) = operation_dynamics_target_id(op) else {
+					continue;
+				};
+				effects.push(UnaRuntimeActionEffect::DynamicsEnabled {
+					source_id: source_id.to_string(),
+					enabled,
+				});
+			}
 			_ => {}
 		}
 	}
@@ -6736,13 +6771,13 @@ mod tests {
 	}
 
 	#[test]
-	fn unavatar_variant_runtime_action_imports_material_effects() {
+	fn unavatar_variant_runtime_action_imports_non_visibility_effects() {
 		let variant = serde_json::json!({
-			"id": "material-toggle",
-			"name": "Material Toggle",
+			"id": "fx-toggle",
+			"name": "FX Toggle",
 			"operations": [{
 				"op": "metadata",
-				"menuPath": "FX/Material Toggle"
+				"menuPath": "FX/Toggle"
 			}, {
 				"op": "materialColor",
 				"target": {"materialName": "Accent"},
@@ -6753,20 +6788,28 @@ mod tests {
 				"materialIndex": 2,
 				"parameter": "_Smoothness",
 				"value": 0.75
+			}, {
+				"op": "expressionWeight",
+				"name": "Blink",
+				"weight": 0.5
+			}, {
+				"op": "dynamicsEnable",
+				"target": {"dynamicsId": "physbone:hair"},
+				"enabled": false
 			}]
 		});
 
 		let action = unavatar_variant_runtime_action(&variant).expect("runtime action");
 
-		assert_eq!(action.id, "variant:material-toggle");
+		assert_eq!(action.id, "variant:fx-toggle");
 		assert_eq!(
 			action.triggers,
 			vec![
 				UnaRuntimeActionTrigger::SupervisorCommand {
-					command: "material-toggle".to_string()
+					command: "fx-toggle".to_string()
 				},
 				UnaRuntimeActionTrigger::ExpressionMenu {
-					path: "FX/Material Toggle".to_string()
+					path: "FX/Toggle".to_string()
 				}
 			]
 		);
@@ -6788,6 +6831,14 @@ mod tests {
 					},
 					parameter: "_Smoothness".to_string(),
 					value: 0.75,
+				},
+				UnaRuntimeActionEffect::ExpressionWeight {
+					name: "Blink".to_string(),
+					weight: 0.5,
+				},
+				UnaRuntimeActionEffect::DynamicsEnabled {
+					source_id: "physbone:hair".to_string(),
+					enabled: false,
 				},
 			]
 		);
