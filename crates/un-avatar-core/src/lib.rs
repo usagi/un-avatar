@@ -164,8 +164,17 @@ pub struct UnaRuntimeAction {
 
 impl UnaRuntimeAction {
 	pub fn matches_query(&self, query: UnaRuntimeActionQuery<'_>) -> bool {
-		query.action_id.is_some_and(|id| self.id == id)
-			|| self.triggers.iter().any(|trigger| trigger.matches_query(query))
+		query.action_id.is_some_and(|id| self.id == id) || self.triggers.iter().any(|trigger| trigger.matches_query(query))
+	}
+
+	pub fn parameter_assignments(&self) -> BTreeMap<String, f32> {
+		self.triggers
+			.iter()
+			.filter_map(|trigger| match trigger {
+				UnaRuntimeActionTrigger::ParameterValue { name, value } if !name.is_empty() => Some((name.clone(), *value)),
+				_ => None,
+			})
+			.collect()
 	}
 }
 
@@ -179,6 +188,10 @@ pub struct UnaRuntimeState {
 	/// this field only records transient runtime state for status/diagnostics.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub last_action_id: Option<String>,
+	/// Runtime parameter values selected through action activation. Parameter definitions and menu metadata remain in
+	/// `UnaRuntimeActionSet`; this map records only the current transient state.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub parameter_values: BTreeMap<String, f32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -210,22 +223,18 @@ pub enum UnaRuntimeActionTrigger {
 impl UnaRuntimeActionTrigger {
 	pub fn matches_query(&self, query: UnaRuntimeActionQuery<'_>) -> bool {
 		match self {
-			UnaRuntimeActionTrigger::ExpressionMenu { path } => {
-				query.expression_menu_path.is_some_and(|query_path| path == query_path)
-			}
+			UnaRuntimeActionTrigger::ExpressionMenu { path } => query.expression_menu_path.is_some_and(|query_path| path == query_path),
 			UnaRuntimeActionTrigger::KeyboardShortcut { .. } => false,
 			UnaRuntimeActionTrigger::SupervisorCommand { command } => {
 				query.supervisor_command.is_some_and(|query_command| command == query_command)
 			}
 			UnaRuntimeActionTrigger::AnimationEvent { .. } => false,
-			UnaRuntimeActionTrigger::ParameterValue { name, value } => {
-				query.parameter_name.is_some_and(|query_name| {
-					name == query_name
-						&& query
-							.parameter_value
-							.is_some_and(|query_value| (query_value - *value).abs() <= UNA_RUNTIME_ACTION_PARAMETER_EPSILON)
-				})
-			}
+			UnaRuntimeActionTrigger::ParameterValue { name, value } => query.parameter_name.is_some_and(|query_name| {
+				name == query_name
+					&& query
+						.parameter_value
+						.is_some_and(|query_value| (query_value - *value).abs() <= UNA_RUNTIME_ACTION_PARAMETER_EPSILON)
+			}),
 		}
 	}
 }
@@ -766,6 +775,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.runtime_state().last_action_id.as_deref()
 	}
 
+	pub fn runtime_parameter_values(self) -> &'a BTreeMap<String, f32> {
+		&self.runtime_state().parameter_values
+	}
+
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
 		Some(UnaRuntimeSceneExpressions {
 			scene: self.scene()?,
@@ -821,6 +834,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_last_action_id(&mut self, action_id: Option<String>) {
 		self.runtime_state_mut().last_action_id = action_id;
+	}
+
+	pub fn set_runtime_parameter_value(&mut self, name: impl Into<String>, value: f32) {
+		self.runtime_state_mut().parameter_values.insert(name.into(), value);
+	}
+
+	pub fn set_runtime_parameter_values(&mut self, values: BTreeMap<String, f32>) {
+		self.runtime_state_mut().parameter_values.extend(values);
 	}
 
 	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
@@ -4103,6 +4124,10 @@ mod tests {
 				..Default::default()
 			})
 			.is_none());
+		assert_eq!(
+			actions.actions[0].parameter_assignments(),
+			BTreeMap::from([("Outfit".to_string(), 2.0)])
+		);
 	}
 
 	#[test]
@@ -4117,13 +4142,16 @@ mod tests {
 		document
 			.runtime_model_mut()
 			.set_last_action_id(Some("wardrobe:field_drape".to_string()));
+		document.runtime_model_mut().set_runtime_parameter_value("Outfit", 2.0);
 		assert_eq!(document.runtime_model().active_wardrobe_set(), Some("field_drape"));
 		assert_eq!(document.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
 
 		let json = serde_json::to_string(&document).unwrap();
 		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
 		assert_eq!(decoded.runtime_model().active_wardrobe_set(), Some("field_drape"));
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
+		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
 	}
 
 	#[test]

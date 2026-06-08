@@ -105,6 +105,8 @@ struct DiagnoseRuntimeSummary {
 	active_wardrobe_set: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	last_action_id: Option<String>,
+	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
+	parameter_values: BTreeMap<String, f32>,
 }
 
 #[derive(Serialize)]
@@ -2446,6 +2448,7 @@ fn build_diagnose_report(
 		humanoid_basis: runtime_model.humanoid_basis(),
 		active_wardrobe_set: runtime_model.active_wardrobe_set().map(str::to_owned),
 		last_action_id: runtime_model.last_action_id().map(str::to_owned),
+		parameter_values: runtime_model.runtime_parameter_values().clone(),
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
@@ -2742,9 +2745,16 @@ fn run_diagnose(
 		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
 	);
 	println!(
-		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} last_action_id={:?}",
-		report.runtime.source_kind, report.runtime.humanoid_basis, report.runtime.active_wardrobe_set, report.runtime.last_action_id
+		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} last_action_id={:?} parameter_values={}",
+		report.runtime.source_kind,
+		report.runtime.humanoid_basis,
+		report.runtime.active_wardrobe_set,
+		report.runtime.last_action_id,
+		report.runtime.parameter_values.len()
 	);
+	if !report.runtime.parameter_values.is_empty() {
+		println!("runtime.parameters: {:?}", report.runtime.parameter_values);
+	}
 	if let Some(actions) = &report.actions {
 		println!(
 			"actions: actions={} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",

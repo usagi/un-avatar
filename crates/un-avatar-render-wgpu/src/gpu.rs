@@ -2,6 +2,7 @@
 
 use std::{
 	borrow::Cow,
+	collections::BTreeMap,
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -56,10 +57,11 @@ pub(crate) struct MeshShaderResourcePlan {
 	pub(crate) required_limits: wgpu::Limits,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RuntimeActionActivation {
 	pub(crate) action_id: String,
 	pub(crate) active_wardrobe_set: Option<String>,
+	pub(crate) parameter_values: BTreeMap<String, f32>,
 }
 
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
@@ -2680,6 +2682,16 @@ impl GpuState {
 		doc.runtime_model().last_action_id().map(str::to_owned)
 	}
 
+	pub(crate) fn runtime_parameter_values(&self) -> BTreeMap<String, f32> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return BTreeMap::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return BTreeMap::new();
+		};
+		doc.runtime_model().runtime_parameter_values().clone()
+	}
+
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2779,7 +2791,7 @@ impl GpuState {
 			return Err("document is not attached".to_string());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (resolved_action_id, effects) = {
+		let (resolved_action_id, parameter_values, effects) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let Some(actions) = doc.runtime_model().runtime_actions() else {
 				return Err("document has no runtime actions".to_string());
@@ -2793,7 +2805,7 @@ impl GpuState {
 					parameter_value,
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
-			(action.id.clone(), action.effects.clone())
+			(action.id.clone(), action.parameter_assignments(), action.effects.clone())
 		};
 		let mut active_wardrobe_set = None;
 		for effect in effects {
@@ -2828,9 +2840,11 @@ impl GpuState {
 		}
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		doc.runtime_model_mut().set_last_action_id(Some(resolved_action_id.clone()));
+		doc.runtime_model_mut().set_runtime_parameter_values(parameter_values.clone());
 		Ok(RuntimeActionActivation {
 			action_id: resolved_action_id,
 			active_wardrobe_set,
+			parameter_values,
 		})
 	}
 

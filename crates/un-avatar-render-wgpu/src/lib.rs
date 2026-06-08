@@ -23,7 +23,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
 	cell::Cell,
-	collections::VecDeque,
+	collections::{BTreeMap, VecDeque},
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
@@ -1642,6 +1642,15 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_parameters(&self, parameter_values: BTreeMap<String, f32>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.runtime_parameter_values.extend(parameter_values);
+		}
+	}
+
 	fn update_runtime_startup(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -2458,6 +2467,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
 					}
 					self.update_runtime_last_action(Some(activation.action_id.clone()));
+					self.update_runtime_parameters(activation.parameter_values.clone());
 				}
 				if outcome.is_ok() {
 					self.request_redraw();
@@ -2830,6 +2840,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.update_runtime_texture_summary(actual_texture_summary);
 						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
 						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
+						self.update_runtime_parameters(
+							self.gpu
+								.as_ref()
+								.map(|gpu| gpu.runtime_parameter_values())
+								.unwrap_or_default(),
+						);
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
@@ -2982,6 +2998,8 @@ struct RendererRuntimeSnapshot {
 	active_wardrobe_set: Option<String>,
 	#[serde(default)]
 	last_action_id: Option<String>,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	runtime_parameter_values: BTreeMap<String, f32>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3115,6 +3133,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_summary: None,
 		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
 		last_action_id: None,
+		runtime_parameter_values: BTreeMap::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
