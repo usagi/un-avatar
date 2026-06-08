@@ -474,7 +474,7 @@ impl MotionRetargetRuntime {
 
 struct RuntimePhysicsBuild {
 	spring_sim: Option<SpringBoneSimulator>,
-	bone_colliders: Vec<BoneColliderPrimitive>,
+	debug_bone_colliders: Vec<BoneColliderPrimitive>,
 	stats: BoneColliderStats,
 }
 
@@ -501,9 +501,10 @@ fn build_runtime_physics_for_document(
 	} else {
 		None
 	};
+	let debug_bone_colliders = if spring_sim.is_some() { Vec::new() } else { bone_colliders };
 	RuntimePhysicsBuild {
 		spring_sim,
-		bone_colliders,
+		debug_bone_colliders,
 		stats,
 	}
 }
@@ -1817,11 +1818,7 @@ impl GpuState {
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
 		self.spring_sim = physics.spring_sim;
-		self.bone_colliders = if self.spring_sim.is_some() {
-			Vec::new()
-		} else {
-			physics.bone_colliders
-		};
+		self.bone_colliders = physics.debug_bone_colliders;
 	}
 
 	fn reset_spring_bone_nodes_to_rest(&mut self) {
@@ -2718,18 +2715,13 @@ impl GpuSceneBuildContext {
 			}
 		}
 		let document_wrapped = Arc::new(RwLock::new(document));
-		let bone_colliders = if physics.spring_sim.is_some() {
-			Vec::new()
-		} else {
-			physics.bone_colliders
-		};
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
 			rest_nodes,
 			scene_meshes,
 			texture_summary,
 			spring_sim: physics.spring_sim,
-			bone_colliders,
+			bone_colliders: physics.debug_bone_colliders,
 			bone_collider_count: physics.stats.count,
 			bone_collider_source: physics.stats.source,
 			runtime_requirements,
