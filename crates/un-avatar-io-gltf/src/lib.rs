@@ -7616,6 +7616,43 @@ mod tests {
 	}
 
 	#[test]
+	fn imports_unavatar_extension_from_gltf_bytes() {
+		let mut root: Value = serde_json::from_str(include_str!("../tests/fixtures/triangle.gltf")).unwrap();
+		if let Some(buffer) = root
+			.get_mut("buffers")
+			.and_then(Value::as_array_mut)
+			.and_then(|buffers| buffers.get_mut(0))
+			.and_then(Value::as_object_mut)
+		{
+			buffer.remove("uri");
+		}
+		root["extensionsUsed"] = serde_json::json!(["UN_avatar"]);
+		root["extensions"] = serde_json::json!({
+			"UN_avatar": {
+				"specVersion": "0.1-preview",
+				"generator": "bytes-test"
+			}
+		});
+		let json = serde_json::to_string(&root).unwrap();
+		let bytes = glb_bytes_with_bin(&json, &triangle_bin_bytes());
+
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp
+			.import(
+				&mut ctx,
+				ImportInput::Bytes {
+					bytes: bytes.into(),
+					path_hint: Some(std::path::PathBuf::from("triangle.glb")),
+				},
+				ImportOptions,
+			)
+			.unwrap();
+
+		assert_eq!(got.document.unavatar.as_ref().unwrap().spec_version, "0.1-preview");
+	}
+
+	#[test]
 	fn imports_single_bone_skin_gltf() {
 		let dir = std::env::temp_dir().join(format!("un-avatar-gltf-skin-{}", std::process::id()));
 		let _ = std::fs::remove_dir_all(&dir);
