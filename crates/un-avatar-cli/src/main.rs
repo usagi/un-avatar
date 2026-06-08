@@ -467,6 +467,7 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_component_count: usize,
 	modular_avatar_support_counts: BTreeMap<String, usize>,
 	modular_avatar_type_counts: BTreeMap<String, usize>,
+	modular_avatar_disabled_type_counts: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
@@ -2028,6 +2029,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		.and_then(|components| components.as_array());
 	let mut modular_avatar_support_counts = BTreeMap::new();
 	let mut modular_avatar_type_counts = BTreeMap::new();
+	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
 	if let Some(components) = modular_avatar_components {
 		for component in components {
 			let short_type = component
@@ -2042,6 +2044,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			);
 			if component.get("enabled").and_then(|value| value.as_bool()) == Some(false) {
 				bump_count(&mut modular_avatar_support_counts, "disabled");
+				bump_count(&mut modular_avatar_disabled_type_counts, short_type);
 			}
 		}
 	}
@@ -2125,6 +2128,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_component_count: modular_avatar_components.map(Vec::len).unwrap_or(0),
 		modular_avatar_support_counts,
 		modular_avatar_type_counts,
+		modular_avatar_disabled_type_counts,
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
@@ -2925,7 +2929,7 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?}",
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?}",
 			unavatar.spec_version,
 			unavatar.generator,
 			unavatar.manifest_name,
@@ -2933,7 +2937,8 @@ fn run_diagnose(
 			unavatar.dynamics_entry_count,
 			unavatar.modular_avatar_component_count,
 			unavatar.modular_avatar_support_counts,
-			unavatar.modular_avatar_type_counts
+			unavatar.modular_avatar_type_counts,
+			unavatar.modular_avatar_disabled_type_counts
 		);
 		println!(
 			"wardrobe: base={:?} sets={} {:?} asset_groups={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
@@ -3488,6 +3493,10 @@ mod tests {
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
+		assert_eq!(
+			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
+			Some(&1)
+		);
 		assert_eq!(
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
