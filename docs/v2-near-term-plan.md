@@ -140,7 +140,7 @@ MVP control command:
 次の段階:
 
 - VRC Expression Menu metadata から action label/path をより正確に取り込む。Modular Avatar MenuItem metadata は effect source が確定できるものから順次 action 化する。
-- Modular Avatar Material Setter の direct renderer slot payload と Material Swap の scene-aware From / To slot expansion は `MaterialSlot` action へ import される。component / fields / menuItem に明示された Expression Menu path metadata は `ExpressionMenu` trigger へ取り込む。Generic wardrobe material color / scalar / slot operations も hot switch で適用され、CLI diagnose / wardrobe probe で material apply counts を観測できる。残りは Menu Item / parameter trigger 統合、QuickSwapMode / asset group 対応。
+- Modular Avatar Material Setter の direct renderer slot payload は scene-aware renderer reference resolver を通して `MaterialSlot` action へ import され、Material Swap の scene-aware From / To slot expansion も `MaterialSlot` action へ import される。component / fields / menuItem に明示された Expression Menu path metadata は `ExpressionMenu` trigger へ取り込む。Generic wardrobe material color / scalar / slot operations も hot switch で適用され、CLI diagnose / wardrobe probe で material apply counts を観測できる。残りは Menu Item / parameter trigger 統合、QuickSwapMode / asset group 対応。
 - Modular Avatar / VRC Expression Menu metadata から取り込んだ material parameter 名を、必要に応じて lilToon 専用 parameter へ拡張する。
 
 ## PhysBone Placement

@@ -2322,13 +2322,18 @@ fn unavatar_modular_avatar_component_runtime_action(
 	}
 	let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or("");
 	match short_type {
-		"ModularAvatarMaterialSetter" => unavatar_material_setter_runtime_action(component, component_index),
+		"ModularAvatarMaterialSetter" => unavatar_material_setter_runtime_action(component, component_index, scene, unavatar),
 		"ModularAvatarMaterialSwap" => unavatar_material_swap_runtime_action(component, component_index, scene?, unavatar),
 		_ => None,
 	}
 }
 
-fn unavatar_material_setter_runtime_action(component: &Value, component_index: usize) -> Option<UnaRuntimeAction> {
+fn unavatar_material_setter_runtime_action(
+	component: &Value,
+	component_index: usize,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeAction> {
 	let objects = component
 		.get("fields")
 		.and_then(|fields| {
@@ -2343,7 +2348,7 @@ fn unavatar_material_setter_runtime_action(component: &Value, component_index: u
 		.and_then(Value::as_array)?;
 	let mut effects = Vec::new();
 	for object in objects {
-		let Some(target) = unavatar_material_setter_slot_target(object) else {
+		let Some(target) = unavatar_material_setter_slot_target(object, scene, unavatar) else {
 			continue;
 		};
 		let Some(material) = object
@@ -2383,7 +2388,11 @@ fn unavatar_material_setter_runtime_action(component: &Value, component_index: u
 	})
 }
 
-fn unavatar_material_setter_slot_target(object: &Value) -> Option<UnaRuntimeMaterialSlotTarget> {
+fn unavatar_material_setter_slot_target(
+	object: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeMaterialSlotTarget> {
 	let target_ref = object
 		.get("Object")
 		.or_else(|| object.get("object"))
@@ -2414,6 +2423,22 @@ fn unavatar_material_setter_slot_target(object: &Value) -> Option<UnaRuntimeMate
 		.or_else(|| object.get("slot"))
 		.and_then(Value::as_u64)
 		.and_then(|value| usize::try_from(value).ok());
+	if let Some(scene) = scene {
+		let node_ids = scene_node_ids(scene);
+		let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+		let paths = scene_node_paths(scene);
+		let normalized_paths = scene_node_normalized_paths(scene);
+		let node_index = modular_avatar_reference_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths)?;
+		let node = scene.nodes.get(node_index)?;
+		return Some(UnaRuntimeMaterialSlotTarget {
+			node: UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id: node.source_node_id.clone(),
+				path: scene_node_path_for_index(scene, node_index),
+			},
+			primitive_index,
+		});
+	}
 	Some(UnaRuntimeMaterialSlotTarget {
 		node: UnaRuntimeNodeTarget {
 			node_index: None,
@@ -7621,6 +7646,109 @@ mod tests {
 				},
 			}]
 		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_resolve_modular_avatar_material_setter_targets_from_scene() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"fields": {
+							"objects": [{
+								"object": {
+									"nodeId": "node_jacket",
+									"path": "Outdated/Jacket"
+								},
+								"MaterialIndex": 0,
+								"Material": {
+									"materialName": "Jacket Red"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene)).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::MaterialSlot {
+				target: UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: Some("node_jacket".to_string()),
+						path: Some("Root/Jacket".to_string()),
+					},
+					primitive_index: Some(0),
+				},
+				material: UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Jacket Red".to_string()),
+				},
+			}]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_skip_modular_avatar_material_setter_when_target_is_missing() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![UnaSceneNode {
+				name: Some("Root".to_string()),
+				..test_node(Vec::new())
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"fields": {
+							"objects": [{
+								"object": {
+									"nodeId": "node_missing",
+									"path": "Missing/Jacket"
+								},
+								"MaterialIndex": 0,
+								"Material": {
+									"materialName": "Jacket Red"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene)).is_none());
 	}
 
 	#[test]
