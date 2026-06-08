@@ -1138,6 +1138,8 @@ pub(crate) struct GpuState {
 	unmotion_zenoh_received_frames: Arc<AtomicU64>,
 	/// 現在の profile と可視 material set が外部 AudioLink texture を必要としているか。
 	audio_link_texture_needed: bool,
+	/// 現在の profile と可視 material set から抽出した renderer runtime 要求。
+	runtime_requirements: SceneMeshRuntimeRequirements,
 	/// 描画直前に motion buffer から取り出して document に適用したフレーム数。
 	motion_applied_frames: Arc<AtomicU64>,
 	motion_receiver_generation: Arc<AtomicU64>,
@@ -1512,6 +1514,7 @@ impl GpuState {
 			unmotion_zenoh_live,
 			unmotion_zenoh_received_frames,
 			audio_link_texture_needed: false,
+			runtime_requirements: SceneMeshRuntimeRequirements::default(),
 			motion_applied_frames,
 			motion_receiver_generation: Arc::new(AtomicU64::new(0)),
 			// XYZ 軸はデフォルト Off（manifest や CLI、UI からの明示指示で表示）。
@@ -1663,12 +1666,17 @@ impl GpuState {
 		self.audio_link_texture_needed
 	}
 
+	pub(crate) fn runtime_requirements(&self) -> SceneMeshRuntimeRequirements {
+		self.runtime_requirements
+	}
+
 	fn apply_runtime_requirements(&mut self, requirements: SceneMeshRuntimeRequirements, audio_link_options: AudioLinkOptions) {
 		let audio_link_texture_needed = audio_link_options.source == AudioLinkSource::InputDevice && requirements.audio_link_texture;
 		let audio_link_config_changed = self.audio_link_options != audio_link_options;
 		let audio_link_need_changed = self.audio_link_texture_needed != audio_link_texture_needed;
 		self.audio_link_options = audio_link_options;
 		self.audio_link_texture_needed = audio_link_texture_needed;
+		self.runtime_requirements = requirements;
 		if audio_link_config_changed || audio_link_need_changed {
 			self.reconfigure_audio_link_runtime();
 		}
@@ -1676,6 +1684,7 @@ impl GpuState {
 
 	fn apply_runtime_requirements_with_current_audio_link(&mut self, requirements: SceneMeshRuntimeRequirements) {
 		let audio_link_texture_needed = self.audio_link_options.source == AudioLinkSource::InputDevice && requirements.audio_link_texture;
+		self.runtime_requirements = requirements;
 		if self.audio_link_texture_needed != audio_link_texture_needed {
 			self.audio_link_texture_needed = audio_link_texture_needed;
 			self.reconfigure_audio_link_runtime();

@@ -1463,6 +1463,10 @@ impl AvatarApp {
 			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
 			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
 			status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
+			let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
+			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
+			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
+			status.runtime_requires_fur = runtime_requirements.fur;
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -2916,6 +2920,12 @@ struct RendererRuntimeSnapshot {
 	/// 現在の profile と可視 material set が external AudioLink texture を必要としているか。
 	#[serde(default)]
 	audio_link_texture_needed: bool,
+	#[serde(default)]
+	runtime_requires_audio_link_texture: bool,
+	#[serde(default)]
+	runtime_requires_screen_refraction: bool,
+	#[serde(default)]
+	runtime_requires_fur: bool,
 	/// 旧 status 互換の primary motion source。
 	#[serde(default)]
 	primary_motion_source: crate::options::PrimaryMotionSource,
@@ -3057,6 +3067,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		unmotion_zenoh_received_frames: 0,
 		motion_applied_frames: 0,
 		audio_link_texture_needed: false,
+		runtime_requires_audio_link_texture: false,
+		runtime_requires_screen_refraction: false,
+		runtime_requires_fur: false,
 		primary_motion_source: opts.primary_motion_source,
 		show_axes: opts.show_axes,
 		show_bone_colliders: opts.show_bone_colliders,
