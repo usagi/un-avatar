@@ -1348,7 +1348,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		.and_then(|v| v.as_i64())
 		.map(|v| v as i32);
 	let liltoon_features = material_liltoon_features(material);
-	let mtoon = material.mtoon.as_ref().map(|m| DiagnoseMToonSummary {
+	let mtoon = material.mtoon_like_runtime().map(|m| DiagnoseMToonSummary {
 		transparent_with_z_write: m.transparent_with_z_write,
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
@@ -1682,7 +1682,7 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 				shading: material.shading,
 				alpha_mode: material.alpha_mode,
 				alpha_cutoff: material.alpha_cutoff,
-				transparent_with_z_write: material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+				transparent_with_z_write: material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write),
 				draw_skipped_fully_transparent,
 				morph_target_count: primitive.morph_targets.len(),
 				nonzero_morph_weights,
