@@ -443,6 +443,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		Some((self.humanoid_profile()?, self.scene()?))
 	}
 
+	pub fn scene_profile_dynamics(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a HumanoidProfile>, UnaRuntimeDynamics<'a>)> {
+		Some((self.scene()?, self.humanoid_profile(), self.dynamics()))
+	}
+
 	pub fn expression_catalog(self) -> Option<&'a UnaExpressionCatalog> {
 		self.document.expression_catalog.as_ref()
 	}

@@ -1742,9 +1742,8 @@ impl GpuState {
 			return;
 		};
 		let runtime_model = doc.runtime_model();
-		let (colliders, stats) = if let Some(scene) = runtime_model.scene() {
-			let profile = runtime_model.humanoid_profile();
-			let colliders = build_runtime_bone_colliders(scene, profile, bone_collider_config, runtime_model.dynamics());
+		let (colliders, stats) = if let Some((scene, profile, dynamics)) = runtime_model.scene_profile_dynamics() {
+			let colliders = build_runtime_bone_colliders(scene, profile, bone_collider_config, dynamics);
 			let stats = collider_stats(&colliders);
 			(colliders, stats)
 		} else {
@@ -2598,9 +2597,8 @@ impl GpuSceneBuildContext {
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let runtime_model = document.runtime_model();
-		let bone_colliders = if let Some(scene) = runtime_model.scene() {
-			let profile = runtime_model.humanoid_profile();
-			build_runtime_bone_colliders(scene, profile, options.bone_colliders, runtime_model.dynamics())
+		let bone_colliders = if let Some((scene, profile, dynamics)) = runtime_model.scene_profile_dynamics() {
+			build_runtime_bone_colliders(scene, profile, options.bone_colliders, dynamics)
 		} else {
 			Vec::new()
 		};
