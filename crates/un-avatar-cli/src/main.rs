@@ -1439,12 +1439,16 @@ fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<b
 }
 
 fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSummary> {
-	let (Some(scene), Some(settings)) = (doc.scene.as_ref(), doc.runtime_model().dynamics().spring_bones()) else {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
 		return Vec::new();
 	};
-	let node_paths_by_index = scene_node_paths_by_index(scene);
-	settings
-		.groups
+	let groups = runtime.dynamics.groups();
+	if groups.is_empty() {
+		return Vec::new();
+	}
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	groups
 		.iter()
 		.enumerate()
 		.map(|(index, group)| {
@@ -2338,15 +2342,16 @@ fn build_diagnose_report(
 		}
 	}
 	let dynamics_source_features = dynamics_source_feature_counts(&doc);
+	let dynamics_counts = runtime_dynamics.counts();
 	let dynamics = DiagnoseDynamicsSummary {
-		group_count: runtime_dynamics.group_count(),
-		vrm_spring_bone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
-		vrc_physbone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
-		unknown_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::Unknown),
-		collider_count: runtime_dynamics.collider_count(),
-		vrm_spring_bone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone),
-		vrc_physbone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone),
-		unknown_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown),
+		group_count: dynamics_counts.groups,
+		vrm_spring_bone_group_count: dynamics_counts.vrm_spring_bone_groups,
+		vrc_physbone_group_count: dynamics_counts.vrc_physbone_groups,
+		unknown_group_count: dynamics_counts.unknown_groups,
+		collider_count: dynamics_counts.colliders,
+		vrm_spring_bone_collider_count: dynamics_counts.vrm_spring_bone_colliders,
+		vrc_physbone_collider_count: dynamics_counts.vrc_physbone_colliders,
+		unknown_collider_count: dynamics_counts.unknown_colliders,
 		source_limit_count: dynamics_source_features.limit_count,
 		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
