@@ -411,15 +411,12 @@ impl UnaDocument {
 		UnaRuntimeModel { document: self }
 	}
 
+	pub fn runtime_model_mut(&mut self) -> UnaRuntimeModelMut<'_> {
+		UnaRuntimeModelMut { document: self }
+	}
+
 	pub fn runtime_scene_and_dynamics_mut(&mut self) -> Option<(&mut UnaSceneSnapshot, UnaRuntimeDynamics<'_>)> {
-		let UnaDocument { scene, spring_bones, .. } = self;
-		let scene = scene.as_mut()?;
-		Some((
-			scene,
-			UnaRuntimeDynamics {
-				spring_bones: spring_bones.as_ref(),
-			},
-		))
+		self.runtime_model_mut().scene_and_dynamics_mut()
 	}
 }
 
@@ -450,6 +447,11 @@ pub enum UnaHumanoidRuntimeBasis {
 #[derive(Clone, Copy, Debug)]
 pub struct UnaRuntimeModel<'a> {
 	document: &'a UnaDocument,
+}
+
+#[derive(Debug)]
+pub struct UnaRuntimeModelMut<'a> {
+	document: &'a mut UnaDocument,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -538,6 +540,25 @@ impl<'a> UnaRuntimeModel<'a> {
 		UnaRuntimeDynamics {
 			spring_bones: self.document.spring_bones.as_ref(),
 		}
+	}
+}
+
+impl<'a> UnaRuntimeModelMut<'a> {
+	pub fn scene_and_dynamics_mut(self) -> Option<(&'a mut UnaSceneSnapshot, UnaRuntimeDynamics<'a>)> {
+		let UnaDocument { scene, spring_bones, .. } = self.document;
+		Some((
+			scene.as_mut()?,
+			UnaRuntimeDynamics {
+				spring_bones: spring_bones.as_ref(),
+			},
+		))
+	}
+
+	pub fn humanoid_scene_mut(&mut self) -> Option<(&mut UnaSceneSnapshot, &HumanoidProfile)> {
+		let UnaDocument {
+			scene, humanoid_profile, ..
+		} = self.document;
+		Some((scene.as_mut()?, humanoid_profile.as_ref()?))
 	}
 }
 
@@ -3162,6 +3183,29 @@ mod tests {
 		assert_eq!(retarget_inputs.humanoid_basis, UnaHumanoidRuntimeBasis::Vrm0);
 		assert!(retarget_inputs.profile.is_some());
 		assert!(retarget_inputs.scene.is_some());
+	}
+
+	#[test]
+	fn runtime_model_mut_exposes_mutable_runtime_scene_views() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			humanoid_profile: Some(HumanoidProfile::default()),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup::default()],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+
+		{
+			let mut runtime_model = document.runtime_model_mut();
+			let (scene, profile) = runtime_model.humanoid_scene_mut().unwrap();
+			scene.roots.push(7);
+			assert!(profile.bone_node_indices.is_empty());
+		}
+		let (scene, dynamics) = document.runtime_scene_and_dynamics_mut().unwrap();
+		assert_eq!(scene.roots, vec![7]);
+		assert_eq!(dynamics.group_count(), 1);
 	}
 
 	#[test]

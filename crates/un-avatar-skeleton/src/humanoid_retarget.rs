@@ -1671,90 +1671,90 @@ pub fn apply_un_motion_frame_to_document_with_context(
 	rest_nodes: Option<&[UnaSceneNode]>,
 	context: &HumanoidRetargetContext,
 ) {
-	let Some(ref mut scene) = document.scene else {
-		return;
-	};
-	let Some(ref profile) = document.humanoid_profile else {
-		return;
-	};
 	let frame_ctx = context.frame_context(frame.header.coordinate_space);
 	let body_pose = frame.body.as_ref().and_then(|body| body.humanoid.as_ref());
 	let body_pose_ownership = BodyPoseOwnership::from_pose(body_pose);
-	if let Some(ref body) = frame.body {
-		if let Some(ref pose) = body.humanoid {
-			apply_humanoid_pose_to_scene_with_rest_in_space_full(
-				profile,
-				&mut scene.nodes,
-				&scene.roots,
-				pose,
-				!opts.apply_eye_bones,
-				rest_nodes,
-				frame_ctx,
-				if opts.apply_eye_bones { opts.eye_look_at_clamp_deg } else { None },
-				opts.apply_root_translation,
-			);
-		}
-	}
-	if let Some(ref hand) = frame.left_hand {
-		apply_hand_motion_to_scene(
-			profile,
-			&mut scene.nodes,
-			hand,
-			"left",
-			rest_nodes,
-			frame_ctx,
-			!body_pose_ownership.left_hand,
-		);
-	}
-	if let Some(ref hand) = frame.right_hand {
-		apply_hand_motion_to_scene(
-			profile,
-			&mut scene.nodes,
-			hand,
-			"right",
-			rest_nodes,
-			frame_ctx,
-			!body_pose_ownership.right_hand,
-		);
-	}
-	if let Some(ref face) = frame.face {
-		if let Some(ref head) = face.head {
-			if let Some(binding) = frame_ctx.body_bone_binding(HumanoidBone::Head) {
-				apply_humanoid_transform_to_node_index(
+	{
+		let mut runtime_model = document.runtime_model_mut();
+		let Some((scene, profile)) = runtime_model.humanoid_scene_mut() else {
+			return;
+		};
+		if let Some(ref body) = frame.body {
+			if let Some(ref pose) = body.humanoid {
+				apply_humanoid_pose_to_scene_with_rest_in_space_full(
 					profile,
 					&mut scene.nodes,
+					&scene.roots,
+					pose,
+					!opts.apply_eye_bones,
 					rest_nodes,
 					frame_ctx,
-					binding.node_index,
-					head,
-					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
-					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
-					Some(binding.base),
-					true,
-					None,
-				);
-			} else {
-				apply_humanoid_transform_to_profile_node(
-					profile,
-					&mut scene.nodes,
-					rest_nodes,
-					frame_ctx,
-					"head",
-					head,
-					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
-					UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+					if opts.apply_eye_bones { opts.eye_look_at_clamp_deg } else { None },
+					opts.apply_root_translation,
 				);
 			}
 		}
-	}
-	if let Some(rest_nodes) = rest_nodes {
-		let UnaSceneSnapshot {
-			nodes,
-			roots,
-			node_constraints,
-			..
-		} = scene;
-		apply_node_constraints_to_scene(nodes, roots, node_constraints, rest_nodes);
+		if let Some(ref hand) = frame.left_hand {
+			apply_hand_motion_to_scene(
+				profile,
+				&mut scene.nodes,
+				hand,
+				"left",
+				rest_nodes,
+				frame_ctx,
+				!body_pose_ownership.left_hand,
+			);
+		}
+		if let Some(ref hand) = frame.right_hand {
+			apply_hand_motion_to_scene(
+				profile,
+				&mut scene.nodes,
+				hand,
+				"right",
+				rest_nodes,
+				frame_ctx,
+				!body_pose_ownership.right_hand,
+			);
+		}
+		if let Some(ref face) = frame.face {
+			if let Some(ref head) = face.head {
+				if let Some(binding) = frame_ctx.body_bone_binding(HumanoidBone::Head) {
+					apply_humanoid_transform_to_node_index(
+						profile,
+						&mut scene.nodes,
+						rest_nodes,
+						frame_ctx,
+						binding.node_index,
+						head,
+						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+						Some(binding.base),
+						true,
+						None,
+					);
+				} else {
+					apply_humanoid_transform_to_profile_node(
+						profile,
+						&mut scene.nodes,
+						rest_nodes,
+						frame_ctx,
+						"head",
+						head,
+						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+					);
+				}
+			}
+		}
+		if let Some(rest_nodes) = rest_nodes {
+			let UnaSceneSnapshot {
+				nodes,
+				roots,
+				node_constraints,
+				..
+			} = scene;
+			apply_node_constraints_to_scene(nodes, roots, node_constraints, rest_nodes);
+		}
 	}
 	if opts.apply_expressions {
 		if let Some(ref face) = frame.face {
