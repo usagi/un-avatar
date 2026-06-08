@@ -810,6 +810,10 @@ impl UnaMaterialPbr {
 			.then_some(self.mtoon.as_ref())
 			.flatten()
 	}
+
+	pub fn mtoon_source_profile(&self) -> Option<&UnaMtoonMaterial> {
+		self.mtoon.as_ref()
+	}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -3070,6 +3074,7 @@ mod tests {
 		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::MToonLike));
 		assert!(material.liltoon_like_runtime().is_none());
 		assert!(material.mtoon_like_runtime().is_some());
+		assert!(material.mtoon_source_profile().is_some());
 	}
 
 	#[test]

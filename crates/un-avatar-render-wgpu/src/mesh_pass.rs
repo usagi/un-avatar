@@ -4782,7 +4782,7 @@ fn mesh_draw_material_gpu_runtime(
 	mesh_index: usize,
 	prim_index: usize,
 ) -> MeshDrawMaterialGpu {
-	let mtoon = mat.mtoon.as_ref().unwrap_or(default_mtoon);
+	let mtoon = mat.mtoon_source_profile().unwrap_or(default_mtoon);
 	mesh_draw_material_gpu(mat, mtoon, opts, mesh_index, prim_index)
 }
 
