@@ -4852,9 +4852,9 @@ impl SceneMeshes {
 		depth_write: bool,
 		depth_compare: wgpu::CompareFunction,
 		cull_mode: Option<wgpu::Face>,
+		alpha_to_coverage_enabled: bool,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
-		let alpha_to_coverage_enabled = matches!(label, "mesh_opaque_toon" | "mesh_compute_fur_cards_pre_toon");
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -5192,6 +5192,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::Less,
 			Some(wgpu::Face::Front),
+			false,
 			sample_count,
 		);
 		let pipeline_opaque_lit = Self::create_mesh_pipeline(
@@ -5208,6 +5209,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_opaque_unlit = Self::create_mesh_pipeline(
@@ -5224,6 +5226,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_opaque_toon = Self::create_mesh_pipeline(
@@ -5240,6 +5243,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			true,
 			sample_count,
 		);
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -5285,6 +5289,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_blend_unlit = Self::create_mesh_pipeline(
@@ -5301,6 +5306,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_blend_toon = Self::create_mesh_pipeline(
@@ -5317,6 +5323,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_compute_fur_cards_pre_toon = Self::create_mesh_pipeline(
@@ -5333,6 +5340,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			true,
 			sample_count,
 		);
 		let pipeline_compute_fur_cards_toon = Self::create_mesh_pipeline(
@@ -5349,6 +5357,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
@@ -5365,6 +5374,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_transparent_toon_backpass_no_zwrite = Self::create_mesh_pipeline(
@@ -5381,6 +5391,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
@@ -5397,6 +5408,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_blend_toon_add = Self::create_mesh_pipeline(
@@ -5413,6 +5425,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_blend_toon_add_zwrite = Self::create_mesh_pipeline(
@@ -5429,6 +5442,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		let pipeline_liltoon_gem_pre_toon = Self::create_mesh_pipeline(
@@ -5445,6 +5459,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			sample_count,
 		);
 		report("gpu-upload", "Preparing mesh frame buffers".to_string());
@@ -7759,6 +7774,7 @@ mod tests {
 			false,
 			wgpu::CompareFunction::Less,
 			Some(wgpu::Face::Front),
+			false,
 			1,
 		);
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
@@ -7775,6 +7791,7 @@ mod tests {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			true,
 			1,
 		);
 		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
@@ -7791,6 +7808,7 @@ mod tests {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			true,
 			1,
 		);
 		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
@@ -7807,6 +7825,7 @@ mod tests {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
+			false,
 			1,
 		);
 	}
