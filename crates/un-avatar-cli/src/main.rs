@@ -462,6 +462,8 @@ struct DiagnoseUnavatarSummary {
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
 	wardrobe_set_ids: Vec<String>,
+	asset_group_count: usize,
+	asset_group_ids: Vec<String>,
 	wardrobe_sets: Vec<DiagnoseUnavatarWardrobeSetSummary>,
 	base_operation_count: usize,
 	base_operation_counts: BTreeMap<String, usize>,
@@ -2034,7 +2036,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 				.collect()
 		})
 		.unwrap_or_default();
-	let wardrobe_sets = sets
+	let wardrobe_sets: Vec<DiagnoseUnavatarWardrobeSetSummary> = sets
 		.map(|sets| {
 			sets.iter()
 				.map(|set| {
@@ -2067,6 +2069,12 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 				.collect()
 		})
 		.unwrap_or_default();
+	let asset_group_ids: Vec<String> = wardrobe_sets
+		.iter()
+		.flat_map(|set| set.asset_groups.iter().cloned())
+		.collect::<BTreeSet<_>>()
+		.into_iter()
+		.collect();
 
 	DiagnoseUnavatarSummary {
 		spec_version: ext.spec_version.clone(),
@@ -2079,6 +2087,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
+		asset_group_count: asset_group_ids.len(),
+		asset_group_ids,
 		wardrobe_sets,
 		base_operation_count: base_operations.map(Vec::len).unwrap_or(0),
 		base_operation_counts,
@@ -2491,6 +2501,16 @@ fn build_diagnose_report(
 	});
 	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
 	if let Some(unavatar) = &unavatar {
+		for set in &unavatar.wardrobe_sets {
+			if set.operation_count > 0 && set.asset_groups.is_empty() {
+				warnings.push(format!(
+					"wardrobe set {:?} has {} operation(s) but no assetGroups; lazy GPU upload cannot scope this set yet",
+					set.id, set.operation_count
+				));
+			}
+		}
+	}
+	if let Some(unavatar) = &unavatar {
 		if unavatar.dynamics_entry_count > 0 && dynamics.group_count == 0 {
 			warnings.push(format!(
 				".unavatar has {} raw dynamics entries but no runtime dynamics groups; check dynamics root node references and importer lowering",
@@ -2841,10 +2861,12 @@ fn run_diagnose(
 			unavatar.spec_version, unavatar.generator, unavatar.manifest_name, unavatar.source_type, unavatar.dynamics_entry_count
 		);
 		println!(
-			"wardrobe: base={:?} sets={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
+			"wardrobe: base={:?} sets={} {:?} asset_groups={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
 			unavatar.base_set,
 			unavatar.wardrobe_set_count,
 			unavatar.wardrobe_set_ids,
+			unavatar.asset_group_count,
+			unavatar.asset_group_ids,
 			unavatar.base_operation_count,
 			unavatar.base_operation_counts,
 			unavatar.extension_node_count,
@@ -3327,6 +3349,58 @@ mod tests {
 		assert_eq!(report.scene.eye_like_material_indices, vec![0]);
 		assert_eq!(report.vrm.as_ref().unwrap().mtoon_material_indices_v1, vec![0, 1]);
 		assert!(!report.warnings.iter().any(|w| w.contains("eye-like material[0]")));
+	}
+
+	#[test]
+	fn diagnose_report_summarizes_unavatar_asset_groups() {
+		let doc = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"sets": [{
+							"id": "jacket",
+							"assetGroups": ["outfit:jacket", "texture:red"],
+							"operations": [{"op": "nodeVisibility"}]
+						}, {
+							"id": "pants",
+							"assetGroups": ["outfit:pants", "texture:red"],
+							"operations": [{"op": "nodeVisibility"}]
+						}, {
+							"id": "hat",
+							"operations": [{"op": "nodeVisibility"}]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let unavatar = report.unavatar.as_ref().unwrap();
+		assert_eq!(unavatar.asset_group_count, 3);
+		assert_eq!(
+			unavatar.asset_group_ids,
+			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
+		);
+		assert!(report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups")));
 	}
 
 	#[test]
