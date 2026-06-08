@@ -41,10 +41,10 @@ const SHADER_BONE_COLLIDERS: &str = include_str!("../shaders/bone_colliders.wgsl
 const SHADER_STARTUP_SPLASH: &str = include_str!("../shaders/startup_splash.wgsl");
 const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl");
 
-const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
-const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
-const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
-const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
+pub(crate) const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
+pub(crate) const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
+pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
+pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
