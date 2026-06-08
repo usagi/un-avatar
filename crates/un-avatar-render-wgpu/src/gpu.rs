@@ -1904,7 +1904,7 @@ impl GpuState {
 		let Some(runtime) = doc.runtime_scene_and_dynamics_mut() else {
 			return;
 		};
-		if !reset_runtime_dynamics_nodes_to_rest(runtime.scene, runtime.dynamics, rest_nodes) {
+		if !reset_runtime_dynamics_nodes_to_rest(runtime.scene, runtime.dynamics.as_readonly(), rest_nodes) {
 			return;
 		}
 		self.applied_document_revision = 0;
@@ -3270,7 +3270,7 @@ impl GpuState {
 		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.spring_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
 				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
-					sim.step_runtime_dynamics(runtime.scene, runtime.dynamics, dt);
+					sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
 				}
 			}
 		}

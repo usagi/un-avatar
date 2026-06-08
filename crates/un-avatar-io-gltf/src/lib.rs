@@ -16,8 +16,8 @@ use un_avatar_core::{
 	UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
 	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
 	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
-	UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings,
-	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaMtoonOutlineWidthMode, UnaRuntimeDynamicsMut, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1792,7 +1792,7 @@ pub struct WardrobeApplyReport {
 
 fn apply_unavatar_wardrobe_operations(
 	scene: &mut UnaSceneSnapshot,
-	dynamics: Option<&mut UnaSpringBoneSettings>,
+	dynamics: Option<&mut UnaRuntimeDynamicsMut<'_>>,
 	operations: &[Value],
 	unavatar: Option<&UnaUnavatarExtension>,
 ) -> WardrobeApplyReport {
@@ -1855,13 +1855,13 @@ fn apply_unavatar_wardrobe_operations(
 				let Some(target_id) = operation_dynamics_target_id(op) else {
 					continue;
 				};
-				let Some(settings) = dynamics.as_deref_mut() else {
+				let Some(dynamics) = dynamics.as_deref_mut() else {
 					report.dynamics_missing += 1;
 					report.missing_dynamics_ids.push(target_id.to_string());
 					continue;
 				};
 				let mut applied = false;
-				for group in &mut settings.groups {
+				for group in dynamics.groups_mut() {
 					if group.source_id == target_id {
 						group.enabled = enabled;
 						applied = true;
@@ -1899,13 +1899,11 @@ fn operation_dynamics_target_id(op: &Value) -> Option<&str> {
 		.filter(|id| !id.is_empty())
 }
 
-fn reset_runtime_dynamics_enabled(dynamics: Option<&mut UnaSpringBoneSettings>) {
-	let Some(settings) = dynamics else {
+fn reset_runtime_dynamics_enabled(dynamics: Option<&mut UnaRuntimeDynamicsMut<'_>>) {
+	let Some(dynamics) = dynamics else {
 		return;
 	};
-	for group in &mut settings.groups {
-		group.enabled = true;
-	}
+	dynamics.reset_enabled();
 }
 
 fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_id: &str) -> Option<&'a [Value]> {
@@ -2590,33 +2588,33 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(operations) = unavatar_wardrobe_set_operations(&unavatar, set_id) else {
 		return Err(format!(".unavatar wardrobe set not found: {set_id}"));
 	};
-	let Some(scene) = document.scene.as_mut() else {
+	let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
 		return Err("document has no scene".to_string());
 	};
-	let mut spring_bones = document.spring_bones.as_mut();
-	reset_runtime_dynamics_enabled(spring_bones.as_deref_mut());
+	reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
 	let base_id = unavatar_base_wardrobe_set(&unavatar).map(|(id, _)| id.to_string());
 	if base_id.as_deref() == Some(set_id) {
-		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) else {
+		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar)
+		else {
 			return Ok(WardrobeApplyReport::default());
 		};
-		let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &reset_operations, Some(&unavatar));
+		let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
 		return Ok(apply_unavatar_wardrobe_operations(
-			scene,
-			spring_bones.as_deref_mut(),
+			runtime.scene,
+			Some(&mut runtime.dynamics),
 			&base_operations,
 			Some(&unavatar),
 		));
 	}
 	if base_id.as_deref() != Some(set_id) {
-		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) {
-			let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &reset_operations, Some(&unavatar));
-			let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &base_operations, Some(&unavatar));
+		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar) {
+			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
+			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
 		}
 	}
 	Ok(apply_unavatar_wardrobe_operations(
-		scene,
-		spring_bones.as_deref_mut(),
+		runtime.scene,
+		Some(&mut runtime.dynamics),
 		operations,
 		Some(&unavatar),
 	))

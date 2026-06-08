@@ -260,6 +260,11 @@ pub struct UnaRuntimeDynamics<'a> {
 	spring_bones: Option<&'a UnaSpringBoneSettings>,
 }
 
+#[derive(Debug, Default)]
+pub struct UnaRuntimeDynamicsMut<'a> {
+	spring_bones: Option<&'a mut UnaSpringBoneSettings>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnaRuntimeDynamicsCounts {
 	pub groups: usize,
@@ -336,6 +341,27 @@ impl<'a> UnaRuntimeDynamics<'a> {
 			}
 		}
 		counts
+	}
+}
+
+impl<'a> UnaRuntimeDynamicsMut<'a> {
+	pub fn as_readonly(&self) -> UnaRuntimeDynamics<'_> {
+		UnaRuntimeDynamics {
+			spring_bones: self.spring_bones.as_deref(),
+		}
+	}
+
+	pub fn groups_mut(&mut self) -> &mut [UnaSpringBoneGroup] {
+		self.spring_bones
+			.as_deref_mut()
+			.map(|settings| settings.groups.as_mut_slice())
+			.unwrap_or(&mut [])
+	}
+
+	pub fn reset_enabled(&mut self) {
+		for group in self.groups_mut() {
+			group.enabled = true;
+		}
 	}
 }
 
@@ -477,7 +503,7 @@ pub struct UnaRuntimeSceneExpressions<'a> {
 #[derive(Debug)]
 pub struct UnaRuntimeSceneDynamicsMut<'a> {
 	pub scene: &'a mut UnaSceneSnapshot,
-	pub dynamics: UnaRuntimeDynamics<'a>,
+	pub dynamics: UnaRuntimeDynamicsMut<'a>,
 }
 
 impl<'a> UnaRuntimeModel<'a> {
@@ -565,8 +591,8 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		let UnaDocument { scene, spring_bones, .. } = self.document;
 		Some(UnaRuntimeSceneDynamicsMut {
 			scene: scene.as_mut()?,
-			dynamics: UnaRuntimeDynamics {
-				spring_bones: spring_bones.as_ref(),
+			dynamics: UnaRuntimeDynamicsMut {
+				spring_bones: spring_bones.as_mut(),
 			},
 		})
 	}
@@ -3247,7 +3273,7 @@ mod tests {
 		{
 			let runtime = document.runtime_scene_and_dynamics_mut().unwrap();
 			assert_eq!(runtime.scene.roots, vec![7]);
-			assert_eq!(runtime.dynamics.group_count(), 1);
+			assert_eq!(runtime.dynamics.as_readonly().group_count(), 1);
 		}
 		assert_eq!(
 			document
