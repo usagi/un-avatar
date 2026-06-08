@@ -2619,7 +2619,7 @@ impl GpuSceneBuildContext {
 		} else {
 			None
 		};
-		let expression_presets = expression_preset_names(runtime_model.expression_catalog());
+		let expression_presets = expression_preset_names(runtime_model.humanoid_retarget_inputs().expression_catalog);
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
