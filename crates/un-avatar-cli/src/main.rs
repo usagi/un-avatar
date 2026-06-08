@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
 	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
-	UnaRuntimeSourceKind, UnaSceneSnapshot, UnaShadingModel,
+	UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -2090,7 +2090,13 @@ fn build_diagnose_report(
 				fully_transparent_visible_materials
 			));
 		}
-		if doc.vrm.is_some() && !sc.materials.is_empty() && !sc.materials.iter().any(|m| m.shading == UnaShadingModel::MToonLike) {
+		if doc.vrm.is_some()
+			&& !sc.materials.is_empty()
+			&& !sc
+				.materials
+				.iter()
+				.any(|m| m.runtime_toon_model() == Some(UnaRuntimeToonModel::MToonLike))
+		{
 			warnings.push("VRM document has no MToonLike materials after import".to_string());
 		}
 		let mut image_source_mime_counts = BTreeMap::new();
