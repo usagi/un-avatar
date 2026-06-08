@@ -2740,7 +2740,12 @@ impl GpuState {
 		Ok(())
 	}
 
-	pub(crate) fn activate_runtime_action(&mut self, action_id: Option<&str>, command: Option<&str>) -> Result<Option<String>, String> {
+	pub(crate) fn activate_runtime_action(
+		&mut self,
+		action_id: Option<&str>,
+		command: Option<&str>,
+		expression_menu_path: Option<&str>,
+	) -> Result<Option<String>, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
@@ -2753,12 +2758,18 @@ impl GpuState {
 				.actions
 				.iter()
 				.find(|action| {
-					action_id.is_some_and(|id| action.id == id)
-						|| command.is_some_and(|command| {
-							action.triggers.iter().any(
-								|trigger| matches!(trigger, UnaRuntimeActionTrigger::SupervisorCommand { command: trigger_command } if trigger_command == command),
-							)
-						})
+					let matches_action_id = action_id.is_some_and(|id| action.id == id);
+					let matches_supervisor_command = command.is_some_and(|command| {
+						action.triggers.iter().any(
+							|trigger| matches!(trigger, UnaRuntimeActionTrigger::SupervisorCommand { command: trigger_command } if trigger_command == command),
+						)
+					});
+					let matches_expression_menu_path = expression_menu_path.is_some_and(|path| {
+						action.triggers.iter().any(
+							|trigger| matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { path: trigger_path } if trigger_path == path),
+						)
+					});
+					matches_action_id || matches_supervisor_command || matches_expression_menu_path
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
 			action.effects.clone()

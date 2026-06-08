@@ -224,6 +224,7 @@ enum RendererControlEvent {
 	ActivateAction {
 		action_id: Option<String>,
 		supervisor_command: Option<String>,
+		expression_menu_path: Option<String>,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -415,6 +416,8 @@ enum RendererControlCommand {
 		action_id: Option<String>,
 		#[serde(default)]
 		supervisor_command: Option<String>,
+		#[serde(default, alias = "expressionMenuPath")]
+		expression_menu_path: Option<String>,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -2418,10 +2421,13 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			RendererControlEvent::ActivateAction {
 				action_id,
 				supervisor_command,
+				expression_menu_path,
 				result,
 			} => {
 				let outcome = match self.gpu.as_mut() {
-					Some(gpu) => gpu.activate_runtime_action(action_id.as_deref(), supervisor_command.as_deref()),
+					Some(gpu) => {
+						gpu.activate_runtime_action(action_id.as_deref(), supervisor_command.as_deref(), expression_menu_path.as_deref())
+					}
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(Some(active_set_id)) = &outcome {
@@ -3376,7 +3382,8 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 		Ok(RendererControlCommand::ActivateAction {
 			action_id,
 			supervisor_command,
-		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command),
+			expression_menu_path,
+		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command, expression_menu_path),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -3405,18 +3412,23 @@ fn dispatch_activate_action_command(
 	proxy: &EventLoopProxy<RendererControlEvent>,
 	action_id: Option<String>,
 	supervisor_command: Option<String>,
+	expression_menu_path: Option<String>,
 ) -> String {
 	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
 	let supervisor_command = supervisor_command
 		.map(|value| value.trim().to_string())
 		.filter(|value| !value.is_empty());
-	if action_id.is_none() && supervisor_command.is_none() {
-		return "err action_id or supervisor_command required".to_string();
+	let expression_menu_path = expression_menu_path
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if action_id.is_none() && supervisor_command.is_none() && expression_menu_path.is_none() {
+		return "err action_id, supervisor_command, or expression_menu_path required".to_string();
 	}
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::ActivateAction {
 		action_id,
 		supervisor_command,
+		expression_menu_path,
 		result: Arc::clone(&result),
 	};
 	if proxy.send_event(event).is_err() {
@@ -4290,12 +4302,31 @@ mod tests {
 		let RendererControlCommand::ActivateAction {
 			action_id,
 			supervisor_command,
+			expression_menu_path,
 		} = command
 		else {
 			panic!("expected activate_action command");
 		};
 		assert_eq!(action_id.as_deref(), Some("wardrobe:field_drape"));
 		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_expression_menu_path() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","expressionMenuPath":"Wardrobe/Field Drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path.as_deref(), Some("Wardrobe/Field Drape"));
 	}
 
 	#[test]
