@@ -200,6 +200,10 @@ pub enum UnaRuntimeActionEffect {
 		parameter: String,
 		value: f32,
 	},
+	MaterialSlot {
+		target: UnaRuntimeMaterialSlotTarget,
+		material: UnaRuntimeMaterialTarget,
+	},
 	DynamicsEnabled {
 		source_id: String,
 		enabled: bool,
@@ -222,6 +226,13 @@ pub struct UnaRuntimeMaterialTarget {
 	pub material_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeMaterialSlotTarget {
+	pub node: UnaRuntimeNodeTarget,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub primitive_index: Option<usize>,
 }
 
 /// VRM Secondary Animation / SpringBone の 1 チェーン（bootstrap）。
@@ -776,14 +787,45 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		apply_runtime_material_scalar(material, parameter, value)
 	}
 
+	pub fn set_material_slot(&mut self, target: &UnaRuntimeMaterialSlotTarget, material: &UnaRuntimeMaterialTarget) -> Result<(), String> {
+		let Some(scene) = self.document.scene.as_mut() else {
+			return Err("document has no scene".to_string());
+		};
+		let Some(material_index) = resolve_runtime_material_index(scene, material) else {
+			return Err(format!("runtime material target not found: {material:?}"));
+		};
+		let Some(node_index) = resolve_runtime_node_target(scene, &target.node) else {
+			return Err(format!("runtime node target not found: {:?}", target.node));
+		};
+		let Some(mesh_index) = scene.nodes.get(node_index).and_then(|node| node.mesh) else {
+			return Err(format!("runtime node target has no mesh: {:?}", target.node));
+		};
+		let primitive_index = target.primitive_index.unwrap_or(0);
+		let Some(primitive) = scene.meshes.get_mut(mesh_index).and_then(|mesh| mesh.get_mut(primitive_index)) else {
+			return Err(format!(
+				"runtime material slot target not found: node={:?}, primitive_index={primitive_index}",
+				target.node
+			));
+		};
+		primitive.material_index = Some(material_index);
+		Ok(())
+	}
+
 	fn resolve_material_mut(&mut self, target: &UnaRuntimeMaterialTarget) -> Option<&mut UnaMaterialPbr> {
 		let scene = self.document.scene.as_mut()?;
-		if let Some(index) = target.material_index.filter(|index| *index < scene.materials.len()) {
+		if let Some(index) = resolve_runtime_material_index(scene, target) {
 			return scene.materials.get_mut(index);
 		}
-		let name = target.name.as_deref().filter(|name| !name.is_empty())?;
-		scene.materials.iter_mut().find(|material| material.name.as_deref() == Some(name))
+		None
 	}
+}
+
+fn resolve_runtime_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
+	if let Some(index) = target.material_index.filter(|index| *index < scene.materials.len()) {
+		return Some(index);
+	}
+	let name = target.name.as_deref().filter(|name| !name.is_empty())?;
+	scene.materials.iter().position(|material| material.name.as_deref() == Some(name))
 }
 
 fn resolve_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
@@ -3718,6 +3760,109 @@ mod tests {
 			)
 			.expect_err("unsupported material scalar should fail");
 		assert!(err.contains("not supported"));
+	}
+
+	#[test]
+	fn runtime_model_mut_replaces_material_slots() {
+		let primitive = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(0),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				meshes: vec![vec![primitive.clone(), primitive]],
+				materials: vec![
+					UnaMaterialPbr {
+						name: Some("Base".to_string()),
+						..Default::default()
+					},
+					UnaMaterialPbr {
+						name: Some("Alt".to_string()),
+						..Default::default()
+					},
+				],
+				nodes: vec![
+					UnaSceneNode {
+						name: Some("Root".to_string()),
+						source_node_id: None,
+						visible: true,
+						transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+						children: vec![1],
+						mesh: None,
+						skin: None,
+						probe_anchor_node: None,
+						local_bounds: None,
+					},
+					UnaSceneNode {
+						name: Some("Renderer".to_string()),
+						source_node_id: Some("node_renderer".to_string()),
+						visible: true,
+						transform: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+						children: Vec::new(),
+						mesh: Some(0),
+						skin: None,
+						probe_anchor_node: None,
+						local_bounds: None,
+					},
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		document
+			.runtime_model_mut()
+			.set_material_slot(
+				&UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: Some("node_renderer".to_string()),
+						path: None,
+					},
+					primitive_index: Some(1),
+				},
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Alt".to_string()),
+				},
+			)
+			.unwrap();
+		assert_eq!(document.scene.as_ref().unwrap().meshes[0][0].material_index, Some(0));
+		assert_eq!(document.scene.as_ref().unwrap().meshes[0][1].material_index, Some(1));
+
+		document
+			.runtime_model_mut()
+			.set_material_slot(
+				&UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: None,
+						path: Some("Root/Renderer".to_string()),
+					},
+					primitive_index: None,
+				},
+				&UnaRuntimeMaterialTarget {
+					material_index: Some(0),
+					name: None,
+				},
+			)
+			.unwrap();
+		assert_eq!(document.scene.as_ref().unwrap().meshes[0][0].material_index, Some(0));
 	}
 
 	#[test]

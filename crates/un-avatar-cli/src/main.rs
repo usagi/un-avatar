@@ -2538,6 +2538,7 @@ fn runtime_action_effect_kind(effect: &UnaRuntimeActionEffect) -> &'static str {
 		UnaRuntimeActionEffect::ExpressionWeight { .. } => "expression_weight",
 		UnaRuntimeActionEffect::MaterialColor { .. } => "material_color",
 		UnaRuntimeActionEffect::MaterialScalar { .. } => "material_scalar",
+		UnaRuntimeActionEffect::MaterialSlot { .. } => "material_slot",
 		UnaRuntimeActionEffect::DynamicsEnabled { .. } => "dynamics_enabled",
 	}
 }

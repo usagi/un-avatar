@@ -2740,6 +2740,21 @@ impl GpuState {
 		Ok(())
 	}
 
+	fn set_runtime_material_slot(
+		&mut self,
+		target: &un_avatar_core::UnaRuntimeMaterialSlotTarget,
+		material: &un_avatar_core::UnaRuntimeMaterialTarget,
+	) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		doc.runtime_model_mut().set_material_slot(target, material)?;
+		drop(doc);
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	pub(crate) fn activate_runtime_action(
 		&mut self,
 		action_id: Option<&str>,
@@ -2799,6 +2814,9 @@ impl GpuState {
 				}
 				UnaRuntimeActionEffect::MaterialScalar { target, parameter, value } => {
 					self.set_runtime_material_scalar(&target, &parameter, value)?;
+				}
+				UnaRuntimeActionEffect::MaterialSlot { target, material } => {
+					self.set_runtime_material_slot(&target, &material)?;
 				}
 			}
 		}
