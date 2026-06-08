@@ -486,7 +486,7 @@ impl<'a> UnaRuntimeModel<'a> {
 			return UnaRuntimeSourceKind::Unavatar;
 		}
 		if let Some(vrm) = self.document.vrm.as_ref() {
-			return if vrm.spec_version.starts_with('0') {
+			return if vrm.is_vrm0() {
 				UnaRuntimeSourceKind::Vrm0
 			} else {
 				UnaRuntimeSourceKind::Vrm1
@@ -641,6 +641,12 @@ pub struct UnaVrmExtension {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub mtoon_material_indices_v1: Vec<usize>,
 	pub source: Value,
+}
+
+impl UnaVrmExtension {
+	pub fn is_vrm0(&self) -> bool {
+		self.spec_version.starts_with('0')
+	}
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -3170,9 +3176,11 @@ mod tests {
 			..Default::default()
 		};
 
+		assert!(document.vrm.as_ref().unwrap().is_vrm0());
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm0);
 		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::Vrm0);
 		document.vrm.as_mut().unwrap().spec_version = "1.0".to_string();
+		assert!(!document.vrm.as_ref().unwrap().is_vrm0());
 		assert_eq!(document.runtime_model().source_kind(), UnaRuntimeSourceKind::Vrm1);
 		assert_eq!(document.runtime_model().humanoid_basis(), UnaHumanoidRuntimeBasis::Vrm1);
 	}
