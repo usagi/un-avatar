@@ -130,12 +130,12 @@ MVP control command:
 - `UnaRuntimeActionSet` / `UnaRuntimeAction` / trigger / effect schema を core に追加した。
 - `.unavatar` wardrobe sets は、base set を除き `WardrobeSet` effect を持つ runtime action candidate へ import される。
 - CLI diagnose は runtime action 件数、trigger 件数、effect 件数、action id / label を観測できる。
-- renderer runtime control は `activate_action` を受け、`action_id` または `supervisor_command` で action を解決し、`WardrobeSet` effect を既存 hot switch 経路で適用する。
+- renderer runtime control は `activate_action` を受け、`action_id` または `supervisor_command` で action を解決し、`WardrobeSet` effect を既存 hot switch 経路で適用し、`DynamicsEnabled` effect を runtime dynamics mutation 経路で適用する。
 
 次の段階:
 
 - Modular Avatar / VRC Expression Menu metadata から ExpressionMenu trigger と action label/path を取り込む。
-- Node visibility、expression weight、dynamics enable、material override effect を renderer の既存 hot switch / expression override / dynamics mutation 経路へ接続する。
+- Node visibility、expression weight、material override effect を renderer の既存 hot switch / expression override / material mutation 経路へ接続する。
 
 ## PhysBone Placement
 
@@ -146,7 +146,7 @@ PhysBone behavior implementation は runtime state cleanup、runtime dynamics no
 - PhysBone roots、colliders、enabled state は active wardrobe と animation state に依存する。
 - scene source data を直接 mutate する solver は、hot switch と相性が悪い。
 - 初期実装では VRC PhysBone parameters を既存 SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved runtime state を入力にする。
-- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data を既存 SpringBone solver collider へ接続している。`insideBounds` collider は tail を collider 内側へ留める制約として近似し、`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。wardrobe `dynamicsEnable` は runtime group enabled state を切り替え、disabled group は solver 対象外にする。CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。残りは limits solver behavior、detailed collision behavior、grabbing/posing behavior、action runtime enable。
+- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data を既存 SpringBone solver collider へ接続している。`insideBounds` collider は tail を collider 内側へ留める制約として近似し、`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。wardrobe `dynamicsEnable` と runtime action `DynamicsEnabled` は runtime group enabled state を切り替え、disabled group は solver 対象外にする。CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。残りは limits solver behavior、detailed collision behavior、grabbing/posing behavior。
 
 ## この段階の非目標
 
