@@ -83,10 +83,11 @@ namespace UNAvatar.UnityExporter
                 var wardrobeBaseSnapshot = bakedWardrobeSets != null ? bakedBaseSnapshot : null;
                 var exportWardrobeSets = bakedWardrobeSets ?? WardrobeSetsForExport();
                 var exportPreviewImages = PreviewImagesForExport(exportWardrobeSets);
-                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.TextureAssets);
+                var dynamicsPayload = BuildDynamicsPayload(clone);
+                var extension = BuildExtensionPayload(sourceVariants, humanoid, bakeAttempted, bakeSucceeded, clone, dynamicsPayload, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.TextureAssets);
                 GlbExtensionPatcher.PatchRootExtension(tempGlb, normalizedPath, ExtensionName, extension, exportResult.TextureAssets, exportPreviewImages);
 
-                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, clone, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.Textures);
+                var report = BuildReportPayload(validation, sourceVariants, humanoid, normalizedPath, bakeAttempted, bakeSucceeded, dynamicsPayload, wardrobeBaseSnapshot, exportWardrobeSets, exportResult.Textures);
                 File.WriteAllText(reportPath, MiniJson.Serialize(report), new UTF8Encoding(false));
 
                 AssetDatabase.Refresh();

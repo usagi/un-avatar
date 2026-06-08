@@ -33,9 +33,9 @@ namespace UNAvatar.UnityExporter
             return payload;
         }
 
-        private Dictionary<string, object> BuildDynamicsReportSummary(GameObject root)
+        private Dictionary<string, object> BuildDynamicsReportSummary(List<object> groups)
         {
-            var groups = BuildDynamicsPayload(root);
+            groups = groups ?? new List<object>();
             var samples = new List<object>();
             for (var i = 0; i < groups.Count && samples.Count < 32; i++)
             {

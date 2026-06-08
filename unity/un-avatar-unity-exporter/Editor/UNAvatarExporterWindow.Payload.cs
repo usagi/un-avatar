@@ -19,6 +19,7 @@ namespace UNAvatar.UnityExporter
             bool bakeAttempted,
             bool bakeSucceeded,
             GameObject registryRoot,
+            List<object> dynamicsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
             List<WardrobeSetDraft> exportWardrobeSets,
             List<UnavatarTextureAssetRecord> textureAssets)
@@ -37,7 +38,7 @@ namespace UNAvatar.UnityExporter
                 },
                 ["humanoid"] = humanoid,
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
-                ["dynamics"] = BuildDynamicsPayload(registryRoot),
+                ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot),
@@ -91,7 +92,7 @@ namespace UNAvatar.UnityExporter
             string output,
             bool bakeAttempted,
             bool bakeSucceeded,
-            GameObject registryRoot,
+            List<object> dynamicsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
             List<WardrobeSetDraft> exportWardrobeSets,
             List<ExportedTextureRecord> exportedTextures)
@@ -138,7 +139,7 @@ namespace UNAvatar.UnityExporter
                 ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
-                ["dynamics"] = BuildDynamicsReportSummary(registryRoot),
+                ["dynamics"] = BuildDynamicsReportSummary(dynamicsPayload),
                 ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
