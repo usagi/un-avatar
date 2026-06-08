@@ -2468,10 +2468,54 @@ fn collect_same_name_humanoid_armature_mappings(scene: &UnaSceneSnapshot, humano
 	mappings
 }
 
-fn retarget_same_name_humanoid_armature_skins(scene: &mut UnaSceneSnapshot, humanoid: &HumanoidProfile) -> (usize, usize) {
+fn subtree_contains_mapped_node(scene: &UnaSceneSnapshot, node: usize, mappings: &BTreeMap<usize, usize>) -> bool {
+	if mappings.contains_key(&node) {
+		return true;
+	}
+	let Some(scene_node) = scene.nodes.get(node) else {
+		return false;
+	};
+	scene_node
+		.children
+		.iter()
+		.any(|&child| child < scene.nodes.len() && subtree_contains_mapped_node(scene, child, mappings))
+}
+
+fn reparent_same_name_humanoid_auxiliary_bones(scene: &mut UnaSceneSnapshot, mappings: &BTreeMap<usize, usize>) -> usize {
+	if mappings.is_empty() {
+		return 0;
+	}
+	let initial_world = scene_world_matrices(scene);
+	let mut reparent_ops = Vec::new();
+	for (&source_node, &target_node) in mappings {
+		let Some(source) = scene.nodes.get(source_node) else {
+			continue;
+		};
+		for &child in &source.children {
+			if child >= scene.nodes.len() || subtree_contains_mapped_node(scene, child, mappings) {
+				continue;
+			}
+			let old_world = initial_world.get(child).copied().unwrap_or(Mat4::IDENTITY);
+			reparent_ops.push((child, target_node, old_world));
+		}
+	}
+	let reparent_world = scene_world_matrices(scene);
+	let mut reparented = 0usize;
+	for (child, new_parent, old_world) in reparent_ops {
+		let parent_world = reparent_world.get(new_parent).copied().unwrap_or(Mat4::IDENTITY);
+		let local = inverse_finite_or_identity(parent_world) * old_world;
+		if reparent_scene_node(scene, child, new_parent, local) {
+			reparented += 1;
+		}
+	}
+	reparented
+}
+
+fn retarget_same_name_humanoid_armature_skins(scene: &mut UnaSceneSnapshot, humanoid: &HumanoidProfile) -> (usize, usize, usize) {
 	let mappings = collect_same_name_humanoid_armature_mappings(scene, humanoid);
+	let auxiliary_reparented = reparent_same_name_humanoid_auxiliary_bones(scene, &mappings);
 	let retargeted = retarget_merge_armature_skins(scene, &mappings);
-	(mappings.len(), retargeted)
+	(mappings.len(), retargeted, auxiliary_reparented)
 }
 
 fn modular_avatar_reference_index(
@@ -5409,11 +5453,12 @@ impl AvatarImporter for GltfImporter {
 		if let Some(unavatar) = &unavatar {
 			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
 			if let Some(humanoid_profile) = &humanoid_profile {
-				let (same_name_mappings, same_name_retargeted) = retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
-				if same_name_mappings > 0 || same_name_retargeted > 0 {
+				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
+					retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
+				if same_name_mappings > 0 || same_name_retargeted > 0 || same_name_auxiliary_reparented > 0 {
 					report.push_info(format!(
-						".unavatar humanoid armature fallback: same_name_mappings={}, skin_joints={}",
-						same_name_mappings, same_name_retargeted
+						".unavatar humanoid armature fallback: same_name_mappings={}, skin_joints={}, auxiliary_bones={}",
+						same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented
 					));
 				}
 			}
@@ -7994,6 +8039,7 @@ mod tests {
 	fn same_name_humanoid_armature_fallback_retargets_skin_bindposes() {
 		let main_hips_world = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0));
 		let outfit_hips_world = Mat4::from_translation(Vec3::new(3.0, 1.0, 0.0));
+		let outfit_aux_local = Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0));
 		let old_bind = Mat4::from_translation(Vec3::new(-3.0, -1.0, 0.0));
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
@@ -8035,6 +8081,17 @@ mod tests {
 					source_node_id: Some("outfit_hips".to_string()),
 					visible: true,
 					transform: outfit_hips_world.to_cols_array(),
+					children: vec![4],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("ShirtRoot".to_string()),
+					source_node_id: Some("outfit_shirt_root".to_string()),
+					visible: true,
+					transform: outfit_aux_local.to_cols_array(),
 					children: Vec::new(),
 					mesh: None,
 					skin: None,
@@ -8050,14 +8107,20 @@ mod tests {
 			roots: vec![0],
 			..Default::default()
 		};
+		let before = scene_world_matrices(&scene);
 		let humanoid = HumanoidProfile {
 			bone_node_indices: BTreeMap::from([("hips".to_string(), 1)]),
 		};
 
-		let (mappings, retargeted) = retarget_same_name_humanoid_armature_skins(&mut scene, &humanoid);
+		let (mappings, retargeted, auxiliary_reparented) = retarget_same_name_humanoid_armature_skins(&mut scene, &humanoid);
+		let after = scene_world_matrices(&scene);
 
 		assert_eq!(mappings, 1);
 		assert_eq!(retargeted, 1);
+		assert_eq!(auxiliary_reparented, 1);
+		assert_eq!(scene.nodes[1].children, vec![4]);
+		assert_eq!(scene.nodes[3].children, Vec::<usize>::new());
+		assert_eq!(after[4].transform_point3(Vec3::ZERO), before[4].transform_point3(Vec3::ZERO));
 		assert_eq!(scene.skins[0].joint_nodes, vec![1]);
 		assert_eq!(scene.skins[0].skeleton_node, Some(1));
 		let expected = main_hips_world.inverse() * outfit_hips_world * old_bind;

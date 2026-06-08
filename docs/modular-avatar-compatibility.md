@@ -67,6 +67,10 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Exporter stores MergeArmature public fields and resolved source bone -> target bone mappings. Runtime resolver rewrites `UnaSkin.joint_nodes` and inverse bind matrices from saved source bone -> target bone mappings.
   - remaining: retained merged bones / transform lookthrough, nested topology order, and components / constraints / PhysBone cases where MA preserves intermediate bones.
   - sample: `Color  1`, `Color  13`, `B_White&Brown` armature merge.
+- `[~]` non-MA fitted outfit armature fallback
+  - done: When a `.unavatar` wardrobe outfit contains a separate fitted armature but no Modular Avatar payload, Runtime maps same-name outfit Humanoid joints to the avatar Humanoid joints, rewrites skin joint bindposes, and reparents unmapped auxiliary bone subtrees directly below the matched avatar Humanoid bone while preserving world pose. This covers common non-MA fitted outfit roots such as sleeve, stocking, breast, skirt, bag, and accessory helper bones that sit below `Hips` / `Chest` / `Head` / arm / leg bones.
+  - remaining: this is a conservative fallback, not a full Modular Avatar bake. It does not infer constraints, custom component semantics, PhysBone behavior, material side effects, or ambiguous duplicated bone names beyond same-name Humanoid connection points.
+  - sample: `usagi.unavatar` `LittleWriter` / `A_Brown&Gold` is a non-MA wardrobe outfit with its own `A_Brown&Gold/Armature`; current fallback detects same-name Humanoid connections and moves auxiliary roots such as `ShirtRoot`, `SleeveRoot_*`, `StockingsRoot_*`, and accessory roots under the avatar armature.
 - `[~]` MeshRetargeter bindpose rewrite
   - reference formula: `newBindTarget.worldToLocalMatrix * originalBone.localToWorldMatrix * originalBindPose`
   - done: Runtime applies the equivalent formula after glTF import using `UnaSceneSnapshot` world matrices.

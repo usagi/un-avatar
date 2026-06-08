@@ -32,7 +32,7 @@
 - `HumanoidRetargetContext` は `UnaRuntimeRetargetInputs` から構築できるようになり、renderer の retarget runtime は document source field ではなく runtime model view から compile する。
 - `UnaRuntimeDynamics` / `UnaRuntimeDynamicsMut` は SpringBone / PhysBone source settings を直接渡す逃げ道を閉じ、groups / colliders / counts / dynamic node iterator / source id enable mutation の view として solver / renderer / wardrobe importer に渡す。
 - まだ `UnaDocument` 自体は source data と runtime state を同居させる transitional container であり、Wardrobe hot switch 前に resolved wardrobe state / action state / dynamics enabled state の所有境界をさらに分ける。
-- `.unavatar` import は、Modular Avatar payload がある場合は resolver を正本にし、payload がない別アーマチュア衣装は Humanoid 同名骨 fallback で最小 retarget する。ただし fallback は non-Humanoid 骨、constraints、PhysBone roots、blendshape / material side effects を復元しない。
+- `.unavatar` import は、Modular Avatar payload がある場合は resolver を正本にし、payload がない別アーマチュア衣装は Humanoid 同名骨 fallback で retarget する。同名 Humanoid 接続点にぶら下がる non-Humanoid 補助骨 subtree は world pose を保って主 armature へ reparent する。ただし fallback は constraints、PhysBone behavior、blendshape / material side effects、曖昧な重複骨名の完全解決までは復元しない。
 - 2026-06-08 時点の追加 regression target: `mizuki-split.unavatar` は Body 正面消失、腰周辺衣装の不自然な持ち上がり、MA 衣装の追従ずれを優先調査対象にする。`usagi.unavatar` は Perfect Sync 対応 sample として表情 / blendshape と sparse MA payload export の検証対象にする。
 
 優先領域:
