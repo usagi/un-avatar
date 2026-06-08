@@ -376,6 +376,8 @@ struct DiagnoseDynamicsGroupSummary {
 	index: usize,
 	source_kind: UnaDynamicsSourceKind,
 	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
 	comment: String,
 	#[serde(skip_serializing_if = "String::is_empty")]
 	category: String,
@@ -1444,6 +1446,7 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 			DiagnoseDynamicsGroupSummary {
 				index,
 				source_kind: group.source_kind,
+				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
 				category: group.category.clone(),
 				bone_count: group.bone_node_indices.len(),
@@ -2477,9 +2480,10 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
+			group.source_id,
 			group.bone_count,
 			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
 			group.tip_path.as_deref().or(group.tip_node.map(|_| "#")),

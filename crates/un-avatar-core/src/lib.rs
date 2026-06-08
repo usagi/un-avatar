@@ -120,6 +120,9 @@ pub struct UnaExpressionWeights {
 pub struct UnaSpringBoneGroup {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
+	/// Source-side stable identifier, used by wardrobe / action state once dynamics toggles are resolved.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
 	#[serde(default)]
 	pub comment: String,
 	/// UN Avatar 側で推定・編集する SpringBone 物理カテゴリ。

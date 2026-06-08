@@ -838,6 +838,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.05,
@@ -881,6 +882,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -927,6 +929,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -1010,6 +1013,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: "ミミ spring".to_string(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1058,6 +1062,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1108,6 +1113,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.8,
@@ -1169,6 +1175,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,

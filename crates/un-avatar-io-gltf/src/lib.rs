@@ -1624,12 +1624,8 @@ fn unavatar_dynamics_settings(
 			.filter(|value| !value.is_empty())
 			.unwrap_or("")
 			.to_string();
-		let comment = item
-			.get("id")
-			.or_else(|| item.get("name"))
-			.and_then(Value::as_str)
-			.unwrap_or("")
-			.to_string();
+		let source_id = item.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+		let comment = item.get("name").and_then(Value::as_str).unwrap_or(source_id.as_str()).to_string();
 		let stiffness = json_f32(item.get("stiffness").or_else(|| item.get("spring")).or_else(|| item.get("pull"))).unwrap_or(1.0);
 		let drag_force = json_f32(
 			item.get("drag")
@@ -1685,6 +1681,7 @@ fn unavatar_dynamics_settings(
 				}
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
+					source_id: source_id.clone(),
 					comment: comment.clone(),
 					category: category.clone(),
 					stiffness,
@@ -5355,6 +5352,8 @@ mod tests {
 
 		assert_eq!(settings.groups.len(), 2);
 		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.groups[0].source_id, "hair_front");
+		assert_eq!(settings.groups[0].comment, "hair_front");
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);

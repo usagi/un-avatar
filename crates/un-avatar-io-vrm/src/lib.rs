@@ -1011,6 +1011,7 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 			}
 			out_groups.push(UnaSpringBoneGroup {
 				source_kind: UnaDynamicsSourceKind::VrmSpringBone,
+				source_id: String::new(),
 				comment: comment.clone(),
 				category: String::new(),
 				stiffness,
@@ -1070,6 +1071,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 		let comment = sp.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string();
 		out_groups.push(UnaSpringBoneGroup {
 			source_kind: UnaDynamicsSourceKind::VrmSpringBone,
+			source_id: String::new(),
 			comment,
 			category: String::new(),
 			stiffness,
