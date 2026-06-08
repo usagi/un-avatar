@@ -6123,7 +6123,12 @@ fn json_number_f32(value: &Value) -> Option<f32> {
 }
 
 fn json_f32(value: Option<&Value>) -> Option<f32> {
-	value.and_then(Value::as_f64).map(|v| v as f32)
+	value.and_then(|value| {
+		value
+			.as_f64()
+			.or_else(|| value.as_str().and_then(|value| value.trim().parse::<f64>().ok()))
+			.map(|v| v as f32)
+	})
 }
 
 fn json_usize(value: Option<&Value>) -> Option<usize> {
@@ -7672,7 +7677,7 @@ mod tests {
 							"menuItem": {
 								"control": {
 									"parameter": {"name": "JacketColor"},
-									"value": 1.0
+									"value": "1"
 								}
 							},
 							"objects": [{
