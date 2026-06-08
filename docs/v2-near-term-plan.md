@@ -89,6 +89,13 @@ MVP control command:
 
 この command は既に attach 済みの document を base wardrobe state へ戻してから対象 `.unavatar` wardrobe operation を適用し、document revision を進める。対象 set だけを現在状態へ重ねると、前回 set の visibility / morph default が累積してしまうため禁止。draw transform / visibility / morph default は次の frame update で反映する。成功時は runtime status の `active_wardrobe_set` を更新する。初期実装では新規 GPU resource が必要な material / mesh を lazy upload せず、startup 時に読み込まれた resource set の範囲で切り替える。
 
+現在対応済み:
+
+- `set_wardrobe` runtime control command は正規化済み set id を受け、適用失敗理由を control response に返す。
+- renderer は wardrobe 適用後に document revision を進め、draw transform / visibility / scene morph default / runtime requirements を次 frame で再読込する。
+- runtime status は正規化済み `active_wardrobe_set` を公開する。
+- `dynamicsEnable` は `UnaRuntimeDynamicsMut` 経由で runtime group enabled state を切り替え、適用件数と missing dynamics id を renderer log で観測できる。
+
 後回し:
 
 - wardrobe asset group 単位の lazy GPU upload / unload。
