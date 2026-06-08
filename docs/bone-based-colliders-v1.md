@@ -125,6 +125,7 @@ show_bone_colliders: bool
 bone_collider_count: u32
 bone_collider_source: "off" | "auto" | "auto+vrm" | "vrm"
 dynamics_group_count: u32
+dynamics_enabled_group_count: u32
 dynamics_vrm_spring_bone_group_count: u32
 dynamics_vrc_physbone_group_count: u32
 dynamics_unknown_group_count: u32
@@ -135,7 +136,7 @@ dynamics_unknown_collider_count: u32
 ```
 
 `bone_collider_source` は v1 では `"off"` / `"auto"` のみでよい。将来 VRM collider 読み込みを足す時に値を拡張する。
-`dynamics_*` は renderer が正規化後に保持している runtime dynamics group / collider の件数であり、raw `.unavatar` `dynamics` entry 数ではない。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
+`dynamics_*` は renderer が正規化後に保持している runtime dynamics group / collider の件数であり、raw `.unavatar` `dynamics` entry 数ではない。`dynamics_enabled_group_count` は wardrobe / action 適用後に solver 対象として残っている group 数。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
 `.unavatar` / VRC PhysBone source collider は import 時に local sphere / capsule collider として正規化し、SpringBone solver と debug draw の collider list に結合する。`insideBounds` collider は外側へ押し出す collider ではなく、tail を collider 内側へ留める制約として近似する。
 
 Diagnostics には profile 値、生成 collider 数、part ごとの有効/無効と scale を出す。
