@@ -8656,6 +8656,98 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_replace_object_reports_invalid_parent_target() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OriginalParent".to_string()),
+					source_node_id: Some("node_original".to_string()),
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ReplacementChild".to_string()),
+					source_node_id: Some("node_replacement".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarReplaceObject",
+						"enabled": true,
+						"target": {"nodeId": "node_replacement", "path": "OriginalParent/ReplacementChild"},
+						"fields": {
+							"targetObject": {"nodeId": "node_original", "path": "OriginalParent"}
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.nodes[0].children, vec![1]);
+		assert_eq!(scene.nodes[1].children, vec![2]);
+		assert!(scene.nodes[1].visible);
+		assert!(report.messages.iter().any(|m| m.contains("replace_object_invalid=1")));
+	}
+
+	#[test]
+	fn modular_avatar_replace_object_reports_missing_target_object() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Replacement".to_string()),
+					source_node_id: Some("node_replacement".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarReplaceObject",
+						"enabled": true,
+						"target": {"nodeId": "node_replacement", "path": "Replacement"},
+						"fields": {
+							"targetObject": {"nodeId": "node_missing", "path": "Missing"}
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.nodes[0].children, vec![1]);
+		assert!(report.messages.iter().any(|m| m.contains("replace_object_missing=1")));
+	}
+
+	#[test]
 	fn modular_avatar_bone_proxy_reparents_keep_world_pose() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
