@@ -943,6 +943,8 @@ struct DrawBindState {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneMeshRuntimeRequirements {
 	pub(crate) audio_link_texture: bool,
+	pub(crate) screen_refraction: bool,
+	pub(crate) fur: bool,
 }
 
 #[derive(Default)]
@@ -1156,6 +1158,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 		}
 		if material_needs_screen_refraction(&draw.material) {
 			state.needs_screen_refraction = true;
+			state.runtime_requirements.screen_refraction = true;
 		}
 		if material_needs_audio_link_texture(&draw.material, draw.shading) {
 			state.runtime_requirements.audio_link_texture = true;
@@ -1170,6 +1173,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 		let has_fur = draw_has_fur(draw, opts);
 		if has_fur {
 			state.fur_draw_indices.push(draw_index);
+			state.runtime_requirements.fur = true;
 		}
 
 		let shading_index = match shading {
