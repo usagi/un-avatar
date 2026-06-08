@@ -3461,6 +3461,9 @@ fn dispatch_activate_action_command(
 	if parameter_value.is_some() && parameter_name.is_none() {
 		return "err parameter_name required when parameter_value is provided".to_string();
 	}
+	if parameter_name.is_some() && parameter_value.is_none() {
+		return "err parameter_value required when parameter_name is provided".to_string();
+	}
 	if action_id.is_none() && supervisor_command.is_none() && expression_menu_path.is_none() && parameter_name.is_none() {
 		return "err action_id, supervisor_command, expression_menu_path, or parameter_name required".to_string();
 	}

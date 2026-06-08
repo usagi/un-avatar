@@ -2806,7 +2806,7 @@ impl GpuState {
 								UnaRuntimeActionTrigger::ParameterValue {
 									name: trigger_name,
 									value: trigger_value,
-								} if trigger_name == name && parameter_value.is_none_or(|value| (value - *trigger_value).abs() <= 0.005)
+								} if trigger_name == name && parameter_value.is_some_and(|value| (value - *trigger_value).abs() <= 0.005)
 							)
 						})
 					});
