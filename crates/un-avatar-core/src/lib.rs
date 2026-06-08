@@ -521,12 +521,8 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.humanoid_profile.as_ref()
 	}
 
-	pub fn humanoid_scene(self) -> Option<(&'a HumanoidProfile, &'a UnaSceneSnapshot)> {
-		Some((self.humanoid_profile()?, self.scene()?))
-	}
-
 	pub fn has_humanoid_scene(self) -> bool {
-		self.humanoid_scene().is_some()
+		self.humanoid_profile().is_some() && self.scene().is_some()
 	}
 
 	pub fn scene_profile_dynamics(self) -> Option<UnaRuntimeSceneDynamics<'a>> {
@@ -3201,17 +3197,18 @@ mod tests {
 	fn runtime_model_reports_humanoid_scene_only_when_both_exist() {
 		let mut document = UnaDocument::default();
 		assert!(document.runtime_model().scene_nodes().is_none());
-		assert!(document.runtime_model().humanoid_scene().is_none());
 		assert!(!document.runtime_model().has_humanoid_scene());
+		assert!(document.runtime_model().humanoid_retarget_inputs().profile.is_none());
+		assert!(document.runtime_model().humanoid_retarget_inputs().scene.is_none());
 
 		document.scene = Some(UnaSceneSnapshot::default());
 		assert!(document.runtime_model().scene_nodes().is_some());
-		assert!(document.runtime_model().humanoid_scene().is_none());
 		assert!(!document.runtime_model().has_humanoid_scene());
+		assert!(document.runtime_model().humanoid_retarget_inputs().profile.is_none());
+		assert!(document.runtime_model().humanoid_retarget_inputs().scene.is_some());
 
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_weights = Some(UnaExpressionWeights::default());
-		assert!(document.runtime_model().humanoid_scene().is_some());
 		assert!(document.runtime_model().has_humanoid_scene());
 		assert!(document.runtime_model().expression_weights().is_some());
 		let retarget_inputs = document.runtime_model().humanoid_retarget_inputs();
