@@ -1260,7 +1260,7 @@ impl GpuState {
 		let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
 		let limits = mesh_shader_plan.required_limits.clone();
 		let shader_variant_tier = mesh_shader_plan.tier;
-		if shader_variant_tier == MeshShaderVariantTier::BaselineFallback {
+		if shader_variant_tier.is_baseline_fallback() {
 			eprintln!(
 				"un-avatar-renderer: GPU sampled texture/sampler limits are below the high-capability lilToon-compatible shader target; using baseline fallback variant (adapter sampled={} samplers={}, target sampled={} samplers={})",
 				adapter_limits.max_sampled_textures_per_shader_stage,

@@ -197,6 +197,16 @@ pub(crate) enum MeshShaderVariantTier {
 	BaselineFallback,
 }
 
+impl MeshShaderVariantTier {
+	pub(crate) fn is_high_capability(self) -> bool {
+		matches!(self, Self::HighCapability)
+	}
+
+	pub(crate) fn is_baseline_fallback(self) -> bool {
+		matches!(self, Self::BaselineFallback)
+	}
+}
+
 use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
@@ -1921,7 +1931,7 @@ fn mesh_material_layout_entries(variant_tier: MeshShaderVariantTier) -> Vec<wgpu
 		texture_bind_group_layout_entry(36, wgpu::ShaderStages::FRAGMENT),
 		sampler_bind_group_layout_entry(37, wgpu::ShaderStages::FRAGMENT),
 	];
-	if variant_tier == MeshShaderVariantTier::HighCapability {
+	if variant_tier.is_high_capability() {
 		entries.extend([
 			texture_bind_group_layout_entry(24, wgpu::ShaderStages::FRAGMENT),
 			texture_bind_group_layout_entry(25, wgpu::ShaderStages::FRAGMENT),
@@ -6823,7 +6833,7 @@ impl SceneMeshes {
 						resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
 					},
 				];
-				if shader_variant_tier == MeshShaderVariantTier::HighCapability {
+				if shader_variant_tier.is_high_capability() {
 					bind_material_entries.extend([
 						wgpu::BindGroupEntry {
 							binding: 19,
