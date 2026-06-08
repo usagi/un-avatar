@@ -464,6 +464,9 @@ struct DiagnoseUnavatarSummary {
 	extension_node_count: usize,
 	variant_count: usize,
 	dynamics_entry_count: usize,
+	modular_avatar_component_count: usize,
+	modular_avatar_support_counts: BTreeMap<String, usize>,
+	modular_avatar_type_counts: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
@@ -2015,10 +2018,42 @@ fn diagnose_texture_shape_is_cube(shape: Option<&str>) -> bool {
 	shape.is_some_and(|shape| shape.eq_ignore_ascii_case("TextureCube") || shape.eq_ignore_ascii_case("Cube"))
 }
 
+fn modular_avatar_component_support(short_type: &str) -> &'static str {
+	match short_type {
+		"ModularAvatarBoneProxy"
+		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMeshSettings"
+		| "ModularAvatarRemoveVertexColor"
+		| "ModularAvatarReplaceObject" => "resolver",
+		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
+		_ => "unsupported",
+	}
+}
+
 fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnavatarSummary {
 	let source = &ext.source;
 	let wardrobe = source.get("wardrobe");
 	let sets = wardrobe.and_then(|w| w.get("sets")).and_then(|v| v.as_array());
+	let modular_avatar_components = source
+		.get("modularAvatar")
+		.and_then(|modular_avatar| modular_avatar.get("components"))
+		.and_then(|components| components.as_array());
+	let mut modular_avatar_support_counts = BTreeMap::new();
+	let mut modular_avatar_type_counts = BTreeMap::new();
+	if let Some(components) = modular_avatar_components {
+		for component in components {
+			let short_type = component
+				.get("shortType")
+				.and_then(|value| value.as_str())
+				.filter(|value| !value.is_empty())
+				.unwrap_or("unknown");
+			bump_count(&mut modular_avatar_type_counts, short_type);
+			bump_count(&mut modular_avatar_support_counts, modular_avatar_component_support(short_type));
+			if component.get("enabled").and_then(|value| value.as_bool()) == Some(false) {
+				bump_count(&mut modular_avatar_support_counts, "disabled");
+			}
+		}
+	}
 	let base_set = json_string(wardrobe.and_then(|w| w.get("baseSet")));
 	let base = sets.and_then(|sets| {
 		sets.iter().find(|set| {
@@ -2096,6 +2131,9 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		extension_node_count: source.get("nodes").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		variant_count: source.get("variants").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		dynamics_entry_count: source.get("dynamics").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
+		modular_avatar_component_count: modular_avatar_components.map(Vec::len).unwrap_or(0),
+		modular_avatar_support_counts,
+		modular_avatar_type_counts,
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
@@ -2875,8 +2913,15 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={}",
-			unavatar.spec_version, unavatar.generator, unavatar.manifest_name, unavatar.source_type, unavatar.dynamics_entry_count
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?}",
+			unavatar.spec_version,
+			unavatar.generator,
+			unavatar.manifest_name,
+			unavatar.source_type,
+			unavatar.dynamics_entry_count,
+			unavatar.modular_avatar_component_count,
+			unavatar.modular_avatar_support_counts,
+			unavatar.modular_avatar_type_counts
 		);
 		println!(
 			"wardrobe: base={:?} sets={} {:?} asset_groups={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
@@ -3376,6 +3421,18 @@ mod tests {
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
 				spec_version: "0.1-preview".to_string(),
 				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [{
+							"shortType": "ModularAvatarRemoveVertexColor",
+							"enabled": true
+						}, {
+							"shortType": "ModularAvatarMaterialSwap",
+							"enabled": true
+						}, {
+							"shortType": "ModularAvatarMeshCutter",
+							"enabled": false
+						}]
+					},
 					"wardrobe": {
 						"sets": [{
 							"id": "jacket",
@@ -3412,6 +3469,13 @@ mod tests {
 
 		let unavatar = report.unavatar.as_ref().unwrap();
 		assert_eq!(unavatar.asset_group_count, 3);
+		assert_eq!(unavatar.modular_avatar_component_count, 3);
+		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
 		assert_eq!(
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
