@@ -2413,6 +2413,40 @@ fn reparent_scene_node(scene: &mut UnaSceneSnapshot, child: usize, new_parent: u
 	true
 }
 
+fn make_unique_child_name(scene: &UnaSceneSnapshot, parent: usize, child: usize) -> Option<String> {
+	let base_name = scene
+		.nodes
+		.get(child)
+		.and_then(|node| node.name.as_deref())
+		.filter(|name| !name.is_empty())?;
+	let Some(parent_node) = scene.nodes.get(parent) else {
+		return Some(base_name.to_string());
+	};
+	let mut suffix = String::new();
+	let mut suffix_index = 1usize;
+	while parent_node.children.iter().any(|&sibling| {
+		scene
+			.nodes
+			.get(sibling)
+			.and_then(|node| node.name.as_deref())
+			.is_some_and(|name| name == format!("{base_name}{suffix}"))
+	}) {
+		suffix = format!(" ({suffix_index})");
+		suffix_index += 1;
+	}
+	Some(format!("{base_name}{suffix}"))
+}
+
+fn reparent_bone_proxy_node(scene: &mut UnaSceneSnapshot, child: usize, new_parent: usize, local: Mat4) -> bool {
+	let Some(unique_name) = make_unique_child_name(scene, new_parent, child) else {
+		return reparent_scene_node(scene, child, new_parent, local);
+	};
+	if let Some(node) = scene.nodes.get_mut(child) {
+		node.name = Some(unique_name);
+	}
+	reparent_scene_node(scene, child, new_parent, local)
+}
+
 #[derive(Clone, Debug)]
 struct BoneProxyResolverInfo {
 	child: usize,
@@ -2839,7 +2873,7 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	for proxy in &bone_proxies {
 		let parent_world = reparent_world.get(proxy.new_parent).copied().unwrap_or(Mat4::IDENTITY);
 		let local = inverse_finite_or_identity(parent_world) * proxy.old_world;
-		if reparent_scene_node(scene, proxy.child, proxy.new_parent, local) {
+		if reparent_bone_proxy_node(scene, proxy.child, proxy.new_parent, local) {
 			bone_proxy_applied += 1;
 		} else {
 			bone_proxy_missing += 1;
@@ -8000,6 +8034,20 @@ mod tests {
 		);
 	}
 
+	fn test_node(children: Vec<usize>) -> UnaSceneNode {
+		UnaSceneNode {
+			name: None,
+			source_node_id: None,
+			visible: true,
+			transform: Mat4::IDENTITY.to_cols_array(),
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
 	#[test]
 	fn modular_avatar_bone_proxy_attachment_modes_match_processor_semantics() {
 		let target_rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
@@ -8039,6 +8087,106 @@ mod tests {
 		let local = bone_proxy_local_transform("AsChildKeepWorldPose", true, target_world, old_world);
 		let (scale, _, _) = decompose_finite(local);
 		assert_vec3_near(scale, Vec3::ONE);
+	}
+
+	#[test]
+	fn modular_avatar_bone_proxy_renames_duplicate_target_child() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_head".to_string()),
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Proxy".to_string()),
+					source_node_id: Some("node_existing_proxy".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Proxy".to_string()),
+					source_node_id: Some("node_proxy".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarBoneProxy",
+						"enabled": true,
+						"target": {"nodeId": "node_proxy", "path": "Proxy"},
+						"resolvedTarget": {"nodeId": "node_head", "path": "Head"},
+						"fields": {
+							"attachmentMode": "AsChildAtRoot",
+							"matchScale": false
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.nodes[1].children, vec![2, 3]);
+		assert_eq!(scene.nodes[3].name.as_deref(), Some("Proxy (1)"));
+		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_applied=1")));
+	}
+
+	#[test]
+	fn modular_avatar_bone_proxy_reports_missing_target() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Proxy".to_string()),
+					source_node_id: Some("node_proxy".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarBoneProxy",
+						"enabled": true,
+						"target": {"nodeId": "node_proxy", "path": "Proxy"},
+						"resolvedTarget": {"nodeId": "node_missing", "path": "Missing"},
+						"fields": {
+							"attachmentMode": "AsChildAtRoot",
+							"matchScale": false
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.nodes[0].children, vec![1]);
+		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_missing=1")));
 	}
 
 	#[test]

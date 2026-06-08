@@ -92,8 +92,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Reparenting / Proxy / Object Replacement
 
 - `[~]` MA Bone Proxy
-  - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, and `matchScale`. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting.
-  - remaining: regression-check `field_drape` visually and add broader fixture coverage for duplicate names / missing targets.
+  - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, `matchScale`, and MA-like duplicate child name suffixing. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting. Numeric tests cover duplicate target child names and missing target reporting.
+  - remaining: regression-check `field_drape` visually and add broader fixture coverage for path ambiguity / component interactions.
 - `[ ]` MA Replace Object
   - required: replacement object and child migration as render graph operation.
 - `[ ]` MA Move Independently
@@ -174,8 +174,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[ ]` numeric resolver tests
   - required: MergeArmature one-bone retarget, BoneProxy reparent, MeshSettings rootBone override.
 - `[~]` BoneProxy numeric test
-  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, and `matchScale`.
-  - remaining: broader duplicate-name / missing-target fixture coverage.
+  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, `matchScale`, duplicate target child names, and missing target reporting.
+  - remaining: broader path ambiguity / component interaction fixture coverage.
 - `[ ]` visual regression screenshots
   - required: front/back/detail views for mizuki field_drape after each resolver milestone.
 
