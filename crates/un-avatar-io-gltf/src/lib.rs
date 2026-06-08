@@ -17,8 +17,8 @@ use un_avatar_core::{
 	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
 	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
 	UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsMut, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings,
-	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaRuntimeDynamicsMut, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1920,34 +1920,105 @@ fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<
 }
 
 fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension) -> Option<UnaRuntimeActionSet> {
-	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
-	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
-	let base_id = unavatar_base_wardrobe_set(unavatar).map(|(id, _)| id);
 	let mut actions = Vec::new();
-	for set in sets {
-		let Some(set_id) = set.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
-			continue;
-		};
-		if base_id == Some(set_id) {
-			continue;
+	if let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) {
+		if let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) {
+			let base_id = unavatar_base_wardrobe_set(unavatar).map(|(id, _)| id);
+			for set in sets {
+				let Some(set_id) = set.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+					continue;
+				};
+				if base_id == Some(set_id) {
+					continue;
+				}
+				let label = set
+					.get("name")
+					.or_else(|| set.get("displayName"))
+					.and_then(Value::as_str)
+					.unwrap_or(set_id);
+				actions.push(UnaRuntimeAction {
+					id: format!("wardrobe:{set_id}"),
+					label: label.to_string(),
+					triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
+						command: set_id.to_string(),
+					}],
+					effects: vec![UnaRuntimeActionEffect::WardrobeSet {
+						set_id: set_id.to_string(),
+					}],
+				});
+			}
 		}
-		let label = set
-			.get("name")
-			.or_else(|| set.get("displayName"))
-			.and_then(Value::as_str)
-			.unwrap_or(set_id);
-		actions.push(UnaRuntimeAction {
-			id: format!("wardrobe:{set_id}"),
-			label: label.to_string(),
-			triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
-				command: set_id.to_string(),
-			}],
-			effects: vec![UnaRuntimeActionEffect::WardrobeSet {
-				set_id: set_id.to_string(),
-			}],
-		});
+	}
+	if let Some(variants) = unavatar.source.get("variants").and_then(|v| v.as_array()) {
+		for variant in variants {
+			let Some(action) = unavatar_variant_runtime_action(variant) else {
+				continue;
+			};
+			if actions.iter().any(|existing| existing.id == action.id) {
+				continue;
+			}
+			actions.push(action);
+		}
 	}
 	(!actions.is_empty()).then_some(UnaRuntimeActionSet { actions })
+}
+
+fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> {
+	let id = variant.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
+	if id == "current-state" {
+		return None;
+	}
+	let operations = variant.get("operations").and_then(Value::as_array)?;
+	let mut effects = Vec::new();
+	for op in operations {
+		let ty = op.get("type").or_else(|| op.get("op")).and_then(Value::as_str).unwrap_or("");
+		if !matches!(
+			ty,
+			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
+		) {
+			continue;
+		}
+		let Some(visible) = op.get("visible").and_then(Value::as_bool) else {
+			continue;
+		};
+		let path = operation_target_path(op);
+		let target = op.get("target").and_then(Value::as_object);
+		let source_node_id = target
+			.and_then(|target| target.get("nodeId").or_else(|| target.get("sourceNodeId")))
+			.and_then(Value::as_str)
+			.filter(|value| !value.is_empty())
+			.map(str::to_string);
+		let path = (!path.is_empty()).then(|| path.to_string());
+		if source_node_id.is_none() && path.is_none() {
+			continue;
+		}
+		effects.push(UnaRuntimeActionEffect::NodeVisibility {
+			target: UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id,
+				path,
+			},
+			visible,
+		});
+	}
+	if effects.is_empty() {
+		return None;
+	}
+	let label = variant
+		.get("name")
+		.or_else(|| variant.get("displayName"))
+		.and_then(Value::as_str)
+		.unwrap_or(id)
+		.to_string();
+	Some(UnaRuntimeAction {
+		id: format!("variant:{id}"),
+		label: label.clone(),
+		triggers: vec![
+			UnaRuntimeActionTrigger::SupervisorCommand { command: id.to_string() },
+			UnaRuntimeActionTrigger::ExpressionMenu { path: label },
+		],
+		effects,
+	})
 }
 
 fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
@@ -6126,6 +6197,15 @@ mod tests {
 							"path": "Hidden/HiddenChild",
 							"visible": false
 						}]
+					}, {
+						"id": "ma-object-toggle-0",
+						"name": "Hidden Toggle",
+						"source": "modular-avatar-object-toggle",
+						"operations": [{
+							"op": "nodeEnabled",
+							"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
+							"visible": true
+						}]
 					}],
 					"humanoid": {
 						"Hips": "Hidden"
@@ -6213,12 +6293,24 @@ mod tests {
 		assert_eq!(expressions.presets[0].binds.len(), 1);
 		assert!(got.document.expression_weights.is_some());
 		let runtime_actions = got.document.runtime_actions.as_ref().expect("runtime actions");
-		assert_eq!(runtime_actions.actions.len(), 2);
+		assert_eq!(runtime_actions.actions.len(), 3);
 		assert_eq!(runtime_actions.actions[0].id, "wardrobe:visible");
 		assert_eq!(
 			runtime_actions.actions[0].effects,
 			vec![UnaRuntimeActionEffect::WardrobeSet {
 				set_id: "visible".to_string()
+			}]
+		);
+		assert_eq!(runtime_actions.actions[2].id, "variant:ma-object-toggle-0");
+		assert_eq!(
+			runtime_actions.actions[2].effects,
+			vec![UnaRuntimeActionEffect::NodeVisibility {
+				target: UnaRuntimeNodeTarget {
+					node_index: None,
+					source_node_id: Some("node_hidden".to_string()),
+					path: Some("Wrong Path".to_string()),
+				},
+				visible: true,
 			}]
 		);
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
