@@ -165,7 +165,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[ ]` stable IDs for source and resolved nodes
   - required: source node id remains wardrobe operation target; resolved graph can create derived node ids/cache keys.
 - `[ ]` resolver cache key
-  - required: selected wardrobe set, MA component payload hash, mesh/material source hash, runtime resolver version.
+  - required: selected wardrobe set, active asset groups, MA component payload hash, mesh/material source hash, runtime resolver version.
 - `[ ]` report parity
   - required: Unity Exporter report and Runtime importer report use the same feature names.
 

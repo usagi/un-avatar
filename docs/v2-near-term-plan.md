@@ -31,7 +31,7 @@
 - renderer、skeleton retarget、CLI diagnose は、frame loop / solver / diagnostics で source-format field を直接読む箇所を減らし、runtime accessor 経由へ寄せている。
 - `HumanoidRetargetContext` は `UnaRuntimeRetargetInputs` から構築できるようになり、renderer の retarget runtime は document source field ではなく runtime model view から compile する。
 - `UnaRuntimeDynamics` / `UnaRuntimeDynamicsMut` は SpringBone / PhysBone source settings を直接渡す逃げ道を閉じ、groups / colliders / counts / dynamic node iterator / source id enable mutation の view として solver / renderer / wardrobe importer に渡す。
-- まだ `UnaDocument` 自体は source data と runtime state を同居させる transitional container であり、Wardrobe hot switch 前に resolved wardrobe state / action state / runtime parameter values / dynamics enabled state の所有境界をさらに分ける。
+- まだ `UnaDocument` 自体は source data と runtime state を同居させる transitional container であり、Wardrobe hot switch 前に resolved wardrobe state / active asset groups / action state / runtime parameter values / dynamics enabled state の所有境界をさらに分ける。
 - `.unavatar` import は、Modular Avatar payload がある場合は resolver を正本にし、payload がない別アーマチュア衣装は Humanoid 同名骨 fallback で retarget する。同名 Humanoid 接続点にぶら下がる non-Humanoid 補助骨 subtree は world pose を保って主 armature へ reparent する。ただし fallback は constraints、PhysBone behavior、blendshape / material side effects、曖昧な重複骨名の完全解決までは復元しない。
 - 2026-06-08 時点の追加 regression target: `mizuki-split.unavatar` は Body 正面消失、腰周辺衣装の不自然な持ち上がり、MA 衣装の追従ずれを優先調査対象にする。`usagi.unavatar` は Perfect Sync 対応 sample として表情 / blendshape と sparse MA payload export の検証対象にする。
 
@@ -95,12 +95,12 @@ MVP control command:
 
 - `set_wardrobe` runtime control command は正規化済み set id を受け、適用失敗理由を control response に返す。
 - renderer は wardrobe 適用後に document revision を進め、draw transform / visibility / scene morph default / runtime requirements を次 frame で再読込する。
-- `UnaRuntimeState.active_wardrobe_set` は wardrobe 適用成功時の resolved runtime state として更新され、`UnaRuntimeState.last_action_id` と `parameter_values` は runtime action 成功時だけ更新される。runtime status は document state から `active_wardrobe_set` / `last_action_id` / `runtime_parameter_values` を公開する。
+- `UnaRuntimeState.active_wardrobe_set` と `active_asset_groups` は wardrobe 適用成功時の resolved runtime state として更新され、`UnaRuntimeState.last_action_id` と `parameter_values` は runtime action 成功時だけ更新される。runtime status は document state から `active_wardrobe_set` / `active_asset_groups` / `last_action_id` / `runtime_parameter_values` を公開する。
 - `dynamicsEnable` は `UnaRuntimeDynamicsMut` 経由で runtime group enabled state を切り替え、適用件数と missing dynamics id を renderer log で観測できる。
 
 後回し:
 
-- wardrobe asset group 単位の lazy GPU upload / unload。
+- wardrobe asset group 単位の lazy GPU upload / unload。現在は選択 set の `assetGroups` を runtime state / renderer status / CLI diagnose で観測する段階。
 - crossfade、dissolve、sparkle などのお着替え effect。
 - set ごとの physics reset / blend。
 - user-facing ring-menu UI。
