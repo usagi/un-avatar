@@ -11,8 +11,13 @@ pub(crate) fn normalize_wardrobe_set_id(wardrobe_set: Option<&str>) -> Option<&s
 
 fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 	eprintln!(
-		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={}",
-		report.visibility_applied, report.visibility_missing, report.blendshape_applied, report.blendshape_missing
+		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={}",
+		report.visibility_applied,
+		report.visibility_missing,
+		report.blendshape_applied,
+		report.blendshape_missing,
+		report.dynamics_applied,
+		report.dynamics_missing
 	);
 	if !report.missing_visibility_paths.is_empty() {
 		eprintln!(
@@ -24,6 +29,12 @@ fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 		eprintln!(
 			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing blendshapes: {:?}",
 			report.missing_blendshapes
+		);
+	}
+	if !report.missing_dynamics_ids.is_empty() {
+		eprintln!(
+			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing dynamics ids: {:?}",
+			report.missing_dynamics_ids
 		);
 	}
 }
