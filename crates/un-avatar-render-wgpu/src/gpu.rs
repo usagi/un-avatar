@@ -2686,6 +2686,19 @@ impl GpuState {
 		Ok(())
 	}
 
+	fn set_runtime_node_visible(&mut self, target: &un_avatar_core::UnaRuntimeNodeTarget, visible: bool) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		if !doc.runtime_model_mut().set_node_visible(target, visible) {
+			return Err(format!("runtime node target not found: {target:?}"));
+		}
+		drop(doc);
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	pub(crate) fn activate_runtime_action(&mut self, action_id: Option<&str>, command: Option<&str>) -> Result<Option<String>, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -2726,9 +2739,10 @@ impl GpuState {
 				UnaRuntimeActionEffect::ExpressionWeight { name, weight } => {
 					self.set_expression_override(&name, weight);
 				}
-				UnaRuntimeActionEffect::NodeVisibility { .. }
-				| UnaRuntimeActionEffect::MaterialColor { .. }
-				| UnaRuntimeActionEffect::MaterialScalar { .. } => {
+				UnaRuntimeActionEffect::NodeVisibility { target, visible } => {
+					self.set_runtime_node_visible(&target, visible)?;
+				}
+				UnaRuntimeActionEffect::MaterialColor { .. } | UnaRuntimeActionEffect::MaterialScalar { .. } => {
 					return Err("runtime action effect is not connected yet".to_string());
 				}
 			}

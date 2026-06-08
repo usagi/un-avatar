@@ -714,6 +714,77 @@ impl<'a> UnaRuntimeModelMut<'a> {
 	pub fn expression_weights_mut(&mut self) -> &mut UnaExpressionWeights {
 		self.document.expression_weights.get_or_insert_with(Default::default)
 	}
+
+	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
+		let Some(scene) = self.document.scene.as_mut() else {
+			return false;
+		};
+		let Some(index) = resolve_runtime_node_target(scene, target) else {
+			return false;
+		};
+		let Some(node) = scene.nodes.get_mut(index) else {
+			return false;
+		};
+		node.visible = visible;
+		true
+	}
+}
+
+fn resolve_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
+	if let Some(source_node_id) = target.source_node_id.as_deref().filter(|value| !value.is_empty()) {
+		if let Some((index, _)) = scene
+			.nodes
+			.iter()
+			.enumerate()
+			.find(|(_, node)| node.source_node_id.as_deref() == Some(source_node_id))
+		{
+			return Some(index);
+		}
+	}
+	if let Some(path) = target.path.as_deref().filter(|value| !value.is_empty()) {
+		if let Some(index) = runtime_scene_node_paths(scene).get(path).copied() {
+			return Some(index);
+		}
+	}
+	if let Some(index) = target.node_index.filter(|index| *index < scene.nodes.len()) {
+		return Some(index);
+	}
+	None
+}
+
+fn runtime_scene_node_paths(scene: &UnaSceneSnapshot) -> std::collections::BTreeMap<String, usize> {
+	fn visit(scene: &UnaSceneSnapshot, index: usize, path: String, out: &mut std::collections::BTreeMap<String, usize>) {
+		out.insert(path.clone(), index);
+		let Some(node) = scene.nodes.get(index) else {
+			return;
+		};
+		for &child in &node.children {
+			let Some(child_node) = scene.nodes.get(child) else {
+				continue;
+			};
+			let child_name = child_node.name.as_deref().unwrap_or("");
+			let child_path = if path.is_empty() {
+				child_name.to_string()
+			} else {
+				format!("{path}/{child_name}")
+			};
+			visit(scene, child, child_path, out);
+		}
+	}
+
+	let mut out = std::collections::BTreeMap::new();
+	for &root in &scene.roots {
+		visit(scene, root, String::new(), &mut out);
+		if let Some(name) = scene
+			.nodes
+			.get(root)
+			.and_then(|node| node.name.as_deref())
+			.filter(|name| !name.is_empty())
+		{
+			visit(scene, root, name.to_string(), &mut out);
+		}
+	}
+	out
 }
 
 /// `.unavatar` 固有 metadata。現段階では raw JSON を正本として保持し、runtime 対応が進むごとに構造化する。
@@ -3389,6 +3460,74 @@ mod tests {
 				.and_then(|weights| weights.preset_weights.get("Blink").copied()),
 			Some(0.5)
 		);
+	}
+
+	#[test]
+	fn runtime_model_mut_sets_node_visibility_by_runtime_target() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					UnaSceneNode {
+						name: Some("Root".to_string()),
+						children: vec![1],
+						..test_node(Vec::new())
+					},
+					UnaSceneNode {
+						name: Some("Child".to_string()),
+						source_node_id: Some("node_child".to_string()),
+						..test_node(Vec::new())
+					},
+					UnaSceneNode {
+						name: Some("Fallback".to_string()),
+						source_node_id: Some("node_fallback".to_string()),
+						..test_node(Vec::new())
+					},
+				],
+				roots: vec![0, 2],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		assert!(document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				node_index: Some(2),
+				source_node_id: Some("node_child".to_string()),
+				path: None,
+			},
+			false,
+		));
+		assert!(!document.scene.as_ref().unwrap().nodes[1].visible);
+		assert!(document.scene.as_ref().unwrap().nodes[2].visible);
+
+		assert!(document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id: None,
+				path: Some("Root/Child".to_string()),
+			},
+			true,
+		));
+		assert!(document.scene.as_ref().unwrap().nodes[1].visible);
+
+		assert!(document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				node_index: Some(2),
+				source_node_id: None,
+				path: Some("missing".to_string()),
+			},
+			false,
+		));
+		assert!(!document.scene.as_ref().unwrap().nodes[2].visible);
+
+		assert!(!document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				node_index: Some(99),
+				source_node_id: None,
+				path: None,
+			},
+			true,
+		));
 	}
 
 	#[test]
