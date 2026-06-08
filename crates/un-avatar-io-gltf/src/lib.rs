@@ -2329,7 +2329,16 @@ fn unavatar_material_swap_runtime_action(
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
-	let root_index = root.and_then(|root| modular_avatar_reference_index(root, &node_ids, &registry_paths, &paths, &normalized_paths));
+	let root_index = match root {
+		Some(root) if unavatar_reference_has_target(root) => Some(modular_avatar_reference_index(
+			root,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+		)?),
+		_ => None,
+	};
 	let parents = scene_parent_indices(scene);
 	let mut effects = Vec::new();
 	for swap in swaps {
@@ -2412,6 +2421,20 @@ fn unavatar_scene_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMa
 	}
 	let name = target.name.as_deref().filter(|value| !value.is_empty())?;
 	scene.materials.iter().position(|material| material.name.as_deref() == Some(name))
+}
+
+fn unavatar_reference_has_target(value: &Value) -> bool {
+	value
+		.get("nodeId")
+		.or_else(|| value.get("sourceNodeId"))
+		.or_else(|| value.get("source_node_id"))
+		.or_else(|| value.get("path"))
+		.or_else(|| value.get("referencePath"))
+		.or_else(|| value.get("reference_path"))
+		.and_then(Value::as_str)
+		.is_some_and(|value| !value.is_empty())
+		|| value.get("resolvedTarget").is_some_and(unavatar_reference_has_target)
+		|| value.get("targetObject").is_some_and(unavatar_reference_has_target)
 }
 
 fn scene_node_path_for_index(scene: &UnaSceneSnapshot, target_index: usize) -> Option<String> {
@@ -7541,6 +7564,77 @@ mod tests {
 				},
 			}]
 		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_skip_material_swap_when_explicit_root_is_missing() {
+		let primitive = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(0),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![primitive]],
+			materials: vec![
+				UnaMaterialPbr {
+					name: Some("Base Blue".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Base Red".to_string()),
+					..Default::default()
+				},
+			],
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSwap",
+						"enabled": true,
+						"id": "mat-swap",
+						"fields": {
+							"root": {"nodeId": "missing_root", "path": "MissingRoot"},
+							"swaps": [{
+								"from": {"materialName": "Base Blue"},
+								"to": {"materialName": "Base Red"}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene)).is_none());
 	}
 
 	#[test]
