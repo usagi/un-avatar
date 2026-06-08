@@ -205,6 +205,14 @@ impl MeshShaderVariantTier {
 	pub(crate) fn is_baseline_fallback(self) -> bool {
 		matches!(self, Self::BaselineFallback)
 	}
+
+	fn material_layout_label(self) -> &'static str {
+		if self.is_high_capability() {
+			"mesh_material"
+		} else {
+			"mesh_material_baseline_fallback"
+		}
+	}
 }
 
 use wgpu::util::DeviceExt;
@@ -4989,11 +4997,7 @@ impl SceneMeshes {
 
 		let material_entries = mesh_material_layout_entries(shader_variant_tier);
 		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some(if shader_variant_tier.is_high_capability() {
-				"mesh_material"
-			} else {
-				"mesh_material_baseline_fallback"
-			}),
+			label: Some(shader_variant_tier.material_layout_label()),
 			entries: &material_entries,
 		});
 		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
