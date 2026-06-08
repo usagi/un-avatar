@@ -2124,6 +2124,14 @@ fn build_diagnose_report(
 		spring_group_count: dynamics.vrm_spring_bone_group_count,
 	});
 	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
+	if let Some(unavatar) = &unavatar {
+		if unavatar.dynamics_entry_count > 0 && dynamics.group_count == 0 {
+			warnings.push(format!(
+				".unavatar has {} raw dynamics entries but no runtime dynamics groups; check dynamics root node references and importer lowering",
+				unavatar.dynamics_entry_count
+			));
+		}
+	}
 
 	DiagnoseReport {
 		path: path.to_string_lossy().to_string(),
@@ -2902,6 +2910,44 @@ mod tests {
 		assert!(report.warnings.iter().any(|w| w.contains("renderer bone palette limit")));
 		assert!(report.warnings.iter().any(|w| w.contains("mismatched JOINTS/WEIGHTS")));
 		assert!(report.warnings.iter().any(|w| w.contains("outside effective palette")));
+	}
+
+	#[test]
+	fn diagnose_report_warns_when_unavatar_dynamics_do_not_lower() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot::default()),
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1".into(),
+				source: serde_json::json!({
+					"dynamics": [
+						{ "source": "vrc_physbone", "roots": [999] }
+					]
+				}),
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert_eq!(report.unavatar.as_ref().unwrap().dynamics_entry_count, 1);
+		assert_eq!(report.dynamics.group_count, 0);
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("raw dynamics entries but no runtime dynamics groups")));
 	}
 
 	#[test]
