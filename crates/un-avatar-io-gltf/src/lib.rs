@@ -2745,6 +2745,7 @@ fn unavatar_menu_item_parameter_value(menu_item: &Value) -> Option<(String, f32)
 fn unavatar_explicit_parameter_value(value: &Value) -> Option<(String, f32)> {
 	let name = value
 		.get("parameter")
+		.or_else(|| value.get("Parameter"))
 		.and_then(|parameter| {
 			parameter
 				.as_str()
@@ -8119,8 +8120,8 @@ mod tests {
 						"fields": {
 							"menuItem": {
 								"control": {
-									"parameter": {"name": "JacketColor"},
-									"value": "1"
+									"Parameter": {"Name": "JacketColor"},
+									"Value": "1"
 								}
 							},
 							"objects": [{
