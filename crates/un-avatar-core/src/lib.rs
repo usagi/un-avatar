@@ -1727,6 +1727,24 @@ pub struct UnaLilToonLikeMaterial {
 	pub blend_state: UnaLilToonLikeBlendState,
 }
 
+impl UnaLilToonLikeMaterial {
+	pub fn is_gem_profile(&self) -> bool {
+		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonGem
+	}
+
+	pub fn is_refraction_profile(&self) -> bool {
+		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonRefraction
+	}
+
+	pub fn needs_screen_refraction(&self) -> bool {
+		(self.is_gem_profile() || self.is_refraction_profile()) && self.reflection.gem_refraction_strength_factor.abs() > 0.00001
+	}
+
+	pub fn uses_reflection_source_cube(&self) -> bool {
+		self.reflection.cube_override_factor > 0.5 || self.is_gem_profile()
+	}
+}
+
 impl Default for UnaLilToonLikeShadow {
 	fn default() -> Self {
 		Self {

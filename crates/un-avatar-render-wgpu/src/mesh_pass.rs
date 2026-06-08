@@ -1119,11 +1119,9 @@ fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -
 }
 
 fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
-	material.liltoon_like_runtime().is_some_and(|u| {
-		(u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem
-			|| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
-			&& u.reflection.gem_refraction_strength_factor.abs() > 0.00001
-	})
+	material
+		.liltoon_like_runtime()
+		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::needs_screen_refraction)
 }
 
 fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonLikeAudioLink) -> bool {
@@ -1168,7 +1166,7 @@ fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 fn material_uses_liltoon_gem_prepass(material: &UnaMaterialPbr) -> bool {
 	material
 		.liltoon_like_runtime()
-		.is_some_and(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem)
+		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile)
 }
 
 fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
@@ -1176,9 +1174,10 @@ fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
 }
 
 fn liltoon_reflection_texture_index(liltoon_like: &un_avatar_core::UnaLilToonLikeMaterial) -> Option<usize> {
-	let use_source_cube = liltoon_like.reflection.cube_override_factor > 0.5
-		|| liltoon_like.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
-	use_source_cube.then_some(liltoon_like.reflection.cube_texture_index).flatten()
+	liltoon_like
+		.uses_reflection_source_cube()
+		.then_some(liltoon_like.reflection.cube_texture_index)
+		.flatten()
 }
 
 fn transparent_backpass_enabled(
@@ -3438,16 +3437,10 @@ fn mesh_draw_material_gpu(
 	if liltoon_like.is_some() {
 		flags |= 4096;
 	}
-	if liltoon_like
-		.map(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem)
-		.unwrap_or(false)
-	{
+	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile) {
 		flags |= 8192;
 	}
-	if liltoon_like
-		.map(|u| u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction)
-		.unwrap_or(false)
-	{
+	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_refraction_profile) {
 		flags |= 16384;
 	}
 	if liltoon_uses_additive_color_blend(mat) {
@@ -4019,7 +4012,7 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([1.0, 1.0, 1.0, 1.0]);
 	let gem_params = liltoon_like
 		.map(|u| {
-			if u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction {
+			if u.is_refraction_profile() {
 				[
 					u.reflection.gem_refraction_strength_factor,
 					u.reflection.refraction_color_from_main_factor.clamp(0.0, 1.0),
@@ -4038,7 +4031,7 @@ fn mesh_draw_material_gpu(
 		.unwrap_or([0.5, 0.02, 8.0, 1.0]);
 	let gem_particle_color = liltoon_like
 		.map(|u| {
-			if u.source_profile == un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction {
+			if u.is_refraction_profile() {
 				u.reflection.refraction_color_factor
 			} else {
 				u.reflection.gem_particle_color_factor
