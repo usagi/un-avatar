@@ -71,6 +71,10 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - reference formula: `newBindTarget.worldToLocalMatrix * originalBone.localToWorldMatrix * originalBindPose`
   - done: Runtime applies the equivalent formula after glTF import using `UnaSceneSnapshot` world matrices.
   - remaining: renderer rootBone / localBounds scale adjustment and fixture coverage for multi-bone wardrobe assets.
+- `[~]` same-name Humanoid armature fallback
+  - done: when a `.unavatar` contains skinned outfit armatures but no MA MergeArmature payload for those skins, importer retargets joints whose node names match the primary `UN_avatar.humanoid` bones and rewrites inverse bind matrices with the same MeshRetargeter formula.
+  - scope: this is a compatibility fallback for sparse / non-MA captures such as `usagi.unavatar`, not a substitute for Modular Avatar bake semantics.
+  - remaining: non-Humanoid accessory bones, constraints, PhysBone roots, and material / blendshape side effects still require explicit MA or VRC payload.
 - `[ ]` retained merged bones / transform lookthrough
   - required: components, constraints, PhysBone roots, and rootBone offset cases where MA keeps intermediate bones.
 - `[~]` rootBone / localBounds / probeAnchor retarget

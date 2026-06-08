@@ -2416,6 +2416,61 @@ fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &BTreeM
 	retargeted
 }
 
+fn collect_primary_humanoid_name_targets(scene: &UnaSceneSnapshot, humanoid: &HumanoidProfile) -> BTreeMap<String, usize> {
+	let mut targets = BTreeMap::new();
+	for &node_index in humanoid.bone_node_indices.values() {
+		let Some(name) = scene
+			.nodes
+			.get(node_index)
+			.and_then(|node| node.name.as_deref())
+			.filter(|name| !name.is_empty())
+		else {
+			continue;
+		};
+		targets.entry(name.to_string()).or_insert(node_index);
+	}
+	targets
+}
+
+fn collect_same_name_humanoid_armature_mappings(scene: &UnaSceneSnapshot, humanoid: &HumanoidProfile) -> BTreeMap<usize, usize> {
+	let targets = collect_primary_humanoid_name_targets(scene, humanoid);
+	if targets.is_empty() {
+		return BTreeMap::new();
+	}
+	let mut mappings = BTreeMap::new();
+	for skin in &scene.skins {
+		for &joint_node in &skin.joint_nodes {
+			let Some(name) = scene.nodes.get(joint_node).and_then(|node| node.name.as_deref()) else {
+				continue;
+			};
+			let Some(&target_node) = targets.get(name) else {
+				continue;
+			};
+			if joint_node != target_node {
+				mappings.entry(joint_node).or_insert(target_node);
+			}
+		}
+		if let Some(skeleton_node) = skin.skeleton_node {
+			let Some(name) = scene.nodes.get(skeleton_node).and_then(|node| node.name.as_deref()) else {
+				continue;
+			};
+			let Some(&target_node) = targets.get(name) else {
+				continue;
+			};
+			if skeleton_node != target_node {
+				mappings.entry(skeleton_node).or_insert(target_node);
+			}
+		}
+	}
+	mappings
+}
+
+fn retarget_same_name_humanoid_armature_skins(scene: &mut UnaSceneSnapshot, humanoid: &HumanoidProfile) -> (usize, usize) {
+	let mappings = collect_same_name_humanoid_armature_mappings(scene, humanoid);
+	let retargeted = retarget_merge_armature_skins(scene, &mappings);
+	(mappings.len(), retargeted)
+}
+
 fn modular_avatar_reference_index(
 	reference: &Value,
 	node_ids: &BTreeMap<String, usize>,
@@ -5345,14 +5400,23 @@ impl AvatarImporter for GltfImporter {
 			apply_unavatar_material_texture_asset_refs(&mut scene, root, &asset_map);
 		}
 		let unavatar = root_json.as_ref().and_then(unavatar_extension_from_root);
-		if let Some(unavatar) = &unavatar {
-			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
-			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
-			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
-		}
 		let humanoid_profile = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
+		if let Some(unavatar) = &unavatar {
+			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
+			if let Some(humanoid_profile) = &humanoid_profile {
+				let (same_name_mappings, same_name_retargeted) = retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
+				if same_name_mappings > 0 || same_name_retargeted > 0 {
+					report.push_info(format!(
+						".unavatar humanoid armature fallback: same_name_mappings={}, skin_joints={}",
+						same_name_mappings, same_name_retargeted
+					));
+				}
+			}
+			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
+			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
+		}
 		let expression_catalog = if unavatar.is_some() {
 			expression_catalog_from_morph_target_names(&scene)
 		} else {
@@ -7920,6 +7984,83 @@ mod tests {
 			.messages
 			.iter()
 			.any(|m| { m.contains("merge_armature_mappings=1") && m.contains("mesh_retargeter_joints=1") }));
+	}
+
+	#[test]
+	fn same_name_humanoid_armature_fallback_retargets_skin_bindposes() {
+		let main_hips_world = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0));
+		let outfit_hips_world = Mat4::from_translation(Vec3::new(3.0, 1.0, 0.0));
+		let old_bind = Mat4::from_translation(Vec3::new(-3.0, -1.0, 0.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Armature".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Hips".to_string()),
+					source_node_id: Some("main_hips".to_string()),
+					visible: true,
+					transform: main_hips_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("OutfitArmature".to_string()),
+					source_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Hips".to_string()),
+					source_node_id: Some("outfit_hips".to_string()),
+					visible: true,
+					transform: outfit_hips_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![3],
+				inverse_bind_matrices: vec![old_bind.to_cols_array()],
+				skeleton_node: Some(3),
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let humanoid = HumanoidProfile {
+			bone_node_indices: BTreeMap::from([("hips".to_string(), 1)]),
+		};
+
+		let (mappings, retargeted) = retarget_same_name_humanoid_armature_skins(&mut scene, &humanoid);
+
+		assert_eq!(mappings, 1);
+		assert_eq!(retargeted, 1);
+		assert_eq!(scene.skins[0].joint_nodes, vec![1]);
+		assert_eq!(scene.skins[0].skeleton_node, Some(1));
+		let expected = main_hips_world.inverse() * outfit_hips_world * old_bind;
+		let actual = Mat4::from_cols_array(&scene.skins[0].inverse_bind_matrices[0]);
+		for (a, e) in actual.to_cols_array().iter().zip(expected.to_cols_array()) {
+			assert!((a - e).abs() < 0.0001, "actual={actual:?} expected={expected:?}");
+		}
 	}
 
 	#[test]
