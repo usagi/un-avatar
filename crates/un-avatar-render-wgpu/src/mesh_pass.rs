@@ -1,6 +1,9 @@
 //! glTF / [`UnaSceneSnapshot`] 由来のメッシュ描画（スキニング・モーフ・シェーディング種別）。
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{
+	borrow::Cow,
+	collections::{BTreeMap, BTreeSet},
+};
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use half::f16;
@@ -867,6 +870,7 @@ struct ExpandedPrimitive {
 	indices: Vec<u32>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 }
 
@@ -976,6 +980,7 @@ struct MeshDraw {
 	active: bool,
 	shading: UnaShadingModel,
 	morph_pos: Vec<Vec<[f32; 3]>>,
+	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 	expression_bindings: Vec<ExpressionBinding>,
 	morph_weights: Vec<f32>,
@@ -1445,7 +1450,7 @@ fn fill_missing_tangents(verts: &mut [Vertex], indices: &[u32]) {
 	}
 }
 
-fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> Option<ExpandedPrimitive> {
+fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSet<usize>>) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
 	let positions = &buf.positions;
 	if positions.is_empty() {
@@ -1464,11 +1469,18 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 	let w_default = [1.0_f32, 0.0, 0.0, 0.0];
 
 	let num_morph = buf.morph_targets.len();
+	let morph_source_indices: Vec<usize> = dynamic_morph_targets
+		.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
+		.unwrap_or_else(|| (0..num_morph).collect());
 	let vertex_capacity = positions.len();
-	let mut morph_push: Vec<Vec<[f32; 3]>> = (0..num_morph).map(|_| Vec::with_capacity(vertex_capacity)).collect();
-	let has_morph_normals = buf.morph_targets.iter().any(|target| target.normal_deltas.is_some());
+	let mut morph_push: Vec<Vec<[f32; 3]>> = morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect();
+	let has_morph_normals = morph_source_indices.iter().any(|&target_index| {
+		buf.morph_targets
+			.get(target_index)
+			.is_some_and(|target| target.normal_deltas.is_some())
+	});
 	let mut morph_nrm_push: Option<Vec<Vec<[f32; 3]>>> = if has_morph_normals {
-		Some((0..num_morph).map(|_| Vec::with_capacity(vertex_capacity)).collect())
+		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
 	} else {
 		None
 	};
@@ -1477,8 +1489,11 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 	for pi in 0..positions.len() {
 		let mut pos = positions[pi];
 		let mut n = normals.and_then(|nn| nn.get(pi)).copied().unwrap_or(default_n);
-		if bake_static_default_morphs {
+		if let Some(dynamic_morph_targets) = dynamic_morph_targets {
 			for (target_index, target) in buf.morph_targets.iter().enumerate() {
+				if dynamic_morph_targets.contains(&target_index) {
+					continue;
+				}
 				let weight = default_morph_weight_for(buf, target_index);
 				if weight.abs() <= 0.000001 {
 					continue;
@@ -1519,16 +1534,21 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 			weights: we,
 			color,
 		});
-		for (target, bucket) in buf.morph_targets.iter().zip(morph_push.iter_mut()) {
-			let d = target.position_deltas.get(pi).copied().unwrap_or([0.0, 0.0, 0.0]);
+		for (&target_index, bucket) in morph_source_indices.iter().zip(morph_push.iter_mut()) {
+			let d = buf
+				.morph_targets
+				.get(target_index)
+				.and_then(|target| target.position_deltas.get(pi))
+				.copied()
+				.unwrap_or([0.0, 0.0, 0.0]);
 			bucket.push(d);
 		}
 		if let Some(ref mut normal_buckets) = morph_nrm_push {
-			for (target, bucket) in buf.morph_targets.iter().zip(normal_buckets.iter_mut()) {
-				let nd = target
-					.normal_deltas
-					.as_ref()
-					.and_then(|n| n.get(pi))
+			for (&target_index, bucket) in morph_source_indices.iter().zip(normal_buckets.iter_mut()) {
+				let nd = buf
+					.morph_targets
+					.get(target_index)
+					.and_then(|target| target.normal_deltas.as_ref().and_then(|n| n.get(pi)))
 					.copied()
 					.unwrap_or([0.0, 0.0, 0.0]);
 				bucket.push(nd);
@@ -1559,11 +1579,11 @@ fn expand_primitive(buf: &UnaMeshBuffers, bake_static_default_morphs: bool) -> O
 		indices,
 		morph_pos: morph_push,
 		morph_nrm: morph_nrm_push,
-		default_morph_weights: if bake_static_default_morphs {
-			vec![0.0; num_morph]
-		} else {
-			buf.default_morph_weights.clone()
-		},
+		default_morph_weights: morph_source_indices
+			.iter()
+			.map(|&target_index| default_morph_weight_for(buf, target_index))
+			.collect(),
+		morph_source_indices,
 	})
 }
 
@@ -1585,6 +1605,69 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 		}
 	}
 	index
+}
+
+fn runtime_expression_morph_name_candidate(name: &str) -> bool {
+	let normalized = name.trim();
+	let lower = normalized.to_ascii_lowercase();
+	lower.starts_with("vrc.")
+		|| lower.starts_with("fcl_")
+		|| lower.starts_with("brow")
+		|| lower.starts_with("eye")
+		|| lower.starts_with("jaw")
+		|| lower.starts_with("mouth")
+		|| lower.starts_with("cheek")
+		|| lower.starts_with("nose")
+		|| lower == "tongueout"
+		|| matches!(
+			normalized,
+			"Blink" | "Blink_L" | "Blink_R" | "A" | "I" | "U" | "E" | "O" | "Joy" | "Angry" | "Sorrow" | "Fun" | "Surprised"
+		)
+}
+
+fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBinding], include_all: bool) -> BTreeSet<usize> {
+	if include_all {
+		return (0..buf.morph_targets.len()).collect();
+	}
+	let mut indices = BTreeSet::new();
+	for (index, &weight) in buf.default_morph_weights.iter().enumerate() {
+		if index < buf.morph_targets.len() && weight.abs() > 0.000001 {
+			indices.insert(index);
+		}
+	}
+	for binding in bindings {
+		if binding.morph_target_index < buf.morph_targets.len()
+			&& buf
+				.morph_target_names
+				.get(binding.morph_target_index)
+				.is_some_and(|name| runtime_expression_morph_name_candidate(name))
+		{
+			indices.insert(binding.morph_target_index);
+		}
+	}
+	indices
+}
+
+fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indices: &[usize]) -> Vec<ExpressionBinding> {
+	if bindings.is_empty() || morph_source_indices.is_empty() {
+		return Vec::new();
+	}
+	let compact_indices: BTreeMap<usize, usize> = morph_source_indices
+		.iter()
+		.enumerate()
+		.map(|(compact_index, &source_index)| (source_index, compact_index))
+		.collect();
+	bindings
+		.iter()
+		.filter_map(|binding| {
+			let &morph_target_index = compact_indices.get(&binding.morph_target_index)?;
+			Some(ExpressionBinding {
+				preset_index: binding.preset_index,
+				morph_target_index,
+				weight_scale: binding.weight_scale,
+			})
+		})
+		.collect()
 }
 
 fn scene_has_morph_targets(scene: &UnaSceneSnapshot) -> bool {
@@ -1735,19 +1818,19 @@ fn scene_default_morph_weights_for_draw(
 	scene: &UnaSceneSnapshot,
 	mesh_index: usize,
 	primitive_index: usize,
-	target_count: usize,
+	morph_source_indices: &[usize],
 ) -> Vec<f32> {
-	let mut out = vec![0.0; target_count];
+	let mut out = vec![0.0; morph_source_indices.len()];
 	let Some(primitive) = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index)) else {
 		return out;
 	};
-	let copy_len = primitive.default_morph_weights.len().min(target_count);
-	for (dst, src) in out
-		.iter_mut()
-		.take(copy_len)
-		.zip(primitive.default_morph_weights.iter().take(copy_len))
-	{
-		*dst = src.clamp(0.0, 1.0);
+	for (dst, &source_index) in out.iter_mut().zip(morph_source_indices) {
+		*dst = primitive
+			.default_morph_weights
+			.get(source_index)
+			.copied()
+			.unwrap_or(0.0)
+			.clamp(0.0, 1.0);
 	}
 	out
 }
@@ -1758,9 +1841,9 @@ fn refresh_morph_default_weights(
 	scene: &UnaSceneSnapshot,
 	mesh_index: usize,
 	primitive_index: usize,
-	target_count: usize,
+	morph_source_indices: &[usize],
 ) -> bool {
-	let next = scene_default_morph_weights_for_draw(scene, mesh_index, primitive_index, target_count);
+	let next = scene_default_morph_weights_for_draw(scene, mesh_index, primitive_index, morph_source_indices);
 	if *default_morph_weights == next {
 		return false;
 	}
@@ -5929,10 +6012,9 @@ impl SceneMeshes {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
 				}
-				// Wardrobe / expression updates mutate scene default morph weights after GPU upload.
-				// Baking defaults into vertices here would make later wardrobe morphs double-apply
-				// against already-morphed positions.
-				let Some(exp) = expand_primitive(buf, false) else {
+				let original_expression_bindings = expression_bindings.get(&(mesh_i, prim_i)).map(Vec::as_slice).unwrap_or(&[]);
+				let dynamic_morph_targets = dynamic_morph_target_indices(buf, original_expression_bindings, opts.debug_zero_morphs);
+				let Some(exp) = expand_primitive(buf, Some(&dynamic_morph_targets)) else {
 					continue;
 				};
 				let ExpandedPrimitive {
@@ -5940,8 +6022,10 @@ impl SceneMeshes {
 					indices,
 					morph_pos,
 					morph_nrm,
+					morph_source_indices,
 					default_morph_weights,
 				} = exp;
+				let compact_expression_bindings = remap_expression_bindings(original_expression_bindings, &morph_source_indices);
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
 				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
 				let skin_palette_key = skin_palette_key_for_node(ni, node.skin);
@@ -6608,11 +6692,8 @@ impl SceneMeshes {
 					active,
 					shading: mat.shading,
 					morph_pos,
-					expression_bindings: if has_morph_targets {
-						expression_bindings.get(&(mesh_i, prim_i)).cloned().unwrap_or_default()
-					} else {
-						Vec::new()
-					},
+					morph_source_indices,
+					expression_bindings: compact_expression_bindings,
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_target_count),
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
@@ -7289,7 +7370,7 @@ impl SceneMeshes {
 				scene,
 				draw.mesh_index,
 				draw.primitive_index,
-				target_count,
+				&draw.morph_source_indices,
 			) {
 				changed += 1;
 			}
@@ -8033,8 +8114,8 @@ mod tests {
 			}]],
 			..Default::default()
 		};
-		assert_eq!(scene_default_morph_weights_for_draw(&scene, 0, 0, 2), vec![1.0, 0.0]);
-		assert_eq!(scene_default_morph_weights_for_draw(&scene, 9, 0, 2), vec![0.0, 0.0]);
+		assert_eq!(scene_default_morph_weights_for_draw(&scene, 0, 0, &[0, 1]), vec![1.0, 0.0]);
+		assert_eq!(scene_default_morph_weights_for_draw(&scene, 9, 0, &[0, 1]), vec![0.0, 0.0]);
 	}
 
 	#[test]
@@ -8065,12 +8146,12 @@ mod tests {
 		};
 		let mut defaults = vec![0.25];
 		let mut uploaded = vec![0.25];
-		assert!(refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, 1));
+		assert!(refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0]));
 		assert_eq!(defaults, vec![0.75]);
 		assert!(uploaded.is_empty());
 
 		uploaded.push(0.75);
-		assert!(!refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, 1));
+		assert!(!refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0]));
 		assert_eq!(uploaded, vec![0.75]);
 	}
 
@@ -8084,6 +8165,61 @@ mod tests {
 		let mut out = Vec::new();
 		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &mut out);
 		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	#[test]
+	fn dynamic_morph_targets_keep_runtime_expressions_and_nonzero_defaults() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+			],
+			morph_target_names: vec![
+				"eyeBlinkLeft".to_string(),
+				"Chest1_____胸_首元".to_string(),
+				"WardrobeOnlyZero".to_string(),
+			],
+			default_morph_weights: vec![0.0, 1.0, 0.0],
+		};
+		let bindings = [
+			ExpressionBinding {
+				preset_index: 0,
+				morph_target_index: 0,
+				weight_scale: 1.0,
+			},
+			ExpressionBinding {
+				preset_index: 1,
+				morph_target_index: 2,
+				weight_scale: 1.0,
+			},
+		];
+
+		let indices = dynamic_morph_target_indices(&buf, &bindings, false);
+
+		assert_eq!(indices, BTreeSet::from([0, 1]));
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
@@ -8162,11 +8298,13 @@ mod tests {
 			default_morph_weights: vec![0.5],
 		};
 
-		let baked = expand_primitive(&buf, true).expect("expanded primitive");
+		let static_morph_targets = BTreeSet::new();
+		let baked = expand_primitive(&buf, Some(&static_morph_targets)).expect("expanded primitive");
 		assert_eq!(baked.verts[0].pos, [2.0, 2.0, 2.5]);
-		assert_eq!(baked.default_morph_weights, vec![0.0]);
+		assert!(baked.default_morph_weights.is_empty());
+		assert!(baked.morph_pos.is_empty());
 
-		let dynamic = expand_primitive(&buf, false).expect("expanded primitive");
+		let dynamic = expand_primitive(&buf, None).expect("expanded primitive");
 		assert_eq!(dynamic.verts[0].pos, [1.0, 2.0, 3.0]);
 		assert_eq!(dynamic.default_morph_weights, vec![0.5]);
 	}
