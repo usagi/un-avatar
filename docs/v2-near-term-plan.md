@@ -130,10 +130,10 @@ MVP control command:
 - `UnaRuntimeActionSet` / `UnaRuntimeAction` / trigger / effect schema を core に追加した。
 - `.unavatar` wardrobe sets は、base set を除き `WardrobeSet` effect を持つ runtime action candidate へ import される。
 - CLI diagnose は runtime action 件数、trigger 件数、effect 件数、action id / label を観測できる。
+- renderer runtime control は `activate_action` を受け、`action_id` または `supervisor_command` で action を解決し、`WardrobeSet` effect を既存 hot switch 経路で適用する。
 
 次の段階:
 
-- runtime control command から action id / supervisor command を解決して effect を適用する。
 - Modular Avatar / VRC Expression Menu metadata から ExpressionMenu trigger と action label/path を取り込む。
 - Node visibility、expression weight、dynamics enable、material override effect を renderer の既存 hot switch / expression override / dynamics mutation 経路へ接続する。
 
