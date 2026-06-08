@@ -4059,6 +4059,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	let mut disabled = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
 	let mut unsupported_active_types = BTreeMap::<String, usize>::new();
+	let mut inverted_runtime_action_types = BTreeMap::<String, usize>::new();
 	for component in components {
 		let component_disabled = component.get("enabled").and_then(Value::as_bool) == Some(false);
 		if component_disabled {
@@ -4071,7 +4072,12 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			.unwrap_or("unknown");
 		match modular_avatar_component_support_kind(short_type) {
 			"resolver" => resolver_supported += 1,
-			"runtime_action" => runtime_action_supported += 1,
+			"runtime_action" => {
+				runtime_action_supported += 1;
+				if !component_disabled && unavatar_modular_avatar_component_inverted(component) {
+					*inverted_runtime_action_types.entry(short_type.to_string()).or_default() += 1;
+				}
+			}
 			_ => {
 				unsupported += 1;
 				*unsupported_types.entry(short_type.to_string()).or_default() += 1;
@@ -4092,6 +4098,17 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			)),
 		});
 	}
+	for (short_type, count) in &inverted_runtime_action_types {
+		report.push_warning(format!(
+			".unavatar Modular Avatar runtime action approximation: type={short_type}, inverted_ignored={count}"
+		));
+		report.approximations.push(Approximation {
+			feature: format!("ModularAvatar.{short_type}.Inverted"),
+			detail: Some(format!(
+				"{count} inverted Modular Avatar reactive component(s) were imported as direct runtime actions without inverted condition evaluation"
+			)),
+		});
+	}
 	let unsupported_types = unsupported_types
 		.into_iter()
 		.map(|(ty, count)| format!("{ty}:{count}"))
@@ -4106,6 +4123,18 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		disabled,
 		unsupported_types
 	));
+}
+
+fn unavatar_modular_avatar_component_inverted(component: &Value) -> bool {
+	component
+		.get("Inverted")
+		.or_else(|| component.get("inverted"))
+		.or_else(|| component.get("m_inverted"))
+		.or_else(|| component.get("fields").and_then(|fields| fields.get("Inverted")))
+		.or_else(|| component.get("fields").and_then(|fields| fields.get("inverted")))
+		.or_else(|| component.get("fields").and_then(|fields| fields.get("m_inverted")))
+		.and_then(Value::as_bool)
+		.unwrap_or(false)
 }
 
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
@@ -10625,6 +10654,31 @@ mod tests {
 		assert!(report.diagnostics.iter().any(|diagnostic| {
 			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarMeshCutter")
 		}));
+	}
+
+	#[test]
+	fn modular_avatar_component_catalog_reports_inverted_runtime_action_approximation() {
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarObjectToggle",
+			"enabled": true,
+			"fields": {"m_inverted": true}
+		})];
+		let mut report = ImportReport::default();
+		report_unavatar_modular_avatar_component_catalog(&components, &mut report);
+
+		let message = report
+			.messages
+			.iter()
+			.find(|message| message.contains("runtime action approximation"))
+			.unwrap();
+		assert!(message.contains("type=ModularAvatarObjectToggle"));
+		assert!(message.contains("inverted_ignored=1"));
+		assert_eq!(report.lost_features.len(), 0);
+		assert_eq!(report.approximations.len(), 1);
+		assert_eq!(
+			report.approximations[0].feature,
+			"ModularAvatar.ModularAvatarObjectToggle.Inverted"
+		);
 	}
 
 	#[test]
