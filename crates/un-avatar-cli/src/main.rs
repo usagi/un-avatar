@@ -2146,6 +2146,19 @@ fn build_diagnose_report(
 	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
 ) -> DiagnoseReport {
 	let mut warnings = Vec::new();
+	for diagnostic in &import_report.diagnostics {
+		if diagnostic.severity == un_avatar_core::ReportSeverity::Warning {
+			warnings.push(format!("import warning: {}", diagnostic.text));
+		}
+	}
+	for lost in &import_report.lost_features {
+		let detail = lost.detail.as_deref().unwrap_or("");
+		if detail.is_empty() {
+			warnings.push(format!("import lost feature: {}", lost.feature));
+		} else {
+			warnings.push(format!("import lost feature: {} ({detail})", lost.feature));
+		}
+	}
 	let runtime_model = doc.runtime_model();
 	let scene = if let Some(sc) = runtime_model.scene() {
 		let mut shading_counts = BTreeMap::new();
@@ -3475,6 +3488,40 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups")));
+	}
+
+	#[test]
+	fn diagnose_report_surfaces_import_warnings_and_lost_features() {
+		let mut import_report = ImportReport::default();
+		import_report.push_warning(".unavatar Modular Avatar unsupported component: type=ModularAvatarMeshCutter, count=1");
+		import_report.lost_features.push(un_avatar_core::LostFeature {
+			feature: "ModularAvatar.ModularAvatarMeshCutter".to_string(),
+			detail: Some("1 unsupported Modular Avatar component(s) were preserved as source payload but not applied".to_string()),
+		});
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			import_report,
+			UnaDocument::default(),
+			Vec::new(),
+		);
+
+		assert!(report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("import warning") && warning.contains("ModularAvatarMeshCutter")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter")));
 	}
 
 	#[test]
