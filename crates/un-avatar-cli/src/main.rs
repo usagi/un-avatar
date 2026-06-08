@@ -369,12 +369,23 @@ struct DiagnoseActionItemSummary {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	parameter_triggers: Vec<DiagnoseActionParameterTrigger>,
 	effect_kinds: BTreeMap<String, usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	node_visibility_effects: Vec<DiagnoseActionNodeVisibilityEffect>,
 }
 
 #[derive(Serialize)]
 struct DiagnoseActionParameterTrigger {
 	name: String,
 	value: f32,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionNodeVisibilityEffect {
+	node_index: Option<usize>,
+	source_node_id: Option<String>,
+	resolved_node_id: Option<String>,
+	path: Option<String>,
+	visible: bool,
 }
 
 #[derive(Serialize)]
@@ -2516,6 +2527,7 @@ fn build_diagnose_report(
 				trigger_kinds: runtime_action_trigger_kind_counts(action.triggers.iter()),
 				parameter_triggers: runtime_action_parameter_triggers(action.triggers.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
 			})
 			.collect(),
 	});
@@ -2731,6 +2743,24 @@ fn runtime_action_parameter_triggers<'a>(
 		.collect()
 }
 
+fn runtime_action_node_visibility_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<DiagnoseActionNodeVisibilityEffect> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::NodeVisibility { target, visible } => Some(DiagnoseActionNodeVisibilityEffect {
+				node_index: target.node_index,
+				source_node_id: target.source_node_id.clone(),
+				resolved_node_id: target.resolved_node_id.clone(),
+				path: target.path.clone(),
+				visible: *visible,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
 fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
 	let mut counts = BTreeMap::new();
 	for effect in effects {
@@ -2873,6 +2903,24 @@ fn run_diagnose(
 					.collect::<Vec<_>>()
 					.join(", ");
 				println!("action[{}].parameter_triggers: {}", action.id, triggers);
+			}
+			if !action.node_visibility_effects.is_empty() {
+				let effects = action
+					.node_visibility_effects
+					.iter()
+					.map(|effect| {
+						let target = effect
+							.source_node_id
+							.as_deref()
+							.or(effect.resolved_node_id.as_deref())
+							.or(effect.path.as_deref())
+							.map(str::to_string)
+							.unwrap_or_else(|| effect.node_index.map_or("?".to_string(), |index| format!("#{index}")));
+						format!("{target}={}", effect.visible)
+					})
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].node_visibility: {}", action.id, effects);
 			}
 		}
 	} else {
@@ -3555,6 +3603,54 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarObjectToggle.Inverted")));
+	}
+
+	#[test]
+	fn diagnose_report_summarizes_node_visibility_action_targets() {
+		let doc = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "ma:object_toggle:hat".to_string(),
+					label: "Hat".to_string(),
+					triggers: vec![UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+						target: un_avatar_core::UnaRuntimeNodeTarget {
+							node_index: None,
+							source_node_id: Some("node_hat".to_string()),
+							resolved_node_id: Some("resolved_hat".to_string()),
+							path: Some("Root/Hat".to_string()),
+						},
+						visible: false,
+					}],
+				}],
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let action = &report.actions.as_ref().unwrap().actions[0];
+		assert_eq!(action.node_visibility_effects.len(), 1);
+		assert_eq!(action.node_visibility_effects[0].source_node_id.as_deref(), Some("node_hat"));
+		assert_eq!(action.node_visibility_effects[0].resolved_node_id.as_deref(), Some("resolved_hat"));
+		assert_eq!(action.node_visibility_effects[0].path.as_deref(), Some("Root/Hat"));
+		assert!(!action.node_visibility_effects[0].visible);
 	}
 
 	#[test]
