@@ -215,6 +215,18 @@ impl MeshShaderVariantTier {
 	}
 }
 
+#[derive(Clone, Copy)]
+enum MeshPipelineAlphaCoverage {
+	Off,
+	On,
+}
+
+impl MeshPipelineAlphaCoverage {
+	fn enabled(self) -> bool {
+		matches!(self, Self::On)
+	}
+}
+
 use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
@@ -4852,9 +4864,10 @@ impl SceneMeshes {
 		depth_write: bool,
 		depth_compare: wgpu::CompareFunction,
 		cull_mode: Option<wgpu::Face>,
-		alpha_to_coverage_enabled: bool,
+		alpha_coverage: MeshPipelineAlphaCoverage,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
+		let alpha_to_coverage_enabled = alpha_coverage.enabled();
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -5192,7 +5205,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::Less,
 			Some(wgpu::Face::Front),
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_opaque_lit = Self::create_mesh_pipeline(
@@ -5209,7 +5222,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_opaque_unlit = Self::create_mesh_pipeline(
@@ -5226,7 +5239,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_opaque_toon = Self::create_mesh_pipeline(
@@ -5243,7 +5256,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			true,
+			MeshPipelineAlphaCoverage::On,
 			sample_count,
 		);
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -5289,7 +5302,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_blend_unlit = Self::create_mesh_pipeline(
@@ -5306,7 +5319,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_blend_toon = Self::create_mesh_pipeline(
@@ -5323,7 +5336,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_compute_fur_cards_pre_toon = Self::create_mesh_pipeline(
@@ -5340,7 +5353,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			true,
+			MeshPipelineAlphaCoverage::On,
 			sample_count,
 		);
 		let pipeline_compute_fur_cards_toon = Self::create_mesh_pipeline(
@@ -5357,7 +5370,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
@@ -5374,7 +5387,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_transparent_toon_backpass_no_zwrite = Self::create_mesh_pipeline(
@@ -5391,7 +5404,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
@@ -5408,7 +5421,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_blend_toon_add = Self::create_mesh_pipeline(
@@ -5425,7 +5438,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_blend_toon_add_zwrite = Self::create_mesh_pipeline(
@@ -5442,7 +5455,7 @@ impl SceneMeshes {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		let pipeline_liltoon_gem_pre_toon = Self::create_mesh_pipeline(
@@ -5459,7 +5472,7 @@ impl SceneMeshes {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			sample_count,
 		);
 		report("gpu-upload", "Preparing mesh frame buffers".to_string());
@@ -7774,7 +7787,7 @@ mod tests {
 			false,
 			wgpu::CompareFunction::Less,
 			Some(wgpu::Face::Front),
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			1,
 		);
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
@@ -7791,7 +7804,7 @@ mod tests {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			true,
+			MeshPipelineAlphaCoverage::On,
 			1,
 		);
 		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
@@ -7808,7 +7821,7 @@ mod tests {
 			true,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			true,
+			MeshPipelineAlphaCoverage::On,
 			1,
 		);
 		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
@@ -7825,7 +7838,7 @@ mod tests {
 			false,
 			wgpu::CompareFunction::LessEqual,
 			None,
-			false,
+			MeshPipelineAlphaCoverage::Off,
 			1,
 		);
 	}
