@@ -238,6 +238,37 @@ struct MeshPipelineRenderState {
 	sample_count: u32,
 }
 
+impl MeshPipelineRenderState {
+	fn mesh_main(color_blend: Option<wgpu::BlendState>, depth_write: bool, sample_count: u32) -> Self {
+		Self {
+			color_blend,
+			color_write_mask: wgpu::ColorWrites::ALL,
+			depth_write,
+			depth_compare: wgpu::CompareFunction::LessEqual,
+			cull_mode: None,
+			alpha_coverage: MeshPipelineAlphaCoverage::Off,
+			sample_count,
+		}
+	}
+
+	fn outline(sample_count: u32) -> Self {
+		Self {
+			color_blend: None,
+			color_write_mask: wgpu::ColorWrites::ALL,
+			depth_write: false,
+			depth_compare: wgpu::CompareFunction::Less,
+			cull_mode: Some(wgpu::Face::Front),
+			alpha_coverage: MeshPipelineAlphaCoverage::Off,
+			sample_count,
+		}
+	}
+
+	fn with_alpha_coverage(mut self, alpha_coverage: MeshPipelineAlphaCoverage) -> Self {
+		self.alpha_coverage = alpha_coverage;
+		self
+	}
+}
+
 use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
@@ -5205,15 +5236,7 @@ impl SceneMeshes {
 			"mesh_outline_toon",
 			"vs_outline",
 			"fs_outline",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::Less,
-				cull_mode: Some(wgpu::Face::Front),
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::outline(sample_count),
 		);
 		let pipeline_opaque_lit = Self::create_mesh_pipeline(
 			device,
@@ -5224,15 +5247,7 @@ impl SceneMeshes {
 			"mesh_opaque_lit",
 			"vs_main",
 			"fs_lit",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, sample_count),
 		);
 		let pipeline_opaque_unlit = Self::create_mesh_pipeline(
 			device,
@@ -5243,15 +5258,7 @@ impl SceneMeshes {
 			"mesh_opaque_unlit",
 			"vs_main",
 			"fs_unlit",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, sample_count),
 		);
 		let pipeline_opaque_toon = Self::create_mesh_pipeline(
 			device,
@@ -5262,15 +5269,7 @@ impl SceneMeshes {
 			"mesh_opaque_toon",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::On,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
 		);
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
 		// lilToon Transparent uses SrcBlend=One, DstBlend=OneMinusSrcAlpha
@@ -5310,15 +5309,7 @@ impl SceneMeshes {
 			"mesh_blend_lit",
 			"vs_main",
 			"fs_lit",
-			MeshPipelineRenderState {
-				color_blend: blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
 		);
 		let pipeline_blend_unlit = Self::create_mesh_pipeline(
 			device,
@@ -5329,15 +5320,7 @@ impl SceneMeshes {
 			"mesh_blend_unlit",
 			"vs_main",
 			"fs_unlit",
-			MeshPipelineRenderState {
-				color_blend: blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
 		);
 		let pipeline_blend_toon = Self::create_mesh_pipeline(
 			device,
@@ -5348,15 +5331,7 @@ impl SceneMeshes {
 			"mesh_blend_toon",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: premultiplied_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
 		);
 		let pipeline_compute_fur_cards_pre_toon = Self::create_mesh_pipeline(
 			device,
@@ -5367,15 +5342,7 @@ impl SceneMeshes {
 			"mesh_compute_fur_cards_pre_toon",
 			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::On,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
 		);
 		let pipeline_compute_fur_cards_toon = Self::create_mesh_pipeline(
 			device,
@@ -5386,15 +5353,7 @@ impl SceneMeshes {
 			"mesh_compute_fur_cards_toon",
 			"vs_compute_fur_cards",
 			"fs_fur_toon",
-			MeshPipelineRenderState {
-				color_blend: blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
 		);
 		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
 			device,
@@ -5405,15 +5364,7 @@ impl SceneMeshes {
 			"mesh_transparent_toon_backpass",
 			"vs_main",
 			"fs_toon_backpass",
-			MeshPipelineRenderState {
-				color_blend: premultiplied_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
 		);
 		let pipeline_transparent_toon_backpass_no_zwrite = Self::create_mesh_pipeline(
 			device,
@@ -5424,15 +5375,7 @@ impl SceneMeshes {
 			"mesh_transparent_toon_backpass_no_zwrite",
 			"vs_main",
 			"fs_toon_backpass",
-			MeshPipelineRenderState {
-				color_blend: premultiplied_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
 		);
 		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
 			device,
@@ -5443,15 +5386,7 @@ impl SceneMeshes {
 			"mesh_blend_toon_zwrite",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: premultiplied_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
 		);
 		let pipeline_blend_toon_add = Self::create_mesh_pipeline(
 			device,
@@ -5462,15 +5397,7 @@ impl SceneMeshes {
 			"mesh_blend_toon_add",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: additive_toon_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(additive_toon_blend, false, sample_count),
 		);
 		let pipeline_blend_toon_add_zwrite = Self::create_mesh_pipeline(
 			device,
@@ -5481,15 +5408,7 @@ impl SceneMeshes {
 			"mesh_blend_toon_add_zwrite",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: additive_toon_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(additive_toon_blend, true, sample_count),
 		);
 		let pipeline_liltoon_gem_pre_toon = Self::create_mesh_pipeline(
 			device,
@@ -5500,15 +5419,7 @@ impl SceneMeshes {
 			"mesh_liltoon_gem_pre_toon",
 			"vs_main",
 			"fs_toon_gem_pre",
-			MeshPipelineRenderState {
-				color_blend: gem_pre_blend,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count,
-			},
+			MeshPipelineRenderState::mesh_main(gem_pre_blend, false, sample_count),
 		);
 		report("gpu-upload", "Preparing mesh frame buffers".to_string());
 		let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -7817,15 +7728,7 @@ mod tests {
 			"mesh_outline_toon",
 			"vs_outline",
 			"fs_outline",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::Less,
-				cull_mode: Some(wgpu::Face::Front),
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count: 1,
-			},
+			MeshPipelineRenderState::outline(1),
 		);
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
@@ -7836,15 +7739,7 @@ mod tests {
 			"mesh_opaque_toon",
 			"vs_main",
 			"fs_toon",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::On,
-				sample_count: 1,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
 		);
 		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
@@ -7855,15 +7750,7 @@ mod tests {
 			"mesh_compute_fur_cards_pre_toon",
 			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
-			MeshPipelineRenderState {
-				color_blend: None,
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: true,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::On,
-				sample_count: 1,
-			},
+			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
 		);
 		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
@@ -7874,15 +7761,7 @@ mod tests {
 			"mesh_compute_fur_cards_toon",
 			"vs_compute_fur_cards",
 			"fs_fur_toon",
-			MeshPipelineRenderState {
-				color_blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-				color_write_mask: wgpu::ColorWrites::ALL,
-				depth_write: false,
-				depth_compare: wgpu::CompareFunction::LessEqual,
-				cull_mode: None,
-				alpha_coverage: MeshPipelineAlphaCoverage::Off,
-				sample_count: 1,
-			},
+			MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, 1),
 		);
 	}
 
