@@ -3242,8 +3242,9 @@ impl GpuState {
 			self.debug_morph && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
 		) {
 			if let Ok(g) = doc_arc.read() {
-				let n_presets = g.runtime_model().expression_catalog().map(|c| c.presets.len()).unwrap_or(0);
-				if let Some(ew) = g.expression_weights.as_ref() {
+				let runtime_model = g.runtime_model();
+				let n_presets = runtime_model.expression_catalog().map(|c| c.presets.len()).unwrap_or(0);
+				if let Some(ew) = runtime_model.expression_weights() {
 					let top = format_top_expression_weights(&ew.preset_weights, 16);
 					self.debug_log.line(
 						"morph",
