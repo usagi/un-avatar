@@ -92,6 +92,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"screenshot",
 	"set_wardrobe",
 	"activate_action",
+	"set_parameter",
 	"set_expression_override",
 	"clear_expression_overrides",
 	"set_look_at",
@@ -227,6 +228,11 @@ enum RendererControlEvent {
 		expression_menu_path: Option<String>,
 		parameter_name: Option<String>,
 		parameter_value: Option<f32>,
+		result: CommandResultSlot,
+	},
+	SetParameter {
+		name: String,
+		value: f32,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -424,6 +430,12 @@ enum RendererControlCommand {
 		parameter_name: Option<String>,
 		#[serde(default, alias = "parameterValue")]
 		parameter_value: Option<f32>,
+	},
+	SetParameter {
+		#[serde(alias = "parameterName")]
+		name: String,
+		#[serde(alias = "parameterValue")]
+		value: f32,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -670,6 +682,7 @@ impl RendererControlCommand {
 			Self::Screenshot { .. } => unreachable!("Screenshot は runtime_control_response で個別に処理する"),
 			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
 			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
+			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -1651,6 +1664,14 @@ impl AvatarApp {
 		}
 	}
 
+	fn apply_runtime_activation_status(&self, activation: &gpu::RuntimeActionActivation) {
+		if let Some(active_set_id) = &activation.active_wardrobe_set {
+			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+		}
+		self.update_runtime_last_action(Some(activation.action_id.clone()));
+		self.update_runtime_parameters(activation.parameter_values.clone());
+	}
+
 	fn update_runtime_startup(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -2463,11 +2484,22 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(activation) = &outcome {
-					if let Some(active_set_id) = &activation.active_wardrobe_set {
-						self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
-					}
-					self.update_runtime_last_action(Some(activation.action_id.clone()));
-					self.update_runtime_parameters(activation.parameter_values.clone());
+					self.apply_runtime_activation_status(activation);
+				}
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome.map(|_| ()));
+				}
+			}
+			RendererControlEvent::SetParameter { name, value, result } => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.activate_runtime_action(None, None, None, Some(&name), Some(value)),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(activation) = &outcome {
+					self.apply_runtime_activation_status(activation);
 				}
 				if outcome.is_ok() {
 					self.request_redraw();
@@ -3435,12 +3467,30 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			parameter_name,
 			parameter_value,
 		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command, expression_menu_path, parameter_name, parameter_value),
+		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
 		},
 		Err(e) => format!("err {e}"),
 	}
+}
+
+fn dispatch_set_parameter_command(proxy: &EventLoopProxy<RendererControlEvent>, name: String, value: f32) -> String {
+	let name = name.trim().to_string();
+	if name.is_empty() {
+		return "err parameter name required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetParameter {
+		name,
+		value,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_parameter")
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
@@ -4310,6 +4360,10 @@ mod tests {
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
 			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_wardrobe"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_parameter"))));
 	}
 
 	#[test]
@@ -4421,6 +4475,17 @@ mod tests {
 		assert_eq!(expression_menu_path, None);
 		assert_eq!(parameter_name.as_deref(), Some("JacketColor"));
 		assert_eq!(parameter_value, Some(1.0));
+	}
+
+	#[test]
+	fn parses_json_set_parameter_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"set_parameter","parameterName":"JacketColor","parameterValue":1.0}"#)
+			.unwrap();
+		let RendererControlCommand::SetParameter { name, value } = command else {
+			panic!("expected set_parameter command");
+		};
+		assert_eq!(name, "JacketColor");
+		assert_eq!(value, 1.0);
 	}
 
 	#[test]
