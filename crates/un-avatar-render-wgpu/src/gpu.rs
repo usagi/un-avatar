@@ -291,7 +291,9 @@ fn active_expression_weights_for_doc(disable_expression_morphs: bool, doc: &UnaD
 	if disable_expression_morphs {
 		None
 	} else {
-		doc.expression_weights.as_ref().filter(|weights| !weights.preset_weights.is_empty())
+		doc.runtime_model()
+			.expression_weights()
+			.filter(|weights| !weights.preset_weights.is_empty())
 	}
 }
 

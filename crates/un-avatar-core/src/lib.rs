@@ -536,6 +536,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.expression_catalog.as_ref()
 	}
 
+	pub fn expression_weights(self) -> Option<&'a UnaExpressionWeights> {
+		self.document.expression_weights.as_ref()
+	}
+
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
 		Some(UnaRuntimeSceneExpressions {
 			scene: self.scene()?,
@@ -3201,8 +3205,10 @@ mod tests {
 		assert!(!document.runtime_model().has_humanoid_scene());
 
 		document.humanoid_profile = Some(HumanoidProfile::default());
+		document.expression_weights = Some(UnaExpressionWeights::default());
 		assert!(document.runtime_model().humanoid_scene().is_some());
 		assert!(document.runtime_model().has_humanoid_scene());
+		assert!(document.runtime_model().expression_weights().is_some());
 		let retarget_inputs = document.runtime_model().humanoid_retarget_inputs();
 		assert_eq!(retarget_inputs.humanoid_basis, UnaHumanoidRuntimeBasis::Vrm0);
 		assert!(retarget_inputs.profile.is_some());
