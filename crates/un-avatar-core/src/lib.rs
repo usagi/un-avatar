@@ -206,17 +206,69 @@ pub struct UnaRuntimeResolverCacheKey {
 	pub wardrobe_set: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub active_asset_groups: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub modular_avatar_components_hash: Option<u64>,
 	pub resolver_version: u32,
 }
 
 impl UnaRuntimeResolverCacheKey {
-	pub fn from_state(state: &UnaRuntimeState) -> Self {
+	pub fn from_document(document: &UnaDocument) -> Self {
+		let state = &document.runtime_state;
 		Self {
 			wardrobe_set: state.active_wardrobe_set.clone(),
 			active_asset_groups: state.active_asset_groups.clone(),
+			modular_avatar_components_hash: document.unavatar.as_ref().and_then(unavatar_modular_avatar_components_hash),
 			resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 		}
 	}
+}
+
+fn unavatar_modular_avatar_components_hash(unavatar: &UnaUnavatarExtension) -> Option<u64> {
+	let components = unavatar.source.get("modularAvatar")?.get("components")?;
+	Some(stable_json_hash(components))
+}
+
+fn stable_json_hash(value: &Value) -> u64 {
+	const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
+	const FNV64_PRIME: u64 = 0x100000001b3;
+
+	fn update(mut hash: u64, bytes: &[u8]) -> u64 {
+		for byte in bytes {
+			hash ^= u64::from(*byte);
+			hash = hash.wrapping_mul(FNV64_PRIME);
+		}
+		hash
+	}
+
+	fn visit(hash: u64, value: &Value) -> u64 {
+		match value {
+			Value::Null => update(hash, b"n"),
+			Value::Bool(value) => update(update(hash, b"b"), if *value { b"1" } else { b"0" }),
+			Value::Number(value) => update(update(hash, b"#"), value.to_string().as_bytes()),
+			Value::String(value) => update(update(hash, b"s"), value.as_bytes()),
+			Value::Array(values) => {
+				let mut hash = update(hash, b"[");
+				for value in values {
+					hash = visit(hash, value);
+					hash = update(hash, b",");
+				}
+				update(hash, b"]")
+			}
+			Value::Object(values) => {
+				let mut hash = update(hash, b"{");
+				let mut keys: Vec<_> = values.keys().collect();
+				keys.sort();
+				for key in keys {
+					hash = update(update(hash, b"k"), key.as_bytes());
+					hash = visit(hash, &values[key]);
+					hash = update(hash, b",");
+				}
+				update(hash, b"}")
+			}
+		}
+	}
+
+	visit(FNV64_OFFSET, value)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -793,7 +845,7 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn resolver_cache_key(self) -> UnaRuntimeResolverCacheKey {
-		UnaRuntimeResolverCacheKey::from_state(self.runtime_state())
+		UnaRuntimeResolverCacheKey::from_document(self.document)
 	}
 
 	pub fn active_wardrobe_set(self) -> Option<&'a str> {
@@ -4193,6 +4245,7 @@ mod tests {
 			UnaRuntimeResolverCacheKey {
 				wardrobe_set: Some("field_drape".to_string()),
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				modular_avatar_components_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4205,6 +4258,7 @@ mod tests {
 			UnaRuntimeResolverCacheKey {
 				wardrobe_set: Some("field_drape".to_string()),
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				modular_avatar_components_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4218,6 +4272,51 @@ mod tests {
 		);
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&3.0));
+	}
+
+	#[test]
+	fn runtime_resolver_cache_key_hashes_modular_avatar_components() {
+		let mut document = UnaDocument {
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [{
+							"shortType": "ModularAvatarMaterialSetter",
+							"id": "mat-setter",
+							"fields": {
+								"objects": [{"slot": 0, "material": "Red"}]
+							}
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+		let first = document.runtime_model().resolver_cache_key();
+		assert!(first.modular_avatar_components_hash.is_some());
+
+		document.unavatar.as_mut().unwrap().source = serde_json::json!({
+			"modularAvatar": {
+				"components": [{
+					"fields": {
+						"objects": [{"material": "Red", "slot": 0}]
+					},
+					"id": "mat-setter",
+					"shortType": "ModularAvatarMaterialSetter"
+				}]
+			}
+		});
+		assert_eq!(
+			document.runtime_model().resolver_cache_key().modular_avatar_components_hash,
+			first.modular_avatar_components_hash
+		);
+
+		document.unavatar.as_mut().unwrap().source["modularAvatar"]["components"][0]["id"] = Value::String("other".to_string());
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().modular_avatar_components_hash,
+			first.modular_avatar_components_hash
+		);
 	}
 
 	#[test]
