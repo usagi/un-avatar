@@ -62,29 +62,6 @@ namespace UNAvatar.UnityExporter
             };
         }
 
-        private HashSet<string> ReferencedMorphTargetNamesForExport()
-        {
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var set in capturedWardrobeSets)
-            {
-                foreach (var operation in set.operations)
-                {
-                    if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name))
-                    {
-                        names.Add(operation.name);
-                    }
-                }
-            }
-            foreach (var operation in CurrentBaseOperations())
-            {
-                if (operation.type == "blendShapeWeight" && !string.IsNullOrWhiteSpace(operation.name) && Math.Abs(operation.floatValue) > 0.001f)
-                {
-                    names.Add(operation.name);
-                }
-            }
-            return names;
-        }
-
         private Dictionary<string, object> BuildReportPayload(
             ExportValidation validation,
             List<VariantRecord> variants,

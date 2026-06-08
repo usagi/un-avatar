@@ -238,7 +238,13 @@ Texture report は次を記録する。
 
 これにより `.exr` や runtime generated texture が silent に PNG 化された場合も、`.unavatar.report.json` から追跡できるようにする。
 
-## 10. User Flow
+## 10. Morph Target Export
+
+SkinnedMeshRenderer の BlendShape は、wardrobe operation で参照された名前だけに絞らず、`sharedMesh` に存在する全 BlendShape を glTF morph target として保存する。Perfect Sync / ARKit / VRC expression 入力は wardrobe 差分に現れないことが多く、ここを pruning すると `.unavatar` runtime では復元不能になるためである。
+
+初期 weight は SkinnedMeshRenderer の現在 weight を glTF `mesh.weights` に保存する。Wardrobe の `blendShapeWeight` operation は import 時・runtime wardrobe 切替時にこの default morph state を上書きする。
+
+## 11. User Flow
 
 想定 UI。
 
@@ -250,7 +256,7 @@ Texture report は次を記録する。
 6. `.unavatar` を export する。
 7. U.N. Avatar Runtime / Supervisor で読み込む。
 
-## 11. Texture Embedding Policy
+## 12. Texture Embedding Policy
 
 Exporter は原則として Unity の texture asset 元ファイルをそのまま `.unavatar` に埋め込む。
 
