@@ -872,9 +872,7 @@ impl UnaMaterialPbr {
 	}
 
 	pub fn liltoon_like_runtime(&self) -> Option<&UnaLilToonLikeMaterial> {
-		(self.runtime_toon_model() == Some(UnaRuntimeToonModel::LilToonLike))
-			.then_some(self.liltoon_like.as_ref())
-			.flatten()
+		self.shading.is_liltoon_like().then_some(self.liltoon_like.as_ref()).flatten()
 	}
 
 	pub fn liltoon_like_source_profile(&self) -> Option<&UnaLilToonLikeMaterial> {
@@ -882,9 +880,7 @@ impl UnaMaterialPbr {
 	}
 
 	pub fn mtoon_like_runtime(&self) -> Option<&UnaMtoonMaterial> {
-		(self.runtime_toon_model() == Some(UnaRuntimeToonModel::MToonLike))
-			.then_some(self.mtoon.as_ref())
-			.flatten()
+		self.shading.is_mtoon_like().then_some(self.mtoon.as_ref()).flatten()
 	}
 
 	pub fn mtoon_source_profile(&self) -> Option<&UnaMtoonMaterial> {
