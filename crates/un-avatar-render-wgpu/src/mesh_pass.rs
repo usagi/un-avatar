@@ -7900,10 +7900,6 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::gpu::{
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-	};
 	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
 
 	fn empty_source_metadata() -> UnaImageSourceMetadata {
@@ -8057,34 +8053,8 @@ mod tests {
 		};
 
 		let adapter_limits = adapter.limits();
-		let high_capability_supported = adapter_limits.max_sampled_textures_per_shader_stage
-			>= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
-			&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE;
-		let shader_variant_tier = if high_capability_supported {
-			MeshShaderVariantTier::HighCapability
-		} else {
-			MeshShaderVariantTier::BaselineFallback
-		};
-		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-		if high_capability_supported {
-			limits.max_sampled_textures_per_shader_stage = limits
-				.max_sampled_textures_per_shader_stage
-				.max(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE)
-				.min(adapter_limits.max_sampled_textures_per_shader_stage);
-			limits.max_samplers_per_shader_stage = limits
-				.max_samplers_per_shader_stage
-				.max(HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE)
-				.min(adapter_limits.max_samplers_per_shader_stage);
-		} else {
-			limits.max_sampled_textures_per_shader_stage = limits
-				.max_sampled_textures_per_shader_stage
-				.max(BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE)
-				.min(adapter_limits.max_sampled_textures_per_shader_stage);
-			limits.max_samplers_per_shader_stage = limits
-				.max_samplers_per_shader_stage
-				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE)
-				.min(adapter_limits.max_samplers_per_shader_stage);
-		}
+		let shader_variant_tier = crate::gpu::mesh_shader_variant_tier_for_limits(&adapter_limits);
+		let limits = crate::gpu::mesh_shader_required_limits_for_adapter(&adapter_limits);
 
 		let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 			label: Some("mesh-pipeline-interface-test"),

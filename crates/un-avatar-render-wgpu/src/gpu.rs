@@ -48,6 +48,44 @@ pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
+pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
+	if adapter_limits.max_sampled_textures_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
+		&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
+	{
+		MeshShaderVariantTier::HighCapability
+	} else {
+		MeshShaderVariantTier::BaselineFallback
+	}
+}
+
+pub(crate) fn mesh_shader_required_limits_for_adapter(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
+	let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+	limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
+	match mesh_shader_variant_tier_for_limits(adapter_limits) {
+		MeshShaderVariantTier::HighCapability => {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+		}
+		MeshShaderVariantTier::BaselineFallback => {
+			limits.max_sampled_textures_per_shader_stage = limits
+				.max_sampled_textures_per_shader_stage
+				.max(BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE)
+				.min(adapter_limits.max_sampled_textures_per_shader_stage);
+			limits.max_samplers_per_shader_stage = limits
+				.max_samplers_per_shader_stage
+				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE)
+				.min(adapter_limits.max_samplers_per_shader_stage);
+		}
+	}
+	limits
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DynamicsRuntimeCounts {
 	pub groups: u32,
@@ -1208,34 +1246,9 @@ impl GpuState {
 		.map_err(|e| format!("request_adapter: {e}"))?;
 
 		let adapter_limits = adapter.limits();
-		let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-		limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
-		let high_capability_liltoon_supported = adapter_limits.max_sampled_textures_per_shader_stage
-			>= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
-			&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE;
-		let shader_variant_tier = if high_capability_liltoon_supported {
-			MeshShaderVariantTier::HighCapability
-		} else {
-			MeshShaderVariantTier::BaselineFallback
-		};
-		if high_capability_liltoon_supported {
-			limits.max_sampled_textures_per_shader_stage = limits
-				.max_sampled_textures_per_shader_stage
-				.max(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE)
-				.min(adapter_limits.max_sampled_textures_per_shader_stage);
-			limits.max_samplers_per_shader_stage = limits
-				.max_samplers_per_shader_stage
-				.max(HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE)
-				.min(adapter_limits.max_samplers_per_shader_stage);
-		} else {
-			limits.max_sampled_textures_per_shader_stage = limits
-				.max_sampled_textures_per_shader_stage
-				.max(BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE)
-				.min(adapter_limits.max_sampled_textures_per_shader_stage);
-			limits.max_samplers_per_shader_stage = limits
-				.max_samplers_per_shader_stage
-				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE)
-				.min(adapter_limits.max_samplers_per_shader_stage);
+		let limits = mesh_shader_required_limits_for_adapter(&adapter_limits);
+		let shader_variant_tier = mesh_shader_variant_tier_for_limits(&adapter_limits);
+		if shader_variant_tier == MeshShaderVariantTier::BaselineFallback {
 			eprintln!(
 				"un-avatar-renderer: GPU sampled texture/sampler limits are below the high-capability lilToon-compatible shader target; using baseline fallback variant (adapter sampled={} samplers={}, target sampled={} samplers={})",
 				adapter_limits.max_sampled_textures_per_shader_stage,
@@ -4097,12 +4110,54 @@ fn create_startup_splash_pipeline(
 
 #[cfg(test)]
 mod tests {
-	use super::{transparent_alpha_mode, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE};
+	use super::{
+		mesh_shader_required_limits_for_adapter, mesh_shader_variant_tier_for_limits, transparent_alpha_mode,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+	};
+	use crate::mesh_pass::MeshShaderVariantTier;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
 	fn high_capability_liltoon_texture_budget_covers_highest_mesh_binding() {
 		assert_eq!(HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, 56);
+	}
+
+	#[test]
+	fn mesh_shader_variant_tier_uses_shared_resource_limits() {
+		let mut baseline = wgpu::Limits::downlevel_defaults();
+		baseline.max_sampled_textures_per_shader_stage = BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE;
+		baseline.max_samplers_per_shader_stage = BASELINE_FALLBACK_SAMPLERS_PER_STAGE;
+		assert_eq!(
+			mesh_shader_variant_tier_for_limits(&baseline),
+			MeshShaderVariantTier::BaselineFallback
+		);
+		let baseline_required = mesh_shader_required_limits_for_adapter(&baseline);
+		assert_eq!(
+			baseline_required.max_sampled_textures_per_shader_stage,
+			BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE
+		);
+		assert_eq!(
+			baseline_required.max_samplers_per_shader_stage,
+			BASELINE_FALLBACK_SAMPLERS_PER_STAGE
+		);
+
+		let mut high_capability = baseline.clone();
+		high_capability.max_sampled_textures_per_shader_stage = HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE + 8;
+		high_capability.max_samplers_per_shader_stage = HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE + 4;
+		assert_eq!(
+			mesh_shader_variant_tier_for_limits(&high_capability),
+			MeshShaderVariantTier::HighCapability
+		);
+		let high_required = mesh_shader_required_limits_for_adapter(&high_capability);
+		assert_eq!(
+			high_required.max_sampled_textures_per_shader_stage,
+			HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
+		);
+		assert_eq!(
+			high_required.max_samplers_per_shader_stage,
+			HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
+		);
 	}
 
 	#[test]
