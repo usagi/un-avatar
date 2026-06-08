@@ -349,6 +349,32 @@ struct DiagnoseDynamicsSummary {
 	vrm_spring_bone_group_count: usize,
 	vrc_physbone_group_count: usize,
 	unknown_group_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	groups: Vec<DiagnoseDynamicsGroupSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsGroupSummary {
+	index: usize,
+	source_kind: UnaDynamicsSourceKind,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	comment: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	category: String,
+	bone_count: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	root_node: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	root_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	tip_node: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	tip_path: Option<String>,
+	stiffness: f32,
+	drag_force: f32,
+	gravity_power: f32,
+	gravity_dir: [f32; 3],
+	hit_radius: f32,
 }
 
 #[derive(Serialize)]
@@ -1372,6 +1398,38 @@ fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<b
 	out
 }
 
+fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSummary> {
+	let (Some(scene), Some(settings)) = (doc.scene.as_ref(), doc.runtime_model().dynamics().spring_bones()) else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(scene);
+	settings
+		.groups
+		.iter()
+		.enumerate()
+		.map(|(index, group)| {
+			let root_node = group.bone_node_indices.first().copied();
+			let tip_node = group.bone_node_indices.last().copied();
+			DiagnoseDynamicsGroupSummary {
+				index,
+				source_kind: group.source_kind,
+				comment: group.comment.clone(),
+				category: group.category.clone(),
+				bone_count: group.bone_node_indices.len(),
+				root_node,
+				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				tip_node,
+				tip_path: tip_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				stiffness: group.stiffness,
+				drag_force: group.drag_force,
+				gravity_power: group.gravity_power,
+				gravity_dir: group.gravity_dir,
+				hit_radius: group.hit_radius,
+			}
+		})
+		.collect()
+}
+
 fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: usize) -> Vec<DiagnoseVisibleMaterialSummary> {
 	let Some(primitives) = scene.meshes.get(mesh_index) else {
 		return Vec::new();
@@ -2049,11 +2107,13 @@ fn build_diagnose_report(
 		humanoid_basis: runtime_model.humanoid_basis(),
 	};
 	let runtime_dynamics = runtime_model.dynamics();
+	let dynamics_groups = dynamics_group_summaries(&doc);
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: runtime_dynamics.group_count(),
 		vrm_spring_bone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
 		vrc_physbone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
 		unknown_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::Unknown),
+		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
 		spec_version: vrm.spec_version.clone(),
@@ -2263,6 +2323,21 @@ fn run_diagnose(
 		report.dynamics.vrc_physbone_group_count,
 		report.dynamics.unknown_group_count
 	);
+	for group in report.dynamics.groups.iter().take(16) {
+		println!(
+			"  dynamics_group[{}]: source={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={} comment={:?}",
+			group.index,
+			group.source_kind,
+			group.bone_count,
+			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
+			group.tip_path.as_deref().or(group.tip_node.map(|_| "#")),
+			group.stiffness,
+			group.drag_force,
+			group.gravity_power,
+			group.hit_radius,
+			group.comment
+		);
+	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
 			"unavatar: spec={} generator={:?} name={:?} source={:?}",
