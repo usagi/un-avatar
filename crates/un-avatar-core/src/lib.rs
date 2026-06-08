@@ -309,6 +309,10 @@ impl<'a> UnaRuntimeDynamics<'a> {
 			.flat_map(|group| group.bone_node_indices.iter().copied())
 	}
 
+	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
+		self.spring_bones.into_iter().flat_map(|settings| settings.colliders.iter())
+	}
+
 	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.spring_bones
 			.map(|settings| {
@@ -3225,7 +3229,17 @@ mod tests {
 						..Default::default()
 					},
 				],
-				colliders: Vec::new(),
+				colliders: vec![
+					UnaDynamicsCollider {
+						node: 4,
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						..Default::default()
+					},
+					UnaDynamicsCollider {
+						node: 5,
+						..Default::default()
+					},
+				],
 			}),
 			..Default::default()
 		};
@@ -3243,7 +3257,11 @@ mod tests {
 		assert_eq!(counts.vrm_spring_bone_groups, 1);
 		assert_eq!(counts.vrc_physbone_groups, 1);
 		assert_eq!(counts.unknown_groups, 0);
+		assert_eq!(counts.colliders, 2);
+		assert_eq!(counts.vrm_spring_bone_colliders, 1);
+		assert_eq!(counts.vrc_physbone_colliders, 1);
 		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+		assert_eq!(dynamics.colliders().map(|collider| collider.node).collect::<Vec<_>>(), vec![4, 5]);
 	}
 
 	#[test]

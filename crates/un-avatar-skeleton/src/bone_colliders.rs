@@ -175,43 +175,41 @@ pub fn build_runtime_bone_colliders(
 	dynamics: UnaRuntimeDynamics<'_>,
 ) -> Vec<BoneColliderPrimitive> {
 	let mut out = build_bone_colliders(scene, profile, config);
-	if let Some(settings) = dynamics.spring_bones() {
-		for collider in &settings.colliders {
-			if collider.node >= scene.nodes.len() {
-				continue;
-			}
-			let radius = collider.radius.max(0.0);
-			if !radius.is_finite() || radius <= OFF_EPSILON {
-				continue;
-			}
-			let center = collider.position;
-			match collider.shape {
-				UnaDynamicsColliderShape::Sphere => out.push(BoneColliderPrimitive::LocalSphere {
+	for collider in dynamics.colliders() {
+		if collider.node >= scene.nodes.len() {
+			continue;
+		}
+		let radius = collider.radius.max(0.0);
+		if !radius.is_finite() || radius <= OFF_EPSILON {
+			continue;
+		}
+		let center = collider.position;
+		match collider.shape {
+			UnaDynamicsColliderShape::Sphere => out.push(BoneColliderPrimitive::LocalSphere {
+				node: collider.node,
+				center,
+				radius,
+				inside_bounds: collider.inside_bounds,
+			}),
+			UnaDynamicsColliderShape::Capsule => {
+				let axis = Quat::from_xyzw(
+					collider.rotation[0],
+					collider.rotation[1],
+					collider.rotation[2],
+					collider.rotation[3],
+				) * Vec3::Y;
+				let axis = axis.try_normalize().unwrap_or(Vec3::Y).to_array();
+				let half_length = (collider.height.max(0.0) * 0.5 - radius).max(0.0);
+				out.push(BoneColliderPrimitive::LocalCapsule {
 					node: collider.node,
 					center,
+					axis,
+					half_length,
 					radius,
 					inside_bounds: collider.inside_bounds,
-				}),
-				UnaDynamicsColliderShape::Capsule => {
-					let axis = Quat::from_xyzw(
-						collider.rotation[0],
-						collider.rotation[1],
-						collider.rotation[2],
-						collider.rotation[3],
-					) * Vec3::Y;
-					let axis = axis.try_normalize().unwrap_or(Vec3::Y).to_array();
-					let half_length = (collider.height.max(0.0) * 0.5 - radius).max(0.0);
-					out.push(BoneColliderPrimitive::LocalCapsule {
-						node: collider.node,
-						center,
-						axis,
-						half_length,
-						radius,
-						inside_bounds: collider.inside_bounds,
-					});
-				}
-				UnaDynamicsColliderShape::Unknown => {}
+				});
 			}
+			UnaDynamicsColliderShape::Unknown => {}
 		}
 	}
 	out
