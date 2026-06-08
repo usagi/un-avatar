@@ -2823,6 +2823,14 @@ fn run_diagnose(
 		report.timings.import_ms, report.timings.wardrobe_apply_ms, report.timings.wardrobe_probe_ms, report.timings.report_build_ms
 	);
 	println!(
+		"import_report: status={:?} messages={} diagnostics={} approximations={} lost_features={}",
+		report.import_report.status,
+		report.import_report.messages.len(),
+		report.import_report.diagnostics.len(),
+		report.import_report.approximations.len(),
+		report.import_report.lost_features.len()
+	);
+	println!(
 		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} active_asset_groups={:?} last_action_id={:?} parameter_values={}",
 		report.runtime.source_kind,
 		report.runtime.humanoid_basis,
