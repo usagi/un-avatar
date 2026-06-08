@@ -1784,7 +1784,7 @@ fn wardrobe_probe_for_document(
 ) -> DiagnoseWardrobeProbeSummary {
 	let mut visible_mesh_paths = Vec::new();
 	let mut nonzero_morph_weights = Vec::new();
-	if let Some(scene) = doc.scene.as_ref() {
+	if let Some(scene) = doc.runtime_model().scene() {
 		let effective_visibility = scene_effective_visibility(scene);
 		let node_paths_by_index = scene_node_paths_by_index(scene);
 		for (node_index, node) in scene.nodes.iter().enumerate() {
@@ -2001,7 +2001,8 @@ fn build_diagnose_report(
 	wardrobe_probes: Vec<DiagnoseWardrobeProbeSummary>,
 ) -> DiagnoseReport {
 	let mut warnings = Vec::new();
-	let scene = if let Some(sc) = doc.scene.as_ref() {
+	let runtime_model = doc.runtime_model();
+	let scene = if let Some(sc) = runtime_model.scene() {
 		let mut shading_counts = BTreeMap::new();
 		let mut alpha_counts = BTreeMap::new();
 		let mut eye_like_material_indices = Vec::new();
@@ -2441,17 +2442,18 @@ fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyPr
 	});
 	un_avatar_skeleton::apply_un_motion_frame_to_document(&mut doc, &frame, un_avatar_skeleton::ApplyUnMotionFrameOpts::default());
 	let weights: BTreeMap<String, f32> = doc
-		.expression_weights
-		.as_ref()?
+		.runtime_model()
+		.expression_weights()?
 		.preset_weights
 		.iter()
 		.filter_map(|(name, value)| if *value > 0.0001 { Some((name.clone(), *value)) } else { None })
 		.collect();
 	let mut active_morph_slots = Vec::new();
-	if let (Some(scene), Some(catalog), Some(expression_weights)) = (&doc.scene, &doc.expression_catalog, &doc.expression_weights) {
-		for (mesh_i, primitives) in scene.meshes.iter().enumerate() {
+	let runtime_model = doc.runtime_model();
+	if let (Some(runtime), Some(expression_weights)) = (runtime_model.scene_expression_catalog(), runtime_model.expression_weights()) {
+		for (mesh_i, primitives) in runtime.scene.meshes.iter().enumerate() {
 			for (prim_i, primitive) in primitives.iter().enumerate() {
-				let morphs = morph_weights_for_primitive(primitive, Some(catalog), Some(expression_weights), mesh_i, prim_i);
+				let morphs = morph_weights_for_primitive(primitive, runtime.expression_catalog, Some(expression_weights), mesh_i, prim_i);
 				let active_count = morphs.iter().filter(|value| **value > 0.0001).count();
 				if active_count > 0 {
 					let max_weight = morphs.iter().copied().fold(0.0f32, f32::max);
