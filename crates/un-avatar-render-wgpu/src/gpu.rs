@@ -2692,6 +2692,35 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let doc_arc = Arc::clone(doc_arc);
+		{
+			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+			doc.runtime_model_mut().set_runtime_parameter_value(name.to_string(), value);
+		}
+		let has_matching_action = {
+			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			doc.runtime_model()
+				.runtime_actions()
+				.is_some_and(|actions| {
+					actions
+						.find_action(UnaRuntimeActionQuery {
+							parameter_name: Some(name),
+							parameter_value: Some(value),
+							..Default::default()
+						})
+						.is_some()
+				})
+		};
+		if !has_matching_action {
+			return Ok(None);
+		}
+		self.activate_runtime_action(None, None, None, Some(name), Some(value)).map(Some)
+	}
+
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());

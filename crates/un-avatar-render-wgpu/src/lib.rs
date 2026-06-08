@@ -2495,11 +2495,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 			RendererControlEvent::SetParameter { name, value, result } => {
 				let outcome = match self.gpu.as_mut() {
-					Some(gpu) => gpu.activate_runtime_action(None, None, None, Some(&name), Some(value)),
+					Some(gpu) => gpu.set_runtime_parameter(&name, value),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(activation) = &outcome {
-					self.apply_runtime_activation_status(activation);
+					self.update_runtime_parameters(BTreeMap::from([(name.clone(), value)]));
+					if let Some(activation) = activation {
+						self.apply_runtime_activation_status(activation);
+					}
 				}
 				if outcome.is_ok() {
 					self.request_redraw();
