@@ -462,6 +462,19 @@ pub struct UnaRuntimeRetargetInputs<'a> {
 	pub expression_catalog: Option<&'a UnaExpressionCatalog>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct UnaRuntimeSceneDynamics<'a> {
+	pub scene: &'a UnaSceneSnapshot,
+	pub humanoid_profile: Option<&'a HumanoidProfile>,
+	pub dynamics: UnaRuntimeDynamics<'a>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct UnaRuntimeSceneExpressions<'a> {
+	pub scene: &'a UnaSceneSnapshot,
+	pub expression_catalog: Option<&'a UnaExpressionCatalog>,
+}
+
 impl<'a> UnaRuntimeModel<'a> {
 	pub fn document(self) -> &'a UnaDocument {
 		self.document
@@ -511,16 +524,23 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.humanoid_scene().is_some()
 	}
 
-	pub fn scene_profile_dynamics(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a HumanoidProfile>, UnaRuntimeDynamics<'a>)> {
-		Some((self.scene()?, self.humanoid_profile(), self.dynamics()))
+	pub fn scene_profile_dynamics(self) -> Option<UnaRuntimeSceneDynamics<'a>> {
+		Some(UnaRuntimeSceneDynamics {
+			scene: self.scene()?,
+			humanoid_profile: self.humanoid_profile(),
+			dynamics: self.dynamics(),
+		})
 	}
 
 	pub fn expression_catalog(self) -> Option<&'a UnaExpressionCatalog> {
 		self.document.expression_catalog.as_ref()
 	}
 
-	pub fn scene_expression_catalog(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a UnaExpressionCatalog>)> {
-		Some((self.scene()?, self.expression_catalog()))
+	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
+		Some(UnaRuntimeSceneExpressions {
+			scene: self.scene()?,
+			expression_catalog: self.expression_catalog(),
+		})
 	}
 
 	pub fn humanoid_retarget_inputs(self) -> UnaRuntimeRetargetInputs<'a> {
@@ -3187,6 +3207,11 @@ mod tests {
 		assert_eq!(retarget_inputs.humanoid_basis, UnaHumanoidRuntimeBasis::Vrm0);
 		assert!(retarget_inputs.profile.is_some());
 		assert!(retarget_inputs.scene.is_some());
+		let scene_expressions = document.runtime_model().scene_expression_catalog().unwrap();
+		assert!(scene_expressions.expression_catalog.is_none());
+		let scene_dynamics = document.runtime_model().scene_profile_dynamics().unwrap();
+		assert!(scene_dynamics.humanoid_profile.is_some());
+		assert_eq!(scene_dynamics.dynamics.group_count(), 0);
 	}
 
 	#[test]

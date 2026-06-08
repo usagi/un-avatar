@@ -486,15 +486,20 @@ fn build_runtime_physics_for_document(
 ) -> RuntimePhysicsBuild {
 	let runtime_model = document.runtime_model();
 	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
-	let bone_colliders = if let Some((scene, profile, dynamics)) = scene_profile_dynamics {
-		build_runtime_bone_colliders(scene, profile, bone_collider_config, dynamics)
+	let bone_colliders = if let Some(runtime) = scene_profile_dynamics {
+		build_runtime_bone_colliders(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
 	} else {
 		Vec::new()
 	};
 	let stats = collider_stats(&bone_colliders);
 	let spring_sim = if enable_spring_bones {
-		if let Some((scene, _, dynamics)) = scene_profile_dynamics {
-			SpringBoneSimulator::new_with_runtime_dynamics(scene, dynamics, bone_colliders.clone(), spring_bone_physics.clone())
+		if let Some(runtime) = scene_profile_dynamics {
+			SpringBoneSimulator::new_with_runtime_dynamics(
+				runtime.scene,
+				runtime.dynamics,
+				bone_colliders.clone(),
+				spring_bone_physics.clone(),
+			)
 		} else {
 			None
 		}
@@ -1759,20 +1764,20 @@ impl GpuState {
 			return false;
 		};
 		let runtime_model = doc.runtime_model();
-		let Some((sc, expression_catalog)) = runtime_model.scene_expression_catalog() else {
+		let Some(runtime) = runtime_model.scene_expression_catalog() else {
 			return false;
 		};
-		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
+		crate::scene_transform::write_world_from_nodes(runtime.scene, &mut self.world_scratch);
 		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
-		if document_changed && !expression_presets_match_catalog(&self.expression_presets, expression_catalog) {
-			self.expression_presets = expression_preset_names(expression_catalog);
+		if document_changed && !expression_presets_match_catalog(&self.expression_presets, runtime.expression_catalog) {
+			self.expression_presets = expression_preset_names(runtime.expression_catalog);
 		}
 		let refresh_scene_morph_defaults = document_changed;
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		sm.update_draw_transforms(
 			&self.queue,
-			sc,
+			runtime.scene,
 			&self.world_scratch,
 			expr_weights,
 			expression_overrides,
@@ -2721,7 +2726,7 @@ impl GpuSceneBuildContext {
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
-		if let Some((sc, expression_catalog)) = runtime_model.scene_expression_catalog() {
+		if let Some(runtime) = runtime_model.scene_expression_catalog() {
 			if options.debug_material_dump {
 				log_material_skin_report(&document);
 			}
@@ -2740,8 +2745,8 @@ impl GpuSceneBuildContext {
 				format,
 				aa_sample_count(aa),
 				shader_variant_tier,
-				sc,
-				expression_catalog,
+				runtime.scene,
+				runtime.expression_catalog,
 				options.mesh_diagnostics.clone(),
 				options.texture_max_dimension,
 				options.texture_compression,
@@ -2758,9 +2763,9 @@ impl GpuSceneBuildContext {
 			)?;
 			if !sm.is_empty() {
 				texture_summary = Some(sm.texture_summary());
-				let world = crate::scene_transform::scene_world_matrices(sc);
+				let world = crate::scene_transform::scene_world_matrices(runtime.scene);
 				let expression_weights = active_expression_weights_for_doc(false, &document);
-				sm.update_draw_transforms(&queue, sc, &world, expression_weights, None, true);
+				sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
