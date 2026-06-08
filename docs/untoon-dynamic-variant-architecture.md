@@ -139,6 +139,8 @@ Variant planner は model load 時に実行する。
 
 `audio_link_texture_needed` は AudioLink 入力 source が有効な場合だけ実際の worker / texture upload を起動する実行時判定である。`runtime_requires_audio_link_texture` は material set が AudioLink texture を要求しているかを表す variant planning 用の事実であり、入力 source の ON/OFF とは分けて扱う。
 
+現実装では `material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出し、draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
+
 ## Resource Budget
 
 Texture / sampler budget は material だけで使い切ってはいけない。
