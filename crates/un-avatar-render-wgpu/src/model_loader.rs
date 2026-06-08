@@ -9,6 +9,10 @@ pub(crate) fn normalize_wardrobe_set_id(wardrobe_set: Option<&str>) -> Option<&s
 	wardrobe_set.map(str::trim).filter(|set_id| !set_id.is_empty())
 }
 
+pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String> {
+	normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())
+}
+
 fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 	eprintln!(
 		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={}",
@@ -40,7 +44,7 @@ fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 }
 
 pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
-	let set_id = normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())?;
+	let set_id = require_wardrobe_set_id(wardrobe_set)?;
 	let report =
 		apply_unavatar_wardrobe_set(document, set_id).map_err(|e| format!(".unavatar wardrobe set `{set_id}` not applied: {e}"))?;
 	log_wardrobe_apply_report(set_id, &report);
@@ -116,6 +120,7 @@ mod tests {
 		let mut document = UnaDocument::default();
 		let err = apply_required_wardrobe_set(&mut document, " \t ").expect_err("empty wardrobe id should be rejected");
 		assert_eq!(err, "wardrobe set id required");
+		assert_eq!(require_wardrobe_set_id(" field_drape ").unwrap(), "field_drape");
 	}
 
 	#[test]

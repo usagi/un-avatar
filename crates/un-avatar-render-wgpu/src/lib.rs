@@ -3345,9 +3345,10 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
-	if set_id.trim().is_empty() {
-		return "err wardrobe set id required".to_string();
-	}
+	let set_id = match model_loader::require_wardrobe_set_id(&set_id) {
+		Ok(set_id) => set_id.to_string(),
+		Err(e) => return format!("err {e}"),
+	};
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::SetWardrobe {
 		set_id,
