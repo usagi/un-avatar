@@ -24,7 +24,7 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 - `UnaLilToonLikeMaterial`: v2 開発中の lilToon source profile。lilToon-compatible な Shadow / MatCap / Reflection / Rim / Outline をここへ保持し、UNToon semantic material へ正規化する。
 - `UnaMtoonMaterial`: legacy MToon / VRM import 用 source profile。v2 lilToon 互換機能をここへ追加せず、MToon 由来の値を UNToon semantic material へ変換する。
 - `UnaMaterialPbr`: glTF/PBR由来の共通 material container。UNPBR の設計正本ではなく、`liltoon_like` / `mtoon` などの model-specific payload をぶら下げる既存構造。
-- Renderer は v2 開発中、`material.liltoon_like` があればこれを優先する。v1 互換性は MToon source profile から UNToon semantic material への変換として扱う。
+- Renderer は v2 開発中、`material.liltoon_like_source_profile()` が返す lilToon source profile を優先する。v1 互換性は `material.mtoon_source_profile()` が返す MToon source profile から UNToon semantic material への変換として扱う。
 - Renderer はモデル単位の UNToon dynamic variant planning で、必要な material features、screen-grab、Fur、Gem、AudioLink、GPU skinning / morph resource を集計し、そのモデルに必要十分な shader resource layout を作る。現在の `FullOnePass` / `Portable16` は実装上の歴史名であり、正式な外部 tier ではない。
 - Adapter が必要 resource を満たせない場合は、最低保証構成へ固定 fallback し、UNAvatar 側で警告を出す。fallback は互換性維持のための低機能構成であり、lilToon 利用層の標準品質目標ではない。
 
