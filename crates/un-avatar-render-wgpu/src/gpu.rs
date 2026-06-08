@@ -496,12 +496,16 @@ fn build_runtime_physics_for_document(
 	let stats = collider_stats(&bone_colliders);
 	let spring_sim = if enable_spring_bones {
 		if let Some(runtime) = scene_profile_dynamics {
-			SpringBoneSimulator::new_with_runtime_dynamics(
-				runtime.scene,
-				runtime.dynamics,
-				bone_colliders.clone(),
-				spring_bone_physics.clone(),
-			)
+			if runtime.dynamics.has_groups() {
+				SpringBoneSimulator::new_with_runtime_dynamics(
+					runtime.scene,
+					runtime.dynamics,
+					bone_colliders.clone(),
+					spring_bone_physics.clone(),
+				)
+			} else {
+				None
+			}
 		} else {
 			None
 		}
