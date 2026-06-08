@@ -10213,6 +10213,55 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_apply_reports_remove_vertex_color_and_catalog() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Renderer".to_string()),
+					source_node_id: Some("node_renderer".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![test_colored_primitive()]],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarRemoveVertexColor",
+						"enabled": true,
+						"target": {"nodeId": "node_renderer", "path": "Root/Renderer"},
+						"fields": {"Mode": "Remove"}
+					}]
+				}
+			}),
+		};
+		let mut report = ImportReport::default();
+
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert!(scene.meshes[0][0].colors_0.is_none());
+		assert!(report.messages.iter().any(|message| {
+			message.contains("Modular Avatar components") && message.contains("resolver_supported=1") && message.contains("unsupported=0")
+		}));
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| { message.contains("remove_vertex_color_nodes=1") && message.contains("remove_vertex_color_primitives=1") }));
+	}
+
+	#[test]
 	fn modular_avatar_bone_proxy_renames_duplicate_target_child() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
