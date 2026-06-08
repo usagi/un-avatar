@@ -3371,9 +3371,10 @@ fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLo
 	mat.base_color_factor[3] <= 0.001 && matches!(mat.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
 }
 
-fn mesh_draw_material_gpu(
+fn mesh_draw_material_gpu_with_profiles(
 	mat: &UnaMaterialPbr,
 	mtoon: &UnaMtoonMaterial,
+	liltoon_like: Option<&un_avatar_core::UnaLilToonLikeMaterial>,
 	opts: &SceneMeshLoadOpts,
 	mesh_index: usize,
 	prim_index: usize,
@@ -3433,7 +3434,6 @@ fn mesh_draw_material_gpu(
 	} else {
 		1.0
 	};
-	let liltoon_like = mat.liltoon_like_source_profile();
 	if liltoon_like.is_some() {
 		flags |= 4096;
 	}
@@ -4859,6 +4859,17 @@ fn mesh_draw_material_gpu(
 	}
 }
 
+#[cfg(test)]
+fn mesh_draw_material_gpu(
+	mat: &UnaMaterialPbr,
+	mtoon: &UnaMtoonMaterial,
+	opts: &SceneMeshLoadOpts,
+	mesh_index: usize,
+	prim_index: usize,
+) -> MeshDrawMaterialGpu {
+	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_source_profile(), opts, mesh_index, prim_index)
+}
+
 fn mesh_draw_material_gpu_runtime(
 	mat: &UnaMaterialPbr,
 	default_mtoon: &UnaMtoonMaterial,
@@ -4867,7 +4878,7 @@ fn mesh_draw_material_gpu_runtime(
 	prim_index: usize,
 ) -> MeshDrawMaterialGpu {
 	let mtoon = mat.mtoon_like_runtime().unwrap_or(default_mtoon);
-	mesh_draw_material_gpu(mat, mtoon, opts, mesh_index, prim_index)
+	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_runtime(), opts, mesh_index, prim_index)
 }
 
 fn liltoon_blend_mode_gpu(mode: un_avatar_core::UnaLilToonLikeBlendMode) -> f32 {
