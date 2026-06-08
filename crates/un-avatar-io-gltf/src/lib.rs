@@ -2459,13 +2459,7 @@ fn unavatar_material_setter_runtime_action(
 		.filter(|value| !value.is_empty())
 		.map(str::to_string)
 		.unwrap_or_else(|| component_index.to_string());
-	let label = component
-		.get("name")
-		.or_else(|| component.get("displayName"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.unwrap_or("Material Setter")
-		.to_string();
+	let label = unavatar_modular_avatar_component_label(component, "Material Setter");
 	let command = format!("ma:material_setter:{component_id}");
 	Some(UnaRuntimeAction {
 		id: command.clone(),
@@ -2633,13 +2627,7 @@ fn unavatar_material_swap_runtime_action(
 		.filter(|value| !value.is_empty())
 		.map(str::to_string)
 		.unwrap_or_else(|| component_index.to_string());
-	let label = component
-		.get("name")
-		.or_else(|| component.get("displayName"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.unwrap_or("Material Swap")
-		.to_string();
+	let label = unavatar_modular_avatar_component_label(component, "Material Swap");
 	let command = format!("ma:material_swap:{component_id}");
 	Some(UnaRuntimeAction {
 		id: command.clone(),
@@ -2658,6 +2646,36 @@ fn unavatar_modular_avatar_component_triggers(component: &Value, command: String
 		triggers.push(UnaRuntimeActionTrigger::ParameterValue { name, value });
 	}
 	triggers
+}
+
+fn unavatar_modular_avatar_component_label(component: &Value, fallback: &str) -> String {
+	unavatar_named_value(component)
+		.or_else(|| component.get("fields").and_then(unavatar_named_value))
+		.or_else(|| {
+			component.get("fields").and_then(|fields| {
+				fields
+					.get("menuItem")
+					.or_else(|| fields.get("menu_item"))
+					.and_then(unavatar_named_value)
+			})
+		})
+		.or_else(|| {
+			component
+				.get("menuItem")
+				.or_else(|| component.get("menu_item"))
+				.and_then(unavatar_named_value)
+		})
+		.unwrap_or(fallback)
+		.to_string()
+}
+
+fn unavatar_named_value(value: &Value) -> Option<&str> {
+	value
+		.get("name")
+		.or_else(|| value.get("displayName"))
+		.or_else(|| value.get("display_name"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
 }
 
 fn unavatar_modular_avatar_component_expression_menu_path(component: &Value) -> Option<String> {
@@ -8156,6 +8174,42 @@ mod tests {
 				}),
 			}]
 		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_use_modular_avatar_menu_item_label_fallback() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"fields": {
+							"menuItem": {
+								"name": "Jacket Red"
+							},
+							"objects": [{
+								"object": {
+									"nodeId": "node_jacket",
+									"path": "Root/Jacket"
+								},
+								"MaterialIndex": 0,
+								"Material": {
+									"materialName": "Jacket Red"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, None).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].label, "Jacket Red");
 	}
 
 	#[test]
