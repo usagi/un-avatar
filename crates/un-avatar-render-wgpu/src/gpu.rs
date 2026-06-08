@@ -514,11 +514,11 @@ fn reset_runtime_dynamics_nodes_to_rest(
 	dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
 	rest_nodes: &[UnaSceneNode],
 ) -> bool {
-	let Some(settings) = dynamics.spring_bones() else {
+	if !dynamics.has_groups() {
 		return false;
-	};
+	}
 	let mut changed = false;
-	for node_index in settings.groups.iter().flat_map(|group| group.bone_node_indices.iter().copied()) {
+	for node_index in dynamics.dynamic_bone_node_indices() {
 		if let (Some(dst), Some(src)) = (scene.nodes.get_mut(node_index), rest_nodes.get(node_index)) {
 			dst.transform = src.transform;
 			changed = true;

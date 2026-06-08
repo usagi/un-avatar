@@ -302,6 +302,13 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.spring_bones.map(|settings| settings.colliders.len()).unwrap_or(0)
 	}
 
+	pub fn dynamic_bone_node_indices(self) -> impl Iterator<Item = usize> + 'a {
+		self.spring_bones
+			.into_iter()
+			.flat_map(|settings| settings.groups.iter())
+			.flat_map(|group| group.bone_node_indices.iter().copied())
+	}
+
 	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.spring_bones
 			.map(|settings| {
@@ -3236,6 +3243,7 @@ mod tests {
 		assert_eq!(counts.vrm_spring_bone_groups, 1);
 		assert_eq!(counts.vrc_physbone_groups, 1);
 		assert_eq!(counts.unknown_groups, 0);
+		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
 	}
 
 	#[test]
