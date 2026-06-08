@@ -4,7 +4,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
 	resolved_scene_roots, UnaDocument, UnaHumanoidRuntimeBasis, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
-	UnaNodeConstraintKind, UnaSceneNode, UnaSceneSnapshot,
+	UnaNodeConstraintKind, UnaRuntimeRetargetInputs, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
@@ -570,7 +570,10 @@ pub struct HumanoidRetargetContext {
 
 impl HumanoidRetargetContext {
 	pub fn for_document(document: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
-		let inputs = document.runtime_model().humanoid_retarget_inputs();
+		Self::for_runtime_inputs(document.runtime_model().humanoid_retarget_inputs(), rest_nodes)
+	}
+
+	pub fn for_runtime_inputs(inputs: UnaRuntimeRetargetInputs<'_>, rest_nodes: Option<&[UnaSceneNode]>) -> Self {
 		let target_basis = inputs.humanoid_basis;
 		let profile = inputs.profile;
 		let scene = inputs.scene;

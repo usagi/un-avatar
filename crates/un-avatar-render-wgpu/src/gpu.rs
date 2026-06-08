@@ -454,7 +454,10 @@ impl MotionRetargetRuntime {
 		if !runtime_model.has_humanoid_scene() {
 			return None;
 		}
-		let context = un_avatar_skeleton::HumanoidRetargetContext::for_document(document, Some(rest_nodes.as_slice()));
+		let context = un_avatar_skeleton::HumanoidRetargetContext::for_runtime_inputs(
+			runtime_model.humanoid_retarget_inputs(),
+			Some(rest_nodes.as_slice()),
+		);
 		Some(Self { rest_nodes, context })
 	}
 
