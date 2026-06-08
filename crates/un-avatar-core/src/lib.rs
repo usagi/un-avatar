@@ -127,6 +127,95 @@ pub struct UnaExpressionWeights {
 	pub preset_weights: BTreeMap<String, f32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeActionSet {
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub actions: Vec<UnaRuntimeAction>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeAction {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub label: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub triggers: Vec<UnaRuntimeActionTrigger>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub effects: Vec<UnaRuntimeActionEffect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UnaRuntimeActionTrigger {
+	ExpressionMenu {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		path: String,
+	},
+	KeyboardShortcut {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		key: String,
+	},
+	SupervisorCommand {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		command: String,
+	},
+	AnimationEvent {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		name: String,
+	},
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UnaRuntimeActionEffect {
+	WardrobeSet {
+		set_id: String,
+	},
+	NodeVisibility {
+		target: UnaRuntimeNodeTarget,
+		visible: bool,
+	},
+	ExpressionWeight {
+		name: String,
+		weight: f32,
+	},
+	MaterialColor {
+		target: UnaRuntimeMaterialTarget,
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		parameter: String,
+		color: [f32; 4],
+	},
+	MaterialScalar {
+		target: UnaRuntimeMaterialTarget,
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		parameter: String,
+		value: f32,
+	},
+	DynamicsEnabled {
+		source_id: String,
+		enabled: bool,
+	},
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeNodeTarget {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub node_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_node_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeMaterialTarget {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub material_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+}
+
 /// VRM Secondary Animation / SpringBone の 1 チェーン（bootstrap）。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaSpringBoneGroup {
@@ -437,6 +526,9 @@ pub struct UnaDocument {
 	/// 式プリセットの現在ウェイト。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub expression_weights: Option<UnaExpressionWeights>,
+	/// VRC Expression Menu / shortcut / supervisor / animation 由来の軽量 runtime action model。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub runtime_actions: Option<UnaRuntimeActionSet>,
 	/// VRM SpringBone / secondaryAnimation から取り込んだ揺れもの用チェーン（ランタイムで更新）。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub spring_bones: Option<UnaSpringBoneSettings>,
@@ -572,6 +664,10 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn expression_weights(self) -> Option<&'a UnaExpressionWeights> {
 		self.document.expression_weights.as_ref()
+	}
+
+	pub fn runtime_actions(self) -> Option<&'a UnaRuntimeActionSet> {
+		self.document.runtime_actions.as_ref()
 	}
 
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
@@ -3329,6 +3425,43 @@ mod tests {
 		assert!(!groups[0].enabled);
 		assert!(!groups[1].enabled);
 		assert!(groups[2].enabled);
+	}
+
+	#[test]
+	fn runtime_action_model_roundtrips_optional_effects() {
+		let document = UnaDocument {
+			runtime_actions: Some(UnaRuntimeActionSet {
+				actions: vec![UnaRuntimeAction {
+					id: "field-drape".to_string(),
+					label: "Field Drape".to_string(),
+					triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
+						command: "field_drape".to_string(),
+					}],
+					effects: vec![
+						UnaRuntimeActionEffect::WardrobeSet {
+							set_id: "field_drape".to_string(),
+						},
+						UnaRuntimeActionEffect::DynamicsEnabled {
+							source_id: "physbone:hair".to_string(),
+							enabled: false,
+						},
+					],
+				}],
+			}),
+			..Default::default()
+		};
+
+		let json = serde_json::to_string(&document).unwrap();
+		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
+		let actions = decoded.runtime_model().runtime_actions().unwrap();
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].effects.len(), 2);
+	}
+
+	#[test]
+	fn runtime_action_model_defaults_to_absent_for_legacy_documents() {
+		let decoded: UnaDocument = serde_json::from_str("{}").unwrap();
+		assert!(decoded.runtime_model().runtime_actions().is_none());
 	}
 
 	#[test]

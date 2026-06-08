@@ -1183,6 +1183,7 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 			humanoid_profile,
 			expression_catalog,
 			expression_weights,
+			runtime_actions: None,
 			spring_bones,
 		},
 		report,
