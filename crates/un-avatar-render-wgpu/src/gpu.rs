@@ -12,7 +12,7 @@ use std::{
 };
 
 use glam::{Mat4, Vec3, Vec4};
-use un_avatar_core::{UnaDocument, UnaExpressionCatalog, UnaSceneNode};
+use un_avatar_core::{UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaSceneNode};
 use un_avatar_skeleton::{
 	build_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, SpringBonePhysicsConfig,
 	SpringBoneSimulator,
@@ -1584,6 +1584,22 @@ impl GpuState {
 
 	pub fn motion_applied_frames(&self) -> u64 {
 		self.motion_applied_frames.load(Ordering::Relaxed)
+	}
+
+	pub fn dynamics_group_counts(&self) -> (u32, u32, u32, u32) {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return (0, 0, 0, 0);
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return (0, 0, 0, 0);
+		};
+		let dynamics = doc.runtime_model().dynamics();
+		(
+			dynamics.group_count() as u32,
+			dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
+			dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
+			dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,
+		)
 	}
 
 	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
