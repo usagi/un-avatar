@@ -351,25 +351,30 @@ namespace UNAvatar.UnityExporter
             }
             if (value is float f)
             {
-                return f;
+                return SanitizeFloat(f, fallback);
             }
             if (value is double d)
             {
-                return (float)d;
+                return SanitizeFloat((float)d, fallback);
             }
             if (value is int i)
             {
-                return i;
+                return SanitizeFloat(i, fallback);
             }
             if (value is long l)
             {
-                return l;
+                return SanitizeFloat(l, fallback);
             }
             if (float.TryParse(value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
             {
-                return parsed;
+                return SanitizeFloat(parsed, fallback);
             }
             return fallback;
+        }
+
+        private static float SanitizeFloat(float value, float fallback)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? fallback : value;
         }
 
         private static bool ReadBoolMember(Type type, object instance, string name, bool fallback)

@@ -37,10 +37,14 @@ namespace UNAvatar.UnityExporter
                 case uint _:
                 case long _:
                 case ulong _:
-                case float _:
-                case double _:
                 case decimal _:
                     sb.Append(Convert.ToString(value, CultureInfo.InvariantCulture));
+                    break;
+                case float f:
+                    WriteFiniteFloat(sb, f);
+                    break;
+                case double d:
+                    WriteFiniteDouble(sb, d);
                     break;
                 case IDictionary<string, object> map:
                     WriteObject(sb, map);
@@ -55,6 +59,26 @@ namespace UNAvatar.UnityExporter
                     sb.Append('"').Append(EscapeString(Convert.ToString(value, CultureInfo.InvariantCulture))).Append('"');
                     break;
             }
+        }
+
+        private static void WriteFiniteFloat(StringBuilder sb, float value)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                sb.Append("null");
+                return;
+            }
+            sb.Append(value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void WriteFiniteDouble(StringBuilder sb, double value)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value))
+            {
+                sb.Append("null");
+                return;
+            }
+            sb.Append(value.ToString(CultureInfo.InvariantCulture));
         }
 
         private static void WriteObject(StringBuilder sb, IDictionary<string, object> map)
