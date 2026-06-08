@@ -2656,14 +2656,14 @@ fn unavatar_modular_avatar_component_label(component: &Value, fallback: &str) ->
 				fields
 					.get("menuItem")
 					.or_else(|| fields.get("menu_item"))
-					.and_then(unavatar_named_value)
+					.and_then(unavatar_menu_item_label)
 			})
 		})
 		.or_else(|| {
 			component
 				.get("menuItem")
 				.or_else(|| component.get("menu_item"))
-				.and_then(unavatar_named_value)
+				.and_then(unavatar_menu_item_label)
 		})
 		.unwrap_or(fallback)
 		.to_string()
@@ -2672,10 +2672,23 @@ fn unavatar_modular_avatar_component_label(component: &Value, fallback: &str) ->
 fn unavatar_named_value(value: &Value) -> Option<&str> {
 	value
 		.get("name")
+		.or_else(|| value.get("Name"))
 		.or_else(|| value.get("displayName"))
 		.or_else(|| value.get("display_name"))
+		.or_else(|| value.get("DisplayName"))
+		.or_else(|| value.get("label"))
+		.or_else(|| value.get("Label"))
 		.and_then(Value::as_str)
 		.filter(|value| !value.is_empty())
+}
+
+fn unavatar_menu_item_label(menu_item: &Value) -> Option<&str> {
+	unavatar_named_value(menu_item).or_else(|| {
+		menu_item
+			.get("control")
+			.or_else(|| menu_item.get("Control"))
+			.and_then(unavatar_named_value)
+	})
 }
 
 fn unavatar_modular_avatar_component_expression_menu_path(component: &Value) -> Option<String> {
@@ -2683,15 +2696,15 @@ fn unavatar_modular_avatar_component_expression_menu_path(component: &Value) -> 
 		.or_else(|| {
 			component.get("fields").and_then(|fields| {
 				unavatar_explicit_expression_menu_path(fields)
-					.or_else(|| fields.get("menuItem").and_then(unavatar_explicit_expression_menu_path))
-					.or_else(|| fields.get("menu_item").and_then(unavatar_explicit_expression_menu_path))
+					.or_else(|| fields.get("menuItem").and_then(unavatar_menu_item_expression_menu_path))
+					.or_else(|| fields.get("menu_item").and_then(unavatar_menu_item_expression_menu_path))
 			})
 		})
 		.or_else(|| {
 			component
 				.get("menuItem")
 				.or_else(|| component.get("menu_item"))
-				.and_then(unavatar_explicit_expression_menu_path)
+				.and_then(unavatar_menu_item_expression_menu_path)
 		})
 }
 
@@ -2699,11 +2712,31 @@ fn unavatar_explicit_expression_menu_path(value: &Value) -> Option<String> {
 	value
 		.get("expressionMenuPath")
 		.or_else(|| value.get("expression_menu_path"))
+		.or_else(|| value.get("ExpressionMenuPath"))
 		.or_else(|| value.get("menuPath"))
 		.or_else(|| value.get("menu_path"))
+		.or_else(|| value.get("MenuPath"))
 		.and_then(Value::as_str)
 		.filter(|path| !path.is_empty())
 		.map(str::to_string)
+}
+
+fn unavatar_menu_item_expression_menu_path(menu_item: &Value) -> Option<String> {
+	unavatar_explicit_expression_menu_path(menu_item)
+		.or_else(|| {
+			menu_item
+				.get("path")
+				.or_else(|| menu_item.get("Path"))
+				.and_then(Value::as_str)
+				.filter(|path| !path.is_empty())
+				.map(str::to_string)
+		})
+		.or_else(|| {
+			menu_item
+				.get("control")
+				.or_else(|| menu_item.get("Control"))
+				.and_then(unavatar_explicit_expression_menu_path)
+		})
 }
 
 fn unavatar_modular_avatar_component_parameter_value(component: &Value) -> Option<(String, f32)> {
@@ -8281,6 +8314,105 @@ mod tests {
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].label, "Jacket Red");
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_use_modular_avatar_menu_item_label_field_and_path() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"fields": {
+							"menuItem": {
+								"label": "Jacket Crimson",
+								"path": "Clothes/Jacket Crimson",
+								"Control": {
+									"name": "Ignored Control Label",
+									"Parameter": {"Name": "JacketColor"},
+									"Value": 2
+								}
+							},
+							"objects": [{
+								"object": {
+									"nodeId": "node_jacket",
+									"path": "Root/Jacket"
+								},
+								"MaterialIndex": 0,
+								"Material": {
+									"materialName": "Jacket Crimson"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, None).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].label, "Jacket Crimson");
+		assert_eq!(
+			actions.actions[0].triggers,
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "ma:material_setter:mat-setter".to_string()
+				},
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: "Clothes/Jacket Crimson".to_string()
+				},
+				UnaRuntimeActionTrigger::ParameterValue {
+					name: "JacketColor".to_string(),
+					value: 2.0
+				}
+			]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_use_modular_avatar_control_name_label_fallback() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"fields": {
+							"menuItem": {
+								"Control": {
+									"name": "Jacket Red"
+								}
+							},
+							"objects": [{
+								"object": {
+									"nodeId": "node_jacket",
+									"path": "Root/Jacket"
+								},
+								"MaterialIndex": 0,
+								"Material": {
+									"materialName": "Jacket Red"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, None).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].label, "Jacket Red");
+		assert!(actions.actions[0]
+			.triggers
+			.iter()
+			.all(|trigger| !matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { .. })));
 	}
 
 	#[test]
