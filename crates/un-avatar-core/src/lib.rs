@@ -198,7 +198,19 @@ pub struct UnaRuntimeState {
 	pub parameter_values: BTreeMap<String, f32>,
 }
 
-pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 1;
+pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 2;
+
+pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
+	match short_type {
+		"ModularAvatarBoneProxy"
+		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMeshSettings"
+		| "ModularAvatarRemoveVertexColor"
+		| "ModularAvatarReplaceObject" => "resolver",
+		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
+		_ => "unsupported",
+	}
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UnaRuntimeResolverCacheKey {
@@ -4614,6 +4626,14 @@ mod tests {
 			document.runtime_model().resolver_cache_key().mesh_source_hash,
 			first.mesh_source_hash
 		);
+	}
+
+	#[test]
+	fn modular_avatar_component_support_kind_classifies_known_runtime_features() {
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBoneProxy"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarRemoveVertexColor"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "unsupported");
 	}
 
 	#[test]

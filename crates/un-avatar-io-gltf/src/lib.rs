@@ -12,14 +12,14 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	apply_runtime_material_color, apply_runtime_material_scalar, Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode,
-	UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind,
-	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
-	UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind,
-	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet,
-	UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget,
-	UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode,
-	UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
+	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsInteraction,
+	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
+	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
+	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction,
+	UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget,
+	UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -3894,18 +3894,6 @@ fn apply_unavatar_remove_vertex_color(
 	(removed_nodes, removed_primitives, missing, skipped)
 }
 
-fn modular_avatar_component_support(short_type: &str) -> &'static str {
-	match short_type {
-		"ModularAvatarBoneProxy"
-		| "ModularAvatarMergeArmature"
-		| "ModularAvatarMeshSettings"
-		| "ModularAvatarRemoveVertexColor"
-		| "ModularAvatarReplaceObject" => "resolver",
-		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
-		_ => "unsupported",
-	}
-}
-
 fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report: &mut ImportReport) {
 	if components.is_empty() {
 		return;
@@ -3924,7 +3912,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			.and_then(Value::as_str)
 			.filter(|value| !value.is_empty())
 			.unwrap_or("unknown");
-		match modular_avatar_component_support(short_type) {
+		match modular_avatar_component_support_kind(short_type) {
 			"resolver" => resolver_supported += 1,
 			"runtime_action" => runtime_action_supported += 1,
 			_ => {

@@ -15,9 +15,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
-	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
-	UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel,
-	UnaSceneSnapshot, UnaShadingModel,
+	modular_avatar_component_support_kind, morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis,
+	UnaImagePixelFormat, UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind,
+	UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -2018,18 +2018,6 @@ fn diagnose_texture_shape_is_cube(shape: Option<&str>) -> bool {
 	shape.is_some_and(|shape| shape.eq_ignore_ascii_case("TextureCube") || shape.eq_ignore_ascii_case("Cube"))
 }
 
-fn modular_avatar_component_support(short_type: &str) -> &'static str {
-	match short_type {
-		"ModularAvatarBoneProxy"
-		| "ModularAvatarMergeArmature"
-		| "ModularAvatarMeshSettings"
-		| "ModularAvatarRemoveVertexColor"
-		| "ModularAvatarReplaceObject" => "resolver",
-		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
-		_ => "unsupported",
-	}
-}
-
 fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnavatarSummary {
 	let source = &ext.source;
 	let wardrobe = source.get("wardrobe");
@@ -2048,7 +2036,10 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 				.filter(|value| !value.is_empty())
 				.unwrap_or("unknown");
 			bump_count(&mut modular_avatar_type_counts, short_type);
-			bump_count(&mut modular_avatar_support_counts, modular_avatar_component_support(short_type));
+			bump_count(
+				&mut modular_avatar_support_counts,
+				modular_avatar_component_support_kind(short_type),
+			);
 			if component.get("enabled").and_then(|value| value.as_bool()) == Some(false) {
 				bump_count(&mut modular_avatar_support_counts, "disabled");
 			}
