@@ -1804,6 +1804,15 @@ impl GpuState {
 		true
 	}
 
+	fn mark_document_changed(&self) {
+		self.document_revision.fetch_add(1, Ordering::Release);
+	}
+
+	fn invalidate_applied_document_state(&mut self) {
+		self.applied_document_revision = 0;
+		self.mark_document_changed();
+	}
+
 	pub fn audio_link_texture_needed(&self) -> bool {
 		self.audio_link_texture_needed
 	}
@@ -1907,8 +1916,8 @@ impl GpuState {
 		if !reset_runtime_dynamics_nodes_to_rest(runtime.scene, runtime.dynamics.as_readonly(), rest_nodes) {
 			return;
 		}
-		self.applied_document_revision = 0;
-		self.document_revision.fetch_add(1, Ordering::Release);
+		drop(doc);
+		self.invalidate_applied_document_state();
 	}
 
 	/// Avatar outline effect を実行中 renderer に即時反映する。
@@ -2654,8 +2663,8 @@ impl GpuState {
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		crate::model_loader::apply_required_wardrobe_set(&mut doc, set_id)?;
-		self.document_revision.fetch_add(1, Ordering::Release);
-		self.applied_document_revision = 0;
+		drop(doc);
+		self.invalidate_applied_document_state();
 		Ok(())
 	}
 
@@ -2684,8 +2693,7 @@ impl GpuState {
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
 		self.document = Some(prepared.document);
-		self.document_revision.fetch_add(1, Ordering::Release);
-		self.applied_document_revision = 0;
+		self.invalidate_applied_document_state();
 		self.scene_meshes = prepared.scene_meshes;
 		self.texture_summary = prepared.texture_summary;
 		self.spring_sim = prepared.spring_sim;
@@ -3045,7 +3053,7 @@ impl GpuState {
 		let applied_frame_count = self.pending_motion_frames.len();
 		self.pending_motion_frames.clear();
 		self.motion_applied_frames.fetch_add(applied_frame_count as u64, Ordering::Relaxed);
-		self.document_revision.fetch_add(1, Ordering::Release);
+		self.mark_document_changed();
 	}
 
 	pub fn resize(&mut self, width: u32, height: u32) {
