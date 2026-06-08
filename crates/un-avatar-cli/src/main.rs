@@ -77,6 +77,8 @@ struct DiagnoseReport {
 	humanoid: Option<DiagnoseHumanoidSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	expressions: Option<DiagnoseExpressionSummary>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	actions: Option<DiagnoseActionSummary>,
 	dynamics: DiagnoseDynamicsSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	vrm: Option<DiagnoseVrmSummary>,
@@ -333,6 +335,22 @@ struct DiagnoseExpressionMorphSlot {
 	primitive: usize,
 	active_count: usize,
 	max_weight: f32,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionSummary {
+	action_count: usize,
+	trigger_count: usize,
+	effect_count: usize,
+	actions: Vec<DiagnoseActionItemSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionItemSummary {
+	id: String,
+	label: String,
+	trigger_count: usize,
+	effect_count: usize,
 }
 
 #[derive(Serialize)]
@@ -2328,6 +2346,21 @@ fn build_diagnose_report(
 			.collect(),
 		apply_probe: expression_apply_probe,
 	});
+	let actions = runtime_model.runtime_actions().map(|actions| DiagnoseActionSummary {
+		action_count: actions.actions.len(),
+		trigger_count: actions.actions.iter().map(|action| action.triggers.len()).sum(),
+		effect_count: actions.actions.iter().map(|action| action.effects.len()).sum(),
+		actions: actions
+			.actions
+			.iter()
+			.map(|action| DiagnoseActionItemSummary {
+				id: action.id.clone(),
+				label: action.label.clone(),
+				trigger_count: action.triggers.len(),
+				effect_count: action.effects.len(),
+			})
+			.collect(),
+	});
 
 	let runtime = DiagnoseRuntimeSummary {
 		source_kind: runtime_model.source_kind(),
@@ -2392,6 +2425,7 @@ fn build_diagnose_report(
 		scene,
 		humanoid,
 		expressions,
+		actions,
 		dynamics,
 		vrm,
 		unavatar,
@@ -2573,6 +2607,20 @@ fn run_diagnose(
 		"runtime: source={:?} humanoid_basis={:?}",
 		report.runtime.source_kind, report.runtime.humanoid_basis
 	);
+	if let Some(actions) = &report.actions {
+		println!(
+			"actions: actions={} triggers={} effects={}",
+			actions.action_count, actions.trigger_count, actions.effect_count
+		);
+		for action in actions.actions.iter().take(16) {
+			println!(
+				"action[{}]: label={:?} triggers={} effects={}",
+				action.id, action.label, action.trigger_count, action.effect_count
+			);
+		}
+	} else {
+		println!("actions: none");
+	}
 	if let Some(vrm) = &report.vrm {
 		println!(
 			"vrm: spec={} mtoon_v0={} mtoon_v1={:?} spring_groups={}",
