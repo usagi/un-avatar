@@ -560,6 +560,10 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		} = self.document;
 		Some((scene.as_mut()?, humanoid_profile.as_ref()?))
 	}
+
+	pub fn expression_weights_mut(&mut self) -> &mut UnaExpressionWeights {
+		self.document.expression_weights.get_or_insert_with(Default::default)
+	}
 }
 
 /// `.unavatar` 固有 metadata。現段階では raw JSON を正本として保持し、runtime 対応が進むごとに構造化する。
@@ -3202,10 +3206,23 @@ mod tests {
 			let (scene, profile) = runtime_model.humanoid_scene_mut().unwrap();
 			scene.roots.push(7);
 			assert!(profile.bone_node_indices.is_empty());
+			runtime_model
+				.expression_weights_mut()
+				.preset_weights
+				.insert("Blink".to_string(), 0.5);
 		}
-		let (scene, dynamics) = document.runtime_scene_and_dynamics_mut().unwrap();
-		assert_eq!(scene.roots, vec![7]);
-		assert_eq!(dynamics.group_count(), 1);
+		{
+			let (scene, dynamics) = document.runtime_scene_and_dynamics_mut().unwrap();
+			assert_eq!(scene.roots, vec![7]);
+			assert_eq!(dynamics.group_count(), 1);
+		}
+		assert_eq!(
+			document
+				.expression_weights
+				.as_ref()
+				.and_then(|weights| weights.preset_weights.get("Blink").copied()),
+			Some(0.5)
+		);
 	}
 
 	#[test]
