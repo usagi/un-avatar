@@ -1631,13 +1631,13 @@ impl GpuState {
 			return false;
 		};
 		let runtime_model = doc.runtime_model();
-		let Some(sc) = runtime_model.scene() else {
+		let Some((sc, expression_catalog)) = runtime_model.scene_expression_catalog() else {
 			return false;
 		};
 		crate::scene_transform::write_world_from_nodes(sc, &mut self.world_scratch);
 		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
-		if document_changed && !expression_presets_match_catalog(&self.expression_presets, runtime_model.expression_catalog()) {
-			self.expression_presets = expression_preset_names(runtime_model.expression_catalog());
+		if document_changed && !expression_presets_match_catalog(&self.expression_presets, expression_catalog) {
+			self.expression_presets = expression_preset_names(expression_catalog);
 		}
 		let refresh_scene_morph_defaults = document_changed;
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
@@ -2626,7 +2626,7 @@ impl GpuSceneBuildContext {
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
-		if let Some(sc) = runtime_model.scene() {
+		if let Some((sc, expression_catalog)) = runtime_model.scene_expression_catalog() {
 			if options.debug_material_dump {
 				log_material_skin_report(&document);
 			}
@@ -2646,7 +2646,7 @@ impl GpuSceneBuildContext {
 				aa_sample_count(aa),
 				shader_variant_tier,
 				sc,
-				runtime_model.expression_catalog(),
+				expression_catalog,
 				options.mesh_diagnostics.clone(),
 				options.texture_max_dimension,
 				options.texture_compression,

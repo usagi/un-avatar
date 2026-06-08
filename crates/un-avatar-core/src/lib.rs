@@ -451,6 +451,10 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.expression_catalog.as_ref()
 	}
 
+	pub fn scene_expression_catalog(self) -> Option<(&'a UnaSceneSnapshot, Option<&'a UnaExpressionCatalog>)> {
+		Some((self.scene()?, self.expression_catalog()))
+	}
+
 	pub fn spring_bones(self) -> Option<&'a UnaSpringBoneSettings> {
 		self.document.spring_bones.as_ref()
 	}
