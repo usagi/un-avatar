@@ -64,10 +64,16 @@ pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits)
 	}
 }
 
-pub(crate) fn mesh_shader_required_limits_for_adapter(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
-	let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
-	limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.max(4096);
-	match mesh_shader_variant_tier_for_limits(adapter_limits) {
+pub(crate) fn mesh_shader_resource_plan_for_adapter(adapter_limits: &wgpu::Limits) -> MeshShaderResourcePlan {
+	let tier = mesh_shader_variant_tier_for_limits(adapter_limits);
+	let mut required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
+	required_limits.max_texture_dimension_2d = required_limits.max_texture_dimension_2d.max(4096);
+	apply_mesh_shader_resource_limits(&mut required_limits, adapter_limits, tier);
+	MeshShaderResourcePlan { tier, required_limits }
+}
+
+fn apply_mesh_shader_resource_limits(limits: &mut wgpu::Limits, adapter_limits: &wgpu::Limits, tier: MeshShaderVariantTier) {
+	match tier {
 		MeshShaderVariantTier::HighCapability => {
 			limits.max_sampled_textures_per_shader_stage = limits
 				.max_sampled_textures_per_shader_stage
@@ -88,14 +94,6 @@ pub(crate) fn mesh_shader_required_limits_for_adapter(adapter_limits: &wgpu::Lim
 				.max(BASELINE_FALLBACK_SAMPLERS_PER_STAGE)
 				.min(adapter_limits.max_samplers_per_shader_stage);
 		}
-	}
-	limits
-}
-
-pub(crate) fn mesh_shader_resource_plan_for_adapter(adapter_limits: &wgpu::Limits) -> MeshShaderResourcePlan {
-	MeshShaderResourcePlan {
-		tier: mesh_shader_variant_tier_for_limits(adapter_limits),
-		required_limits: mesh_shader_required_limits_for_adapter(adapter_limits),
 	}
 }
 
