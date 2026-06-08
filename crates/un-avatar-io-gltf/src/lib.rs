@@ -2378,7 +2378,7 @@ fn unavatar_material_setter_runtime_action(component: &Value, component_index: u
 	Some(UnaRuntimeAction {
 		id: command.clone(),
 		label,
-		triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand { command }],
+		triggers: unavatar_modular_avatar_component_triggers(component, command),
 		effects,
 	})
 }
@@ -2529,9 +2529,45 @@ fn unavatar_material_swap_runtime_action(
 	Some(UnaRuntimeAction {
 		id: command.clone(),
 		label,
-		triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand { command }],
+		triggers: unavatar_modular_avatar_component_triggers(component, command),
 		effects,
 	})
+}
+
+fn unavatar_modular_avatar_component_triggers(component: &Value, command: String) -> Vec<UnaRuntimeActionTrigger> {
+	let mut triggers = vec![UnaRuntimeActionTrigger::SupervisorCommand { command }];
+	if let Some(path) = unavatar_modular_avatar_component_expression_menu_path(component) {
+		triggers.push(UnaRuntimeActionTrigger::ExpressionMenu { path });
+	}
+	triggers
+}
+
+fn unavatar_modular_avatar_component_expression_menu_path(component: &Value) -> Option<String> {
+	unavatar_explicit_expression_menu_path(component)
+		.or_else(|| {
+			component.get("fields").and_then(|fields| {
+				unavatar_explicit_expression_menu_path(fields)
+					.or_else(|| fields.get("menuItem").and_then(unavatar_explicit_expression_menu_path))
+					.or_else(|| fields.get("menu_item").and_then(unavatar_explicit_expression_menu_path))
+			})
+		})
+		.or_else(|| {
+			component
+				.get("menuItem")
+				.or_else(|| component.get("menu_item"))
+				.and_then(unavatar_explicit_expression_menu_path)
+		})
+}
+
+fn unavatar_explicit_expression_menu_path(value: &Value) -> Option<String> {
+	value
+		.get("expressionMenuPath")
+		.or_else(|| value.get("expression_menu_path"))
+		.or_else(|| value.get("menuPath"))
+		.or_else(|| value.get("menu_path"))
+		.and_then(Value::as_str)
+		.filter(|path| !path.is_empty())
+		.map(str::to_string)
 }
 
 fn unavatar_scene_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
@@ -7534,6 +7570,7 @@ mod tests {
 						"enabled": true,
 						"id": "mat-setter",
 						"name": "Jacket Color",
+						"menuPath": "Clothes/Jacket Color",
 						"fields": {
 							"objects": [{
 								"object": {
@@ -7558,9 +7595,14 @@ mod tests {
 		assert_eq!(actions.actions[0].label, "Jacket Color");
 		assert_eq!(
 			actions.actions[0].triggers,
-			vec![UnaRuntimeActionTrigger::SupervisorCommand {
-				command: "ma:material_setter:mat-setter".to_string()
-			}]
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "ma:material_setter:mat-setter".to_string()
+				},
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: "Clothes/Jacket Color".to_string()
+				}
+			]
 		);
 		assert_eq!(
 			actions.actions[0].effects,
@@ -7674,6 +7716,12 @@ mod tests {
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:material_swap:mat-swap");
+		assert_eq!(
+			actions.actions[0].triggers,
+			vec![UnaRuntimeActionTrigger::SupervisorCommand {
+				command: "ma:material_swap:mat-swap".to_string()
+			}]
+		);
 		assert_eq!(
 			actions.actions[0].effects,
 			vec![UnaRuntimeActionEffect::MaterialSlot {
