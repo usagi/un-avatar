@@ -485,10 +485,6 @@ pub struct UnaRuntimeSceneDynamicsMut<'a> {
 }
 
 impl<'a> UnaRuntimeModel<'a> {
-	pub fn document(self) -> &'a UnaDocument {
-		self.document
-	}
-
 	pub fn source_kind(self) -> UnaRuntimeSourceKind {
 		if self.document.unavatar.is_some() {
 			return UnaRuntimeSourceKind::Unavatar;
