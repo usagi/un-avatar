@@ -1607,14 +1607,9 @@ impl GpuState {
 			return DynamicsRuntimeCounts::default();
 		};
 		let dynamics = doc.runtime_model().dynamics();
-		let enabled_groups = dynamics
-			.spring_bones()
-			.map(|settings| settings.groups.iter().filter(|group| group.enabled).count())
-			.unwrap_or_default() as u32;
-		let dynamics = doc.runtime_model().dynamics();
 		DynamicsRuntimeCounts {
 			groups: dynamics.group_count() as u32,
-			enabled_groups,
+			enabled_groups: dynamics.enabled_group_count() as u32,
 			vrm_spring_bone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
 			vrc_physbone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
 			unknown_groups: dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,

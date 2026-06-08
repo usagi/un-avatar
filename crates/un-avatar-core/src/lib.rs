@@ -261,6 +261,12 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.spring_bones.map(|settings| settings.groups.len()).unwrap_or(0)
 	}
 
+	pub fn enabled_group_count(self) -> usize {
+		self.spring_bones
+			.map(|settings| settings.groups.iter().filter(|group| group.enabled).count())
+			.unwrap_or(0)
+	}
+
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.spring_bones
 			.map(|settings| settings.groups.iter().filter(|group| group.source_kind == source_kind).count())
@@ -3072,10 +3078,12 @@ mod tests {
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![
 					UnaSpringBoneGroup {
+						enabled: true,
 						bone_node_indices: vec![0, 1],
 						..Default::default()
 					},
 					UnaSpringBoneGroup {
+						enabled: true,
 						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
 						bone_node_indices: vec![2, 3],
 						..Default::default()
@@ -3089,6 +3097,7 @@ mod tests {
 
 		assert!(dynamics.has_groups());
 		assert_eq!(dynamics.group_count(), 2);
+		assert_eq!(dynamics.enabled_group_count(), 2);
 		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone), 1);
 		assert_eq!(dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone), 1);
 	}
