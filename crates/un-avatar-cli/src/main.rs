@@ -1473,6 +1473,17 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 		.collect()
 }
 
+fn duplicate_dynamics_source_ids(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<(String, usize)> {
+	let mut counts = BTreeMap::<String, usize>::new();
+	for group in groups {
+		if group.source_id.is_empty() {
+			continue;
+		}
+		*counts.entry(group.source_id.clone()).or_default() += 1;
+	}
+	counts.into_iter().filter(|(_, count)| *count > 1).collect()
+}
+
 fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCounts {
 	let Some(unavatar) = doc.unavatar.as_ref() else {
 		return DynamicsSourceFeatureCounts::default();
@@ -2222,6 +2233,11 @@ fn build_diagnose_report(
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
+	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
+		warnings.push(format!(
+			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
+		));
+	}
 	let dynamics_source_features = dynamics_source_feature_counts(&doc);
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: runtime_dynamics.group_count(),
@@ -3113,6 +3129,51 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("raw dynamics entries but no runtime dynamics groups")));
+	}
+
+	#[test]
+	fn diagnose_report_warns_on_duplicate_dynamics_source_ids() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot::default()),
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![
+					un_avatar_core::UnaSpringBoneGroup {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "physbone:hair".into(),
+						bone_node_indices: vec![0, 1],
+						..Default::default()
+					},
+					un_avatar_core::UnaSpringBoneGroup {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "physbone:hair".into(),
+						bone_node_indices: vec![2, 3],
+						..Default::default()
+					},
+				],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups")));
 	}
 
 	#[test]
