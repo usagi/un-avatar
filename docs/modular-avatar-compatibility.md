@@ -55,8 +55,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Exporter stores `UN_avatar.modularAvatar.components[*]` and report `modularAvatar` with type, target, enabled state, public fields, and component count.
   - remaining: unsupported / approximate classification per component type, private serialized fields where needed, and schema tests.
 - `[~]` object reference resolution: `AvatarObjectReference`, direct object reference, humanoid bone reference, sub-path
-  - done: Exporter serializes `AvatarObjectReference.referencePath`, direct target object, resolved target, and Transform/GameObject references as stable node id + path.
-  - remaining: humanoid bone references, ambiguous duplicate path diagnostics, and component-specific reference schemas.
+  - done: Exporter serializes `AvatarObjectReference.referencePath`, direct target object, resolved target, and Transform/GameObject references as stable node id + path. Import reports now emit path diagnostics for exact duplicate scene paths, normalized ambiguous paths, and `.unavatar` registry paths that resolve to multiple scene nodes.
+  - remaining: humanoid bone references and component-specific reference schemas.
 - `[~]` execution order model: NDMF / Modular Avatar pass order summary
   - done: Runtime resolver order follows the relevant MA transform passes for current support: MeshSettings, ReplaceObject, MergeArmature / MeshRetargeter, then BoneProxy with prepass-captured world pose.
   - remaining: extend pass ordering as ReplaceObject, MeshCutter, MaterialSetter, dynamics, and late transform features are implemented.
@@ -93,7 +93,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 - `[~]` MA Bone Proxy
   - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, `matchScale`, and MA-like duplicate child name suffixing. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting. Numeric tests cover duplicate target child names and missing target reporting.
-  - remaining: regression-check `field_drape` visually and add broader fixture coverage for path ambiguity / component interactions.
+  - remaining: regression-check `field_drape` visually and add broader fixture coverage for component interactions.
 - `[~]` MA Replace Object
   - done: Runtime resolver moves the replacement object into the original object's parent slot, migrates original children under the replacement while preserving world pose, hides the original node, and remaps Runtime node references such as skin joints, skin root, probe anchor, and node constraints to the replacement.
   - remaining: Exporter schema parity for object/component reference remap diagnostics and recursive / conflicting replacement fixture coverage.
@@ -179,7 +179,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - required: MergeArmature one-bone retarget, BoneProxy reparent, MeshSettings rootBone override.
 - `[~]` BoneProxy numeric test
   - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, `matchScale`, duplicate target child names, and missing target reporting.
-  - remaining: broader path ambiguity / component interaction fixture coverage.
+  - remaining: broader component interaction fixture coverage.
 - `[ ]` visual regression screenshots
   - required: front/back/detail views for mizuki field_drape after each resolver milestone.
 

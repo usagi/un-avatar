@@ -1151,6 +1151,29 @@ fn scene_node_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
 	out
 }
 
+fn scene_node_paths_all(scene: &UnaSceneSnapshot) -> BTreeMap<String, Vec<usize>> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, path: String, out: &mut BTreeMap<String, Vec<usize>>) {
+		out.entry(path.clone()).or_default().push(idx);
+		let Some(node) = scene.nodes.get(idx) else { return };
+		for &child in &node.children {
+			let Some(child_node) = scene.nodes.get(child) else { continue };
+			let child_name = child_node.name.as_deref().unwrap_or("");
+			let child_path = if path.is_empty() {
+				child_name.to_string()
+			} else {
+				format!("{path}/{child_name}")
+			};
+			visit(scene, child, child_path, out);
+		}
+	}
+
+	let mut out = BTreeMap::new();
+	for &root in &scene.roots {
+		visit(scene, root, String::new(), &mut out);
+	}
+	out
+}
+
 fn normalize_unavatar_path(path: &str) -> String {
 	let mut out = String::with_capacity(path.len());
 	for segment in path.split('/') {
@@ -1178,8 +1201,8 @@ fn normalize_unavatar_path_segment(segment: &str) -> String {
 
 fn scene_node_normalized_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, Vec<usize>> {
 	let mut out = BTreeMap::new();
-	for (path, idx) in scene_node_paths(scene) {
-		out.entry(normalize_unavatar_path(&path)).or_insert_with(Vec::new).push(idx);
+	for (path, indices) in scene_node_paths_all(scene) {
+		out.entry(normalize_unavatar_path(&path)).or_insert_with(Vec::new).extend(indices);
 	}
 	out
 }
@@ -1208,6 +1231,24 @@ fn lookup_scene_path_all(paths: &BTreeMap<String, usize>, normalized_paths: &BTr
 		}
 	}
 	Vec::new()
+}
+
+fn report_unavatar_path_diagnostics(scene: &UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
+	let exact_paths = scene_node_paths_all(scene);
+	let exact_duplicate_paths = exact_paths.values().filter(|indices| indices.len() > 1).count();
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let normalized_ambiguous_paths = normalized_paths.values().filter(|indices| indices.len() > 1).count();
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let registry_ambiguous_paths = registry_paths
+		.values()
+		.filter(|path| lookup_scene_path_all(&paths, &normalized_paths, path).len() > 1)
+		.count();
+	if exact_duplicate_paths > 0 || normalized_ambiguous_paths > 0 || registry_ambiguous_paths > 0 {
+		report.push_info(format!(
+			".unavatar path diagnostics: exact_duplicate_paths={exact_duplicate_paths}, normalized_ambiguous_paths={normalized_ambiguous_paths}, registry_ambiguous_paths={registry_ambiguous_paths}"
+		));
+	}
 }
 
 fn scene_node_ids(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
@@ -6507,6 +6548,7 @@ impl AvatarImporter for GltfImporter {
 			.as_ref()
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
 		if let Some(unavatar) = &unavatar {
+			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
 			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
 			if let Some(humanoid_profile) = &humanoid_profile {
 				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
@@ -9668,6 +9710,54 @@ mod tests {
 			probe_anchor_node: None,
 			local_bounds: None,
 		}
+	}
+
+	#[test]
+	fn unavatar_path_diagnostics_reports_ambiguous_paths() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Item".to_string()),
+					source_node_id: Some("node_item_a".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Item".to_string()),
+					source_node_id: Some("node_item_b".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [{
+					"nodeId": "node_item_ref",
+					"path": "Root/Item"
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+
+		report_unavatar_path_diagnostics(&scene, &unavatar, &mut report);
+
+		assert!(report.messages.iter().any(|message| {
+			message.contains("exact_duplicate_paths=1")
+				&& message.contains("normalized_ambiguous_paths=1")
+				&& message.contains("registry_ambiguous_paths=1")
+		}));
+
+		scene.nodes[2].name = Some("Other".to_string());
+		let mut report = ImportReport::default();
+		report_unavatar_path_diagnostics(&scene, &unavatar, &mut report);
+		assert!(!report.messages.iter().any(|message| message.contains(".unavatar path diagnostics")));
 	}
 
 	#[test]
