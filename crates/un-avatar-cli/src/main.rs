@@ -353,8 +353,22 @@ struct DiagnoseDynamicsSummary {
 	vrm_spring_bone_collider_count: usize,
 	vrc_physbone_collider_count: usize,
 	unknown_collider_count: usize,
+	source_limit_count: usize,
+	source_collision_disabled_count: usize,
+	source_inside_bounds_collider_count: usize,
+	source_grabbing_enabled_count: usize,
+	source_posing_enabled_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
+}
+
+#[derive(Default)]
+struct DynamicsSourceFeatureCounts {
+	limit_count: usize,
+	collision_disabled_count: usize,
+	inside_bounds_collider_count: usize,
+	grabbing_enabled_count: usize,
+	posing_enabled_count: usize,
 }
 
 #[derive(Serialize)]
@@ -1435,6 +1449,79 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 		.collect()
 }
 
+fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCounts {
+	let Some(unavatar) = doc.unavatar.as_ref() else {
+		return DynamicsSourceFeatureCounts::default();
+	};
+	let Some(dynamics) = unavatar.source.get("dynamics").and_then(|value| value.as_array()) else {
+		return DynamicsSourceFeatureCounts::default();
+	};
+	let mut counts = DynamicsSourceFeatureCounts::default();
+	for item in dynamics {
+		let source_params = item.get("sourceParams").or_else(|| item.get("source_params"));
+		let limit_type = source_params
+			.and_then(|params| params.get("limitType").or_else(|| params.get("limit_type")))
+			.or_else(|| item.get("limitType").or_else(|| item.get("limit_type")))
+			.and_then(|value| value.as_str())
+			.unwrap_or("");
+		let max_angle_x = source_params
+			.and_then(|params| params.get("maxAngleX").or_else(|| params.get("max_angle_x")))
+			.or_else(|| item.get("maxAngleX").or_else(|| item.get("max_angle_x")))
+			.and_then(json_number_f64)
+			.unwrap_or(0.0);
+		let max_angle_z = source_params
+			.and_then(|params| params.get("maxAngleZ").or_else(|| params.get("max_angle_z")))
+			.or_else(|| item.get("maxAngleZ").or_else(|| item.get("max_angle_z")))
+			.and_then(json_number_f64)
+			.unwrap_or(0.0);
+		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 {
+			counts.limit_count += 1;
+		}
+		if source_params
+			.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
+			.and_then(|value| value.as_bool())
+			== Some(false)
+		{
+			counts.collision_disabled_count += 1;
+		}
+		if source_params
+			.and_then(|params| params.get("allowGrabbing").or_else(|| params.get("allow_grabbing")))
+			.and_then(|value| value.as_bool())
+			== Some(true)
+		{
+			counts.grabbing_enabled_count += 1;
+		}
+		if source_params
+			.and_then(|params| params.get("allowPosing").or_else(|| params.get("allow_posing")))
+			.and_then(|value| value.as_bool())
+			== Some(true)
+		{
+			counts.posing_enabled_count += 1;
+		}
+		if let Some(colliders) = source_params
+			.and_then(|params| params.get("colliders"))
+			.or_else(|| item.get("colliders"))
+			.and_then(|value| value.as_array())
+		{
+			counts.inside_bounds_collider_count += colliders
+				.iter()
+				.filter(|collider| {
+					collider
+						.get("insideBounds")
+						.or_else(|| collider.get("inside_bounds"))
+						.and_then(|value| value.as_bool())
+						== Some(true)
+				})
+				.count();
+		}
+	}
+	counts
+}
+
+fn json_number_f64(value: &serde_json::Value) -> Option<f64> {
+	value.as_f64().or_else(|| value.as_i64().map(|value| value as f64))
+}
+
 fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: usize) -> Vec<DiagnoseVisibleMaterialSummary> {
 	let Some(primitives) = scene.meshes.get(mesh_index) else {
 		return Vec::new();
@@ -2114,6 +2201,7 @@ fn build_diagnose_report(
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
+	let dynamics_source_features = dynamics_source_feature_counts(&doc);
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: runtime_dynamics.group_count(),
 		vrm_spring_bone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
@@ -2123,6 +2211,11 @@ fn build_diagnose_report(
 		vrm_spring_bone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone),
 		vrc_physbone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone),
 		unknown_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown),
+		source_limit_count: dynamics_source_features.limit_count,
+		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
+		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
+		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
+		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
 		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
@@ -2335,7 +2428,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} source_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -2343,7 +2436,12 @@ fn run_diagnose(
 		report.dynamics.collider_count,
 		report.dynamics.vrm_spring_bone_collider_count,
 		report.dynamics.vrc_physbone_collider_count,
-		report.dynamics.unknown_collider_count
+		report.dynamics.unknown_collider_count,
+		report.dynamics.source_limit_count,
+		report.dynamics.source_collision_disabled_count,
+		report.dynamics.source_inside_bounds_collider_count,
+		report.dynamics.source_grabbing_enabled_count,
+		report.dynamics.source_posing_enabled_count
 	);
 	for group in report.dynamics.groups.iter().take(16) {
 		println!(
@@ -2932,7 +3030,20 @@ mod tests {
 				spec_version: "0.1".into(),
 				source: serde_json::json!({
 					"dynamics": [
-						{ "source": "vrc_physbone", "roots": [999] }
+						{
+							"source": "vrc_physbone",
+							"roots": [999],
+							"sourceParams": {
+								"limitType": "Angle",
+								"maxAngleX": 45.0,
+								"allowCollision": false,
+								"allowGrabbing": true,
+								"allowPosing": true,
+								"colliders": [
+									{"insideBounds": true}
+								]
+							}
+						}
 					]
 				}),
 			}),
@@ -2956,6 +3067,11 @@ mod tests {
 
 		assert_eq!(report.unavatar.as_ref().unwrap().dynamics_entry_count, 1);
 		assert_eq!(report.dynamics.group_count, 0);
+		assert_eq!(report.dynamics.source_limit_count, 1);
+		assert_eq!(report.dynamics.source_collision_disabled_count, 1);
+		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
+		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
+		assert_eq!(report.dynamics.source_posing_enabled_count, 1);
 		assert!(report
 			.warnings
 			.iter()
