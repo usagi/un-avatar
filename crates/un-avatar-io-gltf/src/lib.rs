@@ -1846,9 +1846,12 @@ pub struct WardrobeApplyReport {
 	pub blendshape_missing: usize,
 	pub dynamics_applied: usize,
 	pub dynamics_missing: usize,
+	pub material_slot_applied: usize,
+	pub material_slot_missing: usize,
 	pub missing_visibility_paths: Vec<String>,
 	pub missing_blendshapes: Vec<String>,
 	pub missing_dynamics_ids: Vec<String>,
+	pub missing_material_slots: Vec<String>,
 }
 
 fn apply_unavatar_wardrobe_operations(
@@ -1945,10 +1948,63 @@ fn apply_unavatar_wardrobe_operations(
 					report.missing_dynamics_ids.push(target_id.to_string());
 				}
 			}
+			"materialSlot" | "material_slot" => {
+				if apply_unavatar_material_slot_operation(scene, op) {
+					report.material_slot_applied += 1;
+				} else {
+					report.material_slot_missing += 1;
+					report.missing_material_slots.push(path.to_string());
+				}
+			}
 			_ => {}
 		}
 	}
 	report
+}
+
+fn apply_unavatar_material_slot_operation(scene: &mut UnaSceneSnapshot, op: &Value) -> bool {
+	let Some(target) = unavatar_runtime_material_slot_target(op) else {
+		return false;
+	};
+	let Some(material) = unavatar_runtime_material_slot_material(op) else {
+		return false;
+	};
+	let Some(material_index) = unavatar_scene_material_index(scene, &material) else {
+		return false;
+	};
+	let Some(node_index) = resolve_unavatar_runtime_node_target(scene, &target.node) else {
+		return false;
+	};
+	let Some(mesh_index) = scene.nodes.get(node_index).and_then(|node| node.mesh) else {
+		return false;
+	};
+	let primitive_index = target.primitive_index.unwrap_or(0);
+	let Some(primitive) = scene.meshes.get_mut(mesh_index).and_then(|mesh| mesh.get_mut(primitive_index)) else {
+		return false;
+	};
+	primitive.material_index = Some(material_index);
+	true
+}
+
+fn resolve_unavatar_runtime_node_target(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
+	if let Some(source_node_id) = target.source_node_id.as_deref().filter(|value| !value.is_empty()) {
+		if let Some((index, _)) = scene
+			.nodes
+			.iter()
+			.enumerate()
+			.find(|(_, node)| node.source_node_id.as_deref() == Some(source_node_id))
+		{
+			return Some(index);
+		}
+	}
+	if let Some(path) = target.path.as_deref().filter(|value| !value.is_empty()) {
+		let paths = scene_node_paths(scene);
+		let normalized_paths = scene_node_normalized_paths(scene);
+		if let Some(index) = lookup_scene_path_all(&paths, &normalized_paths, path).into_iter().next() {
+			return Some(index);
+		}
+	}
+	target.node_index.filter(|index| *index < scene.nodes.len())
 }
 
 fn operation_dynamics_target_id(op: &Value) -> Option<&str> {
@@ -3614,15 +3670,19 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 		|| applied.blendshape_missing > 0
 		|| applied.dynamics_applied > 0
 		|| applied.dynamics_missing > 0
+		|| applied.material_slot_applied > 0
+		|| applied.material_slot_missing > 0
 	{
 		report.push_info(format!(
-			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, inherited_hidden_skipped={}",
+			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_slot_applied={}, material_slot_missing={}, inherited_hidden_skipped={}",
 			applied.visibility_applied,
 			applied.visibility_missing,
 			applied.blendshape_applied,
 			applied.blendshape_missing,
 			applied.dynamics_applied,
 			applied.dynamics_missing,
+			applied.material_slot_applied,
+			applied.material_slot_missing,
 			skipped
 		));
 	}
@@ -7729,6 +7789,82 @@ mod tests {
 		assert_eq!(applied.visibility_applied, 1);
 		assert!(scene.nodes[1].visible);
 		assert!(scene.nodes[3].visible);
+	}
+
+	#[test]
+	fn wardrobe_material_slot_operation_replaces_primitive_material() {
+		let primitive = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(0),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let mut scene = UnaSceneSnapshot {
+			meshes: vec![vec![primitive.clone(), primitive]],
+			materials: vec![
+				UnaMaterialPbr {
+					name: Some("Base".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Alt".to_string()),
+					..Default::default()
+				},
+			],
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Renderer".to_string()),
+					source_node_id: Some("node_renderer".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let operations = vec![
+			serde_json::json!({
+				"op": "materialSlot",
+				"target": {
+					"nodeId": "node_renderer",
+					"path": "Root/Renderer",
+					"primitiveIndex": 1
+				},
+				"material": {"materialName": "Alt"}
+			}),
+			serde_json::json!({
+				"op": "materialSlot",
+				"target": {
+					"path": "Root/Renderer",
+					"primitiveIndex": 2
+				},
+				"material": {"materialName": "Missing"}
+			}),
+		];
+
+		let applied = apply_unavatar_wardrobe_operations(&mut scene, None, &operations, None);
+
+		assert_eq!(applied.material_slot_applied, 1);
+		assert_eq!(applied.material_slot_missing, 1);
+		assert_eq!(scene.meshes[0][0].material_index, Some(0));
+		assert_eq!(scene.meshes[0][1].material_index, Some(1));
 	}
 
 	#[test]
