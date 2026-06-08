@@ -1430,6 +1430,53 @@ fn unavatar_dynamics_colliders(
 		.collect()
 }
 
+fn unavatar_dynamics_endpoint_position(value: &Value) -> Option<[f32; 3]> {
+	let endpoint = value
+		.get("endpointPosition")
+		.or_else(|| value.get("endpoint_position"))
+		.or_else(|| {
+			value
+				.get("sourceParams")
+				.or_else(|| value.get("source_params"))
+				.and_then(|params| params.get("endpointPosition").or_else(|| params.get("endpoint_position")))
+		});
+	let endpoint = unity_vec3_to_unavatar_runtime(json_vec3(endpoint)?);
+	let length_sq = endpoint[0] * endpoint[0] + endpoint[1] * endpoint[1] + endpoint[2] * endpoint[2];
+	(length_sq > 1e-12).then_some(endpoint)
+}
+
+fn ensure_unavatar_dynamics_endpoint_child(
+	scene: &mut UnaSceneSnapshot,
+	root_idx: usize,
+	item: &Value,
+	ignored_nodes: &BTreeSet<usize>,
+) -> bool {
+	if root_idx >= scene.nodes.len() {
+		return false;
+	}
+	if scene.nodes[root_idx].children.iter().any(|child| !ignored_nodes.contains(child)) {
+		return false;
+	}
+	let Some(endpoint) = unavatar_dynamics_endpoint_position(item) else {
+		return false;
+	};
+	let endpoint_idx = scene.nodes.len();
+	let root_name = scene.nodes.get(root_idx).and_then(|node| node.name.as_deref()).unwrap_or("Root");
+	scene.nodes.push(UnaSceneNode {
+		name: Some(format!("{root_name} Endpoint")),
+		source_node_id: None,
+		visible: true,
+		transform: Mat4::from_translation(Vec3::from(endpoint)).to_cols_array(),
+		children: Vec::new(),
+		mesh: None,
+		skin: None,
+		probe_anchor_node: None,
+		local_bounds: None,
+	});
+	scene.nodes[root_idx].children.push(endpoint_idx);
+	true
+}
+
 fn collect_scene_child_chains(
 	scene: &UnaSceneSnapshot,
 	root_idx: usize,
@@ -1493,7 +1540,7 @@ fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
 }
 
 fn unavatar_dynamics_settings(
-	scene: &UnaSceneSnapshot,
+	scene: &mut UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
 	report: &mut ImportReport,
 ) -> Option<UnaSpringBoneSettings> {
@@ -1507,6 +1554,7 @@ fn unavatar_dynamics_settings(
 	let mut short_chains = 0usize;
 	let mut ignored_transform_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
+	let mut endpoint_child_count = 0usize;
 	let mut colliders = Vec::new();
 
 	for item in dynamics {
@@ -1578,6 +1626,9 @@ fn unavatar_dynamics_settings(
 				missing_roots += 1;
 				continue;
 			};
+			if ensure_unavatar_dynamics_endpoint_child(scene, root_idx, item, &ignored_nodes) {
+				endpoint_child_count += 1;
+			}
 			for chain in collect_scene_child_chains(scene, root_idx, &ignored_nodes, multi_child_ignore) {
 				if chain.len() < 2 {
 					short_chains += 1;
@@ -1608,6 +1659,9 @@ fn unavatar_dynamics_settings(
 		report.push_info(format!(
 			".unavatar dynamics: source_hints ignored_transforms={ignored_transform_count} multi_child_ignore={multi_child_ignore_count}"
 		));
+	}
+	if endpoint_child_count > 0 {
+		report.push_info(format!(".unavatar dynamics: synthesized_endpoint_children={endpoint_child_count}"));
 	}
 	if groups.is_empty() {
 		None
@@ -5081,7 +5135,7 @@ impl AvatarImporter for GltfImporter {
 		};
 		let spring_bones = unavatar
 			.as_ref()
-			.and_then(|unavatar| unavatar_dynamics_settings(&scene, unavatar, &mut report));
+			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
 		}
@@ -5182,7 +5236,7 @@ mod tests {
 
 	#[test]
 	fn unavatar_dynamics_lowers_vrc_physbone_to_runtime_group() {
-		let scene = UnaSceneSnapshot {
+		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
 			roots: vec![0],
 			..Default::default()
@@ -5227,7 +5281,7 @@ mod tests {
 			}),
 		};
 		let mut report = ImportReport::default();
-		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
@@ -5245,7 +5299,7 @@ mod tests {
 
 	#[test]
 	fn unavatar_dynamics_lowers_branching_root_to_multiple_runtime_groups() {
-		let scene = UnaSceneSnapshot {
+		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
 				test_scene_node("node_root", vec![1, 3]),
 				test_scene_node("node_left_mid", vec![2]),
@@ -5272,7 +5326,7 @@ mod tests {
 			}),
 		};
 		let mut report = ImportReport::default();
-		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 		let mut chains: Vec<Vec<usize>> = settings.groups.iter().map(|group| group.bone_node_indices.clone()).collect();
 		chains.sort();
 
@@ -5285,7 +5339,7 @@ mod tests {
 
 	#[test]
 	fn unavatar_dynamics_respects_ignored_transforms_and_multi_child_ignore() {
-		let scene = UnaSceneSnapshot {
+		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
 				test_scene_node("node_root", vec![1, 3, 4]),
 				test_scene_node("node_ignored", vec![2]),
@@ -5316,12 +5370,50 @@ mod tests {
 			}),
 		};
 		let mut report = ImportReport::default();
-		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
 		assert!(report.messages.iter().any(|message| message.contains("ignored_transforms=1")));
 		assert!(report.messages.iter().any(|message| message.contains("multi_child_ignore=1")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_synthesizes_endpoint_child_for_leaf_root() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"}
+				],
+				"dynamics": [{
+					"id": "leaf_tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"endpointPosition": [0.1, 0.2, 0.3]
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(scene.nodes.len(), 2);
+		assert_eq!(scene.nodes[0].children, vec![1]);
+		let (_, _, endpoint_translation) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		assert_eq!(endpoint_translation.to_array(), [-0.1, 0.2, 0.3]);
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("synthesized_endpoint_children=1")));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {

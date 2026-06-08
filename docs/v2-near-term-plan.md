@@ -55,7 +55,7 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 - `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、runtime dynamics view の最小形を決める。
 - Unity Exporter は現在有効な VRC PhysBone component を `.unavatar` `dynamics[]` へ近似出力し、Runtime importer が SpringBone-like group へ lower する。
 - 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `radius` / `pull` / `spring` / `stiffness` / `gravity` の最小抽出と lower、source collider metadata 保存、branch root の複数 group 化、CLI diagnostics。
-- 残り: VRC PhysBone collider の runtime solver 接続 / endpointPosition / limit / collision / grabbing / posing の再現、wardrobe / action state と連動した runtime enable state。
+- 残り: VRC PhysBone insideBounds collider / limit / collision / grabbing / posing の再現、wardrobe / action state と連動した runtime enable state。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
 - PhysBone behavior の詳細再現は Wardrobe hot switch と action model の後まで待つ。
 
@@ -119,7 +119,7 @@ PhysBone behavior implementation は runtime state cleanup、runtime dynamics no
 - PhysBone roots、colliders、enabled state は active wardrobe と animation state に依存する。
 - scene source data を直接 mutate する solver は、hot switch と相性が悪い。
 - 初期実装では VRC PhysBone parameters を既存 SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved runtime state を入力にする。
-- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、normalized collider data を既存 SpringBone solver collider へ接続している。CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。残りは insideBounds collider、endpointPosition、limits、collision/grabbing/posing、wardrobe/action runtime enable。
+- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data を既存 SpringBone solver collider へ接続している。CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。残りは insideBounds collider、limits、collision/grabbing/posing、wardrobe/action runtime enable。
 
 ## この段階の非目標
 
