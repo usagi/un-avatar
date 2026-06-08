@@ -162,7 +162,7 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.outline_width_multiply_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
-		if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
+		if let Some(liltoon_like) = mat.liltoon_like_source_profile() {
 			mark_texture_role(&mut roles, liltoon_like.main_color.gradation_texture_index, TextureRole::Data);
 			mark_texture_role(
 				&mut roles,

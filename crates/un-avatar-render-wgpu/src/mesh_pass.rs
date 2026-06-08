@@ -2990,7 +2990,7 @@ fn compute_fur_cards_card_sources_from_triangles(
 	triangles: &[ComputeFurCardsSourceTriangleGpu],
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 ) -> Option<Vec<ComputeFurCardsCardSourceGpu>> {
-	let liltoon_fur = material.liltoon_like.as_ref().map(|liltoon_like| &liltoon_like.fur);
+	let liltoon_fur = material.liltoon_like_source_profile().map(|liltoon_like| &liltoon_like.fur);
 	let layer_num = liltoon_fur.map(|fur| fur.layer_count_factor).unwrap_or(1.0);
 	let fur_length = liltoon_fur.map(|fur| fur.vector_factor[3].max(0.0)).unwrap_or(0.0);
 	let segment_count = liltoon_fur_segment_count(layer_num);
@@ -3101,7 +3101,7 @@ fn compute_fur_cards_generate_params_from_material(
 	_cards_per_triangle: u32,
 	generated: ComputeFurCardsBufferRequirements,
 ) -> ComputeFurCardsGenerateParamsGpu {
-	let fur = material.liltoon_like.as_ref().map(|liltoon_like| &liltoon_like.fur);
+	let fur = material.liltoon_like_source_profile().map(|liltoon_like| &liltoon_like.fur);
 	let vector = fur.map(|f| f.vector_factor).unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let fur_length = vector[3].max(0.0);
 	let cards_per_triangle = fur.map(|f| liltoon_fur_segment_count(f.layer_count_factor)).unwrap_or(0);
@@ -3347,7 +3347,7 @@ fn mesh_draw_material_gpu(
 	} else {
 		1.0
 	};
-	let liltoon_like = mat.liltoon_like.as_ref();
+	let liltoon_like = mat.liltoon_like_source_profile();
 	if liltoon_like.is_some() {
 		flags |= 4096;
 	}
@@ -6491,7 +6491,7 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
 					.or(mtoon.shade_multiply_texture_index);
-				let shade_fallback_view = if mat.liltoon_like.is_some() {
+				let shade_fallback_view = if mat.liltoon_like_source_profile().is_some() {
 					&transparent_black_view
 				} else {
 					&white_view
@@ -6513,7 +6513,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
 				let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
-				let shift_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let shift_fallback_view = if mat.liltoon_like_source_profile().is_some() {
+					&white_view
+				} else {
+					&black_view
+				};
 				let shift_view = texture_view_or(&image_views, shading_shift_texture_index, shift_fallback_view);
 				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shading_shift_texture_index, 0);
 				let shadow_border_mask_texture_index = mat
@@ -6533,7 +6537,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
 					.or(mtoon.matcap_texture_index);
-				let matcap_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let matcap_fallback_view = if mat.liltoon_like_source_profile().is_some() {
+					&white_view
+				} else {
+					&black_view
+				};
 				let matcap_view = texture_view_or(&image_views, matcap_texture_index, matcap_fallback_view);
 				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_texture_index, 0);
 				let matcap_blend_mask_texture_index = mat
@@ -6662,7 +6670,7 @@ impl SceneMeshes {
 				let dissolve_mask_view = texture_view_or(&image_views, dissolve_mask_texture_index, &white_view);
 				let dissolve_noise_mask_view = texture_view_or(&image_views, dissolve_noise_mask_texture_index, &white_view);
 				let parallax_view = texture_view_or(&image_views, parallax_texture_index, &white_view);
-				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like.as_ref() {
+				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like_source_profile() {
 					liltoon_reflection_texture_index(liltoon_like)
 				} else {
 					mtoon.reflection_cube_texture_index
@@ -6694,7 +6702,11 @@ impl SceneMeshes {
 					.as_ref()
 					.and_then(|liltoon_like| liltoon_like.emission.texture_index)
 					.or(mat.emissive_texture_index);
-				let emissive_fallback_view = if mat.liltoon_like.is_some() { &white_view } else { &black_view };
+				let emissive_fallback_view = if mat.liltoon_like_source_profile().is_some() {
+					&white_view
+				} else {
+					&black_view
+				};
 				let emissive_view = texture_view_or(&image_views, emissive_texture_index, emissive_fallback_view);
 				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, emissive_texture_index, 0);
 				let emission_blend_mask_texture_index = mat
