@@ -247,6 +247,69 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 						}
 						out.insert("positions".to_string(), Value::from(primitive.positions.len() as u64));
 						out.insert(
+							"normals".to_string(),
+							primitive
+								.normals
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"tangents".to_string(),
+							primitive
+								.tangents
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords0".to_string(),
+							primitive
+								.tex_coords_0
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords1".to_string(),
+							primitive
+								.tex_coords_1
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords2".to_string(),
+							primitive
+								.tex_coords_2
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords3".to_string(),
+							primitive
+								.tex_coords_3
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"colors0".to_string(),
+							primitive
+								.colors_0
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"joints".to_string(),
+							primitive
+								.joints
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"weights".to_string(),
+							primitive
+								.weights
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
 							"indices".to_string(),
 							primitive
 								.indices
@@ -258,6 +321,10 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 							primitive.material_index.map_or(Value::Null, |index| Value::from(index as u64)),
 						);
 						out.insert("morphTargets".to_string(), Value::from(primitive.morph_targets.len() as u64));
+						out.insert(
+							"defaultMorphWeights".to_string(),
+							Value::from(primitive.default_morph_weights.len() as u64),
+						);
 						out.insert(
 							"morphTargetNames".to_string(),
 							Value::Array(
@@ -4536,6 +4603,13 @@ mod tests {
 		document.scene.as_mut().unwrap().meshes[0][0]
 			.morph_target_names
 			.push("Blink".to_string());
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().mesh_source_hash,
+			first.mesh_source_hash
+		);
+
+		document.scene.as_mut().unwrap().meshes[0][0].morph_target_names = vec!["Smile".to_string()];
+		document.scene.as_mut().unwrap().meshes[0][0].colors_0 = Some(vec![[1.0, 1.0, 1.0, 1.0]; 2]);
 		assert_ne!(
 			document.runtime_model().resolver_cache_key().mesh_source_hash,
 			first.mesh_source_hash

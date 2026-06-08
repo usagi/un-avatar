@@ -167,7 +167,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Scene nodes carry source node ids separately from runtime resolved node ids. Runtime node targets can resolve by source id, resolved id, path, or index while preserving source id priority for wardrobe-authored targets. MA Replace Object assigns a derived resolved node id to the replacement node, and CLI diagnose exposes resolved node ids.
   - remaining: exporter schema parity for resolved ids created by other resolver stages and derived mesh/cache node ids.
 - `[x]` resolver cache key
-  - done: runtime resolver cache key exposes selected wardrobe set, active asset groups, Modular Avatar component payload hash, material source hash, mesh render identity hash, and resolver version through core, CLI diagnose, and renderer status.
+  - done: runtime resolver cache key exposes selected wardrobe set, active asset groups, Modular Avatar component payload hash, material source hash, mesh render identity hash, and resolver version through core, CLI diagnose, and renderer status. Mesh render identity includes vertex attribute layout, including vertex color presence, so resolver mesh mutations such as Remove Vertex Color can invalidate downstream mesh caches.
   - note: resolved graph cache storage and full vertex payload cache keys are renderer implementation work, not part of the metadata surface checklist.
 - `[ ]` report parity
   - required: Unity Exporter report and Runtime importer report use the same feature names.
