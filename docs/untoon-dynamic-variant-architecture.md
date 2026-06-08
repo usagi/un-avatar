@@ -259,7 +259,7 @@ UntoonVariantKey {
 6. shader module metadata と deterministic source generation を導入する。
 7. fixed full / fixed portable の外部概念を廃止する。
 
-現 renderer の GPU limit planning は `mesh_shader_variant_tier_for_limits()` / `mesh_shader_required_limits_for_adapter()` に集約済みである。dynamic variant planner は adapter limit 判定を再実装せず、この境界を拡張する。
+現 renderer の GPU limit planning は `mesh_shader_resource_plan_for_adapter()` に集約済みである。dynamic variant planner は adapter limit 判定を再実装せず、この境界を拡張する。
 
 ## Non-goals
 
