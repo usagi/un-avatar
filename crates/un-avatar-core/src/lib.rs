@@ -210,6 +210,8 @@ pub struct UnaRuntimeResolverCacheKey {
 	pub modular_avatar_components_hash: Option<u64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub material_source_hash: Option<u64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mesh_source_hash: Option<u64>,
 	pub resolver_version: u32,
 }
 
@@ -221,9 +223,58 @@ impl UnaRuntimeResolverCacheKey {
 			active_asset_groups: state.active_asset_groups.clone(),
 			modular_avatar_components_hash: document.unavatar.as_ref().and_then(unavatar_modular_avatar_components_hash),
 			material_source_hash: document.scene.as_ref().and_then(scene_material_source_hash),
+			mesh_source_hash: document.scene.as_ref().and_then(scene_mesh_source_hash),
 			resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 		}
 	}
+}
+
+fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
+	if scene.meshes.is_empty() {
+		return None;
+	}
+	let meshes = scene
+		.meshes
+		.iter()
+		.map(|primitives| {
+			Value::Array(
+				primitives
+					.iter()
+					.map(|primitive| {
+						let mut out = serde_json::Map::new();
+						if let Some(name) = &primitive.name {
+							out.insert("name".to_string(), Value::String(name.clone()));
+						}
+						out.insert("positions".to_string(), Value::from(primitive.positions.len() as u64));
+						out.insert(
+							"indices".to_string(),
+							primitive
+								.indices
+								.as_ref()
+								.map_or(Value::Null, |indices| Value::from(indices.len() as u64)),
+						);
+						out.insert(
+							"material".to_string(),
+							primitive.material_index.map_or(Value::Null, |index| Value::from(index as u64)),
+						);
+						out.insert("morphTargets".to_string(), Value::from(primitive.morph_targets.len() as u64));
+						out.insert(
+							"morphTargetNames".to_string(),
+							Value::Array(
+								primitive
+									.morph_target_names
+									.iter()
+									.map(|name| Value::String(name.clone()))
+									.collect(),
+							),
+						);
+						Value::Object(out)
+					})
+					.collect(),
+			)
+		})
+		.collect();
+	Some(stable_json_hash(&Value::Array(meshes)))
 }
 
 fn scene_material_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
@@ -4294,6 +4345,7 @@ mod tests {
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
 				modular_avatar_components_hash: None,
 				material_source_hash: None,
+				mesh_source_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4308,6 +4360,7 @@ mod tests {
 				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
 				modular_avatar_components_hash: None,
 				material_source_hash: None,
+				mesh_source_hash: None,
 				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
 			}
 		);
@@ -4402,6 +4455,51 @@ mod tests {
 		assert_ne!(
 			document.runtime_model().resolver_cache_key().material_source_hash,
 			first.material_source_hash
+		);
+	}
+
+	#[test]
+	fn runtime_resolver_cache_key_hashes_mesh_render_identity() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				meshes: vec![vec![UnaMeshBuffers {
+					name: Some("Body".to_string()),
+					positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+					normals: None,
+					tangents: None,
+					tex_coords_0: None,
+					tex_coords_1: None,
+					tex_coords_2: None,
+					tex_coords_3: None,
+					colors_0: None,
+					joints: None,
+					weights: None,
+					indices: Some(vec![0, 1]),
+					material_index: Some(0),
+					morph_targets: Vec::new(),
+					morph_target_names: vec!["Smile".to_string()],
+					default_morph_weights: Vec::new(),
+				}]],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let first = document.runtime_model().resolver_cache_key();
+		assert!(first.mesh_source_hash.is_some());
+
+		document.scene.as_mut().unwrap().meshes[0][0].material_index = Some(1);
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().mesh_source_hash,
+			first.mesh_source_hash
+		);
+
+		document.scene.as_mut().unwrap().meshes[0][0].material_index = Some(0);
+		document.scene.as_mut().unwrap().meshes[0][0]
+			.morph_target_names
+			.push("Blink".to_string());
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().mesh_source_hash,
+			first.mesh_source_hash
 		);
 	}
 
