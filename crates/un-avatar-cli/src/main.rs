@@ -371,6 +371,8 @@ struct DiagnoseActionItemSummary {
 	effect_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	node_visibility_effects: Vec<DiagnoseActionNodeVisibilityEffect>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	material_slot_effects: Vec<DiagnoseActionMaterialSlotEffect>,
 }
 
 #[derive(Serialize)]
@@ -386,6 +388,17 @@ struct DiagnoseActionNodeVisibilityEffect {
 	resolved_node_id: Option<String>,
 	path: Option<String>,
 	visible: bool,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionMaterialSlotEffect {
+	node_index: Option<usize>,
+	source_node_id: Option<String>,
+	resolved_node_id: Option<String>,
+	path: Option<String>,
+	primitive_index: Option<usize>,
+	material_index: Option<usize>,
+	material_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2528,6 +2541,7 @@ fn build_diagnose_report(
 				parameter_triggers: runtime_action_parameter_triggers(action.triggers.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
+				material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
 			})
 			.collect(),
 	});
@@ -2761,6 +2775,26 @@ fn runtime_action_node_visibility_effects<'a>(
 		.collect()
 }
 
+fn runtime_action_material_slot_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<DiagnoseActionMaterialSlotEffect> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::MaterialSlot { target, material } => Some(DiagnoseActionMaterialSlotEffect {
+				node_index: target.node.node_index,
+				source_node_id: target.node.source_node_id.clone(),
+				resolved_node_id: target.node.resolved_node_id.clone(),
+				path: target.node.path.clone(),
+				primitive_index: target.primitive_index,
+				material_index: material.as_ref().and_then(|material| material.material_index),
+				material_name: material.as_ref().and_then(|material| material.name.clone()),
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
 fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
 	let mut counts = BTreeMap::new();
 	for effect in effects {
@@ -2921,6 +2955,31 @@ fn run_diagnose(
 					.collect::<Vec<_>>()
 					.join(", ");
 				println!("action[{}].node_visibility: {}", action.id, effects);
+			}
+			if !action.material_slot_effects.is_empty() {
+				let effects = action
+					.material_slot_effects
+					.iter()
+					.map(|effect| {
+						let target = effect
+							.source_node_id
+							.as_deref()
+							.or(effect.resolved_node_id.as_deref())
+							.or(effect.path.as_deref())
+							.map(str::to_string)
+							.unwrap_or_else(|| effect.node_index.map_or("?".to_string(), |index| format!("#{index}")));
+						let primitive = effect.primitive_index.map_or("*".to_string(), |index| index.to_string());
+						let material = effect
+							.material_name
+							.as_deref()
+							.map(str::to_string)
+							.or_else(|| effect.material_index.map(|index| format!("#{index}")))
+							.unwrap_or_else(|| "null".to_string());
+						format!("{target}[{primitive}]={material}")
+					})
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].material_slots: {}", action.id, effects);
 			}
 		}
 	} else {
@@ -3651,6 +3710,57 @@ mod tests {
 		assert_eq!(action.node_visibility_effects[0].resolved_node_id.as_deref(), Some("resolved_hat"));
 		assert_eq!(action.node_visibility_effects[0].path.as_deref(), Some("Root/Hat"));
 		assert!(!action.node_visibility_effects[0].visible);
+	}
+
+	#[test]
+	fn diagnose_report_summarizes_material_slot_action_targets() {
+		let doc = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "ma:material_setter:jacket".to_string(),
+					label: "Jacket".to_string(),
+					triggers: Vec::new(),
+					effects: vec![UnaRuntimeActionEffect::MaterialSlot {
+						target: un_avatar_core::UnaRuntimeMaterialSlotTarget {
+							node: un_avatar_core::UnaRuntimeNodeTarget {
+								node_index: None,
+								source_node_id: Some("node_jacket".to_string()),
+								resolved_node_id: None,
+								path: Some("Root/Jacket".to_string()),
+							},
+							primitive_index: Some(1),
+						},
+						material: Some(un_avatar_core::UnaRuntimeMaterialTarget {
+							material_index: None,
+							name: Some("Jacket Red".to_string()),
+						}),
+					}],
+				}],
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let action = &report.actions.as_ref().unwrap().actions[0];
+		assert_eq!(action.material_slot_effects.len(), 1);
+		assert_eq!(action.material_slot_effects[0].source_node_id.as_deref(), Some("node_jacket"));
+		assert_eq!(action.material_slot_effects[0].path.as_deref(), Some("Root/Jacket"));
+		assert_eq!(action.material_slot_effects[0].primitive_index, Some(1));
+		assert_eq!(action.material_slot_effects[0].material_name.as_deref(), Some("Jacket Red"));
 	}
 
 	#[test]
