@@ -3708,7 +3708,7 @@ fn append_collider_wire_vertices(collider: BoneColliderPrimitive, world: &[Mat4]
 			append_wire_sphere(a, radius, COLOR, out);
 			append_wire_sphere(b, radius, COLOR, out);
 		}
-		BoneColliderPrimitive::LocalSphere { node, center, radius } => {
+		BoneColliderPrimitive::LocalSphere { node, center, radius, .. } => {
 			if let Some(center) = world.get(node).map(|m| m.transform_point3(Vec3::from(center))) {
 				append_wire_sphere(center, radius, COLOR, out);
 			}
@@ -3719,6 +3719,7 @@ fn append_collider_wire_vertices(collider: BoneColliderPrimitive, world: &[Mat4]
 			axis,
 			half_length,
 			radius,
+			..
 		} => {
 			let Some(m) = world.get(node) else {
 				return;

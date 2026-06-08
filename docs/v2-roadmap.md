@@ -227,7 +227,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 
 - VRM SpringBone と VRC PhysBone を共通の U.N. dynamics runtime model へ正規化する。
 - VRC PhysBone root / ignoreTransforms / multiChild mode / endpoint / radius / pull / spring / stiffness / gravity / collider の近似抽出。
-- VRC PhysBone limit / interaction 系と insideBounds collider は Wardrobe hot switch と runtime action state の後に段階対応する。
+- VRC PhysBone limit / interaction 系と detailed collision behavior は Wardrobe hot switch と runtime action state の後に段階対応する。
 - VRM SpringBone と VRC PhysBone の source metadata は保持しつつ、solver 入力は正規化済み runtime dynamics state にする。
 - 既存 SpringBone runtime primitive へ変換する。
 - debug view と tuning UI を追加する。

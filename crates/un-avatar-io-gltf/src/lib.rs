@@ -1406,14 +1406,11 @@ fn unavatar_dynamics_colliders(
 	colliders
 		.iter()
 		.filter_map(|collider| {
-			if collider
+			let inside_bounds = collider
 				.get("insideBounds")
 				.or_else(|| collider.get("inside_bounds"))
 				.and_then(Value::as_bool)
-				== Some(true)
-			{
-				return None;
-			}
+				.unwrap_or(false);
 			let root = collider
 				.get("root")
 				.or_else(|| collider.get("node"))
@@ -1431,7 +1428,7 @@ fn unavatar_dynamics_colliders(
 				height: json_f32(collider.get("height")).unwrap_or(0.0).max(0.0),
 				position: unity_vec3_to_unavatar_runtime(json_vec3(collider.get("position")).unwrap_or([0.0; 3])),
 				rotation: unity_quat_to_unavatar_runtime(json_vec4(collider.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
-				inside_bounds: false,
+				inside_bounds,
 			})
 		})
 		.collect()
@@ -5308,13 +5305,16 @@ mod tests {
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
-		assert_eq!(settings.colliders.len(), 1);
+		assert_eq!(settings.colliders.len(), 2);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.colliders[0].node, 0);
 		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Sphere);
 		assert_eq!(settings.colliders[0].radius, 0.08);
 		assert_eq!(settings.colliders[0].position, [-0.1, 0.2, 0.3]);
 		assert_eq!(settings.colliders[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
+		assert!(!settings.colliders[0].inside_bounds);
+		assert_eq!(settings.colliders[1].radius, 0.2);
+		assert!(settings.colliders[1].inside_bounds);
 	}
 
 	#[test]

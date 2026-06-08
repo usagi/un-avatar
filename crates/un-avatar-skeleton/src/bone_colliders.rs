@@ -83,6 +83,7 @@ pub enum BoneColliderPrimitive {
 		node: usize,
 		center: [f32; 3],
 		radius: f32,
+		inside_bounds: bool,
 	},
 	LocalCapsule {
 		node: usize,
@@ -90,6 +91,7 @@ pub enum BoneColliderPrimitive {
 		axis: [f32; 3],
 		half_length: f32,
 		radius: f32,
+		inside_bounds: bool,
 	},
 }
 
@@ -175,7 +177,7 @@ pub fn build_runtime_bone_colliders(
 	let mut out = build_bone_colliders(scene, profile, config);
 	if let Some(settings) = dynamics.spring_bones() {
 		for collider in &settings.colliders {
-			if collider.inside_bounds || collider.node >= scene.nodes.len() {
+			if collider.node >= scene.nodes.len() {
 				continue;
 			}
 			let radius = collider.radius.max(0.0);
@@ -188,6 +190,7 @@ pub fn build_runtime_bone_colliders(
 					node: collider.node,
 					center,
 					radius,
+					inside_bounds: collider.inside_bounds,
 				}),
 				UnaDynamicsColliderShape::Capsule => {
 					let axis = Quat::from_xyzw(
@@ -204,6 +207,7 @@ pub fn build_runtime_bone_colliders(
 						axis,
 						half_length,
 						radius,
+						inside_bounds: collider.inside_bounds,
 					});
 				}
 				UnaDynamicsColliderShape::Unknown => {}
@@ -251,11 +255,20 @@ pub(crate) fn push_out_of_colliders(point: Vec3, world: &[Mat4], colliders: &[Bo
 				};
 				p = push_out_sphere(p, closest_on_segment(p, a, b), radius + extra);
 			}
-			BoneColliderPrimitive::LocalSphere { node, center, radius } => {
+			BoneColliderPrimitive::LocalSphere {
+				node,
+				center,
+				radius,
+				inside_bounds,
+			} => {
 				let Some(center) = local_point_position(world, node, center) else {
 					continue;
 				};
-				p = push_out_sphere(p, center, radius + extra);
+				p = if inside_bounds {
+					push_into_sphere(p, center, radius - extra)
+				} else {
+					push_out_sphere(p, center, radius + extra)
+				};
 			}
 			BoneColliderPrimitive::LocalCapsule {
 				node,
@@ -263,11 +276,16 @@ pub(crate) fn push_out_of_colliders(point: Vec3, world: &[Mat4], colliders: &[Bo
 				axis,
 				half_length,
 				radius,
+				inside_bounds,
 			} => {
 				let Some((a, b)) = local_capsule_segment(world, node, center, axis, half_length) else {
 					continue;
 				};
-				p = push_out_sphere(p, closest_on_segment(p, a, b), radius + extra);
+				p = if inside_bounds {
+					push_into_sphere(p, closest_on_segment(p, a, b), radius - extra)
+				} else {
+					push_out_sphere(p, closest_on_segment(p, a, b), radius + extra)
+				};
 			}
 		}
 	}
@@ -361,6 +379,23 @@ fn push_out_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 	}
 	if dist <= 1e-6 {
 		center + Vec3::Y * radius
+	} else {
+		center + delta / dist * radius
+	}
+}
+
+fn push_into_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
+	if !radius.is_finite() {
+		return point;
+	}
+	let radius = radius.max(0.0);
+	let delta = point - center;
+	let dist = delta.length();
+	if dist <= radius || !dist.is_finite() {
+		return point;
+	}
+	if dist <= 1e-6 || radius <= OFF_EPSILON {
+		center
 	} else {
 		center + delta / dist * radius
 	}
@@ -481,12 +516,45 @@ mod tests {
 			vec![BoneColliderPrimitive::LocalSphere {
 				node: 0,
 				center: [0.2, 0.0, 0.0],
-				radius: 0.1
+				radius: 0.1,
+				inside_bounds: false,
 			}]
 		);
 
 		let world = scene_world(&scene);
 		let pushed = push_out_of_colliders(Vec3::new(0.21, 0.0, 0.0), &world, &colliders, 0.0);
 		assert!((pushed.x - 0.3).abs() < 1e-5, "pushed={pushed:?}");
+	}
+
+	#[test]
+	fn inside_bounds_source_collider_keeps_points_inside() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Root", Vec3::ZERO, Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 0,
+				shape: UnaDynamicsColliderShape::Sphere,
+				radius: 0.2,
+				inside_bounds: true,
+				..Default::default()
+			}],
+		};
+		let colliders = build_runtime_bone_colliders(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		let world = scene_world(&scene);
+		let pushed = push_out_of_colliders(Vec3::new(0.5, 0.0, 0.0), &world, &colliders, 0.05);
+		assert!((pushed.x - 0.15).abs() < 1e-5, "pushed={pushed:?}");
 	}
 }
