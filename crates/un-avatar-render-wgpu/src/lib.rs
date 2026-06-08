@@ -3041,7 +3041,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_compression_advanced: opts.texture_compression_advanced.clone(),
 		processed_texture_cache: opts.processed_texture_cache,
 		texture_summary: None,
-		active_wardrobe_set: opts.wardrobe_set.clone(),
+		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4150,7 +4150,7 @@ mod tests {
 	fn runtime_status_server_keeps_one_shot_compatibility() {
 		let address = reserve_runtime_status_address();
 		let opts = AvatarWindowOptions {
-			wardrobe_set: Some("field_drape".to_string()),
+			wardrobe_set: Some(" field_drape ".to_string()),
 			..Default::default()
 		};
 		let _status = start_runtime_status_server(address, &opts);
