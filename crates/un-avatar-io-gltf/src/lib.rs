@@ -1682,7 +1682,10 @@ fn unavatar_dynamics_settings(
 				}
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
-					enabled: true,
+					// VRC PhysBone is imported as source metadata and an action target, but the
+					// current SpringBone-like solver is not a faithful PhysBone implementation.
+					// Keep it opt-in to avoid visibly deforming authored VRC clothing at rest.
+					enabled: source_kind != UnaDynamicsSourceKind::VrcPhysBone,
 					source_id: source_id.clone(),
 					comment: comment.clone(),
 					category: category.clone(),
@@ -5598,6 +5601,7 @@ mod tests {
 
 		assert_eq!(settings.groups.len(), 2);
 		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert!(!settings.groups[0].enabled);
 		assert_eq!(settings.groups[0].source_id, "hair_front");
 		assert_eq!(settings.groups[0].comment, "hair_front");
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
@@ -8231,7 +8235,7 @@ mod tests {
 			}),
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![UnaSpringBoneGroup {
-					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_kind: UnaDynamicsSourceKind::VrmSpringBone,
 					enabled: true,
 					source_id: "physbone:hair".to_string(),
 					bone_node_indices: vec![0, 1],

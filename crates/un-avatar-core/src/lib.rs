@@ -449,7 +449,7 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 
 	pub fn reset_enabled(&mut self) {
 		for group in self.groups_mut() {
-			group.enabled = true;
+			group.enabled = group.source_kind != UnaDynamicsSourceKind::VrcPhysBone;
 		}
 	}
 
@@ -3721,6 +3721,35 @@ mod tests {
 		assert!(!groups[0].enabled);
 		assert!(!groups[1].enabled);
 		assert!(groups[2].enabled);
+	}
+
+	#[test]
+	fn runtime_dynamics_reset_keeps_vrc_physbone_default_disabled() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![
+					UnaSpringBoneGroup {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						enabled: true,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_kind: UnaDynamicsSourceKind::VrmSpringBone,
+						enabled: false,
+						..Default::default()
+					},
+				],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+
+		document.runtime_scene_and_dynamics_mut().unwrap().dynamics.reset_enabled();
+
+		let groups = &document.spring_bones.as_ref().unwrap().groups;
+		assert!(!groups[0].enabled);
+		assert!(groups[1].enabled);
 	}
 
 	#[test]
