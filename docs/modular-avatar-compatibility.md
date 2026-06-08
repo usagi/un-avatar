@@ -121,8 +121,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Object Toggle
   - done: exporter extracts some toggle/menu candidates as variants.
   - remaining: treat these as wardrobe operations source, not full MA bake replacement.
-- `[ ]` MA Material Swap
-  - required: material slot replacement operation and texture/material asset group references.
+- `[~]` MA Material Swap
+  - done: Runtime action importer expands structured Material Swap root / From / To payload into `MaterialSlot` effects by matching current scene primitive material slots under the selected root.
+  - remaining: QuickSwapMode export semantics, null-material slots, asset group / texture references, and full reactive trigger integration.
 - `[~]` MA Material Setter
   - done: Runtime action importer lowers structured Material Setter object / material index / material payload into `MaterialSlot` effects for direct renderer slot replacement.
   - remaining: full reactive object integration with Menu Item / parameter triggers, component reference diagnostics, and material property override mapping beyond slot replacement.

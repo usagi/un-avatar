@@ -1996,7 +1996,7 @@ fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<
 	Some((id, operations))
 }
 
-fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension) -> Option<UnaRuntimeActionSet> {
+fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension, scene: Option<&UnaSceneSnapshot>) -> Option<UnaRuntimeActionSet> {
 	let mut actions = Vec::new();
 	if let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) {
 		if let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) {
@@ -2044,7 +2044,7 @@ fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension) -> Option<UnaRun
 		.and_then(Value::as_array)
 	{
 		for (component_index, component) in components.iter().enumerate() {
-			let Some(action) = unavatar_modular_avatar_component_runtime_action(component, component_index) else {
+			let Some(action) = unavatar_modular_avatar_component_runtime_action(component, component_index, scene, unavatar) else {
 				continue;
 			};
 			if actions.iter().any(|existing| existing.id == action.id) {
@@ -2192,13 +2192,19 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 	})
 }
 
-fn unavatar_modular_avatar_component_runtime_action(component: &Value, component_index: usize) -> Option<UnaRuntimeAction> {
+fn unavatar_modular_avatar_component_runtime_action(
+	component: &Value,
+	component_index: usize,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeAction> {
 	if component.get("enabled").and_then(Value::as_bool) == Some(false) {
 		return None;
 	}
 	let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or("");
 	match short_type {
 		"ModularAvatarMaterialSetter" => unavatar_material_setter_runtime_action(component, component_index),
+		"ModularAvatarMaterialSwap" => unavatar_material_swap_runtime_action(component, component_index, scene?, unavatar),
 		_ => None,
 	}
 }
@@ -2297,6 +2303,129 @@ fn unavatar_material_setter_slot_target(object: &Value) -> Option<UnaRuntimeMate
 		},
 		primitive_index,
 	})
+}
+
+fn unavatar_material_swap_runtime_action(
+	component: &Value,
+	component_index: usize,
+	scene: &UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeAction> {
+	let swaps = component
+		.get("fields")
+		.and_then(|fields| {
+			fields
+				.get("Swaps")
+				.or_else(|| fields.get("swaps"))
+				.or_else(|| fields.get("m_swaps"))
+		})
+		.or_else(|| component.get("swaps").or_else(|| component.get("m_swaps")))
+		.and_then(Value::as_array)?;
+	let root = component
+		.get("fields")
+		.and_then(|fields| fields.get("Root").or_else(|| fields.get("root")).or_else(|| fields.get("m_root")))
+		.or_else(|| component.get("root").or_else(|| component.get("m_root")));
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let root_index = root.and_then(|root| modular_avatar_reference_index(root, &node_ids, &registry_paths, &paths, &normalized_paths));
+	let parents = scene_parent_indices(scene);
+	let mut effects = Vec::new();
+	for swap in swaps {
+		let Some(from) = swap
+			.get("From")
+			.or_else(|| swap.get("from"))
+			.and_then(unavatar_runtime_material_ref)
+			.and_then(|target| unavatar_scene_material_index(scene, &target))
+		else {
+			continue;
+		};
+		let Some(material) = swap
+			.get("To")
+			.or_else(|| swap.get("to"))
+			.or_else(|| swap.get("material"))
+			.and_then(unavatar_runtime_material_ref)
+		else {
+			continue;
+		};
+		for (node_index, node) in scene.nodes.iter().enumerate() {
+			if let Some(root_index) = root_index {
+				if node_index != root_index && !scene_is_descendant_of(&parents, node_index, root_index) {
+					continue;
+				}
+			}
+			let Some(mesh_index) = node.mesh else {
+				continue;
+			};
+			let Some(mesh) = scene.meshes.get(mesh_index) else {
+				continue;
+			};
+			for (primitive_index, primitive) in mesh.iter().enumerate() {
+				if primitive.material_index != Some(from) {
+					continue;
+				}
+				effects.push(UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							node_index: None,
+							source_node_id: node.source_node_id.clone(),
+							path: scene_node_path_for_index(scene, node_index),
+						},
+						primitive_index: Some(primitive_index),
+					},
+					material: material.clone(),
+				});
+			}
+		}
+	}
+	if effects.is_empty() {
+		return None;
+	}
+	let component_id = component
+		.get("id")
+		.or_else(|| component.get("componentId"))
+		.or_else(|| component.get("component_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| component_index.to_string());
+	let label = component
+		.get("name")
+		.or_else(|| component.get("displayName"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.unwrap_or("Material Swap")
+		.to_string();
+	let command = format!("ma:material_swap:{component_id}");
+	Some(UnaRuntimeAction {
+		id: command.clone(),
+		label,
+		triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand { command }],
+		effects,
+	})
+}
+
+fn unavatar_scene_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
+	if let Some(index) = target.material_index.filter(|index| *index < scene.materials.len()) {
+		return Some(index);
+	}
+	let name = target.name.as_deref().filter(|value| !value.is_empty())?;
+	scene.materials.iter().position(|material| material.name.as_deref() == Some(name))
+}
+
+fn scene_node_path_for_index(scene: &UnaSceneSnapshot, target_index: usize) -> Option<String> {
+	let parents = scene_parent_indices(scene);
+	let mut parts = Vec::new();
+	let mut current = Some(target_index);
+	while let Some(index) = current {
+		let node = scene.nodes.get(index)?;
+		parts.push(node.name.as_deref().unwrap_or("").to_string());
+		current = parents.get(index).copied().flatten();
+	}
+	parts.reverse();
+	let path = parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("/");
+	(!path.is_empty()).then_some(path)
 }
 
 fn unavatar_variant_expression_menu_path(variant: &Value, fallback_label: &str) -> String {
@@ -6112,7 +6241,9 @@ impl AvatarImporter for GltfImporter {
 		let spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
-		let runtime_actions = unavatar.as_ref().and_then(unavatar_runtime_action_set);
+		let runtime_actions = unavatar
+			.as_ref()
+			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene)));
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
 		}
@@ -7270,7 +7401,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, None).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:material_setter:mat-setter");
@@ -7295,6 +7426,118 @@ mod tests {
 				material: UnaRuntimeMaterialTarget {
 					material_index: None,
 					name: Some("Jacket Red".to_string()),
+				},
+			}]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_import_modular_avatar_material_swap_from_scene_slots() {
+		let primitive_base = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(0),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let primitive_other = UnaMeshBuffers {
+			material_index: Some(2),
+			..primitive_base.clone()
+		};
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![primitive_base.clone(), primitive_other], vec![primitive_base]],
+			materials: vec![
+				UnaMaterialPbr {
+					name: Some("Base Blue".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Base Red".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Unchanged".to_string()),
+					..Default::default()
+				},
+			],
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OutfitRoot".to_string()),
+					source_node_id: Some("node_outfit_root".to_string()),
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Outside".to_string()),
+					source_node_id: Some("node_outside".to_string()),
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSwap",
+						"enabled": true,
+						"id": "mat-swap",
+						"name": "Swap Jacket",
+						"fields": {
+							"root": {"nodeId": "node_outfit_root", "path": "Root/OutfitRoot"},
+							"swaps": [{
+								"from": {"materialName": "Base Blue"},
+								"to": {"materialName": "Base Red"}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene)).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "ma:material_swap:mat-swap");
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::MaterialSlot {
+				target: UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: Some("node_jacket".to_string()),
+						path: Some("Root/OutfitRoot/Jacket".to_string()),
+					},
+					primitive_index: Some(0),
+				},
+				material: UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Base Red".to_string()),
 				},
 			}]
 		);
