@@ -15,13 +15,14 @@ pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String
 
 fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 	eprintln!(
-		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={}",
+		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} active_asset_groups={:?}",
 		report.visibility_applied,
 		report.visibility_missing,
 		report.blendshape_applied,
 		report.blendshape_missing,
 		report.dynamics_applied,
-		report.dynamics_missing
+		report.dynamics_missing,
+		report.active_asset_groups
 	);
 	if !report.missing_visibility_paths.is_empty() {
 		eprintln!(

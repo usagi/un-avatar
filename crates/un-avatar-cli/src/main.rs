@@ -510,6 +510,8 @@ struct DiagnoseWardrobeProbeSummary {
 	material_slot_applied: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	material_slot_missing: Option<usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	active_asset_groups: Vec<String>,
 	visible_mesh_node_count: usize,
 	visible_mesh_paths: Vec<String>,
 	nonzero_morph_weight_count: usize,
@@ -1892,6 +1894,7 @@ fn wardrobe_probe_for_document(
 		material_missing,
 		material_slot_applied,
 		material_slot_missing,
+		active_asset_groups,
 		missing_visibility_paths,
 		missing_blendshapes,
 		missing_dynamics_ids,
@@ -1909,6 +1912,7 @@ fn wardrobe_probe_for_document(
 			Some(report.material_missing),
 			Some(report.material_slot_applied),
 			Some(report.material_slot_missing),
+			report.active_asset_groups,
 			report.missing_visibility_paths,
 			report.missing_blendshapes,
 			report.missing_dynamics_ids,
@@ -1932,6 +1936,7 @@ fn wardrobe_probe_for_document(
 			Vec::new(),
 			Vec::new(),
 			Vec::new(),
+			Vec::new(),
 		)
 	};
 	DiagnoseWardrobeProbeSummary {
@@ -1948,6 +1953,7 @@ fn wardrobe_probe_for_document(
 		material_missing,
 		material_slot_applied,
 		material_slot_missing,
+		active_asset_groups,
 		visible_mesh_node_count: visible_mesh_paths.len(),
 		visible_mesh_paths,
 		nonzero_morph_weight_count: nonzero_morph_weights.len(),
@@ -2714,7 +2720,7 @@ fn run_diagnose(
 		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
 		wardrobe_apply_ms = started.elapsed().as_millis();
 		imported.report.push_info(format!(
-			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_applied={}, material_missing={}, material_slot_applied={}, material_slot_missing={}",
+			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_applied={}, material_missing={}, material_slot_applied={}, material_slot_missing={}, active_asset_groups={:?}",
 			applied.visibility_applied,
 			applied.visibility_missing,
 			applied.blendshape_applied,
@@ -2724,7 +2730,8 @@ fn run_diagnose(
 			applied.material_applied,
 			applied.material_missing,
 			applied.material_slot_applied,
-			applied.material_slot_missing
+			applied.material_slot_missing,
+			applied.active_asset_groups
 		));
 	}
 	let wardrobe_probe_started = Instant::now();
@@ -2884,12 +2891,13 @@ fn run_diagnose(
 		}
 		for probe in &report.wardrobe_probes {
 			println!(
-				"wardrobe_probe[{}]: name={:?} probe={}ms visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} dyn {:?}/{:?} mat {:?}/{:?} slot {:?}/{:?} missing=vis {} blend {} dyn {} mat {} slot {}",
+				"wardrobe_probe[{}]: name={:?} probe={}ms visible_meshes={} nonzero_morphs={} active_asset_groups={:?} apply=vis {:?}/{:?} blend {:?}/{:?} dyn {:?}/{:?} mat {:?}/{:?} slot {:?}/{:?} missing=vis {} blend {} dyn {} mat {} slot {}",
 				probe.set_id,
 				probe.display_name,
 				probe.probe_ms,
 				probe.visible_mesh_node_count,
 				probe.nonzero_morph_weight_count,
+				probe.active_asset_groups,
 				probe.visibility_applied,
 				probe.visibility_missing,
 				probe.blendshape_applied,
