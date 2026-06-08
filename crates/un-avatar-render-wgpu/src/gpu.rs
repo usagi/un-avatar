@@ -48,6 +48,18 @@ const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DynamicsRuntimeCounts {
+	pub groups: u32,
+	pub vrm_spring_bone_groups: u32,
+	pub vrc_physbone_groups: u32,
+	pub unknown_groups: u32,
+	pub colliders: u32,
+	pub vrm_spring_bone_colliders: u32,
+	pub vrc_physbone_colliders: u32,
+	pub unknown_colliders: u32,
+}
+
 fn unmotion_frame_hand_summary(frame: &un_motion_frame::UNMotionFrame, document: &UnaDocument) -> String {
 	let body_bones = frame
 		.body
@@ -1586,24 +1598,24 @@ impl GpuState {
 		self.motion_applied_frames.load(Ordering::Relaxed)
 	}
 
-	pub fn dynamics_counts(&self) -> (u32, u32, u32, u32, u32, u32, u32, u32) {
+	pub fn dynamics_counts(&self) -> DynamicsRuntimeCounts {
 		let Some(doc_arc) = self.document.as_ref() else {
-			return (0, 0, 0, 0, 0, 0, 0, 0);
+			return DynamicsRuntimeCounts::default();
 		};
 		let Ok(doc) = doc_arc.read() else {
-			return (0, 0, 0, 0, 0, 0, 0, 0);
+			return DynamicsRuntimeCounts::default();
 		};
 		let dynamics = doc.runtime_model().dynamics();
-		(
-			dynamics.group_count() as u32,
-			dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
-			dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
-			dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,
-			dynamics.collider_count() as u32,
-			dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
-			dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
-			dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown) as u32,
-		)
+		DynamicsRuntimeCounts {
+			groups: dynamics.group_count() as u32,
+			vrm_spring_bone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
+			vrc_physbone_groups: dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
+			unknown_groups: dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,
+			colliders: dynamics.collider_count() as u32,
+			vrm_spring_bone_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
+			vrc_physbone_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
+			unknown_colliders: dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown) as u32,
+		}
 	}
 
 	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
