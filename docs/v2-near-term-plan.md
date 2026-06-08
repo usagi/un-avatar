@@ -134,10 +134,11 @@ MVP control command:
 - `.unavatar` variants のうち ObjectToggle / active-state 由来の node visibility operations は `NodeVisibility` effect を持つ runtime action candidate へ import される。metadata だけの MenuItem は effect を確定できないため source payload に残す。
 - CLI diagnose は runtime action 件数、trigger 件数、effect 件数、action id / label を観測できる。
 - renderer runtime control は `activate_action` を受け、`action_id` または `supervisor_command` で action を解決し、`WardrobeSet` effect を既存 hot switch 経路で適用し、`DynamicsEnabled` effect を runtime dynamics mutation 経路で適用し、`ExpressionWeight` effect を既存 expression override 経路で適用し、`NodeVisibility` effect を runtime scene visibility mutation 経路で適用する。`MaterialColor` / `MaterialScalar` effect は PBR 共通値の初期範囲として base color、emissive、alpha、metallic、roughness/smoothness、alpha cutoff を runtime material mutation 経路で適用し、draw material uniform を再同期する。
+- effect 付き `.unavatar` variant に MenuItem / Expression Menu metadata operation が同居する場合は、runtime action の `ExpressionMenu` trigger path へ metadata path を取り込む。metadata-only MenuItem は引き続き action 化しない。
 
 次の段階:
 
-- VRC Expression Menu metadata から ExpressionMenu trigger と action label/path を取り込む。Modular Avatar MenuItem metadata は effect source が確定できるものから順次 action 化する。
+- VRC Expression Menu metadata から action label/path をより正確に取り込む。Modular Avatar MenuItem metadata は effect source が確定できるものから順次 action 化する。
 - Modular Avatar / VRC Expression Menu metadata から取り込んだ material parameter 名を、必要に応じて lilToon 専用 parameter へ拡張する。
 
 ## PhysBone Placement

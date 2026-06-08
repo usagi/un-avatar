@@ -2086,15 +2086,37 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 		.and_then(Value::as_str)
 		.unwrap_or(id)
 		.to_string();
+	let expression_menu_path = unavatar_variant_expression_menu_path(variant, &label);
 	Some(UnaRuntimeAction {
 		id: format!("variant:{id}"),
 		label: label.clone(),
 		triggers: vec![
 			UnaRuntimeActionTrigger::SupervisorCommand { command: id.to_string() },
-			UnaRuntimeActionTrigger::ExpressionMenu { path: label },
+			UnaRuntimeActionTrigger::ExpressionMenu {
+				path: expression_menu_path,
+			},
 		],
 		effects,
 	})
+}
+
+fn unavatar_variant_expression_menu_path(variant: &Value, fallback_label: &str) -> String {
+	let metadata_path = variant.get("operations").and_then(Value::as_array).and_then(|operations| {
+		operations.iter().find_map(|op| {
+			let ty = op.get("type").or_else(|| op.get("op")).and_then(Value::as_str).unwrap_or("");
+			if ty != "metadata" {
+				return None;
+			}
+			op.get("expressionMenuPath")
+				.or_else(|| op.get("expression_menu_path"))
+				.or_else(|| op.get("menuPath"))
+				.or_else(|| op.get("menu_path"))
+				.or_else(|| op.get("path"))
+				.and_then(Value::as_str)
+				.filter(|path| !path.is_empty())
+		})
+	});
+	metadata_path.unwrap_or(fallback_label).to_string()
 }
 
 fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
@@ -6449,6 +6471,12 @@ mod tests {
 						"name": "Hidden Toggle",
 						"source": "modular-avatar-object-toggle",
 						"operations": [{
+							"op": "metadata",
+							"path": "Menu/Hidden Toggle",
+							"controlType": "Toggle",
+							"parameter": "HiddenToggle",
+							"value": "1"
+						}, {
 							"op": "nodeEnabled",
 							"target": {"nodeId": "node_hidden", "path": "Wrong Path"},
 							"visible": true
@@ -6554,6 +6582,17 @@ mod tests {
 			}]
 		);
 		assert_eq!(runtime_actions.actions[2].id, "variant:ma-object-toggle-0");
+		assert_eq!(
+			runtime_actions.actions[2].triggers,
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "ma-object-toggle-0".to_string()
+				},
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: "Menu/Hidden Toggle".to_string()
+				}
+			]
+		);
 		assert_eq!(
 			runtime_actions.actions[2].effects,
 			vec![UnaRuntimeActionEffect::NodeVisibility {
