@@ -1107,7 +1107,9 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	transparent_backpass_enabled(
 		draw.alpha_mode,
-		draw.material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+		draw.material
+			.mtoon_source_profile()
+			.is_some_and(|mtoon| mtoon.transparent_with_z_write),
 		shading,
 		liltoon_backpass_enabled,
 	)
@@ -1203,7 +1205,9 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 						shading,
 						transparent_forward_zwrite_enabled(
 							draw.alpha_mode,
-							draw.material.mtoon.as_ref().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+							draw.material
+								.mtoon_source_profile()
+								.is_some_and(|mtoon| mtoon.transparent_with_z_write),
 							shading,
 						),
 					),
@@ -6479,7 +6483,7 @@ impl SceneMeshes {
 					}),
 				};
 
-				let mtoon = mat.mtoon.as_ref().unwrap_or(&default_mtoon);
+				let mtoon = mat.mtoon_source_profile().unwrap_or(&default_mtoon);
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let shade_texture_index = mat

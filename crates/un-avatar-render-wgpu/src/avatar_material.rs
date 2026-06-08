@@ -153,7 +153,7 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 		mark_texture_role(&mut roles, mat.normal_texture_index, TextureRole::Normal);
 		mark_texture_role(&mut roles, mat.occlusion_texture_index, TextureRole::Occlusion);
 		mark_texture_role(&mut roles, mat.emissive_texture_index, TextureRole::Emissive);
-		if let Some(mtoon) = mat.mtoon.as_ref() {
+		if let Some(mtoon) = mat.mtoon_source_profile() {
 			mark_texture_role(&mut roles, mtoon.shade_multiply_texture_index, TextureRole::GenericColor);
 			mark_texture_role(&mut roles, mtoon.shading_shift_texture_index, TextureRole::Data);
 			mark_texture_role(&mut roles, mtoon.matcap_texture_index, TextureRole::GenericColor);
