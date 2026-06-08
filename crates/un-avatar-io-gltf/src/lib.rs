@@ -1431,6 +1431,8 @@ fn unavatar_dynamics_settings(
 	let mut groups = Vec::new();
 	let mut missing_roots = 0usize;
 	let mut short_chains = 0usize;
+	let mut ignored_transform_count = 0usize;
+	let mut multi_child_ignore_count = 0usize;
 
 	for item in dynamics {
 		if item.get("enabled").and_then(Value::as_bool) == Some(false) {
@@ -1482,7 +1484,11 @@ fn unavatar_dynamics_settings(
 			&paths,
 			&normalized_paths,
 		);
+		ignored_transform_count += ignored_nodes.len();
 		let multi_child_ignore = unavatar_dynamics_multi_child_ignore(item);
+		if multi_child_ignore {
+			multi_child_ignore_count += 1;
+		}
 
 		for root in root_values.iter() {
 			let Some(root_idx) = unavatar_dynamics_root_index(root, &node_ids, &registry_paths, &paths, &normalized_paths) else {
@@ -1513,6 +1519,11 @@ fn unavatar_dynamics_settings(
 	if missing_roots > 0 || short_chains > 0 {
 		report.push_info(format!(
 			".unavatar dynamics: skipped missing_roots={missing_roots} short_chains={short_chains}"
+		));
+	}
+	if ignored_transform_count > 0 || multi_child_ignore_count > 0 {
+		report.push_info(format!(
+			".unavatar dynamics: source_hints ignored_transforms={ignored_transform_count} multi_child_ignore={multi_child_ignore_count}"
 		));
 	}
 	if groups.is_empty() {
@@ -5199,6 +5210,8 @@ mod tests {
 
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
+		assert!(report.messages.iter().any(|message| message.contains("ignored_transforms=1")));
+		assert!(report.messages.iter().any(|message| message.contains("multi_child_ignore=1")));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
