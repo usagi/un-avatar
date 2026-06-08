@@ -2037,6 +2037,22 @@ fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension) -> Option<UnaRun
 			actions.push(action);
 		}
 	}
+	if let Some(components) = unavatar
+		.source
+		.get("modularAvatar")
+		.and_then(|v| v.get("components"))
+		.and_then(Value::as_array)
+	{
+		for (component_index, component) in components.iter().enumerate() {
+			let Some(action) = unavatar_modular_avatar_component_runtime_action(component, component_index) else {
+				continue;
+			};
+			if actions.iter().any(|existing| existing.id == action.id) {
+				continue;
+			}
+			actions.push(action);
+		}
+	}
 	(!actions.is_empty()).then_some(UnaRuntimeActionSet { actions })
 }
 
@@ -2173,6 +2189,113 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 			},
 		],
 		effects,
+	})
+}
+
+fn unavatar_modular_avatar_component_runtime_action(component: &Value, component_index: usize) -> Option<UnaRuntimeAction> {
+	if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+		return None;
+	}
+	let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or("");
+	match short_type {
+		"ModularAvatarMaterialSetter" => unavatar_material_setter_runtime_action(component, component_index),
+		_ => None,
+	}
+}
+
+fn unavatar_material_setter_runtime_action(component: &Value, component_index: usize) -> Option<UnaRuntimeAction> {
+	let objects = component
+		.get("fields")
+		.and_then(|fields| {
+			fields
+				.get("Objects")
+				.or_else(|| fields.get("objects"))
+				.or_else(|| fields.get("m_objects"))
+				.or_else(|| fields.get("materialSwitchObjects"))
+				.or_else(|| fields.get("material_switch_objects"))
+		})
+		.or_else(|| component.get("objects").or_else(|| component.get("m_objects")))
+		.and_then(Value::as_array)?;
+	let mut effects = Vec::new();
+	for object in objects {
+		let Some(target) = unavatar_material_setter_slot_target(object) else {
+			continue;
+		};
+		let Some(material) = object
+			.get("Material")
+			.or_else(|| object.get("material"))
+			.or_else(|| object.get("to"))
+			.and_then(unavatar_runtime_material_ref)
+		else {
+			continue;
+		};
+		effects.push(UnaRuntimeActionEffect::MaterialSlot { target, material });
+	}
+	if effects.is_empty() {
+		return None;
+	}
+	let component_id = component
+		.get("id")
+		.or_else(|| component.get("componentId"))
+		.or_else(|| component.get("component_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| component_index.to_string());
+	let label = component
+		.get("name")
+		.or_else(|| component.get("displayName"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.unwrap_or("Material Setter")
+		.to_string();
+	let command = format!("ma:material_setter:{component_id}");
+	Some(UnaRuntimeAction {
+		id: command.clone(),
+		label,
+		triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand { command }],
+		effects,
+	})
+}
+
+fn unavatar_material_setter_slot_target(object: &Value) -> Option<UnaRuntimeMaterialSlotTarget> {
+	let target_ref = object
+		.get("Object")
+		.or_else(|| object.get("object"))
+		.or_else(|| object.get("target"))
+		.or_else(|| object.get("renderer"))
+		.unwrap_or(object);
+	let source_node_id = target_ref
+		.get("nodeId")
+		.or_else(|| target_ref.get("sourceNodeId"))
+		.or_else(|| target_ref.get("source_node_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let path = target_ref
+		.get("path")
+		.or_else(|| target_ref.get("referencePath"))
+		.or_else(|| target_ref.get("reference_path"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if source_node_id.is_none() && path.is_none() {
+		return None;
+	}
+	let primitive_index = object
+		.get("MaterialIndex")
+		.or_else(|| object.get("materialIndex"))
+		.or_else(|| object.get("material_index"))
+		.or_else(|| object.get("slot"))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok());
+	Some(UnaRuntimeMaterialSlotTarget {
+		node: UnaRuntimeNodeTarget {
+			node_index: None,
+			source_node_id,
+			path,
+		},
+		primitive_index,
 	})
 }
 
@@ -7116,6 +7239,64 @@ mod tests {
 					enabled: false,
 				},
 			]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_import_modular_avatar_material_setter() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSetter",
+						"enabled": true,
+						"id": "mat-setter",
+						"name": "Jacket Color",
+						"fields": {
+							"objects": [{
+								"object": {
+									"nodeId": "node_jacket",
+									"path": "Root/Jacket"
+								},
+								"MaterialIndex": 1,
+								"Material": {
+									"materialName": "Jacket Red"
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "ma:material_setter:mat-setter");
+		assert_eq!(actions.actions[0].label, "Jacket Color");
+		assert_eq!(
+			actions.actions[0].triggers,
+			vec![UnaRuntimeActionTrigger::SupervisorCommand {
+				command: "ma:material_setter:mat-setter".to_string()
+			}]
+		);
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::MaterialSlot {
+				target: UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: Some("node_jacket".to_string()),
+						path: Some("Root/Jacket".to_string()),
+					},
+					primitive_index: Some(1),
+				},
+				material: UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Jacket Red".to_string()),
+				},
+			}]
 		);
 	}
 
