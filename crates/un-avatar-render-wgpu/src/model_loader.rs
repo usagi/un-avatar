@@ -9,30 +9,39 @@ pub(crate) fn normalize_wardrobe_set_id(wardrobe_set: Option<&str>) -> Option<&s
 	wardrobe_set.map(str::trim).filter(|set_id| !set_id.is_empty())
 }
 
+fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
+	eprintln!(
+		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={}",
+		report.visibility_applied, report.visibility_missing, report.blendshape_applied, report.blendshape_missing
+	);
+	if !report.missing_visibility_paths.is_empty() {
+		eprintln!(
+			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing visibility paths: {:?}",
+			report.missing_visibility_paths
+		);
+	}
+	if !report.missing_blendshapes.is_empty() {
+		eprintln!(
+			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing blendshapes: {:?}",
+			report.missing_blendshapes
+		);
+	}
+}
+
+pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
+	let set_id = normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())?;
+	let report =
+		apply_unavatar_wardrobe_set(document, set_id).map_err(|e| format!(".unavatar wardrobe set `{set_id}` not applied: {e}"))?;
+	log_wardrobe_apply_report(set_id, &report);
+	Ok(report)
+}
+
 pub(crate) fn apply_requested_wardrobe_set(document: &mut UnaDocument, wardrobe_set: Option<&str>) -> Option<WardrobeApplyReport> {
 	let set_id = normalize_wardrobe_set_id(wardrobe_set)?;
-	match apply_unavatar_wardrobe_set(document, set_id) {
-		Ok(report) => {
-			eprintln!(
-				"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={}",
-				report.visibility_applied, report.visibility_missing, report.blendshape_applied, report.blendshape_missing
-			);
-			if !report.missing_visibility_paths.is_empty() {
-				eprintln!(
-					"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing visibility paths: {:?}",
-					report.missing_visibility_paths
-				);
-			}
-			if !report.missing_blendshapes.is_empty() {
-				eprintln!(
-					"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing blendshapes: {:?}",
-					report.missing_blendshapes
-				);
-			}
-			Some(report)
-		}
+	match apply_required_wardrobe_set(document, set_id) {
+		Ok(report) => Some(report),
 		Err(e) => {
-			eprintln!("un-avatar-renderer: .unavatar wardrobe set `{set_id}` not applied: {e}");
+			eprintln!("un-avatar-renderer: {e}");
 			None
 		}
 	}
@@ -89,5 +98,19 @@ mod tests {
 		assert_eq!(normalize_wardrobe_set_id(Some("")), None);
 		assert_eq!(normalize_wardrobe_set_id(Some(" \t ")), None);
 		assert_eq!(normalize_wardrobe_set_id(Some(" field_drape ")), Some("field_drape"));
+	}
+
+	#[test]
+	fn apply_required_wardrobe_set_rejects_empty_values() {
+		let mut document = UnaDocument::default();
+		let err = apply_required_wardrobe_set(&mut document, " \t ").expect_err("empty wardrobe id should be rejected");
+		assert_eq!(err, "wardrobe set id required");
+	}
+
+	#[test]
+	fn apply_requested_wardrobe_set_ignores_empty_values() {
+		let mut document = UnaDocument::default();
+		assert!(apply_requested_wardrobe_set(&mut document, None).is_none());
+		assert!(apply_requested_wardrobe_set(&mut document, Some("")).is_none());
 	}
 }

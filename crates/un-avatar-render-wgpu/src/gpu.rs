@@ -2646,13 +2646,11 @@ impl GpuState {
 	}
 
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
-		let set_id = crate::model_loader::normalize_wardrobe_set_id(Some(set_id)).ok_or_else(|| "wardrobe set id required".to_string())?;
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		crate::model_loader::apply_requested_wardrobe_set(&mut doc, Some(set_id))
-			.ok_or_else(|| format!("wardrobe set `{set_id}` not applied"))?;
+		crate::model_loader::apply_required_wardrobe_set(&mut doc, set_id)?;
 		self.document_revision.fetch_add(1, Ordering::Release);
 		self.applied_document_revision = 0;
 		Ok(())
