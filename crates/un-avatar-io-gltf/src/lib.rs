@@ -1321,7 +1321,47 @@ fn unavatar_dynamics_root_index(
 	unavatar_node_ref_index(value, node_ids, registry_paths, paths, normalized_paths)
 }
 
-fn collect_scene_child_chains(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<Vec<usize>> {
+fn unavatar_dynamics_node_index_set(
+	value: Option<&Value>,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> BTreeSet<usize> {
+	let mut indices = BTreeSet::new();
+	let Some(value) = value else {
+		return indices;
+	};
+	let values: Cow<'_, [Value]> = if let Some(array) = value.as_array() {
+		Cow::Borrowed(array.as_slice())
+	} else {
+		Cow::Owned(vec![value.clone()])
+	};
+	for item in values.iter() {
+		if let Some(index) = unavatar_dynamics_root_index(item, node_ids, registry_paths, paths, normalized_paths) {
+			indices.insert(index);
+		}
+	}
+	indices
+}
+
+fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
+	let value = value
+		.get("multiChildType")
+		.or_else(|| value.get("multi_child_type"))
+		.or_else(|| value.get("multiChild"))
+		.or_else(|| value.get("multi_child"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	value.eq_ignore_ascii_case("ignore") || value.eq_ignore_ascii_case("ignored")
+}
+
+fn collect_scene_child_chains(
+	scene: &UnaSceneSnapshot,
+	root_idx: usize,
+	ignored_nodes: &BTreeSet<usize>,
+	multi_child_ignore: bool,
+) -> Vec<Vec<usize>> {
 	if root_idx >= scene.nodes.len() {
 		return Vec::new();
 	}
@@ -1336,6 +1376,9 @@ fn collect_scene_child_chains(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<
 			if child >= scene.nodes.len() || chain.contains(&child) {
 				continue;
 			}
+			if ignored_nodes.contains(&child) {
+				continue;
+			}
 			child_count += 1;
 			let mut next_chain = chain.clone();
 			next_chain.push(child);
@@ -1343,6 +1386,9 @@ fn collect_scene_child_chains(scene: &UnaSceneSnapshot, root_idx: usize) -> Vec<
 				chains.push(next_chain);
 			} else {
 				stack.push((child, next_chain));
+			}
+			if multi_child_ignore {
+				break;
 			}
 		}
 		if child_count == 0 {
@@ -1426,13 +1472,24 @@ fn unavatar_dynamics_settings(
 		)
 		.unwrap_or(0.02);
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
+		let ignored_nodes = unavatar_dynamics_node_index_set(
+			item.get("ignoreTransforms")
+				.or_else(|| item.get("ignore_transforms"))
+				.or_else(|| item.get("ignoredTransforms"))
+				.or_else(|| item.get("ignored_transforms")),
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+		);
+		let multi_child_ignore = unavatar_dynamics_multi_child_ignore(item);
 
 		for root in root_values.iter() {
 			let Some(root_idx) = unavatar_dynamics_root_index(root, &node_ids, &registry_paths, &paths, &normalized_paths) else {
 				missing_roots += 1;
 				continue;
 			};
-			for chain in collect_scene_child_chains(scene, root_idx) {
+			for chain in collect_scene_child_chains(scene, root_idx, &ignored_nodes, multi_child_ignore) {
 				if chain.len() < 2 {
 					short_chains += 1;
 					continue;
@@ -5103,6 +5160,45 @@ mod tests {
 			.groups
 			.iter()
 			.all(|group| group.source_kind == UnaDynamicsSourceKind::VrcPhysBone));
+	}
+
+	#[test]
+	fn unavatar_dynamics_respects_ignored_transforms_and_multi_child_ignore() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 3, 4]),
+				test_scene_node("node_ignored", vec![2]),
+				test_scene_node("node_ignored_tip", Vec::new()),
+				test_scene_node("node_kept_tip", Vec::new()),
+				test_scene_node("node_extra_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_ignored", "path": "Root/Ignored"},
+					{"nodeId": "node_ignored_tip", "path": "Root/Ignored/Tip"},
+					{"nodeId": "node_kept_tip", "path": "Root/KeptTip"},
+					{"nodeId": "node_extra_tip", "path": "Root/ExtraTip"}
+				],
+				"dynamics": [{
+					"id": "ignored_branch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"ignoreTransforms": [{"nodeId": "node_ignored", "path": "Root/Ignored"}],
+					"multiChildType": "Ignore"
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {

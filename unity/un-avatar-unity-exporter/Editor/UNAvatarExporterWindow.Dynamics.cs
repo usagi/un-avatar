@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
@@ -46,6 +47,8 @@ namespace UNAvatar.UnityExporter
                         ["source"] = group.TryGetValue("source", out var source) ? source : "",
                         ["component"] = group.TryGetValue("component", out var component) ? component : null,
                         ["roots"] = group.TryGetValue("roots", out var roots) ? roots : new List<object>(),
+                        ["ignoreTransforms"] = group.TryGetValue("ignoreTransforms", out var ignoreTransforms) ? ignoreTransforms : new List<object>(),
+                        ["multiChildType"] = group.TryGetValue("multiChildType", out var multiChildType) ? multiChildType : "",
                         ["stiffness"] = group.TryGetValue("stiffness", out var stiffness) ? stiffness : 0.0f,
                         ["spring"] = group.TryGetValue("spring", out var spring) ? spring : 0.0f,
                         ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
@@ -87,6 +90,7 @@ namespace UNAvatar.UnityExporter
             var stiffness = ReadFloatMember(type, component, "stiffness", spring > 0.0f ? spring : pull);
             var radius = ReadFloatMember(type, component, "radius", 0.02f);
             var gravity = ReadFloatMember(type, component, "gravity", 0.0f);
+            var multiChildType = ReadMember(type, component, "multiChildType")?.ToString() ?? "";
 
             return new Dictionary<string, object>
             {
@@ -96,6 +100,8 @@ namespace UNAvatar.UnityExporter
                 ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled,
                 ["component"] = TransformTargetJson(root, component.transform),
                 ["roots"] = new List<object> { TransformTargetJson(root, rootTransform) },
+                ["ignoreTransforms"] = TransformListTargetsJson(root, ReadTransformListMember(type, component, "ignoreTransforms")),
+                ["multiChildType"] = multiChildType,
                 ["pull"] = pull,
                 ["spring"] = spring,
                 ["stiffness"] = stiffness,
@@ -117,6 +123,8 @@ namespace UNAvatar.UnityExporter
                 ["gravityFalloff"] = ReadFloatMember(type, component, "gravityFalloff", 0.0f),
                 ["immobile"] = ReadFloatMember(type, component, "immobile", 0.0f),
                 ["radius"] = ReadFloatMember(type, component, "radius", 0.02f),
+                ["endpointPosition"] = Vector3Json(ReadVector3Member(type, component, "endpointPosition", Vector3.zero)),
+                ["multiChildType"] = ReadMember(type, component, "multiChildType")?.ToString() ?? "",
                 ["maxStretch"] = ReadFloatMember(type, component, "maxStretch", 0.0f),
                 ["limitType"] = ReadMember(type, component, "limitType")?.ToString() ?? "",
                 ["maxAngleX"] = ReadFloatMember(type, component, "maxAngleX", 0.0f),
@@ -125,6 +133,51 @@ namespace UNAvatar.UnityExporter
                 ["allowGrabbing"] = ReadBoolMember(type, component, "allowGrabbing", false),
                 ["allowPosing"] = ReadBoolMember(type, component, "allowPosing", false)
             };
+        }
+
+        private static List<object> TransformListTargetsJson(Transform root, List<Transform> transforms)
+        {
+            var json = new List<object>(transforms != null ? transforms.Count : 0);
+            if (transforms == null)
+            {
+                return json;
+            }
+            foreach (var transform in transforms)
+            {
+                if (transform != null)
+                {
+                    json.Add(TransformTargetJson(root, transform));
+                }
+            }
+            return json;
+        }
+
+        private static List<object> Vector3Json(Vector3 value)
+        {
+            return new List<object> { value.x, value.y, value.z };
+        }
+
+        private static List<Transform> ReadTransformListMember(Type type, object instance, string name)
+        {
+            var value = ReadMember(type, instance, name);
+            var transforms = new List<Transform>();
+            if (value is IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                {
+                    if (item is Transform transform)
+                    {
+                        transforms.Add(transform);
+                    }
+                }
+            }
+            return transforms;
+        }
+
+        private static Vector3 ReadVector3Member(Type type, object instance, string name, Vector3 fallback)
+        {
+            var value = ReadMember(type, instance, name);
+            return value is Vector3 vector ? vector : fallback;
         }
 
         private static float ReadFloatMember(Type type, object instance, string name, float fallback)

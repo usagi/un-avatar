@@ -482,6 +482,13 @@ Unity Exporter は次の出力モードを持つ。
           "path": "Armature/Hips/Spine/Chest/Neck/Head/HairFront"
         }
       ],
+      "ignoreTransforms": [
+        {
+          "nodeId": "node-hair-accessory",
+          "path": "Armature/Hips/Spine/Chest/Neck/Head/HairAccessory"
+        }
+      ],
+      "multiChildType": "Ignore",
       "colliders": [0, 1],
       "pull": 0.2,
       "spring": 0.35,
@@ -505,6 +512,7 @@ Unity Exporter は次の出力モードを持つ。
 
 v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runtime primitive へ近似変換する。
 `roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
+`ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
 
 ## 10. Provenance And License
 
