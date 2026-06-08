@@ -52,8 +52,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Component Discovery / Serialization
 
 - `[~]` component catalog: Modular Avatar component type, enabled state, target node id, path, and raw scalar fields
-  - done: Exporter stores `UN_avatar.modularAvatar.components[*]` and report `modularAvatar` with type, target, enabled state, public fields, and component count.
-  - remaining: unsupported / approximate classification per component type, private serialized fields where needed, and schema tests.
+  - done: Exporter stores `UN_avatar.modularAvatar.components[*]` and report `modularAvatar` with type, target, enabled state, public fields, and component count. Runtime importer reports component support classification counts for resolver-supported, runtime-action-supported, unsupported, and disabled components, including unsupported type counts.
+  - remaining: exporter-side unsupported / approximate classification per component type, private serialized fields where needed, and schema tests.
 - `[~]` object reference resolution: `AvatarObjectReference`, direct object reference, humanoid bone reference, sub-path
   - done: Exporter serializes `AvatarObjectReference.referencePath`, direct target object, resolved target, and Transform/GameObject references as stable node id + path. Import reports now emit path diagnostics for exact duplicate scene paths, normalized ambiguous paths, and `.unavatar` registry paths that resolve to multiple scene nodes.
   - remaining: humanoid bone references and component-specific reference schemas.

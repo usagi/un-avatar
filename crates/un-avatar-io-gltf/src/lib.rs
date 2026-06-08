@@ -3788,6 +3788,57 @@ fn apply_unavatar_replace_objects(
 	(applied, missing, skipped, invalid)
 }
 
+fn modular_avatar_component_support(short_type: &str) -> &'static str {
+	match short_type {
+		"ModularAvatarBoneProxy" | "ModularAvatarMergeArmature" | "ModularAvatarMeshSettings" | "ModularAvatarReplaceObject" => "resolver",
+		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" => "runtime_action",
+		_ => "unsupported",
+	}
+}
+
+fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report: &mut ImportReport) {
+	if components.is_empty() {
+		return;
+	}
+	let mut resolver_supported = 0usize;
+	let mut runtime_action_supported = 0usize;
+	let mut unsupported = 0usize;
+	let mut disabled = 0usize;
+	let mut unsupported_types = BTreeMap::<String, usize>::new();
+	for component in components {
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			disabled += 1;
+		}
+		let short_type = component
+			.get("shortType")
+			.and_then(Value::as_str)
+			.filter(|value| !value.is_empty())
+			.unwrap_or("unknown");
+		match modular_avatar_component_support(short_type) {
+			"resolver" => resolver_supported += 1,
+			"runtime_action" => runtime_action_supported += 1,
+			_ => {
+				unsupported += 1;
+				*unsupported_types.entry(short_type.to_string()).or_default() += 1;
+			}
+		}
+	}
+	let unsupported_types = unsupported_types
+		.into_iter()
+		.map(|(ty, count)| format!("{ty}:{count}"))
+		.collect::<Vec<_>>()
+		.join(",");
+	report.push_info(format!(
+		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, unsupported={}, disabled={}, unsupported_types={}",
+		components.len(),
+		resolver_supported,
+		runtime_action_supported,
+		unsupported,
+		disabled,
+		unsupported_types
+	));
+}
+
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
 		return;
@@ -3795,6 +3846,7 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let Some(components) = modular_avatar.get("components").and_then(|v| v.as_array()) else {
 		return;
 	};
+	report_unavatar_modular_avatar_component_catalog(components, report);
 	let node_ids = scene_node_ids(scene);
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
@@ -9896,6 +9948,31 @@ mod tests {
 		let local = bone_proxy_local_transform("AsChildKeepWorldPose", true, target_world, old_world);
 		let (scale, _, _) = decompose_finite(local);
 		assert_vec3_near(scale, Vec3::ONE);
+	}
+
+	#[test]
+	fn modular_avatar_component_catalog_reports_support_classification() {
+		let components = vec![
+			serde_json::json!({"shortType": "ModularAvatarBoneProxy", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarMaterialSwap", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": false}),
+		];
+		let mut report = ImportReport::default();
+		report_unavatar_modular_avatar_component_catalog(&components, &mut report);
+
+		let message = report
+			.messages
+			.iter()
+			.find(|message| message.contains("Modular Avatar components"))
+			.unwrap();
+		assert!(message.contains("total=4"));
+		assert!(message.contains("resolver_supported=1"));
+		assert!(message.contains("runtime_action_supported=1"));
+		assert!(message.contains("unsupported=2"));
+		assert!(message.contains("disabled=1"));
+		assert!(message.contains("ModularAvatarMeshCutter:1"));
+		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
 	}
 
 	#[test]
