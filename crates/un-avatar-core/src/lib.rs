@@ -3143,6 +3143,30 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_source_profile_helpers_capture_special_runtime_semantics() {
+		let mut material = UnaLilToonLikeMaterial::default();
+		assert!(!material.is_gem_profile());
+		assert!(!material.is_refraction_profile());
+		assert!(!material.needs_screen_refraction());
+		assert!(!material.uses_reflection_source_cube());
+
+		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonGem;
+		assert!(material.is_gem_profile());
+		assert!(!material.is_refraction_profile());
+		assert!(material.uses_reflection_source_cube());
+		assert!(material.needs_screen_refraction());
+
+		material.reflection.gem_refraction_strength_factor = 0.0;
+		assert!(!material.needs_screen_refraction());
+		material.reflection.gem_refraction_strength_factor = 0.25;
+
+		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		assert!(!material.is_gem_profile());
+		assert!(material.is_refraction_profile());
+		assert!(material.needs_screen_refraction());
+	}
+
+	#[test]
 	fn runtime_dynamics_reports_spring_bone_groups() {
 		let document = UnaDocument {
 			spring_bones: Some(UnaSpringBoneSettings {
