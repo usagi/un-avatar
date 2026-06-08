@@ -72,6 +72,7 @@ fn run_tool(repo: &Path, program: &str, args: &[&str]) -> process::ExitStatus {
 fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 	let mut profile: Option<String> = None;
 	let mut manifest: Option<PathBuf> = None;
+	let mut wardrobe_set: Option<String> = None;
 	let mut release = false;
 	let mut renderer_args: Vec<String> = Vec::new();
 	while let Some(arg) = args.next() {
@@ -89,6 +90,13 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 					return false;
 				};
 				manifest = Some(path_from_arg(repo, value));
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					print_run_renderer_usage();
+					return false;
+				};
+				wardrobe_set = Some(value);
 			}
 			"--release" => release = true,
 			"--" => {
@@ -141,7 +149,11 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 	if release {
 		command.arg("--release");
 	}
-	command.arg("--").arg("--manifest").arg(&manifest).args(renderer_args);
+	command.arg("--").arg("--manifest").arg(&manifest);
+	if let Some(set_id) = wardrobe_set {
+		command.arg("--wardrobe-set").arg(set_id);
+	}
+	command.args(renderer_args);
 	eprintln!("run-renderer: manifest {}", manifest.display());
 	command
 		.current_dir(repo)
@@ -1873,12 +1885,14 @@ fn print_run_usage() {
 
 fn print_run_renderer_usage() {
 	eprintln!(
-		"cargo xtask run-renderer --profile <name> [--release] [-- <renderer args>]\n\
-		cargo xtask run-renderer --manifest <path> [--release] [-- <renderer args>]\n\
+		"cargo xtask run-renderer --profile <name> [--wardrobe-set <id>] [--release] [-- <renderer args>]\n\
+		cargo xtask run-renderer --manifest <path> [--wardrobe-set <id>] [--release] [-- <renderer args>]\n\
 	\n\
 	UN Avatar の user profile dir (%APPDATA%/UN Avatar/profiles) を優先し、次に repo の profiles/ を探す。\n\
 	<name> は file stem、timestamp接頭辞を除いた stem、[profile].id、[profile].display_name、title に一致する。\n\
+	--wardrobe-set は profile/manifest を上書き保存せず、この起動だけ renderer の wardrobe set を指定する。\n\
 	例: cargo xtask run-renderer --profile model1\n\
+	    cargo xtask run-renderer --profile mizuki-split --wardrobe-set field_drape\n\
 	    cargo xtask run-renderer --profile model2 -- --debug-material-dump"
 	);
 }
