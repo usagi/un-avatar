@@ -198,8 +198,10 @@ Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone`
 - stiffness / pull / spring
 - gravity
 - source collider metadata
+- endpoint position
+- collision / grabbing / posing / limit source hints
 
-現段階では `drag` は runtime default 相当、limits は source metadata または将来対応の対象に留める。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。PhysBone collider は `sourceParams.colliders` に保存するが、runtime solver collider としてはまだ接続しない。
+現段階では `drag` は runtime default 相当、limits は source metadata または将来対応の対象に留める。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。`endpointPosition` は leaf root に synthetic endpoint child を作って通常 chain へ正規化する。PhysBone collider は `sourceParams.colliders` に保存し、Sphere / Capsule は runtime solver collider と debug draw へ接続する。`insideBounds` collider、limits、grabbing、posing の挙動再現はまだ非対応。`allowCollision=false` は source collider を solver へ渡さない。
 
 Contacts / interactions / limits の完全再現は非目標。
 

@@ -497,6 +497,10 @@ Unity Exporter は次の出力モードを持つ。
       "gravity": [0.0, -0.4, 0.0],
       "radius": 0.03,
       "sourceParams": {
+        "endpointPosition": [0.0, 0.1, 0.0],
+        "allowCollision": true,
+        "allowGrabbing": false,
+        "allowPosing": false,
         "colliders": [
           {
             "shapeType": "Sphere",
@@ -526,7 +530,9 @@ Unity Exporter は次の出力モードを持つ。
 v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runtime primitive へ近似変換する。
 `roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
-`sourceParams.colliders` は VRC PhysBone collider の保存情報であり、v0.1 初期では solver collider へはまだ接続しない。
+`sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
+`sourceParams.colliders` は VRC PhysBone collider の保存情報であり、Sphere / Capsule は local collider として SpringBone solver / debug draw へ接続する。`insideBounds:true` collider は現段階では solver 非対応なので取り込まない。
+`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits / grabbing / posing は source feature count として diagnostics に出すが、v0.1 初期の solver 挙動にはまだ反映しない。
 
 ## 10. Provenance And License
 
