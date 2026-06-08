@@ -3927,6 +3927,9 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		}
 	}
 	for (short_type, count) in &unsupported_active_types {
+		report.push_warning(format!(
+			".unavatar Modular Avatar unsupported component: type={short_type}, count={count}"
+		));
 		report.lost_features.push(un_avatar_core::LostFeature {
 			feature: format!("ModularAvatar.{short_type}"),
 			detail: Some(format!(
@@ -10114,6 +10117,9 @@ mod tests {
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
 		assert_eq!(report.lost_features.len(), 1);
 		assert_eq!(report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
+		assert!(report.diagnostics.iter().any(|diagnostic| {
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarMeshCutter")
+		}));
 	}
 
 	#[test]

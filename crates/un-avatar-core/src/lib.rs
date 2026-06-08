@@ -3729,6 +3729,12 @@ impl ImportReport {
 		self.messages.push(t.clone());
 		self.diagnostics.push(ReportMessage::info(t));
 	}
+
+	pub fn push_warning(&mut self, text: impl Into<String>) {
+		let t = text.into();
+		self.messages.push(t.clone());
+		self.diagnostics.push(ReportMessage::warning(t));
+	}
 }
 
 /// export の集計レポート。
@@ -4773,11 +4779,14 @@ mod tests {
 	fn import_report_serializes_diagnostics() {
 		let mut r = ImportReport::default();
 		r.push_info("loaded");
+		r.push_warning("partial");
 		let v = serde_json::to_value(&r).unwrap();
-		assert_eq!(v["messages"], serde_json::json!(["loaded"]));
+		assert_eq!(v["messages"], serde_json::json!(["loaded", "partial"]));
 		let d = v["diagnostics"].as_array().expect("diagnostics");
-		assert_eq!(d.len(), 1);
+		assert_eq!(d.len(), 2);
 		assert_eq!(d[0]["severity"], "info");
 		assert_eq!(d[0]["text"], "loaded");
+		assert_eq!(d[1]["severity"], "warning");
+		assert_eq!(d[1]["text"], "partial");
 	}
 }
