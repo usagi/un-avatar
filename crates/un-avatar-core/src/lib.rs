@@ -315,29 +315,31 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
-		self.spring_bones
-			.map(|settings| {
-				settings
-					.colliders
-					.iter()
-					.filter(|collider| collider.source_kind == source_kind)
-					.count()
-			})
-			.unwrap_or(0)
+		self.colliders().filter(|collider| collider.source_kind == source_kind).count()
 	}
 
 	pub fn counts(self) -> UnaRuntimeDynamicsCounts {
-		UnaRuntimeDynamicsCounts {
-			groups: self.group_count(),
-			enabled_groups: self.enabled_group_count(),
-			vrm_spring_bone_groups: self.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
-			vrc_physbone_groups: self.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
-			unknown_groups: self.source_group_count(UnaDynamicsSourceKind::Unknown),
-			colliders: self.collider_count(),
-			vrm_spring_bone_colliders: self.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone),
-			vrc_physbone_colliders: self.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone),
-			unknown_colliders: self.source_collider_count(UnaDynamicsSourceKind::Unknown),
+		let mut counts = UnaRuntimeDynamicsCounts::default();
+		for group in self.groups() {
+			counts.groups += 1;
+			if group.enabled {
+				counts.enabled_groups += 1;
+			}
+			match group.source_kind {
+				UnaDynamicsSourceKind::VrmSpringBone => counts.vrm_spring_bone_groups += 1,
+				UnaDynamicsSourceKind::VrcPhysBone => counts.vrc_physbone_groups += 1,
+				UnaDynamicsSourceKind::Unknown => counts.unknown_groups += 1,
+			}
 		}
+		for collider in self.colliders() {
+			counts.colliders += 1;
+			match collider.source_kind {
+				UnaDynamicsSourceKind::VrmSpringBone => counts.vrm_spring_bone_colliders += 1,
+				UnaDynamicsSourceKind::VrcPhysBone => counts.vrc_physbone_colliders += 1,
+				UnaDynamicsSourceKind::Unknown => counts.unknown_colliders += 1,
+			}
+		}
+		counts
 	}
 }
 
