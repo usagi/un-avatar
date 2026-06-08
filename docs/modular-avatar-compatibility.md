@@ -58,7 +58,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Exporter serializes `AvatarObjectReference.referencePath`, direct target object, resolved target, and Transform/GameObject references as stable node id + path.
   - remaining: humanoid bone references, ambiguous duplicate path diagnostics, and component-specific reference schemas.
 - `[~]` execution order model: NDMF / Modular Avatar pass order summary
-  - done: Runtime resolver order follows the relevant MA transform passes for current support: MeshSettings, MergeArmature / MeshRetargeter, then BoneProxy with prepass-captured world pose.
+  - done: Runtime resolver order follows the relevant MA transform passes for current support: MeshSettings, ReplaceObject, MergeArmature / MeshRetargeter, then BoneProxy with prepass-captured world pose.
   - remaining: extend pass ordering as ReplaceObject, MeshCutter, MaterialSetter, dynamics, and late transform features are implemented.
 
 ### Armature / Skin / Mesh Retargeting
@@ -94,8 +94,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Bone Proxy
   - done: Exporter stores public fields and resolved target node. Runtime resolver applies reparenting for `AsChildAtRoot`, `AsChildKeepWorldPose`, `AsChildKeepPosition`, `AsChildKeepRotation`, `matchScale`, and MA-like duplicate child name suffixing. Nested proxies use a MA-like prepass that captures every proxy world pose before any proxy reparenting. Numeric tests cover duplicate target child names and missing target reporting.
   - remaining: regression-check `field_drape` visually and add broader fixture coverage for path ambiguity / component interactions.
-- `[ ]` MA Replace Object
-  - required: replacement object and child migration as render graph operation.
+- `[~]` MA Replace Object
+  - done: Runtime resolver moves the replacement object into the original object's parent slot, migrates original children under the replacement while preserving world pose, hides the original node, and remaps Runtime node references such as skin joints, skin root, probe anchor, and node constraints to the replacement.
+  - remaining: Exporter schema parity for object/component reference remap diagnostics and recursive / conflicting replacement fixture coverage.
 - `[ ]` MA Move Independently
   - required: grouped transform parent remapping, if it affects visible render graph.
 - `[ ]` MA World Fixed Object / World Scale Object

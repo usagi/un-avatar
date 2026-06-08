@@ -2576,6 +2576,94 @@ fn reparent_bone_proxy_node(scene: &mut UnaSceneSnapshot, child: usize, new_pare
 	reparent_scene_node(scene, child, new_parent, local)
 }
 
+fn replace_scene_child(parent_children: &mut Vec<usize>, old_child: usize, new_child: usize, insert_index: usize) {
+	parent_children.retain(|&idx| idx != old_child && idx != new_child);
+	let index = insert_index.min(parent_children.len());
+	parent_children.insert(index, new_child);
+}
+
+fn remap_scene_node_references(scene: &mut UnaSceneSnapshot, old_node: usize, new_node: usize) {
+	for skin in &mut scene.skins {
+		for joint_node in &mut skin.joint_nodes {
+			if *joint_node == old_node {
+				*joint_node = new_node;
+			}
+		}
+		if skin.skeleton_node == Some(old_node) {
+			skin.skeleton_node = Some(new_node);
+		}
+	}
+	for node in &mut scene.nodes {
+		if node.probe_anchor_node == Some(old_node) {
+			node.probe_anchor_node = Some(new_node);
+		}
+	}
+	for constraint in &mut scene.node_constraints {
+		if constraint.source_node == old_node {
+			constraint.source_node = new_node;
+		}
+		if constraint.target_node == old_node {
+			constraint.target_node = new_node;
+		}
+	}
+}
+
+fn replace_scene_object(scene: &mut UnaSceneSnapshot, original: usize, replacement: usize, initial_world: &[Mat4]) -> bool {
+	if original >= scene.nodes.len() || replacement >= scene.nodes.len() || original == replacement {
+		return false;
+	}
+	let parents = scene_parent_indices(scene);
+	if scene_is_descendant_of(&parents, replacement, original) {
+		return false;
+	}
+	let original_parent = parents.get(original).copied().flatten();
+	let replacement_parent = parents.get(replacement).copied().flatten();
+	let sibling_index = original_parent
+		.and_then(|parent| scene.nodes.get(parent))
+		.and_then(|parent| parent.children.iter().position(|&child| child == original))
+		.unwrap_or_else(|| scene.roots.iter().position(|&root| root == original).unwrap_or(scene.roots.len()));
+	let replacement_world = initial_world.get(replacement).copied().unwrap_or(Mat4::IDENTITY);
+	if let Some(parent) = replacement_parent {
+		if let Some(parent_node) = scene.nodes.get_mut(parent) {
+			parent_node.children.retain(|&idx| idx != replacement);
+		}
+	} else {
+		scene.roots.retain(|&idx| idx != replacement);
+	}
+	let parent_world = original_parent
+		.and_then(|parent| initial_world.get(parent).copied())
+		.unwrap_or(Mat4::IDENTITY);
+	if let Some(node) = scene.nodes.get_mut(replacement) {
+		node.transform = (inverse_finite_or_identity(parent_world) * replacement_world).to_cols_array();
+	}
+	if let Some(parent) = original_parent {
+		if let Some(parent_node) = scene.nodes.get_mut(parent) {
+			replace_scene_child(&mut parent_node.children, original, replacement, sibling_index);
+		}
+	} else {
+		replace_scene_child(&mut scene.roots, original, replacement, sibling_index);
+	}
+	let child_world_parent = inverse_finite_or_identity(replacement_world);
+	let original_children = scene.nodes.get(original).map(|node| node.children.clone()).unwrap_or_default();
+	for child in original_children {
+		let old_world = initial_world.get(child).copied().unwrap_or(Mat4::IDENTITY);
+		if let Some(node) = scene.nodes.get_mut(child) {
+			node.transform = (child_world_parent * old_world).to_cols_array();
+		}
+		if let Some(replacement_node) = scene.nodes.get_mut(replacement) {
+			if !replacement_node.children.contains(&child) {
+				replacement_node.children.push(child);
+			}
+		}
+	}
+	if let Some(node) = scene.nodes.get_mut(original) {
+		node.children.clear();
+		node.visible = false;
+	}
+	remap_scene_node_references(scene, original, replacement);
+	true
+}
+
 #[derive(Clone, Debug)]
 struct BoneProxyResolverInfo {
 	child: usize,
@@ -2912,6 +3000,71 @@ fn apply_unavatar_mesh_settings(
 	(root_bone_applied, probe_anchor_applied, bounds_applied, missing)
 }
 
+fn replace_object_target_ref(component: &Value) -> Option<&Value> {
+	component
+		.get("fields")
+		.and_then(|fields| fields.get("targetObject"))
+		.or_else(|| component.get("targetObject"))
+		.or_else(|| component.get("resolvedTarget"))
+		.or_else(|| component.get("original"))
+}
+
+fn apply_unavatar_replace_objects(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize, usize) {
+	let mut replacements = Vec::new();
+	let mut replaced_originals = BTreeSet::new();
+	let mut applied = 0usize;
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	let mut invalid = 0usize;
+	let parents = scene_parent_indices(scene);
+	for component in components {
+		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarReplaceObject") {
+			continue;
+		}
+		if component.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(replacement_ref) = component.get("target") else {
+			missing += 1;
+			continue;
+		};
+		let Some(original_ref) = replace_object_target_ref(component) else {
+			missing += 1;
+			continue;
+		};
+		let Some(replacement) = unavatar_node_ref_index(replacement_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let Some(original) = modular_avatar_reference_index(original_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		if original == replacement || scene_is_descendant_of(&parents, replacement, original) || !replaced_originals.insert(original) {
+			invalid += 1;
+			continue;
+		}
+		replacements.push((original, replacement));
+	}
+	let initial_world = scene_world_matrices(scene);
+	for (original, replacement) in replacements {
+		if replace_scene_object(scene, original, replacement, &initial_world) {
+			applied += 1;
+		} else {
+			invalid += 1;
+		}
+	}
+	(applied, missing, skipped, invalid)
+}
+
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
 		return;
@@ -2932,6 +3085,16 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 		));
 	}
 
+	let (replace_object_applied, replace_object_missing, replace_object_skipped, replace_object_invalid) =
+		apply_unavatar_replace_objects(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if replace_object_applied > 0 || replace_object_missing > 0 || replace_object_skipped > 0 || replace_object_invalid > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: replace_object_applied={replace_object_applied}, replace_object_missing={replace_object_missing}, replace_object_skipped={replace_object_skipped}, replace_object_invalid={replace_object_invalid}"
+		));
+	}
+
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
 	let (merge_mappings, merge_missing, merge_skipped) =
 		collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let merge_auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &merge_mappings);
@@ -8407,6 +8570,89 @@ mod tests {
 
 		assert_eq!(scene.nodes[0].children, vec![1]);
 		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_missing=1")));
+	}
+
+	#[test]
+	fn modular_avatar_replace_object_moves_children_and_remaps_node_references() {
+		let mut scene = UnaSceneSnapshot {
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1, 3],
+				inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+				skeleton_node: Some(1),
+			}],
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2, 5],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Original".to_string()),
+					source_node_id: Some("node_original".to_string()),
+					transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+					children: vec![3],
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Replacement".to_string()),
+					source_node_id: Some("node_replacement".to_string()),
+					transform: Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0)).to_cols_array(),
+					children: vec![4],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OriginalChild".to_string()),
+					source_node_id: Some("node_original_child".to_string()),
+					transform: Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array(),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ReplacementChild".to_string()),
+					source_node_id: Some("node_replacement_child".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ProbeUser".to_string()),
+					probe_anchor_node: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarReplaceObject",
+						"enabled": true,
+						"target": {"nodeId": "node_replacement", "path": "Replacement"},
+						"fields": {
+							"targetObject": {"nodeId": "node_original", "path": "Original"}
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+
+		assert_eq!(scene.nodes[0].children, vec![2, 5]);
+		assert_eq!(scene.nodes[2].children, vec![4, 3]);
+		assert!(scene.nodes[1].children.is_empty());
+		assert!(!scene.nodes[1].visible);
+		assert!((after[2].transform_point3(Vec3::ZERO) - before[2].transform_point3(Vec3::ZERO)).length() < 1e-5);
+		assert!((after[3].transform_point3(Vec3::ZERO) - before[3].transform_point3(Vec3::ZERO)).length() < 1e-5);
+		assert_eq!(scene.skins[0].joint_nodes, vec![2, 3]);
+		assert_eq!(scene.skins[0].skeleton_node, Some(2));
+		assert_eq!(scene.nodes[5].probe_anchor_node, Some(2));
+		assert!(report.messages.iter().any(|m| m.contains("replace_object_applied=1")));
 	}
 
 	#[test]
