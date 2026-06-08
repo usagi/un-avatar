@@ -174,8 +174,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[ ]` numeric resolver tests
   - required: MergeArmature one-bone retarget, BoneProxy reparent, MeshSettings rootBone override.
 - `[~]` BoneProxy numeric test
-  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target.
-  - remaining: cover all attachment modes and matchScale.
+  - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, and `matchScale`.
+  - remaining: broader duplicate-name / missing-target fixture coverage.
 - `[ ]` visual regression screenshots
   - required: front/back/detail views for mizuki field_drape after each resolver milestone.
 
