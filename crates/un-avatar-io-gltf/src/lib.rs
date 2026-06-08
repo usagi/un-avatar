@@ -1388,10 +1388,17 @@ fn unavatar_dynamics_colliders(
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
 ) -> Vec<UnaDynamicsCollider> {
-	let colliders = value
-		.get("sourceParams")
-		.or_else(|| value.get("source_params"))
+	let source_params = value.get("sourceParams").or_else(|| value.get("source_params"));
+	if source_params
+		.and_then(|params| params.get("allowCollision").or_else(|| params.get("allow_collision")))
+		.and_then(Value::as_bool)
+		== Some(false)
+	{
+		return Vec::new();
+	}
+	let colliders = source_params
 		.and_then(|params| params.get("colliders"))
+		.or_else(|| value.get("colliders"))
 		.and_then(Value::as_array);
 	let Some(colliders) = colliders else {
 		return Vec::new();
@@ -5257,6 +5264,7 @@ mod tests {
 					"gravity": [0.0, -0.4, 0.0],
 					"radius": 0.03,
 					"sourceParams": {
+						"allowCollision": true,
 						"colliders": [{
 							"root": {"nodeId": "node_root", "path": "Root"},
 							"shapeType": "Sphere",
@@ -5273,6 +5281,18 @@ mod tests {
 						}]
 					}
 				}, {
+					"id": "no_collision_tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"allowCollision": false,
+						"colliders": [{
+							"root": {"nodeId": "node_root", "path": "Root"},
+							"shapeType": "Sphere",
+							"radius": 0.4
+						}]
+					}
+				}, {
 					"id": "disabled_tail",
 					"source": "vrc_physbone",
 					"enabled": false,
@@ -5283,7 +5303,7 @@ mod tests {
 		let mut report = ImportReport::default();
 		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
-		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups.len(), 2);
 		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
