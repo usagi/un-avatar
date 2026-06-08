@@ -16,7 +16,8 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
 	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
-	UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel,
+	UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -109,6 +110,7 @@ struct DiagnoseRuntimeSummary {
 	last_action_id: Option<String>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	parameter_values: BTreeMap<String, f32>,
+	resolver_cache_key: UnaRuntimeResolverCacheKey,
 }
 
 #[derive(Serialize)]
@@ -2468,6 +2470,7 @@ fn build_diagnose_report(
 		active_asset_groups: runtime_model.active_asset_groups().to_vec(),
 		last_action_id: runtime_model.last_action_id().map(str::to_owned),
 		parameter_values: runtime_model.runtime_parameter_values().clone(),
+		resolver_cache_key: runtime_model.resolver_cache_key(),
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
@@ -2786,6 +2789,7 @@ fn run_diagnose(
 	if !report.runtime.parameter_values.is_empty() {
 		println!("runtime.parameters: {:?}", report.runtime.parameter_values);
 	}
+	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {
 		println!(
 			"actions: actions={} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",

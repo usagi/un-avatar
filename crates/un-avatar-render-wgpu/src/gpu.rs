@@ -15,6 +15,7 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{
 	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaSceneNode,
+	UnaRuntimeResolverCacheKey,
 };
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -2684,6 +2685,12 @@ impl GpuState {
 			return Vec::new();
 		};
 		doc.runtime_model().active_asset_groups().to_vec()
+	}
+
+	pub(crate) fn resolver_cache_key(&self) -> Option<UnaRuntimeResolverCacheKey> {
+		let doc_arc = self.document.as_ref()?;
+		let doc = doc_arc.read().ok()?;
+		Some(doc.runtime_model().resolver_cache_key())
 	}
 
 	pub(crate) fn last_action_id(&self) -> Option<String> {

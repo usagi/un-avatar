@@ -198,6 +198,27 @@ pub struct UnaRuntimeState {
 	pub parameter_values: BTreeMap<String, f32>,
 }
 
+pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct UnaRuntimeResolverCacheKey {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub wardrobe_set: Option<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub active_asset_groups: Vec<String>,
+	pub resolver_version: u32,
+}
+
+impl UnaRuntimeResolverCacheKey {
+	pub fn from_state(state: &UnaRuntimeState) -> Self {
+		Self {
+			wardrobe_set: state.active_wardrobe_set.clone(),
+			active_asset_groups: state.active_asset_groups.clone(),
+			resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
+		}
+	}
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UnaRuntimeActionTrigger {
@@ -769,6 +790,10 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn runtime_state(self) -> &'a UnaRuntimeState {
 		&self.document.runtime_state
+	}
+
+	pub fn resolver_cache_key(self) -> UnaRuntimeResolverCacheKey {
+		UnaRuntimeResolverCacheKey::from_state(self.runtime_state())
 	}
 
 	pub fn active_wardrobe_set(self) -> Option<&'a str> {
@@ -4163,8 +4188,26 @@ mod tests {
 			document.runtime_model().active_asset_groups(),
 			&["outfit:field_drape".to_string(), "texture:red".to_string()]
 		);
+		assert_eq!(
+			document.runtime_model().resolver_cache_key(),
+			UnaRuntimeResolverCacheKey {
+				wardrobe_set: Some("field_drape".to_string()),
+				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
+			}
+		);
 		assert_eq!(document.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
+
+		document.runtime_model_mut().set_runtime_parameter_value("Outfit", 3.0);
+		assert_eq!(
+			document.runtime_model().resolver_cache_key(),
+			UnaRuntimeResolverCacheKey {
+				wardrobe_set: Some("field_drape".to_string()),
+				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				resolver_version: UNA_RUNTIME_RESOLVER_VERSION,
+			}
+		);
 
 		let json = serde_json::to_string(&document).unwrap();
 		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
@@ -4174,7 +4217,7 @@ mod tests {
 			&["outfit:field_drape".to_string(), "texture:red".to_string()]
 		);
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
-		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&2.0));
+		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&3.0));
 	}
 
 	#[test]

@@ -1655,6 +1655,15 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_resolver_cache_key(&self, key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.resolver_cache_key = key;
+		}
+	}
+
 	fn update_runtime_last_action(&self, action_id: Option<String>) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -1677,6 +1686,7 @@ impl AvatarApp {
 		if let Some(active_set_id) = &activation.active_wardrobe_set {
 			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
 			self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+			self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 		}
 		self.update_runtime_last_action(Some(activation.action_id.clone()));
 		self.update_runtime_parameters(activation.parameter_values.clone());
@@ -2468,6 +2478,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				if outcome.is_ok() {
 					self.update_runtime_wardrobe_set(active_set_id);
 					self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+					self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 					self.request_redraw();
 				}
 				if let Ok(mut guard) = result.lock() {
@@ -2886,6 +2897,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.update_runtime_texture_summary(actual_texture_summary);
 						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
 						self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+						self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
 						self.update_runtime_parameters(
 							self.gpu
@@ -3045,6 +3057,8 @@ struct RendererRuntimeSnapshot {
 	active_wardrobe_set: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	active_asset_groups: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	resolver_cache_key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>,
 	#[serde(default)]
 	last_action_id: Option<String>,
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -3182,6 +3196,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_summary: None,
 		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
 		active_asset_groups: Vec::new(),
+		resolver_cache_key: None,
 		last_action_id: None,
 		runtime_parameter_values: BTreeMap::new(),
 		spout_available: crate::spout::backend_available(),
@@ -4370,6 +4385,7 @@ mod tests {
 			Some("field_drape")
 		);
 		assert!(snapshot.get("active_asset_groups").is_none());
+		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
 		assert!(snapshot
 			.get("control_capabilities")
