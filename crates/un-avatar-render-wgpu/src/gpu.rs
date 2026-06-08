@@ -2662,6 +2662,12 @@ impl GpuState {
 		self.texture_summary.clone()
 	}
 
+	pub(crate) fn active_wardrobe_set(&self) -> Option<String> {
+		let doc_arc = self.document.as_ref()?;
+		let doc = doc_arc.read().ok()?;
+		doc.runtime_model().active_wardrobe_set().map(str::to_owned)
+	}
+
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());

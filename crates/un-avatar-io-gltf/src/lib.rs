@@ -2869,16 +2869,16 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	if base_id.as_deref() == Some(set_id) {
 		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar)
 		else {
+			drop(runtime);
+			document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 			return Ok(WardrobeApplyReport::default());
 		};
 		reset_scene_visibility(runtime.scene);
 		let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
-		return Ok(apply_unavatar_wardrobe_operations(
-			runtime.scene,
-			Some(&mut runtime.dynamics),
-			&base_operations,
-			Some(&unavatar),
-		));
+		let report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
+		drop(runtime);
+		document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
+		return Ok(report);
 	}
 	if base_id.as_deref() != Some(set_id) {
 		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar) {
@@ -2887,12 +2887,10 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
 		}
 	}
-	Ok(apply_unavatar_wardrobe_operations(
-		runtime.scene,
-		Some(&mut runtime.dynamics),
-		operations,
-		Some(&unavatar),
-	))
+	let report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), operations, Some(&unavatar));
+	drop(runtime);
+	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
+	Ok(report)
 }
 
 fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
@@ -8593,10 +8591,12 @@ mod tests {
 		assert_eq!(applied.dynamics_missing, 1);
 		assert_eq!(applied.missing_dynamics_ids, vec!["physbone:missing"]);
 		assert!(!doc.spring_bones.as_ref().unwrap().groups[0].enabled);
+		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("no_hair_physics"));
 
 		let applied = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
 		assert_eq!(applied.dynamics_applied, 0);
 		assert_eq!(applied.dynamics_missing, 0);
 		assert!(doc.spring_bones.as_ref().unwrap().groups[0].enabled);
+		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("base"));
 	}
 }

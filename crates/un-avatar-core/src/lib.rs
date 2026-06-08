@@ -145,6 +145,14 @@ pub struct UnaRuntimeAction {
 	pub effects: Vec<UnaRuntimeActionEffect>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeState {
+	/// Currently resolved wardrobe set. Source package wardrobe metadata remains in `UnaUnavatarExtension`;
+	/// this is runtime state so hot-switch clients can observe the active resolver choice.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub active_wardrobe_set: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UnaRuntimeActionTrigger {
@@ -529,9 +537,18 @@ pub struct UnaDocument {
 	/// VRC Expression Menu / shortcut / supervisor / animation 由来の軽量 runtime action model。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub runtime_actions: Option<UnaRuntimeActionSet>,
+	/// Hot switch / action evaluation after source import. This is not persisted source data.
+	#[serde(default, skip_serializing_if = "UnaRuntimeState::is_default")]
+	pub runtime_state: UnaRuntimeState,
 	/// VRM SpringBone / secondaryAnimation から取り込んだ揺れもの用チェーン（ランタイムで更新）。
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub spring_bones: Option<UnaSpringBoneSettings>,
+}
+
+impl UnaRuntimeState {
+	pub fn is_default(self: &Self) -> bool {
+		self == &Self::default()
+	}
 }
 
 impl UnaDocument {
@@ -670,6 +687,14 @@ impl<'a> UnaRuntimeModel<'a> {
 		self.document.runtime_actions.as_ref()
 	}
 
+	pub fn runtime_state(self) -> &'a UnaRuntimeState {
+		&self.document.runtime_state
+	}
+
+	pub fn active_wardrobe_set(self) -> Option<&'a str> {
+		self.runtime_state().active_wardrobe_set.as_deref()
+	}
+
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
 		Some(UnaRuntimeSceneExpressions {
 			scene: self.scene()?,
@@ -713,6 +738,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn expression_weights_mut(&mut self) -> &mut UnaExpressionWeights {
 		self.document.expression_weights.get_or_insert_with(Default::default)
+	}
+
+	pub fn runtime_state_mut(&mut self) -> &mut UnaRuntimeState {
+		&mut self.document.runtime_state
+	}
+
+	pub fn set_active_wardrobe_set(&mut self, set_id: Option<String>) {
+		self.runtime_state_mut().active_wardrobe_set = set_id;
 	}
 
 	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
@@ -3787,6 +3820,21 @@ mod tests {
 	fn runtime_action_model_defaults_to_absent_for_legacy_documents() {
 		let decoded: UnaDocument = serde_json::from_str("{}").unwrap();
 		assert!(decoded.runtime_model().runtime_actions().is_none());
+	}
+
+	#[test]
+	fn runtime_state_tracks_active_wardrobe_set() {
+		let mut document = UnaDocument::default();
+		assert_eq!(document.runtime_model().active_wardrobe_set(), None);
+
+		document
+			.runtime_model_mut()
+			.set_active_wardrobe_set(Some("field_drape".to_string()));
+		assert_eq!(document.runtime_model().active_wardrobe_set(), Some("field_drape"));
+
+		let json = serde_json::to_string(&document).unwrap();
+		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
+		assert_eq!(decoded.runtime_model().active_wardrobe_set(), Some("field_drape"));
 	}
 
 	#[test]

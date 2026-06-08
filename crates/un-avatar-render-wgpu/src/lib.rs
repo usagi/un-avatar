@@ -2796,6 +2796,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.startup_pending_document = false;
 						self.clear_startup_progress();
 						self.update_runtime_texture_summary(actual_texture_summary);
+						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();

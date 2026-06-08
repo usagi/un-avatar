@@ -95,7 +95,7 @@ MVP control command:
 
 - `set_wardrobe` runtime control command は正規化済み set id を受け、適用失敗理由を control response に返す。
 - renderer は wardrobe 適用後に document revision を進め、draw transform / visibility / scene morph default / runtime requirements を次 frame で再読込する。
-- runtime status は正規化済み `active_wardrobe_set` を公開する。
+- `UnaRuntimeState.active_wardrobe_set` は wardrobe 適用成功時の resolved runtime state として更新され、runtime status は document state から `active_wardrobe_set` を公開する。
 - `dynamicsEnable` は `UnaRuntimeDynamicsMut` 経由で runtime group enabled state を切り替え、適用件数と missing dynamics id を renderer log で観測できる。
 
 後回し:
