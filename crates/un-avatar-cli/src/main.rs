@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
 	morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr,
-	UnaRuntimeActionEffect, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -342,6 +342,7 @@ struct DiagnoseActionSummary {
 	action_count: usize,
 	trigger_count: usize,
 	effect_count: usize,
+	trigger_kinds: BTreeMap<String, usize>,
 	effect_kinds: BTreeMap<String, usize>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
@@ -352,6 +353,7 @@ struct DiagnoseActionItemSummary {
 	label: String,
 	trigger_count: usize,
 	effect_count: usize,
+	trigger_kinds: BTreeMap<String, usize>,
 	effect_kinds: BTreeMap<String, usize>,
 }
 
@@ -2410,6 +2412,7 @@ fn build_diagnose_report(
 		action_count: actions.actions.len(),
 		trigger_count: actions.actions.iter().map(|action| action.triggers.len()).sum(),
 		effect_count: actions.actions.iter().map(|action| action.effects.len()).sum(),
+		trigger_kinds: runtime_action_trigger_kind_counts(actions.actions.iter().flat_map(|action| action.triggers.iter())),
 		effect_kinds: runtime_action_effect_kind_counts(actions.actions.iter().flat_map(|action| action.effects.iter())),
 		actions: actions
 			.actions
@@ -2419,6 +2422,7 @@ fn build_diagnose_report(
 				label: action.label.clone(),
 				trigger_count: action.triggers.len(),
 				effect_count: action.effects.len(),
+				trigger_kinds: runtime_action_trigger_kind_counts(action.triggers.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 			})
 			.collect(),
@@ -2587,6 +2591,23 @@ fn runtime_action_effect_kind(effect: &UnaRuntimeActionEffect) -> &'static str {
 	}
 }
 
+fn runtime_action_trigger_kind(trigger: &UnaRuntimeActionTrigger) -> &'static str {
+	match trigger {
+		UnaRuntimeActionTrigger::SupervisorCommand { .. } => "supervisor_command",
+		UnaRuntimeActionTrigger::ExpressionMenu { .. } => "expression_menu",
+		UnaRuntimeActionTrigger::KeyboardShortcut { .. } => "keyboard_shortcut",
+		UnaRuntimeActionTrigger::AnimationEvent { .. } => "animation_event",
+	}
+}
+
+fn runtime_action_trigger_kind_counts<'a>(triggers: impl IntoIterator<Item = &'a UnaRuntimeActionTrigger>) -> BTreeMap<String, usize> {
+	let mut counts = BTreeMap::new();
+	for trigger in triggers {
+		*counts.entry(runtime_action_trigger_kind(trigger).to_string()).or_insert(0) += 1;
+	}
+	counts
+}
+
 fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
 	let mut counts = BTreeMap::new();
 	for effect in effects {
@@ -2695,13 +2716,13 @@ fn run_diagnose(
 	);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={} effect_kinds={:?}",
-			actions.action_count, actions.trigger_count, actions.effect_count, actions.effect_kinds
+			"actions: actions={} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",
+			actions.action_count, actions.trigger_count, actions.effect_count, actions.trigger_kinds, actions.effect_kinds
 		);
 		for action in actions.actions.iter().take(16) {
 			println!(
-				"action[{}]: label={:?} triggers={} effects={} effect_kinds={:?}",
-				action.id, action.label, action.trigger_count, action.effect_count, action.effect_kinds
+				"action[{}]: label={:?} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",
+				action.id, action.label, action.trigger_count, action.effect_count, action.trigger_kinds, action.effect_kinds
 			);
 		}
 	} else {
