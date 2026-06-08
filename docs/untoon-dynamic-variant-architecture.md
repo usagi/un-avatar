@@ -127,6 +127,18 @@ Variant planner は model load 時に実行する。
 
 モデル単位 planning を基本にする。wardrobe set 切替ごとに shader variant を変えると hot switch の障害になるためである。
 
+### Current Implementation Notes
+
+現 renderer はまだ固定 shader source を使うが、`SceneMeshRuntimeRequirements` と runtime status で最初の feature bits を収集・公開している。
+
+現在収集済み。
+
+- `runtime_requires_audio_link_texture`
+- `runtime_requires_screen_refraction`
+- `runtime_requires_fur`
+
+`audio_link_texture_needed` は AudioLink 入力 source が有効な場合だけ実際の worker / texture upload を起動する実行時判定である。`runtime_requires_audio_link_texture` は material set が AudioLink texture を要求しているかを表す variant planning 用の事実であり、入力 source の ON/OFF とは分けて扱う。
+
 ## Resource Budget
 
 Texture / sampler budget は material だけで使い切ってはいけない。
