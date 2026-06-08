@@ -141,6 +141,8 @@ Variant planner は model load 時に実行する。
 
 現実装では `material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出し、draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
 
+Renderer の通常経路は `liltoon_like_runtime()` / `mtoon_like_runtime()` を使う。`*_source_profile()` は import provenance と source-to-semantic 変換、または互換テスト用の低レベル helper に閉じる。これにより、MToon / lilToon / 将来の native UNToon input の差は runtime shader path ではなく model/material compile boundary で吸収する。
+
 ## Resource Budget
 
 Texture / sampler budget は material だけで使い切ってはいけない。
