@@ -50,6 +50,7 @@ namespace UNAvatar.UnityExporter
                         ["ignoreTransforms"] = group.TryGetValue("ignoreTransforms", out var ignoreTransforms) ? ignoreTransforms : new List<object>(),
                         ["multiChildType"] = group.TryGetValue("multiChildType", out var multiChildType) ? multiChildType : "",
                         ["sourceColliderCount"] = SourceColliderCount(group),
+                        ["sourceColliderSamples"] = SourceColliderSamples(group, 8),
                         ["stiffness"] = group.TryGetValue("stiffness", out var stiffness) ? stiffness : 0.0f,
                         ["spring"] = group.TryGetValue("spring", out var spring) ? spring : 0.0f,
                         ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
@@ -148,6 +149,39 @@ namespace UNAvatar.UnityExporter
                 return 0;
             }
             return colliders.Count;
+        }
+
+        private static List<object> SourceColliderSamples(Dictionary<string, object> group, int limit)
+        {
+            var samples = new List<object>();
+            if (!group.TryGetValue("sourceParams", out var rawSourceParams) || !(rawSourceParams is Dictionary<string, object> sourceParams))
+            {
+                return samples;
+            }
+            if (!sourceParams.TryGetValue("colliders", out var rawColliders) || !(rawColliders is List<object> colliders))
+            {
+                return samples;
+            }
+            foreach (var collider in colliders)
+            {
+                if (samples.Count >= limit)
+                {
+                    break;
+                }
+                if (collider is Dictionary<string, object> colliderMap)
+                {
+                    samples.Add(new Dictionary<string, object>
+                    {
+                        ["component"] = colliderMap.TryGetValue("component", out var component) ? component : null,
+                        ["root"] = colliderMap.TryGetValue("root", out var root) ? root : null,
+                        ["shapeType"] = colliderMap.TryGetValue("shapeType", out var shapeType) ? shapeType : "",
+                        ["radius"] = colliderMap.TryGetValue("radius", out var radius) ? radius : 0.0f,
+                        ["height"] = colliderMap.TryGetValue("height", out var height) ? height : 0.0f,
+                        ["insideBounds"] = colliderMap.TryGetValue("insideBounds", out var insideBounds) ? insideBounds : false
+                    });
+                }
+            }
+            return samples;
         }
 
         private List<object> BuildVrcPhysBoneColliderPayloads(Transform root, List<Component> colliders)
