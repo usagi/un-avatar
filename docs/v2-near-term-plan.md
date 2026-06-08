@@ -132,6 +132,7 @@ MVP control command:
 - `UnaRuntimeActionSet` / `UnaRuntimeAction` / trigger / effect schema を core に追加した。
 - `.unavatar` wardrobe sets は、base set を除き `WardrobeSet` effect を持つ runtime action candidate へ import される。
 - `.unavatar` variants のうち ObjectToggle / active-state 由来の node visibility operations は `NodeVisibility` effect を持つ runtime action candidate へ import される。metadata だけの MenuItem は effect を確定できないため source payload に残す。
+- `.unavatar` variants の material color / scalar operations は `MaterialColor` / `MaterialScalar` effect を持つ runtime action candidate へ import される。
 - CLI diagnose は runtime action 件数、trigger 件数、effect 件数、action id / label を観測できる。
 - renderer runtime control は `activate_action` を受け、`action_id` または `supervisor_command` で action を解決し、`WardrobeSet` effect を既存 hot switch 経路で適用し、`DynamicsEnabled` effect を runtime dynamics mutation 経路で適用し、`ExpressionWeight` effect を既存 expression override 経路で適用し、`NodeVisibility` effect を runtime scene visibility mutation 経路で適用する。`MaterialColor` / `MaterialScalar` effect は PBR 共通値の初期範囲として base color、emissive、alpha、metallic、roughness/smoothness、alpha cutoff を runtime material mutation 経路で適用し、draw material uniform を再同期する。
 - effect 付き `.unavatar` variant に MenuItem / Expression Menu metadata operation が同居する場合は、runtime action の `ExpressionMenu` trigger path へ metadata path を取り込む。metadata-only MenuItem は引き続き action 化しない。

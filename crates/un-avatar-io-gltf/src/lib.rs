@@ -17,8 +17,8 @@ use un_avatar_core::{
 	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
 	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
 	UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsMut, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaRuntimeDynamicsMut, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
+	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2048,34 +2048,65 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 	let mut effects = Vec::new();
 	for op in operations {
 		let ty = op.get("type").or_else(|| op.get("op")).and_then(Value::as_str).unwrap_or("");
-		if !matches!(
-			ty,
-			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
-		) {
-			continue;
+		match ty {
+			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility" => {
+				let Some(visible) = op.get("visible").and_then(Value::as_bool) else {
+					continue;
+				};
+				let path = operation_target_path(op);
+				let target = op.get("target").and_then(Value::as_object);
+				let source_node_id = target
+					.and_then(|target| target.get("nodeId").or_else(|| target.get("sourceNodeId")))
+					.and_then(Value::as_str)
+					.filter(|value| !value.is_empty())
+					.map(str::to_string);
+				let path = (!path.is_empty()).then(|| path.to_string());
+				if source_node_id.is_none() && path.is_none() {
+					continue;
+				}
+				effects.push(UnaRuntimeActionEffect::NodeVisibility {
+					target: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id,
+						path,
+					},
+					visible,
+				});
+			}
+			"materialColor" | "material_color" => {
+				let Some(target) = unavatar_runtime_material_target(op) else {
+					continue;
+				};
+				let Some(color) = op.get("color").or_else(|| op.get("value")).and_then(value_vec4) else {
+					continue;
+				};
+				let parameter = op
+					.get("parameter")
+					.or_else(|| op.get("property"))
+					.or_else(|| op.get("name"))
+					.and_then(Value::as_str)
+					.unwrap_or("_Color")
+					.to_string();
+				effects.push(UnaRuntimeActionEffect::MaterialColor { target, parameter, color });
+			}
+			"materialScalar" | "material_scalar" => {
+				let Some(target) = unavatar_runtime_material_target(op) else {
+					continue;
+				};
+				let Some(value) = op.get("value").and_then(Value::as_f64).map(|value| value as f32) else {
+					continue;
+				};
+				let parameter = op
+					.get("parameter")
+					.or_else(|| op.get("property"))
+					.or_else(|| op.get("name"))
+					.and_then(Value::as_str)
+					.unwrap_or("_Alpha")
+					.to_string();
+				effects.push(UnaRuntimeActionEffect::MaterialScalar { target, parameter, value });
+			}
+			_ => {}
 		}
-		let Some(visible) = op.get("visible").and_then(Value::as_bool) else {
-			continue;
-		};
-		let path = operation_target_path(op);
-		let target = op.get("target").and_then(Value::as_object);
-		let source_node_id = target
-			.and_then(|target| target.get("nodeId").or_else(|| target.get("sourceNodeId")))
-			.and_then(Value::as_str)
-			.filter(|value| !value.is_empty())
-			.map(str::to_string);
-		let path = (!path.is_empty()).then(|| path.to_string());
-		if source_node_id.is_none() && path.is_none() {
-			continue;
-		}
-		effects.push(UnaRuntimeActionEffect::NodeVisibility {
-			target: UnaRuntimeNodeTarget {
-				node_index: None,
-				source_node_id,
-				path,
-			},
-			visible,
-		});
 	}
 	if effects.is_empty() {
 		return None;
@@ -2117,6 +2148,47 @@ fn unavatar_variant_expression_menu_path(variant: &Value, fallback_label: &str) 
 		})
 	});
 	metadata_path.unwrap_or(fallback_label).to_string()
+}
+
+fn unavatar_runtime_material_target(op: &Value) -> Option<UnaRuntimeMaterialTarget> {
+	let target = op.get("target");
+	let material_index = target
+		.and_then(|target| target.get("materialIndex").or_else(|| target.get("material_index")))
+		.or_else(|| op.get("materialIndex").or_else(|| op.get("material_index")))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok());
+	let name = target
+		.and_then(|target| {
+			target
+				.get("materialName")
+				.or_else(|| target.get("material_name"))
+				.or_else(|| target.get("name"))
+		})
+		.or_else(|| {
+			op.get("materialName")
+				.or_else(|| op.get("material_name"))
+				.or_else(|| op.get("material"))
+		})
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if material_index.is_none() && name.is_none() {
+		return None;
+	}
+	Some(UnaRuntimeMaterialTarget { material_index, name })
+}
+
+fn value_vec4(value: &Value) -> Option<[f32; 4]> {
+	let values = value.as_array()?;
+	if values.len() != 4 {
+		return None;
+	}
+	Some([
+		values[0].as_f64()? as f32,
+		values[1].as_f64()? as f32,
+		values[2].as_f64()? as f32,
+		values[3].as_f64()? as f32,
+	])
 }
 
 fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
@@ -6661,6 +6733,64 @@ mod tests {
 			.iter()
 			.any(|m| m.contains(".unavatar humanoid: resolved_bones=1")));
 		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn unavatar_variant_runtime_action_imports_material_effects() {
+		let variant = serde_json::json!({
+			"id": "material-toggle",
+			"name": "Material Toggle",
+			"operations": [{
+				"op": "metadata",
+				"menuPath": "FX/Material Toggle"
+			}, {
+				"op": "materialColor",
+				"target": {"materialName": "Accent"},
+				"parameter": "_EmissionColor",
+				"color": [1.0, 0.5, 0.25, 1.0]
+			}, {
+				"op": "materialScalar",
+				"materialIndex": 2,
+				"parameter": "_Smoothness",
+				"value": 0.75
+			}]
+		});
+
+		let action = unavatar_variant_runtime_action(&variant).expect("runtime action");
+
+		assert_eq!(action.id, "variant:material-toggle");
+		assert_eq!(
+			action.triggers,
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "material-toggle".to_string()
+				},
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: "FX/Material Toggle".to_string()
+				}
+			]
+		);
+		assert_eq!(
+			action.effects,
+			vec![
+				UnaRuntimeActionEffect::MaterialColor {
+					target: UnaRuntimeMaterialTarget {
+						material_index: None,
+						name: Some("Accent".to_string()),
+					},
+					parameter: "_EmissionColor".to_string(),
+					color: [1.0, 0.5, 0.25, 1.0],
+				},
+				UnaRuntimeActionEffect::MaterialScalar {
+					target: UnaRuntimeMaterialTarget {
+						material_index: Some(2),
+						name: None,
+					},
+					parameter: "_Smoothness".to_string(),
+					value: 0.75,
+				},
+			]
+		);
 	}
 
 	#[test]
