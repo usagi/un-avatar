@@ -849,8 +849,7 @@ fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelin
 fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	let zwrite = draw
 		.material
-		.liltoon_like
-		.as_ref()
+		.liltoon_like_source_profile()
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	if zwrite {
 		DrawPipelineKind::TransparentToonBackpass
@@ -3087,8 +3086,7 @@ fn create_compute_fur_cards_compute_pipeline(
 #[allow(dead_code)]
 fn compute_fur_cards_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
 	material
-		.liltoon_like
-		.as_ref()
+		.liltoon_like_source_profile()
 		.map(|liltoon_like| liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor))
 		.unwrap_or(1)
 		.max(1)
@@ -6484,193 +6482,106 @@ impl SceneMeshes {
 				};
 
 				let mtoon = mat.mtoon_source_profile().unwrap_or(&default_mtoon);
+				let liltoon_like = mat.liltoon_like_source_profile();
 				let tex_view = texture_view_or(&image_views, mat.base_color_texture_index, &white_view);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
-				let shade_texture_index = mat
-					.liltoon_like
-					.as_ref()
+				let shade_texture_index = liltoon_like
 					.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
 					.or(mtoon.shade_multiply_texture_index);
-				let shade_fallback_view = if mat.liltoon_like_source_profile().is_some() {
+				let shade_fallback_view = if liltoon_like.is_some() {
 					&transparent_black_view
 				} else {
 					&white_view
 				};
 				let shade_view = texture_view_or(&image_views, shade_texture_index, shade_fallback_view);
 				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shade_texture_index, 0);
-				let shadow2_color_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.shadow.second_color_texture_index);
+				let shadow2_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.second_color_texture_index);
 				let shadow2_color_view = texture_view_or(&image_views, shadow2_color_texture_index, &transparent_black_view);
-				let shadow3_color_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
+				let shadow3_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
 				let shadow3_color_view = texture_view_or(&image_views, shadow3_color_texture_index, &transparent_black_view);
-				let liltoon_strength_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
+				let liltoon_strength_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
 				let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
-				let shift_fallback_view = if mat.liltoon_like_source_profile().is_some() {
-					&white_view
-				} else {
-					&black_view
-				};
+				let shift_fallback_view = if liltoon_like.is_some() { &white_view } else { &black_view };
 				let shift_view = texture_view_or(&image_views, shading_shift_texture_index, shift_fallback_view);
 				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shading_shift_texture_index, 0);
-				let shadow_border_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.shadow.border_mask_texture_index);
+				let shadow_border_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.border_mask_texture_index);
 				let shadow_border_mask_view = texture_view_or(&image_views, shadow_border_mask_texture_index, &white_view);
 				let shadow_border_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_border_mask_texture_index, 0);
-				let shadow_blur_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
+				let shadow_blur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
 				let shadow_blur_mask_view = texture_view_or(&image_views, shadow_blur_mask_texture_index, &white_view);
 				let shadow_blur_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_blur_mask_texture_index, 0);
-				let matcap_texture_index = mat
-					.liltoon_like
-					.as_ref()
+				let matcap_texture_index = liltoon_like
 					.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
 					.or(mtoon.matcap_texture_index);
-				let matcap_fallback_view = if mat.liltoon_like_source_profile().is_some() {
-					&white_view
-				} else {
-					&black_view
-				};
+				let matcap_fallback_view = if liltoon_like.is_some() { &white_view } else { &black_view };
 				let matcap_view = texture_view_or(&image_views, matcap_texture_index, matcap_fallback_view);
 				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_texture_index, 0);
-				let matcap_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
+				let matcap_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
 				let matcap_blend_mask_view = texture_view_or(&image_views, matcap_blend_mask_texture_index, &white_view);
 				let matcap_blend_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_blend_mask_texture_index, 0);
-				let matcap_bump_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.matcap.bump_texture_index);
+				let matcap_bump_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.bump_texture_index);
 				let matcap_bump_view = texture_view_or(&image_views, matcap_bump_texture_index, &neutral_normal_view);
-				let matcap2_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.matcap.second_texture_index);
+				let matcap2_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_texture_index);
 				let matcap2_view = texture_view_or(&image_views, matcap2_texture_index, &white_view);
-				let matcap2_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
+				let matcap2_blend_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
 				let matcap2_blend_mask_view = texture_view_or(&image_views, matcap2_blend_mask_texture_index, &white_view);
-				let matcap2_bump_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.matcap.second_bump_texture_index);
+				let matcap2_bump_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_bump_texture_index);
 				let matcap2_bump_view = texture_view_or(&image_views, matcap2_bump_texture_index, &neutral_normal_view);
-				let main2nd_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.second_texture_index);
+				let main2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_texture_index);
 				let main2nd_view = texture_view_or(&image_views, main2nd_texture_index, &white_view);
-				let main2nd_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.second_blend_mask_texture_index);
+				let main2nd_blend_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_blend_mask_texture_index);
 				let main2nd_blend_mask_view = texture_view_or(&image_views, main2nd_blend_mask_texture_index, &white_view);
-				let main2nd_dissolve_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.mask_texture_index);
+				let main2nd_dissolve_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.mask_texture_index);
 				let main2nd_dissolve_mask_view = texture_view_or(&image_views, main2nd_dissolve_mask_texture_index, &white_view);
-				let main2nd_dissolve_noise_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.noise_mask_texture_index);
+				let main2nd_dissolve_noise_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.noise_mask_texture_index);
 				let main2nd_dissolve_noise_mask_view =
 					texture_view_or(&image_views, main2nd_dissolve_noise_mask_texture_index, &white_view);
-				let main3rd_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.third_texture_index);
+				let main3rd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_texture_index);
 				let main3rd_view = texture_view_or(&image_views, main3rd_texture_index, &white_view);
-				let main3rd_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
+				let main3rd_blend_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
 				let main3rd_blend_mask_view = texture_view_or(&image_views, main3rd_blend_mask_texture_index, &white_view);
-				let main3rd_dissolve_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.mask_texture_index);
+				let main3rd_dissolve_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.mask_texture_index);
 				let main3rd_dissolve_mask_view = texture_view_or(&image_views, main3rd_dissolve_mask_texture_index, &white_view);
-				let main3rd_dissolve_noise_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.noise_mask_texture_index);
+				let main3rd_dissolve_noise_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.noise_mask_texture_index);
 				let main3rd_dissolve_noise_mask_view =
 					texture_view_or(&image_views, main3rd_dissolve_noise_mask_texture_index, &white_view);
-				let main_gradation_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
+				let main_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
 				let main_gradation_view = texture_view_or(&image_views, main_gradation_texture_index, &white_view);
-				let main_color_adjust_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.main_color.main_color_adjust_mask_texture_index);
+				let main_color_adjust_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.main_color_adjust_mask_texture_index);
 				let main_color_adjust_mask_view = texture_view_or(&image_views, main_color_adjust_mask_texture_index, &white_view);
-				let alpha_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
+				let alpha_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
 				let alpha_mask_view = texture_view_or(&image_views, alpha_mask_texture_index, &white_view);
 				let alpha_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, alpha_mask_texture_index, 0);
-				let rim_texture_index = mat
-					.liltoon_like
-					.as_ref()
+				let rim_texture_index = liltoon_like
 					.and_then(|liltoon_like| liltoon_like.rim.texture_index)
 					.or(mtoon.rim_multiply_texture_index);
 				let rim_view = texture_view_or(&image_views, rim_texture_index, &white_view);
 				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, rim_texture_index, 0);
-				let rim_shade_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
+				let rim_shade_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
 				let rim_shade_mask_view = texture_view_or(&image_views, rim_shade_mask_texture_index, &white_view);
-				let backlight_color_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
-				let glitter_color_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.glitter.color_texture_index);
-				let glitter_shape_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.glitter.shape_texture_index);
-				let dissolve_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.dissolve.mask_texture_index);
-				let dissolve_noise_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.dissolve.noise_mask_texture_index);
-				let parallax_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.parallax.texture_index);
+				let backlight_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
+				let glitter_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.glitter.color_texture_index);
+				let glitter_shape_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.glitter.shape_texture_index);
+				let dissolve_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.dissolve.mask_texture_index);
+				let dissolve_noise_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.dissolve.noise_mask_texture_index);
+				let parallax_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.parallax.texture_index);
 				let backlight_color_view = texture_view_or(&image_views, backlight_color_texture_index, &white_view);
 				let glitter_color_view = texture_view_or(&image_views, glitter_color_texture_index, &white_view);
 				let glitter_shape_view = texture_view_or(&image_views, glitter_shape_texture_index, &white_view);
 				let dissolve_mask_view = texture_view_or(&image_views, dissolve_mask_texture_index, &white_view);
 				let dissolve_noise_mask_view = texture_view_or(&image_views, dissolve_noise_mask_texture_index, &white_view);
 				let parallax_view = texture_view_or(&image_views, parallax_texture_index, &white_view);
-				let reflection_texture_index = if let Some(liltoon_like) = mat.liltoon_like_source_profile() {
+				let reflection_texture_index = if let Some(liltoon_like) = liltoon_like {
 					liltoon_reflection_texture_index(liltoon_like)
 				} else {
 					mtoon.reflection_cube_texture_index
@@ -6679,133 +6590,73 @@ impl SceneMeshes {
 					.and_then(|index| cube_image_views.get(index).and_then(Option::as_ref))
 					.unwrap_or(&black_cube_view);
 				let reflection_sampler = &reflection_cube_sampler;
-				let reflection_color_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.color_texture_index);
+				let reflection_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.color_texture_index);
 				let reflection_color_view = texture_view_or(&image_views, reflection_color_texture_index, &white_view);
 				let reflection_color_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_color_texture_index, 0);
-				let smoothness_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.smoothness_texture_index);
+				let smoothness_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.smoothness_texture_index);
 				let smoothness_view = texture_view_or(&image_views, smoothness_texture_index, &white_view);
 				let smoothness_sampler = texture_sampler_or(&samplers, &image_sampler_indices, smoothness_texture_index, 0);
-				let metallic_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.metallic_texture_index);
+				let metallic_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.metallic_texture_index);
 				let metallic_view = texture_view_or(&image_views, metallic_texture_index, &white_view);
 				let metallic_sampler = texture_sampler_or(&samplers, &image_sampler_indices, metallic_texture_index, 0);
-				let emissive_texture_index = mat
-					.liltoon_like
-					.as_ref()
+				let emissive_texture_index = liltoon_like
 					.and_then(|liltoon_like| liltoon_like.emission.texture_index)
 					.or(mat.emissive_texture_index);
-				let emissive_fallback_view = if mat.liltoon_like_source_profile().is_some() {
-					&white_view
-				} else {
-					&black_view
-				};
+				let emissive_fallback_view = if liltoon_like.is_some() { &white_view } else { &black_view };
 				let emissive_view = texture_view_or(&image_views, emissive_texture_index, emissive_fallback_view);
 				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, emissive_texture_index, 0);
-				let emission_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.emission.blend_mask_texture_index);
+				let emission_blend_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.blend_mask_texture_index);
 				let emission_blend_mask_view = texture_view_or(&image_views, emission_blend_mask_texture_index, &white_view);
-				let emission_gradation_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.emission.gradation_texture_index);
+				let emission_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.gradation_texture_index);
 				let emission_gradation_view = texture_view_or(&image_views, emission_gradation_texture_index, &white_view);
-				let emission2nd_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.emission.second_texture_index);
+				let emission2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_texture_index);
 				let emission2nd_view = texture_view_or(&image_views, emission2nd_texture_index, &white_view);
-				let emission2nd_blend_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.emission.second_blend_mask_texture_index);
+				let emission2nd_blend_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_blend_mask_texture_index);
 				let emission2nd_blend_mask_view = texture_view_or(&image_views, emission2nd_blend_mask_texture_index, &white_view);
-				let emission2nd_gradation_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
+				let emission2nd_gradation_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
 				let emission2nd_gradation_view = texture_view_or(&image_views, emission2nd_gradation_texture_index, &white_view);
 				let occlusion_view = texture_view_or(&image_views, mat.occlusion_texture_index, &white_view);
 				let occlusion_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.occlusion_texture_index, 0);
-				let outline_width_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
+				let outline_width_mask_texture_index = liltoon_like
 					.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index)
 					.or(mtoon.outline_width_multiply_texture_index);
 				let outline_view = texture_view_or(&image_views, outline_width_mask_texture_index, &white_view);
 				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, outline_width_mask_texture_index, 0);
-				let outline_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.outline.texture_index);
+				let outline_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.texture_index);
 				let outline_color_view = texture_view_or(&image_views, outline_texture_index, &white_view);
 				let uv_mask_view = texture_view_or(&image_views, mtoon.uv_animation_mask_texture_index, &white_view);
 				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
 				let normal_view = texture_view_or(&image_views, mat.normal_texture_index, &neutral_normal_view);
 				let normal_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.normal_texture_index, 0);
-				let normal2nd_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
+				let normal2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
 				let normal2nd_view = texture_view_or(&image_views, normal2nd_texture_index, &neutral_normal_view);
-				let normal2nd_scale_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.normal.second_scale_mask_texture_index);
+				let normal2nd_scale_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_scale_mask_texture_index);
 				let normal2nd_scale_mask_view = texture_view_or(&image_views, normal2nd_scale_mask_texture_index, &white_view);
-				let anisotropy_tangent_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_tangent_texture_index);
+				let anisotropy_tangent_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_tangent_texture_index);
 				let anisotropy_tangent_view = texture_view_or(&image_views, anisotropy_tangent_texture_index, &neutral_normal_view);
-				let anisotropy_scale_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
+				let anisotropy_scale_mask_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
 				let anisotropy_scale_mask_view = texture_view_or(&image_views, anisotropy_scale_mask_texture_index, &white_view);
-				let anisotropy_shift_noise_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
+				let anisotropy_shift_noise_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
 				let anisotropy_shift_noise_view = texture_view_or(&image_views, anisotropy_shift_noise_texture_index, &white_view);
-				let fur_vector_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
+				let fur_vector_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
 				let fur_vector_view = texture_view_or(&image_views, fur_vector_texture_index, &neutral_vector_view);
-				let fur_length_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.fur.length_mask_texture_index);
+				let fur_length_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.length_mask_texture_index);
 				let fur_length_mask_view = texture_view_or(&image_views, fur_length_mask_texture_index, &white_view);
-				let fur_noise_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.fur.noise_mask_texture_index);
+				let fur_noise_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.noise_mask_texture_index);
 				let fur_noise_mask_view = texture_view_or(&image_views, fur_noise_mask_texture_index, &white_view);
-				let fur_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
+				let fur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
 				let fur_mask_view = texture_view_or(&image_views, fur_mask_texture_index, &white_view);
-				let audio_link_mask_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.audio_link.mask_texture_index);
+				let audio_link_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.audio_link.mask_texture_index);
 				let audio_link_mask_view = texture_view_or(&image_views, audio_link_mask_texture_index, &blue_view);
-				let audio_link_local_map_texture_index = mat
-					.liltoon_like
-					.as_ref()
-					.and_then(|liltoon_like| liltoon_like.audio_link.local_map_texture_index);
+				let audio_link_local_map_texture_index =
+					liltoon_like.and_then(|liltoon_like| liltoon_like.audio_link.local_map_texture_index);
 				let audio_link_local_map_view = texture_view_or(&image_views, audio_link_local_map_texture_index, &black_view);
 				let compute_fur_cards_cpu_fur_maps = ComputeFurCardsCpuFurMaps {
 					length_mask: fur_length_mask_texture_index.and_then(|index| scene.images.get(index)),
@@ -7702,8 +7553,7 @@ impl SceneMeshes {
 			for &draw_index in &self.transparent_backpass_draw_indices {
 				let zwrite = self.draws[draw_index]
 					.material
-					.liltoon_like
-					.as_ref()
+					.liltoon_like_source_profile()
 					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 				if backpass_zwrite != Some(zwrite) {
 					pass.set_pipeline(if zwrite {
