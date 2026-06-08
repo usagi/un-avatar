@@ -487,13 +487,16 @@ impl SpringBoneSimulator {
 		bone_colliders: Vec<BoneColliderPrimitive>,
 		physics: SpringBonePhysicsConfig,
 	) -> Option<Self> {
-		let settings = dynamics.spring_bones()?;
+		let groups = dynamics.groups();
+		if groups.is_empty() {
+			return None;
+		}
 		let physics = physics.normalized();
 		let world0 = world_from_snapshot(scene);
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
-		for g in &settings.groups {
+		for g in groups {
 			if !g.enabled {
 				runtimes.push(None);
 				continue;
@@ -605,9 +608,9 @@ impl SpringBoneSimulator {
 	}
 
 	pub fn step_runtime_dynamics(&mut self, scene: &mut UnaSceneSnapshot, dynamics: UnaRuntimeDynamics<'_>, dt: f32) {
-		let Some(settings) = dynamics.spring_bones() else {
+		if !dynamics.has_groups() {
 			return;
-		};
+		}
 		if !dt.is_finite() || dt <= 0.0 {
 			return;
 		}
@@ -618,7 +621,7 @@ impl SpringBoneSimulator {
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
 			for &runtime_index in &self.active_runtime_indices {
-				let (Some(g), Some(Some(rt))) = (settings.groups.get(runtime_index), self.runtimes.get_mut(runtime_index)) else {
+				let (Some(g), Some(Some(rt))) = (dynamics.group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
 				if !g.enabled {

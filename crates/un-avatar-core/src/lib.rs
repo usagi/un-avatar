@@ -278,35 +278,36 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.spring_bones
 	}
 
+	pub fn groups(self) -> &'a [UnaSpringBoneGroup] {
+		self.spring_bones.map(|settings| settings.groups.as_slice()).unwrap_or(&[])
+	}
+
+	pub fn group(self, index: usize) -> Option<&'a UnaSpringBoneGroup> {
+		self.groups().get(index)
+	}
+
 	pub fn has_groups(self) -> bool {
-		self.spring_bones.is_some_and(|settings| !settings.groups.is_empty())
+		!self.groups().is_empty()
 	}
 
 	pub fn group_count(self) -> usize {
-		self.spring_bones.map(|settings| settings.groups.len()).unwrap_or(0)
+		self.groups().len()
 	}
 
 	pub fn enabled_group_count(self) -> usize {
-		self.spring_bones
-			.map(|settings| settings.groups.iter().filter(|group| group.enabled).count())
-			.unwrap_or(0)
+		self.groups().iter().filter(|group| group.enabled).count()
 	}
 
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
-		self.spring_bones
-			.map(|settings| settings.groups.iter().filter(|group| group.source_kind == source_kind).count())
-			.unwrap_or(0)
+		self.groups().iter().filter(|group| group.source_kind == source_kind).count()
 	}
 
 	pub fn collider_count(self) -> usize {
-		self.spring_bones.map(|settings| settings.colliders.len()).unwrap_or(0)
+		self.colliders().count()
 	}
 
 	pub fn dynamic_bone_node_indices(self) -> impl Iterator<Item = usize> + 'a {
-		self.spring_bones
-			.into_iter()
-			.flat_map(|settings| settings.groups.iter())
-			.flat_map(|group| group.bone_node_indices.iter().copied())
+		self.groups().iter().flat_map(|group| group.bone_node_indices.iter().copied())
 	}
 
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
