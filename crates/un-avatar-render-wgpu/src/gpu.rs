@@ -1586,12 +1586,12 @@ impl GpuState {
 		self.motion_applied_frames.load(Ordering::Relaxed)
 	}
 
-	pub fn dynamics_group_counts(&self) -> (u32, u32, u32, u32) {
+	pub fn dynamics_counts(&self) -> (u32, u32, u32, u32, u32, u32, u32, u32) {
 		let Some(doc_arc) = self.document.as_ref() else {
-			return (0, 0, 0, 0);
+			return (0, 0, 0, 0, 0, 0, 0, 0);
 		};
 		let Ok(doc) = doc_arc.read() else {
-			return (0, 0, 0, 0);
+			return (0, 0, 0, 0, 0, 0, 0, 0);
 		};
 		let dynamics = doc.runtime_model().dynamics();
 		(
@@ -1599,6 +1599,10 @@ impl GpuState {
 			dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
 			dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
 			dynamics.source_group_count(UnaDynamicsSourceKind::Unknown) as u32,
+			dynamics.collider_count() as u32,
+			dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone) as u32,
+			dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone) as u32,
+			dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown) as u32,
 		)
 	}
 

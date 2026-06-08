@@ -1472,11 +1472,16 @@ impl AvatarApp {
 				status.bone_collider_source = bone_collider_source.to_string();
 			}
 			if runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(30) {
-				let (total, vrm, vrc, unknown) = gpu.map_or((0, 0, 0, 0), |g| g.dynamics_group_counts());
+				let (total, vrm, vrc, unknown, collider_total, collider_vrm, collider_vrc, collider_unknown) =
+					gpu.map_or((0, 0, 0, 0, 0, 0, 0, 0), |g| g.dynamics_counts());
 				status.dynamics_group_count = total;
 				status.dynamics_vrm_spring_bone_group_count = vrm;
 				status.dynamics_vrc_physbone_group_count = vrc;
 				status.dynamics_unknown_group_count = unknown;
+				status.dynamics_collider_count = collider_total;
+				status.dynamics_vrm_spring_bone_collider_count = collider_vrm;
+				status.dynamics_vrc_physbone_collider_count = collider_vrc;
+				status.dynamics_unknown_collider_count = collider_unknown;
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
@@ -2931,6 +2936,14 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_unknown_group_count: u32,
 	#[serde(default)]
+	dynamics_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_collider_count: u32,
+	#[serde(default)]
+	dynamics_unknown_collider_count: u32,
+	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
 	window_focused: bool,
@@ -3051,6 +3064,10 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrm_spring_bone_group_count: 0,
 		dynamics_vrc_physbone_group_count: 0,
 		dynamics_unknown_group_count: 0,
+		dynamics_collider_count: 0,
+		dynamics_vrm_spring_bone_collider_count: 0,
+		dynamics_vrc_physbone_collider_count: 0,
+		dynamics_unknown_collider_count: 0,
 		camera_locked: opts.camera_locked,
 		window_focused: false,
 		window_activation_seq: 0,

@@ -1026,7 +1026,10 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 	if out_groups.is_empty() {
 		None
 	} else {
-		Some(UnaSpringBoneSettings { groups: out_groups })
+		Some(UnaSpringBoneSettings {
+			groups: out_groups,
+			colliders: Vec::new(),
+		})
 	}
 }
 
@@ -1079,7 +1082,10 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 	if out_groups.is_empty() {
 		None
 	} else {
-		Some(UnaSpringBoneSettings { groups: out_groups })
+		Some(UnaSpringBoneSettings {
+			groups: out_groups,
+			colliders: Vec::new(),
+		})
 	}
 }
 

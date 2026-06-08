@@ -146,6 +146,39 @@ pub struct UnaSpringBoneGroup {
 	pub bone_node_indices: Vec<usize>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsColliderShape {
+	Sphere,
+	Capsule,
+	Unknown,
+}
+
+impl Default for UnaDynamicsColliderShape {
+	fn default() -> Self {
+		Self::Unknown
+	}
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaDynamicsCollider {
+	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+	pub source_kind: UnaDynamicsSourceKind,
+	pub node: usize,
+	#[serde(default)]
+	pub shape: UnaDynamicsColliderShape,
+	#[serde(default)]
+	pub radius: f32,
+	#[serde(default)]
+	pub height: f32,
+	#[serde(default)]
+	pub position: [f32; 3],
+	#[serde(default = "identity_quat_array")]
+	pub rotation: [f32; 4],
+	#[serde(default)]
+	pub inside_bounds: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaDynamicsSourceKind {
@@ -169,10 +202,16 @@ fn default_spring_drag() -> f32 {
 	0.4
 }
 
+fn identity_quat_array() -> [f32; 4] {
+	[0.0, 0.0, 0.0, 1.0]
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaSpringBoneSettings {
 	#[serde(default)]
 	pub groups: Vec<UnaSpringBoneGroup>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub colliders: Vec<UnaDynamicsCollider>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -196,6 +235,22 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.spring_bones
 			.map(|settings| settings.groups.iter().filter(|group| group.source_kind == source_kind).count())
+			.unwrap_or(0)
+	}
+
+	pub fn collider_count(self) -> usize {
+		self.spring_bones.map(|settings| settings.colliders.len()).unwrap_or(0)
+	}
+
+	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
+		self.spring_bones
+			.map(|settings| {
+				settings
+					.colliders
+					.iter()
+					.filter(|collider| collider.source_kind == source_kind)
+					.count()
+			})
 			.unwrap_or(0)
 	}
 }
@@ -2997,6 +3052,7 @@ mod tests {
 						..Default::default()
 					},
 				],
+				colliders: Vec::new(),
 			}),
 			..Default::default()
 		};

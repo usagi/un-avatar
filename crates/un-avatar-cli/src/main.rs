@@ -349,6 +349,10 @@ struct DiagnoseDynamicsSummary {
 	vrm_spring_bone_group_count: usize,
 	vrc_physbone_group_count: usize,
 	unknown_group_count: usize,
+	collider_count: usize,
+	vrm_spring_bone_collider_count: usize,
+	vrc_physbone_collider_count: usize,
+	unknown_collider_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
 }
@@ -2115,6 +2119,10 @@ fn build_diagnose_report(
 		vrm_spring_bone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrmSpringBone),
 		vrc_physbone_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::VrcPhysBone),
 		unknown_group_count: runtime_dynamics.source_group_count(UnaDynamicsSourceKind::Unknown),
+		collider_count: runtime_dynamics.collider_count(),
+		vrm_spring_bone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrmSpringBone),
+		vrc_physbone_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::VrcPhysBone),
+		unknown_collider_count: runtime_dynamics.source_collider_count(UnaDynamicsSourceKind::Unknown),
 		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
@@ -2327,11 +2335,15 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
-		report.dynamics.unknown_group_count
+		report.dynamics.unknown_group_count,
+		report.dynamics.collider_count,
+		report.dynamics.vrm_spring_bone_collider_count,
+		report.dynamics.vrc_physbone_collider_count,
+		report.dynamics.unknown_collider_count
 	);
 	for group in report.dynamics.groups.iter().take(16) {
 		println!(

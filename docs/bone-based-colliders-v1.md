@@ -128,10 +128,14 @@ dynamics_group_count: u32
 dynamics_vrm_spring_bone_group_count: u32
 dynamics_vrc_physbone_group_count: u32
 dynamics_unknown_group_count: u32
+dynamics_collider_count: u32
+dynamics_vrm_spring_bone_collider_count: u32
+dynamics_vrc_physbone_collider_count: u32
+dynamics_unknown_collider_count: u32
 ```
 
 `bone_collider_source` は v1 では `"off"` / `"auto"` のみでよい。将来 VRM collider 読み込みを足す時に値を拡張する。
-`dynamics_*` は renderer が正規化後に保持している runtime dynamics group の件数であり、raw `.unavatar` `dynamics` entry 数ではない。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
+`dynamics_*` は renderer が正規化後に保持している runtime dynamics group / collider の件数であり、raw `.unavatar` `dynamics` entry 数ではない。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
 
 Diagnostics には profile 値、生成 collider 数、part ごとの有効/無効と scale を出す。
 

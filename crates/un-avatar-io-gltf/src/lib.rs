@@ -12,11 +12,11 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog,
-	UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode,
-	UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas,
-	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape,
+	UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba,
+	UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers,
+	UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
+	UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1356,6 +1356,80 @@ fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
 	value.eq_ignore_ascii_case("ignore") || value.eq_ignore_ascii_case("ignored")
 }
 
+fn unavatar_dynamics_collider_shape(value: &Value) -> UnaDynamicsColliderShape {
+	let shape = value
+		.get("shapeType")
+		.or_else(|| value.get("shape_type"))
+		.or_else(|| value.get("shape"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	if shape.eq_ignore_ascii_case("sphere") {
+		UnaDynamicsColliderShape::Sphere
+	} else if shape.eq_ignore_ascii_case("capsule") {
+		UnaDynamicsColliderShape::Capsule
+	} else {
+		UnaDynamicsColliderShape::Unknown
+	}
+}
+
+fn unity_vec3_to_unavatar_runtime(value: [f32; 3]) -> [f32; 3] {
+	[-value[0], value[1], value[2]]
+}
+
+fn unity_quat_to_unavatar_runtime(value: [f32; 4]) -> [f32; 4] {
+	[value[0], -value[1], -value[2], value[3]]
+}
+
+fn unavatar_dynamics_colliders(
+	value: &Value,
+	source_kind: UnaDynamicsSourceKind,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsCollider> {
+	let colliders = value
+		.get("sourceParams")
+		.or_else(|| value.get("source_params"))
+		.and_then(|params| params.get("colliders"))
+		.and_then(Value::as_array);
+	let Some(colliders) = colliders else {
+		return Vec::new();
+	};
+	colliders
+		.iter()
+		.filter_map(|collider| {
+			if collider
+				.get("insideBounds")
+				.or_else(|| collider.get("inside_bounds"))
+				.and_then(Value::as_bool)
+				== Some(true)
+			{
+				return None;
+			}
+			let root = collider
+				.get("root")
+				.or_else(|| collider.get("node"))
+				.or_else(|| collider.get("component"))?;
+			let node = unavatar_node_ref_index(root, node_ids, registry_paths, paths, normalized_paths)?;
+			let radius = json_f32(collider.get("radius")).unwrap_or(0.0);
+			if !radius.is_finite() || radius <= 0.0 {
+				return None;
+			}
+			Some(UnaDynamicsCollider {
+				source_kind,
+				node,
+				shape: unavatar_dynamics_collider_shape(collider),
+				radius,
+				height: json_f32(collider.get("height")).unwrap_or(0.0).max(0.0),
+				position: unity_vec3_to_unavatar_runtime(json_vec3(collider.get("position")).unwrap_or([0.0; 3])),
+				rotation: unity_quat_to_unavatar_runtime(json_vec4(collider.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
+				inside_bounds: false,
+			})
+		})
+		.collect()
+}
+
 fn collect_scene_child_chains(
 	scene: &UnaSceneSnapshot,
 	root_idx: usize,
@@ -1433,6 +1507,7 @@ fn unavatar_dynamics_settings(
 	let mut short_chains = 0usize;
 	let mut ignored_transform_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
+	let mut colliders = Vec::new();
 
 	for item in dynamics {
 		if item.get("enabled").and_then(Value::as_bool) == Some(false) {
@@ -1489,6 +1564,14 @@ fn unavatar_dynamics_settings(
 		if multi_child_ignore {
 			multi_child_ignore_count += 1;
 		}
+		colliders.extend(unavatar_dynamics_colliders(
+			item,
+			source_kind,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+		));
 
 		for root in root_values.iter() {
 			let Some(root_idx) = unavatar_dynamics_root_index(root, &node_ids, &registry_paths, &paths, &normalized_paths) else {
@@ -1529,8 +1612,12 @@ fn unavatar_dynamics_settings(
 	if groups.is_empty() {
 		None
 	} else {
-		report.push_info(format!(".unavatar dynamics: lowered_groups={}", groups.len()));
-		Some(UnaSpringBoneSettings { groups })
+		report.push_info(format!(
+			".unavatar dynamics: lowered_groups={} lowered_colliders={}",
+			groups.len(),
+			colliders.len()
+		));
+		Some(UnaSpringBoneSettings { groups, colliders })
 	}
 }
 
@@ -5114,7 +5201,23 @@ mod tests {
 					"stiffness": 0.35,
 					"drag": 0.2,
 					"gravity": [0.0, -0.4, 0.0],
-					"radius": 0.03
+					"radius": 0.03,
+					"sourceParams": {
+						"colliders": [{
+							"root": {"nodeId": "node_root", "path": "Root"},
+							"shapeType": "Sphere",
+							"radius": 0.08,
+							"height": 0.3,
+							"position": [0.1, 0.2, 0.3],
+							"rotation": [0.0, 0.5, 0.0, 0.8660254],
+							"insideBounds": false
+						}, {
+							"root": {"nodeId": "node_root", "path": "Root"},
+							"shapeType": "Sphere",
+							"radius": 0.2,
+							"insideBounds": true
+						}]
+					}
 				}, {
 					"id": "disabled_tail",
 					"source": "vrc_physbone",
@@ -5131,6 +5234,13 @@ mod tests {
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
+		assert_eq!(settings.colliders.len(), 1);
+		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.colliders[0].node, 0);
+		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Sphere);
+		assert_eq!(settings.colliders[0].radius, 0.08);
+		assert_eq!(settings.colliders[0].position, [-0.1, 0.2, 0.3]);
+		assert_eq!(settings.colliders[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
 	}
 
 	#[test]

@@ -119,7 +119,7 @@ PhysBone behavior implementation は runtime state cleanup、runtime dynamics no
 - PhysBone roots、colliders、enabled state は active wardrobe と animation state に依存する。
 - scene source data を直接 mutate する solver は、hot switch と相性が悪い。
 - 初期実装では VRC PhysBone parameters を既存 SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved runtime state を入力にする。
-- 現在は exporter/importer が PhysBone source を runtime dynamics group へ lower し、CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。次段階は collider source metadata を solver collider へ接続すること。
+- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、CLI diagnose と renderer runtime status が raw/lowered 件数を観測できる。次段階は normalized collider data を solver collider へ接続すること。
 
 ## この段階の非目標
 
