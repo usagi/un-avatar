@@ -16,8 +16,9 @@ use un_avatar_core::{
 	UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
 	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
 	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial,
-	UnaMtoonOutlineWidthMode, UnaRuntimeDynamicsMut, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
+	UnaRuntimeDynamicsMut, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings,
+	UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1916,6 +1917,37 @@ fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<
 	let id = base.get("id").and_then(|v| v.as_str()).unwrap_or(base_set);
 	let operations = base.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)?;
 	Some((id, operations))
+}
+
+fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension) -> Option<UnaRuntimeActionSet> {
+	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
+	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
+	let base_id = unavatar_base_wardrobe_set(unavatar).map(|(id, _)| id);
+	let mut actions = Vec::new();
+	for set in sets {
+		let Some(set_id) = set.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+			continue;
+		};
+		if base_id == Some(set_id) {
+			continue;
+		}
+		let label = set
+			.get("name")
+			.or_else(|| set.get("displayName"))
+			.and_then(Value::as_str)
+			.unwrap_or(set_id);
+		actions.push(UnaRuntimeAction {
+			id: format!("wardrobe:{set_id}"),
+			label: label.to_string(),
+			triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
+				command: set_id.to_string(),
+			}],
+			effects: vec![UnaRuntimeActionEffect::WardrobeSet {
+				set_id: set_id.to_string(),
+			}],
+		});
+	}
+	(!actions.is_empty()).then_some(UnaRuntimeActionSet { actions })
 }
 
 fn unavatar_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
@@ -5258,8 +5290,12 @@ impl AvatarImporter for GltfImporter {
 		let spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
+		let runtime_actions = unavatar.as_ref().and_then(unavatar_runtime_action_set);
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
+		}
+		if let Some(actions) = &runtime_actions {
+			report.push_info(format!(".unavatar runtime actions: {}", actions.actions.len()));
 		}
 
 		report.status = if report.lost_features.is_empty() && report.approximations.is_empty() {
@@ -5290,6 +5326,7 @@ impl AvatarImporter for GltfImporter {
 				humanoid_profile,
 				expression_weights: expression_catalog.as_ref().map(|_| UnaExpressionWeights::default()),
 				expression_catalog,
+				runtime_actions,
 				spring_bones,
 				..Default::default()
 			},
@@ -6175,6 +6212,15 @@ mod tests {
 		assert_eq!(expressions.presets[0].name, "Shrink");
 		assert_eq!(expressions.presets[0].binds.len(), 1);
 		assert!(got.document.expression_weights.is_some());
+		let runtime_actions = got.document.runtime_actions.as_ref().expect("runtime actions");
+		assert_eq!(runtime_actions.actions.len(), 2);
+		assert_eq!(runtime_actions.actions[0].id, "wardrobe:visible");
+		assert_eq!(
+			runtime_actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::WardrobeSet {
+				set_id: "visible".to_string()
+			}]
+		);
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
 		assert!(scene.materials[0].liltoon_like.is_some());
 		let mtoon = scene.materials[0].mtoon.as_ref().unwrap();
