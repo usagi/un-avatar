@@ -276,6 +276,14 @@ impl<'a> RetargetFrameContext<'a> {
 			.and_then(|runtime| runtime.body_bone_nodes.get(humanoid_bone_index(bone)).copied().flatten())
 	}
 
+	fn body_bone_node_index(self, profile: &HumanoidProfile, bone: HumanoidBone) -> Option<usize> {
+		if self.has_runtime() {
+			return self.body_bone_binding(bone).map(|binding| binding.node_index);
+		}
+		let key = humanoid_bone_profile_key(bone);
+		profile_node_index_with_lookup(profile, self.profile_lookup(), key)
+	}
+
 	fn hand_bindings(self, side_prefix: &str) -> Option<&'a HandNodeBindings> {
 		let side_index = side_index_from_prefix(side_prefix)?;
 		self.runtime.and_then(|runtime| runtime.hand_nodes.get(side_index))
@@ -1619,10 +1627,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 			continue;
 		}
 		let binding = frame_ctx.body_bone_binding(sample.bone);
-		let ni = binding.map(|binding| binding.node_index).or_else(|| {
-			let key = humanoid_bone_profile_key(sample.bone);
-			profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), key)
-		});
+		let ni = frame_ctx.body_bone_node_index(profile, sample.bone);
 		let Some(ni) = ni else {
 			continue;
 		};
