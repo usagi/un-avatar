@@ -934,6 +934,46 @@ fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	}
 }
 
+fn json_number_f32(value: &serde_json::Value) -> Option<f32> {
+	value.as_f64().map(|value| value as f32).or_else(|| value.as_i64().map(|value| value as f32))
+}
+
+fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<f32> {
+	let source = material.unavatar_material.as_ref()?;
+	source
+		.get("floatParams")
+		.and_then(|params| params.get(name))
+		.and_then(json_number_f32)
+		.or_else(|| {
+			source
+				.get("floatProperties")
+				.and_then(|params| params.get(name))
+				.and_then(json_number_f32)
+		})
+}
+
+fn material_source_shader_name(material: &UnaMaterialPbr) -> Option<&str> {
+	material
+		.unavatar_material
+		.as_ref()
+		.and_then(|source| source.get("sourceShader").or_else(|| source.get("shaderName")).or_else(|| source.get("shader")))
+		.and_then(|value| value.as_str())
+}
+
+fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
+	if material.liltoon_like_runtime().is_some() {
+		if let Some(value) =
+			material_source_float_param(material, "_ZWrite").or_else(|| material_source_float_param(material, "_ZWriteMode"))
+		{
+			return value > 0.5;
+		}
+		return material_source_shader_name(material).is_some_and(|shader| shader.to_ascii_lowercase().contains("twopass"));
+	}
+	material
+		.mtoon_like_runtime()
+		.is_some_and(|mtoon| mtoon.transparent_with_z_write)
+}
+
 fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
 	match pipeline {
 		DrawPipelineKind::TransparentToonBackpass | DrawPipelineKind::TransparentToonBackpassNoZWrite => 0,
@@ -1199,14 +1239,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 		.material
 		.liltoon_like_runtime()
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-	transparent_backpass_enabled(
-		draw.alpha_mode,
-		draw.material
-			.mtoon_like_runtime()
-			.is_some_and(|mtoon| mtoon.transparent_with_z_write),
-		shading,
-		liltoon_backpass_enabled,
-	)
+	transparent_backpass_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading, liltoon_backpass_enabled)
 }
 
 fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
@@ -1294,13 +1327,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 					blend_pipeline_for_draw(
 						draw,
 						shading,
-						transparent_forward_zwrite_enabled(
-							draw.alpha_mode,
-							draw.material
-								.mtoon_like_runtime()
-								.is_some_and(|mtoon| mtoon.transparent_with_z_write),
-							shading,
-						),
+						transparent_forward_zwrite_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading),
 					),
 					draw_index,
 				));
@@ -8528,6 +8555,34 @@ mod tests {
 			false,
 			UnaShadingModel::LilToonLike
 		));
+	}
+
+	#[test]
+	fn liltoon_source_zwrite_controls_transparent_zwrite() {
+		let base_liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		let enabled = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			alpha_mode: UnaAlphaMode::Blend,
+			liltoon_like: Some(base_liltoon.clone()),
+			unavatar_material: Some(serde_json::json!({
+				"sourceShader": "Hidden/lilToonTransparent",
+				"floatParams": { "_ZWrite": 1.0 }
+			})),
+			..Default::default()
+		};
+		let disabled = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			alpha_mode: UnaAlphaMode::Blend,
+			liltoon_like: Some(base_liltoon),
+			unavatar_material: Some(serde_json::json!({
+				"sourceShader": "Hidden/lilToonTransparent",
+				"floatParams": { "_ZWrite": 0.0 }
+			})),
+			..Default::default()
+		};
+
+		assert!(material_transparent_with_zwrite(&enabled));
+		assert!(!material_transparent_with_zwrite(&disabled));
 	}
 
 	#[test]

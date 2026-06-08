@@ -1320,6 +1320,20 @@ fn material_liltoon_features(material: &UnaMaterialPbr) -> Vec<String> {
 	features.into_iter().collect()
 }
 
+fn material_transparent_with_z_write(material: &UnaMaterialPbr) -> bool {
+	if material.liltoon_like_runtime().is_some() {
+		if let Some(value) =
+			material_source_float_param(material, "_ZWrite").or_else(|| material_source_float_param(material, "_ZWriteMode"))
+		{
+			return value > 0.5;
+		}
+		return material_source_shader_lower(material).contains("twopass");
+	}
+	material
+		.mtoon_like_runtime()
+		.is_some_and(|mtoon| mtoon.transparent_with_z_write)
+}
+
 fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f32> {
 	const PARAMS: &[&str] = &[
 		"_TransparentMode",
@@ -1700,7 +1714,7 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 				shading: material.shading,
 				alpha_mode: material.alpha_mode,
 				alpha_cutoff: material.alpha_cutoff,
-				transparent_with_z_write: material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write),
+				transparent_with_z_write: material_transparent_with_z_write(material),
 				draw_skipped_fully_transparent,
 				morph_target_count: primitive.morph_targets.len(),
 				nonzero_morph_weights,
