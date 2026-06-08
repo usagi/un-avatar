@@ -6750,22 +6750,28 @@ impl AvatarImporter for GltfImporter {
 		let mut original_glb_bin: Option<Vec<u8>> = None;
 		let (path_hint, document, buffers, image_data) = match input {
 			ImportInput::Path(path) => {
-				if path
-					.extension()
-					.and_then(|e| e.to_str())
-					.is_some_and(|e| e.eq_ignore_ascii_case("unavatar"))
-				{
+				let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+				if matches!(extension.as_deref(), Some("unavatar" | "glb")) {
 					let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("{}: {e}", path.display())))?;
 					if bytes.starts_with(b"glTF") {
 						let (root, bin) = read_glb_json_and_bin(&bytes)?;
 						original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin));
 						original_glb_bin = Some(bin);
 						root_json = Some(root);
-					} else {
+					} else if extension.as_deref() == Some("unavatar") {
 						root_json = Some(gltf_root_json_from_bytes(&bytes)?);
 					}
 					let import_bytes = normalize_webp_glb_for_gltf_import(&bytes)?;
 					let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+					(Some(path), imported.0, imported.1, imported.2)
+				} else if path
+					.extension()
+					.and_then(|e| e.to_str())
+					.is_some_and(|e| e.eq_ignore_ascii_case("gltf"))
+				{
+					let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("{}: {e}", path.display())))?;
+					root_json = Some(gltf_root_json_from_bytes(&bytes)?);
+					let imported = gltf::import(&path).map_err(|e| ImportError::Message(e.to_string()))?;
 					(Some(path), imported.0, imported.1, imported.2)
 				} else {
 					let imported = gltf::import(&path).map_err(|e| ImportError::Message(e.to_string()))?;
@@ -6773,26 +6779,17 @@ impl AvatarImporter for GltfImporter {
 				}
 			}
 			ImportInput::Bytes { bytes, path_hint } => {
-				if path_hint
-					.as_ref()
-					.and_then(|p| p.extension().and_then(|e| e.to_str()))
-					.is_some_and(|e| e.eq_ignore_ascii_case("unavatar"))
-				{
-					if bytes.as_ref().starts_with(b"glTF") {
-						let (root, bin) = read_glb_json_and_bin(bytes.as_ref())?;
-						original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin));
-						original_glb_bin = Some(bin);
-						root_json = Some(root);
-					} else {
-						root_json = Some(gltf_root_json_from_bytes(bytes.as_ref())?);
-					}
-					let import_bytes = normalize_webp_glb_for_gltf_import(bytes.as_ref())?;
-					let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
-					(path_hint, imported.0, imported.1, imported.2)
+				if bytes.as_ref().starts_with(b"glTF") {
+					let (root, bin) = read_glb_json_and_bin(bytes.as_ref())?;
+					original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin));
+					original_glb_bin = Some(bin);
+					root_json = Some(root);
 				} else {
-					let imported = gltf::import_slice(bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
-					(path_hint, imported.0, imported.1, imported.2)
+					root_json = Some(gltf_root_json_from_bytes(bytes.as_ref())?);
 				}
+				let import_bytes = normalize_webp_glb_for_gltf_import(bytes.as_ref())?;
+				let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+				(path_hint, imported.0, imported.1, imported.2)
 			}
 		};
 
@@ -7232,7 +7229,7 @@ mod tests {
 				&mut ctx,
 				ImportInput::Bytes {
 					bytes: bytes.into(),
-					path_hint: Some(std::path::PathBuf::from("unsupported-ma.unavatar")),
+					path_hint: Some(std::path::PathBuf::from("unsupported-ma.glb")),
 				},
 				ImportOptions,
 			)

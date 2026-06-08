@@ -161,8 +161,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ### Export Format
 
-- `[ ]` `UN_avatar.modularAvatar` extension block
-  - required fields: `schemaVersion`, `components`, `references`, `armatureMappings`, `meshMutations`, `materialOverrides`, `diagnostics`.
+- `[~]` `UN_avatar.modularAvatar` extension block
+  - done: importer reads the root `UN_avatar` extension from `.unavatar`, `.glb`, `.gltf`, and in-memory glTF/GLB inputs, so Modular Avatar source payloads are no longer restricted to `.unavatar` path hints.
+  - remaining: required fields `schemaVersion`, `components`, `references`, `armatureMappings`, `meshMutations`, `materialOverrides`, `diagnostics`, plus exporter schema parity.
 - `[~]` stable IDs for source and resolved nodes
   - done: Scene nodes carry source node ids separately from runtime resolved node ids. Runtime node targets can resolve by source id, resolved id, path, or index while preserving source id priority for wardrobe-authored targets. MA Replace Object assigns a derived resolved node id to the replacement node, and CLI diagnose exposes resolved node ids.
   - remaining: exporter schema parity for resolved ids created by other resolver stages and derived mesh/cache node ids.
