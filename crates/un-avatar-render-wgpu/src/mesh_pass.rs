@@ -1069,6 +1069,18 @@ fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShad
 	})
 }
 
+fn material_runtime_requirements(
+	material: &UnaMaterialPbr,
+	shading: UnaShadingModel,
+	opts: &SceneMeshLoadOpts,
+) -> SceneMeshRuntimeRequirements {
+	SceneMeshRuntimeRequirements {
+		audio_link_texture: material_needs_audio_link_texture(material, shading),
+		screen_refraction: material_needs_screen_refraction(material),
+		fur: material_has_fur(material, shading, opts),
+	}
+}
+
 fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 	material_needs_screen_refraction(&draw.material)
 }
@@ -1156,11 +1168,12 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 		if !draw.skin_palette_static_identity {
 			state.active_skin_palette_indices.push(draw.skin_palette_index);
 		}
-		if material_needs_screen_refraction(&draw.material) {
+		let requirements = material_runtime_requirements(&draw.material, draw.shading, opts);
+		if requirements.screen_refraction {
 			state.needs_screen_refraction = true;
 			state.runtime_requirements.screen_refraction = true;
 		}
-		if material_needs_audio_link_texture(&draw.material, draw.shading) {
+		if requirements.audio_link_texture {
 			state.runtime_requirements.audio_link_texture = true;
 		}
 		let shading = effective_mesh_shading(draw, opts);
@@ -1170,7 +1183,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 		{
 			state.outline_draw_indices.push(draw_index);
 		}
-		let has_fur = draw_has_fur(draw, opts);
+		let has_fur = requirements.fur;
 		if has_fur {
 			state.fur_draw_indices.push(draw_index);
 			state.runtime_requirements.fur = true;
@@ -3271,10 +3284,6 @@ fn material_has_fur(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &
 		&& !opts.debug_primitive_colors
 		&& !opts.disable_fur
 		&& material_fur_layer_count(material, shading) > 0
-}
-
-fn draw_has_fur(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
-	material_has_fur(&d.material, d.shading, opts)
 }
 
 fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts) -> bool {
@@ -8949,6 +8958,44 @@ mod tests {
 			mat.alpha_mode,
 			material_render_queue_number(&mat, mat.alpha_mode)
 		));
+	}
+
+	#[test]
+	fn material_runtime_requirements_collects_toon_feature_bits() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
+		liltoon_like.audio_link.enabled_factor = 1.0;
+		liltoon_like.audio_link.to_emission_factor = 1.0;
+		liltoon_like.fur.enabled_factor = 1.0;
+		liltoon_like.fur.layer_count_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let requirements = material_runtime_requirements(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(requirements.audio_link_texture);
+		assert!(requirements.screen_refraction);
+		assert!(requirements.fur);
+
+		let disabled_fur = material_runtime_requirements(
+			&mat,
+			UnaShadingModel::LilToonLike,
+			&SceneMeshLoadOpts {
+				disable_fur: true,
+				..Default::default()
+			},
+		);
+		assert!(disabled_fur.audio_link_texture);
+		assert!(disabled_fur.screen_refraction);
+		assert!(!disabled_fur.fur);
+
+		let mtoon_requirements = material_runtime_requirements(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+		assert!(!mtoon_requirements.audio_link_texture);
+		assert!(mtoon_requirements.screen_refraction);
+		assert!(!mtoon_requirements.fur);
 	}
 
 	#[test]
