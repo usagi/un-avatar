@@ -202,7 +202,7 @@ pub enum UnaRuntimeActionEffect {
 	},
 	MaterialSlot {
 		target: UnaRuntimeMaterialSlotTarget,
-		material: UnaRuntimeMaterialTarget,
+		material: Option<UnaRuntimeMaterialTarget>,
 	},
 	DynamicsEnabled {
 		source_id: String,
@@ -787,12 +787,21 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		apply_runtime_material_scalar(material, parameter, value)
 	}
 
-	pub fn set_material_slot(&mut self, target: &UnaRuntimeMaterialSlotTarget, material: &UnaRuntimeMaterialTarget) -> Result<(), String> {
+	pub fn set_material_slot(
+		&mut self,
+		target: &UnaRuntimeMaterialSlotTarget,
+		material: Option<&UnaRuntimeMaterialTarget>,
+	) -> Result<(), String> {
 		let Some(scene) = self.document.scene.as_mut() else {
 			return Err("document has no scene".to_string());
 		};
-		let Some(material_index) = resolve_runtime_material_index(scene, material) else {
-			return Err(format!("runtime material target not found: {material:?}"));
+		let material_index = if let Some(material) = material {
+			Some(
+				resolve_runtime_material_index(scene, material)
+					.ok_or_else(|| format!("runtime material target not found: {material:?}"))?,
+			)
+		} else {
+			None
 		};
 		let Some(node_index) = resolve_runtime_node_target(scene, &target.node) else {
 			return Err(format!("runtime node target not found: {:?}", target.node));
@@ -807,7 +816,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 				target.node
 			));
 		};
-		primitive.material_index = Some(material_index);
+		primitive.material_index = material_index;
 		Ok(())
 	}
 
@@ -3836,10 +3845,10 @@ mod tests {
 					},
 					primitive_index: Some(1),
 				},
-				&UnaRuntimeMaterialTarget {
+				Some(&UnaRuntimeMaterialTarget {
 					material_index: None,
 					name: Some("Alt".to_string()),
-				},
+				}),
 			)
 			.unwrap();
 		assert_eq!(document.scene.as_ref().unwrap().meshes[0][0].material_index, Some(0));
@@ -3856,13 +3865,29 @@ mod tests {
 					},
 					primitive_index: None,
 				},
-				&UnaRuntimeMaterialTarget {
+				Some(&UnaRuntimeMaterialTarget {
 					material_index: Some(0),
 					name: None,
-				},
+				}),
 			)
 			.unwrap();
 		assert_eq!(document.scene.as_ref().unwrap().meshes[0][0].material_index, Some(0));
+
+		document
+			.runtime_model_mut()
+			.set_material_slot(
+				&UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: None,
+						path: Some("Root/Renderer".to_string()),
+					},
+					primitive_index: Some(1),
+				},
+				None,
+			)
+			.unwrap();
+		assert_eq!(document.scene.as_ref().unwrap().meshes[0][1].material_index, None);
 	}
 
 	#[test]

@@ -1988,8 +1988,13 @@ fn apply_unavatar_material_slot_operation(scene: &mut UnaSceneSnapshot, op: &Val
 	let Some(material) = unavatar_runtime_material_slot_material(op) else {
 		return false;
 	};
-	let Some(material_index) = unavatar_scene_material_index(scene, &material) else {
-		return false;
+	let material_index = if let Some(material) = material {
+		let Some(material_index) = unavatar_scene_material_index(scene, &material) else {
+			return false;
+		};
+		Some(material_index)
+	} else {
+		None
 	};
 	let Some(node_index) = resolve_unavatar_runtime_node_target(scene, &target.node) else {
 		return false;
@@ -2001,7 +2006,7 @@ fn apply_unavatar_material_slot_operation(scene: &mut UnaSceneSnapshot, op: &Val
 	let Some(primitive) = scene.meshes.get_mut(mesh_index).and_then(|mesh| mesh.get_mut(primitive_index)) else {
 		return false;
 	};
-	primitive.material_index = Some(material_index);
+	primitive.material_index = material_index;
 	true
 }
 
@@ -2355,7 +2360,7 @@ fn unavatar_material_setter_runtime_action(
 			.get("Material")
 			.or_else(|| object.get("material"))
 			.or_else(|| object.get("to"))
-			.and_then(unavatar_runtime_material_ref)
+			.and_then(unavatar_runtime_material_ref_nullable)
 		else {
 			continue;
 		};
@@ -2489,8 +2494,8 @@ fn unavatar_material_swap_runtime_action(
 		let Some(from) = swap
 			.get("From")
 			.or_else(|| swap.get("from"))
-			.and_then(unavatar_runtime_material_ref)
-			.and_then(|target| unavatar_scene_material_index(scene, &target))
+			.and_then(unavatar_runtime_material_ref_nullable)
+			.and_then(|target| target.map_or(Some(None), |target| unavatar_scene_material_index(scene, &target).map(Some)))
 		else {
 			continue;
 		};
@@ -2498,7 +2503,7 @@ fn unavatar_material_swap_runtime_action(
 			.get("To")
 			.or_else(|| swap.get("to"))
 			.or_else(|| swap.get("material"))
-			.and_then(unavatar_runtime_material_ref)
+			.and_then(unavatar_runtime_material_ref_nullable)
 		else {
 			continue;
 		};
@@ -2515,7 +2520,7 @@ fn unavatar_material_swap_runtime_action(
 				continue;
 			};
 			for (primitive_index, primitive) in mesh.iter().enumerate() {
-				if primitive.material_index != Some(from) {
+				if primitive.material_index != from {
 					continue;
 				}
 				effects.push(UnaRuntimeActionEffect::MaterialSlot {
@@ -2705,6 +2710,13 @@ fn unavatar_runtime_material_ref(value: &Value) -> Option<UnaRuntimeMaterialTarg
 	Some(UnaRuntimeMaterialTarget { material_index, name })
 }
 
+fn unavatar_runtime_material_ref_nullable(value: &Value) -> Option<Option<UnaRuntimeMaterialTarget>> {
+	if value.is_null() {
+		return Some(None);
+	}
+	unavatar_runtime_material_ref(value).map(Some)
+}
+
 fn unavatar_runtime_material_slot_target(op: &Value) -> Option<UnaRuntimeMaterialSlotTarget> {
 	let target = op.get("target").unwrap_or(op);
 	let source_node_id = target
@@ -2742,7 +2754,7 @@ fn unavatar_runtime_material_slot_target(op: &Value) -> Option<UnaRuntimeMateria
 	})
 }
 
-fn unavatar_runtime_material_slot_material(op: &Value) -> Option<UnaRuntimeMaterialTarget> {
+fn unavatar_runtime_material_slot_material(op: &Value) -> Option<Option<UnaRuntimeMaterialTarget>> {
 	if let Some(material) = op
 		.get("material")
 		.or_else(|| op.get("toMaterial"))
@@ -2751,11 +2763,11 @@ fn unavatar_runtime_material_slot_material(op: &Value) -> Option<UnaRuntimeMater
 		.or_else(|| op.get("replacementMaterial"))
 		.or_else(|| op.get("replacement_material"))
 	{
-		if let Some(target) = unavatar_runtime_material_ref(material) {
+		if let Some(target) = unavatar_runtime_material_ref_nullable(material) {
 			return Some(target);
 		}
 	}
-	unavatar_runtime_material_target(op)
+	unavatar_runtime_material_target(op).map(Some)
 }
 
 fn value_vec4(value: &Value) -> Option<[f32; 4]> {
@@ -7567,10 +7579,10 @@ mod tests {
 						},
 						primitive_index: Some(1),
 					},
-					material: UnaRuntimeMaterialTarget {
+					material: Some(UnaRuntimeMaterialTarget {
 						material_index: None,
 						name: Some("Alt".to_string()),
-					},
+					}),
 				},
 				UnaRuntimeActionEffect::ExpressionWeight {
 					name: "Blink".to_string(),
@@ -7640,10 +7652,10 @@ mod tests {
 					},
 					primitive_index: Some(1),
 				},
-				material: UnaRuntimeMaterialTarget {
+				material: Some(UnaRuntimeMaterialTarget {
 					material_index: None,
 					name: Some("Jacket Red".to_string()),
-				},
+				}),
 			}]
 		);
 	}
@@ -7705,10 +7717,10 @@ mod tests {
 					},
 					primitive_index: Some(0),
 				},
-				material: UnaRuntimeMaterialTarget {
+				material: Some(UnaRuntimeMaterialTarget {
 					material_index: None,
 					name: Some("Jacket Red".to_string()),
-				},
+				}),
 			}]
 		);
 	}
@@ -7861,11 +7873,110 @@ mod tests {
 					},
 					primitive_index: Some(0),
 				},
-				material: UnaRuntimeMaterialTarget {
+				material: Some(UnaRuntimeMaterialTarget {
 					material_index: None,
 					name: Some("Base Red".to_string()),
-				},
+				}),
 			}]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_import_modular_avatar_material_swap_null_slots() {
+		let primitive_null = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let primitive_blue = UnaMeshBuffers {
+			material_index: Some(0),
+			..primitive_null.clone()
+		};
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![primitive_null, primitive_blue]],
+			materials: vec![
+				UnaMaterialPbr {
+					name: Some("Base Blue".to_string()),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					name: Some("Base Red".to_string()),
+					..Default::default()
+				},
+			],
+			nodes: vec![UnaSceneNode {
+				name: Some("Renderer".to_string()),
+				source_node_id: Some("node_renderer".to_string()),
+				mesh: Some(0),
+				..test_node(Vec::new())
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMaterialSwap",
+						"enabled": true,
+						"id": "mat-swap",
+						"fields": {
+							"swaps": [
+								{"from": null, "to": {"materialName": "Base Red"}},
+								{"from": {"materialName": "Base Blue"}, "to": null}
+							]
+						}
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene)).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![
+				UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							node_index: None,
+							source_node_id: Some("node_renderer".to_string()),
+							path: Some("Renderer".to_string()),
+						},
+						primitive_index: Some(0),
+					},
+					material: Some(UnaRuntimeMaterialTarget {
+						material_index: None,
+						name: Some("Base Red".to_string()),
+					}),
+				},
+				UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							node_index: None,
+							source_node_id: Some("node_renderer".to_string()),
+							path: Some("Renderer".to_string()),
+						},
+						primitive_index: Some(1),
+					},
+					material: None,
+				},
+			]
 		);
 	}
 
