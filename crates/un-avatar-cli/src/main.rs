@@ -2163,6 +2163,14 @@ fn build_diagnose_report(
 			warnings.push(format!("import lost feature: {} ({detail})", lost.feature));
 		}
 	}
+	for approximation in &import_report.approximations {
+		let detail = approximation.detail.as_deref().unwrap_or("");
+		if detail.is_empty() {
+			warnings.push(format!("import approximation: {}", approximation.feature));
+		} else {
+			warnings.push(format!("import approximation: {} ({detail})", approximation.feature));
+		}
+	}
 	let runtime_model = doc.runtime_model();
 	let scene = if let Some(sc) = runtime_model.scene() {
 		let mut shading_counts = BTreeMap::new();
@@ -3515,6 +3523,10 @@ mod tests {
 			feature: "ModularAvatar.ModularAvatarMeshCutter".to_string(),
 			detail: Some("1 unsupported Modular Avatar component(s) were preserved as source payload but not applied".to_string()),
 		});
+		import_report.approximations.push(un_avatar_core::Approximation {
+			feature: "ModularAvatar.ModularAvatarObjectToggle.Inverted".to_string(),
+			detail: Some("inverted condition evaluation is not exact".to_string()),
+		});
 
 		let report = build_diagnose_report(
 			Path::new("avatar.unavatar"),
@@ -3539,6 +3551,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarObjectToggle.Inverted")));
 	}
 
 	#[test]
