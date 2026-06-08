@@ -120,6 +120,8 @@ pub struct UnaExpressionWeights {
 pub struct UnaSpringBoneGroup {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
+	#[serde(default = "default_true")]
+	pub enabled: bool,
 	/// Source-side stable identifier, used by wardrobe / action state once dynamics toggles are resolved.
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub source_id: String,

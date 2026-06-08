@@ -1681,6 +1681,7 @@ fn unavatar_dynamics_settings(
 				}
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
+					enabled: true,
 					source_id: source_id.clone(),
 					comment: comment.clone(),
 					category: category.clone(),
@@ -1782,12 +1783,16 @@ pub struct WardrobeApplyReport {
 	pub visibility_missing: usize,
 	pub blendshape_applied: usize,
 	pub blendshape_missing: usize,
+	pub dynamics_applied: usize,
+	pub dynamics_missing: usize,
 	pub missing_visibility_paths: Vec<String>,
 	pub missing_blendshapes: Vec<String>,
+	pub missing_dynamics_ids: Vec<String>,
 }
 
 fn apply_unavatar_wardrobe_operations(
 	scene: &mut UnaSceneSnapshot,
+	dynamics: Option<&mut UnaSpringBoneSettings>,
 	operations: &[Value],
 	unavatar: Option<&UnaUnavatarExtension>,
 ) -> WardrobeApplyReport {
@@ -1796,6 +1801,7 @@ fn apply_unavatar_wardrobe_operations(
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
 	let mut report = WardrobeApplyReport::default();
+	let mut dynamics = dynamics;
 	for op in operations {
 		let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
 		let path = operation_target_path(op);
@@ -1842,10 +1848,64 @@ fn apply_unavatar_wardrobe_operations(
 					report.missing_blendshapes.push(format!("{path}::{name}"));
 				}
 			}
+			"dynamicsEnable" => {
+				let Some(enabled) = op.get("enabled").or_else(|| op.get("visible")).and_then(|value| value.as_bool()) else {
+					continue;
+				};
+				let Some(target_id) = operation_dynamics_target_id(op) else {
+					continue;
+				};
+				let Some(settings) = dynamics.as_deref_mut() else {
+					report.dynamics_missing += 1;
+					report.missing_dynamics_ids.push(target_id.to_string());
+					continue;
+				};
+				let mut applied = false;
+				for group in &mut settings.groups {
+					if group.source_id == target_id {
+						group.enabled = enabled;
+						applied = true;
+					}
+				}
+				if applied {
+					report.dynamics_applied += 1;
+				} else {
+					report.dynamics_missing += 1;
+					report.missing_dynamics_ids.push(target_id.to_string());
+				}
+			}
 			_ => {}
 		}
 	}
 	report
+}
+
+fn operation_dynamics_target_id(op: &Value) -> Option<&str> {
+	let target = op.get("target");
+	target
+		.and_then(|target| {
+			target
+				.get("dynamicsId")
+				.or_else(|| target.get("dynamics_id"))
+				.or_else(|| target.get("sourceId"))
+				.or_else(|| target.get("source_id"))
+				.or_else(|| target.get("id"))
+		})
+		.or_else(|| op.get("dynamicsId").or_else(|| op.get("dynamics_id")))
+		.or_else(|| op.get("sourceId").or_else(|| op.get("source_id")))
+		.or_else(|| op.get("dynamics"))
+		.or(target)
+		.and_then(Value::as_str)
+		.filter(|id| !id.is_empty())
+}
+
+fn reset_runtime_dynamics_enabled(dynamics: Option<&mut UnaSpringBoneSettings>) {
+	let Some(settings) = dynamics else {
+		return;
+	};
+	for group in &mut settings.groups {
+		group.enabled = true;
+	}
 }
 
 fn unavatar_wardrobe_set_operations<'a>(unavatar: &'a UnaUnavatarExtension, set_id: &str) -> Option<&'a [Value]> {
@@ -2027,7 +2087,7 @@ fn apply_unavatar_initial_variant_state(scene: &mut UnaSceneSnapshot, unavatar: 
 		.cloned()
 		.collect();
 	let skipped = operations.len().saturating_sub(filtered_operations.len());
-	let applied = apply_unavatar_wardrobe_operations(scene, &filtered_operations, Some(unavatar));
+	let applied = apply_unavatar_wardrobe_operations(scene, None, &filtered_operations, Some(unavatar));
 	report.push_info(format!(
 		".unavatar unity active state: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, inherited_hidden_skipped={}",
 		applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing, skipped
@@ -2533,34 +2593,57 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(scene) = document.scene.as_mut() else {
 		return Err("document has no scene".to_string());
 	};
+	let mut spring_bones = document.spring_bones.as_mut();
+	reset_runtime_dynamics_enabled(spring_bones.as_deref_mut());
 	let base_id = unavatar_base_wardrobe_set(&unavatar).map(|(id, _)| id.to_string());
 	if base_id.as_deref() == Some(set_id) {
 		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) else {
 			return Ok(WardrobeApplyReport::default());
 		};
-		let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(&unavatar));
-		return Ok(apply_unavatar_wardrobe_operations(scene, &base_operations, Some(&unavatar)));
+		let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &reset_operations, Some(&unavatar));
+		return Ok(apply_unavatar_wardrobe_operations(
+			scene,
+			spring_bones.as_deref_mut(),
+			&base_operations,
+			Some(&unavatar),
+		));
 	}
 	if base_id.as_deref() != Some(set_id) {
 		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, &unavatar) {
-			let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(&unavatar));
-			let _ = apply_unavatar_wardrobe_operations(scene, &base_operations, Some(&unavatar));
+			let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &reset_operations, Some(&unavatar));
+			let _ = apply_unavatar_wardrobe_operations(scene, spring_bones.as_deref_mut(), &base_operations, Some(&unavatar));
 		}
 	}
-	Ok(apply_unavatar_wardrobe_operations(scene, operations, Some(&unavatar)))
+	Ok(apply_unavatar_wardrobe_operations(
+		scene,
+		spring_bones.as_deref_mut(),
+		operations,
+		Some(&unavatar),
+	))
 }
 
 fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let Some((filtered_operations, skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, unavatar) else {
 		return;
 	};
-	let _ = apply_unavatar_wardrobe_operations(scene, &reset_operations, Some(unavatar));
-	let applied = apply_unavatar_wardrobe_operations(scene, &filtered_operations, Some(unavatar));
-	if applied.visibility_applied > 0 || applied.visibility_missing > 0 || applied.blendshape_applied > 0 || applied.blendshape_missing > 0
+	let _ = apply_unavatar_wardrobe_operations(scene, None, &reset_operations, Some(unavatar));
+	let applied = apply_unavatar_wardrobe_operations(scene, None, &filtered_operations, Some(unavatar));
+	if applied.visibility_applied > 0
+		|| applied.visibility_missing > 0
+		|| applied.blendshape_applied > 0
+		|| applied.blendshape_missing > 0
+		|| applied.dynamics_applied > 0
+		|| applied.dynamics_missing > 0
 	{
 		report.push_info(format!(
-			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, inherited_hidden_skipped={}",
-			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing, skipped
+			".unavatar wardrobe base: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, inherited_hidden_skipped={}",
+			applied.visibility_applied,
+			applied.visibility_missing,
+			applied.blendshape_applied,
+			applied.blendshape_missing,
+			applied.dynamics_applied,
+			applied.dynamics_missing,
+			skipped
 		));
 	}
 }
@@ -7852,5 +7935,52 @@ mod tests {
 
 		assert!(unavatar_wardrobe_set_operations(&unavatar, "field_drape").is_some());
 		assert!(unavatar_wardrobe_set_operations(&unavatar, "Field Drape").is_none());
+	}
+
+	#[test]
+	fn wardrobe_dynamics_enable_updates_runtime_group() {
+		let mut doc = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"operations": []
+						}, {
+							"id": "no_hair_physics",
+							"operations": [
+								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:hair"}, "enabled": false},
+								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:missing"}, "enabled": false}
+							]
+						}]
+					}
+				}),
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: true,
+					source_id: "physbone:hair".to_string(),
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+
+		let applied = apply_unavatar_wardrobe_set(&mut doc, "no_hair_physics").expect("apply wardrobe");
+		assert_eq!(applied.dynamics_applied, 1);
+		assert_eq!(applied.dynamics_missing, 1);
+		assert_eq!(applied.missing_dynamics_ids, vec!["physbone:missing"]);
+		assert!(!doc.spring_bones.as_ref().unwrap().groups[0].enabled);
+
+		let applied = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
+		assert_eq!(applied.dynamics_applied, 0);
+		assert_eq!(applied.dynamics_missing, 0);
+		assert!(doc.spring_bones.as_ref().unwrap().groups[0].enabled);
 	}
 }

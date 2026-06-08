@@ -494,6 +494,10 @@ impl SpringBoneSimulator {
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
 		for g in &settings.groups {
+			if !g.enabled {
+				runtimes.push(None);
+				continue;
+			}
 			let chain = &g.bone_node_indices;
 			if chain.len() < 2 {
 				runtimes.push(None);
@@ -617,6 +621,9 @@ impl SpringBoneSimulator {
 				let (Some(g), Some(Some(rt))) = (settings.groups.get(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
+				if !g.enabled {
+					continue;
+				}
 				for _ in 0..substeps {
 					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
 						rt.reset_xpbd_lambdas();
@@ -838,6 +845,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
@@ -882,6 +890,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
@@ -913,6 +922,36 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn simulator_skips_disabled_groups() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: false,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 1.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.0,
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1],
+			}],
+			colliders: Vec::new(),
+		};
+
+		assert!(SpringBoneSimulator::new(&scene, &settings).is_none());
+	}
+
 	/// 親 (root) を急に大きく回転させても tail が爆発せず length 制約内に留まることを確認。
 	/// 旧実装ではこのケースで Verlet 速度が暴走していた。
 	#[test]
@@ -929,6 +968,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
@@ -1013,6 +1053,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: "ミミ spring".to_string(),
 				category: String::new(),
@@ -1062,6 +1103,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
@@ -1113,6 +1155,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
@@ -1175,6 +1218,7 @@ mod tests {
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
 				source_kind: Default::default(),
+				enabled: true,
 				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),

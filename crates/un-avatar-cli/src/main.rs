@@ -375,6 +375,7 @@ struct DynamicsSourceFeatureCounts {
 struct DiagnoseDynamicsGroupSummary {
 	index: usize,
 	source_kind: UnaDynamicsSourceKind,
+	enabled: bool,
 	#[serde(skip_serializing_if = "String::is_empty")]
 	source_id: String,
 	#[serde(skip_serializing_if = "String::is_empty")]
@@ -457,6 +458,10 @@ struct DiagnoseWardrobeProbeSummary {
 	blendshape_applied: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	blendshape_missing: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	dynamics_applied: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	dynamics_missing: Option<usize>,
 	visible_mesh_node_count: usize,
 	visible_mesh_paths: Vec<String>,
 	nonzero_morph_weight_count: usize,
@@ -466,6 +471,8 @@ struct DiagnoseWardrobeProbeSummary {
 	missing_visibility_paths: Vec<String>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	missing_blendshapes: Vec<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	missing_dynamics_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1446,6 +1453,7 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 			DiagnoseDynamicsGroupSummary {
 				index,
 				source_kind: group.source_kind,
+				enabled: group.enabled,
 				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
 				category: group.category.clone(),
@@ -1805,19 +1813,31 @@ fn wardrobe_probe_for_document(
 			}
 		}
 	}
-	let (visibility_applied, visibility_missing, blendshape_applied, blendshape_missing, missing_visibility_paths, missing_blendshapes) =
-		if let Some(report) = apply_report {
-			(
-				Some(report.visibility_applied),
-				Some(report.visibility_missing),
-				Some(report.blendshape_applied),
-				Some(report.blendshape_missing),
-				report.missing_visibility_paths,
-				report.missing_blendshapes,
-			)
-		} else {
-			(None, None, None, None, Vec::new(), Vec::new())
-		};
+	let (
+		visibility_applied,
+		visibility_missing,
+		blendshape_applied,
+		blendshape_missing,
+		dynamics_applied,
+		dynamics_missing,
+		missing_visibility_paths,
+		missing_blendshapes,
+		missing_dynamics_ids,
+	) = if let Some(report) = apply_report {
+		(
+			Some(report.visibility_applied),
+			Some(report.visibility_missing),
+			Some(report.blendshape_applied),
+			Some(report.blendshape_missing),
+			Some(report.dynamics_applied),
+			Some(report.dynamics_missing),
+			report.missing_visibility_paths,
+			report.missing_blendshapes,
+			report.missing_dynamics_ids,
+		)
+	} else {
+		(None, None, None, None, None, None, Vec::new(), Vec::new(), Vec::new())
+	};
 	DiagnoseWardrobeProbeSummary {
 		set_id,
 		display_name,
@@ -1826,12 +1846,15 @@ fn wardrobe_probe_for_document(
 		visibility_missing,
 		blendshape_applied,
 		blendshape_missing,
+		dynamics_applied,
+		dynamics_missing,
 		visible_mesh_node_count: visible_mesh_paths.len(),
 		visible_mesh_paths,
 		nonzero_morph_weight_count: nonzero_morph_weights.len(),
 		nonzero_morph_weights,
 		missing_visibility_paths,
 		missing_blendshapes,
+		missing_dynamics_ids,
 	}
 }
 
@@ -2484,8 +2507,13 @@ fn run_diagnose(
 		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
 		wardrobe_apply_ms = started.elapsed().as_millis();
 		imported.report.push_info(format!(
-			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}",
-			applied.visibility_applied, applied.visibility_missing, applied.blendshape_applied, applied.blendshape_missing
+			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}",
+			applied.visibility_applied,
+			applied.visibility_missing,
+			applied.blendshape_applied,
+			applied.blendshape_missing,
+			applied.dynamics_applied,
+			applied.dynamics_missing
 		));
 	}
 	let wardrobe_probe_started = Instant::now();
@@ -2572,9 +2600,10 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} enabled={} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
+			group.enabled,
 			group.source_id,
 			group.bone_count,
 			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
@@ -2611,7 +2640,7 @@ fn run_diagnose(
 		}
 		for probe in &report.wardrobe_probes {
 			println!(
-				"wardrobe_probe[{}]: name={:?} probe={}ms visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} missing=vis {} blend {}",
+				"wardrobe_probe[{}]: name={:?} probe={}ms visible_meshes={} nonzero_morphs={} apply=vis {:?}/{:?} blend {:?}/{:?} dyn {:?}/{:?} missing=vis {} blend {} dyn {}",
 				probe.set_id,
 				probe.display_name,
 				probe.probe_ms,
@@ -2621,8 +2650,11 @@ fn run_diagnose(
 				probe.visibility_missing,
 				probe.blendshape_applied,
 				probe.blendshape_missing,
+				probe.dynamics_applied,
+				probe.dynamics_missing,
 				probe.missing_visibility_paths.len(),
-				probe.missing_blendshapes.len()
+				probe.missing_blendshapes.len(),
+				probe.missing_dynamics_ids.len()
 			);
 			for path in probe.visible_mesh_paths.iter().take(24) {
 				println!("  visible: {path}");

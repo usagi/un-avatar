@@ -422,6 +422,7 @@ operation の `target` は保存上 `nodeId` を正とし、`path` を表示と 
 - `nodeId`: exporter が node に付与する stable id。同名 object や `Armature.1` の衝突を避ける。
 - `path`: Unity hierarchy path。UI 表示、手動修復、diagnostics 用。
 - `dynamicsEnable` は node target ではなく `{ "dynamicsId": "..." }` を使う。`dynamicsId` は `dynamics[].id` を参照する。
+  Runtime はこれを正規化済み dynamics group の `enabled` に反映し、disabled group は solver 対象外にする。
 
 ### Operation Precedence
 
@@ -534,7 +535,7 @@ v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runti
 `sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
 `sourceParams.colliders` は VRC PhysBone collider の保存情報であり、Sphere / Capsule は local collider として SpringBone solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
 `sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、diagnostics にも出すが、v0.1 初期の solver 挙動にはまだ反映しない。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
-`dynamics[].id` は runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。
+`dynamics[].id` は runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。`enabled:false` の source dynamics は import lower 時に無視し、wardrobe / action の `dynamicsEnable` は lower 済み group の `enabled` を切り替える。
 
 ## 10. Provenance And License
 
