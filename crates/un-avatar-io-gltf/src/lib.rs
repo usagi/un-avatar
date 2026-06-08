@@ -2569,6 +2569,9 @@ fn unavatar_modular_avatar_component_triggers(component: &Value, command: String
 	if let Some(path) = unavatar_modular_avatar_component_expression_menu_path(component) {
 		triggers.push(UnaRuntimeActionTrigger::ExpressionMenu { path });
 	}
+	if let Some((name, value)) = unavatar_modular_avatar_component_parameter_value(component) {
+		triggers.push(UnaRuntimeActionTrigger::ParameterValue { name, value });
+	}
 	triggers
 }
 
@@ -2598,6 +2601,63 @@ fn unavatar_explicit_expression_menu_path(value: &Value) -> Option<String> {
 		.and_then(Value::as_str)
 		.filter(|path| !path.is_empty())
 		.map(str::to_string)
+}
+
+fn unavatar_modular_avatar_component_parameter_value(component: &Value) -> Option<(String, f32)> {
+	unavatar_explicit_parameter_value(component)
+		.or_else(|| {
+			component.get("fields").and_then(|fields| {
+				unavatar_explicit_parameter_value(fields)
+					.or_else(|| fields.get("control").and_then(unavatar_explicit_parameter_value))
+					.or_else(|| fields.get("Control").and_then(unavatar_explicit_parameter_value))
+					.or_else(|| fields.get("menuItem").and_then(unavatar_explicit_parameter_value))
+					.or_else(|| fields.get("menu_item").and_then(unavatar_explicit_parameter_value))
+					.or_else(|| fields.get("menuItem").and_then(unavatar_menu_item_parameter_value))
+					.or_else(|| fields.get("menu_item").and_then(unavatar_menu_item_parameter_value))
+			})
+		})
+		.or_else(|| {
+			component
+				.get("control")
+				.or_else(|| component.get("Control"))
+				.and_then(unavatar_explicit_parameter_value)
+		})
+		.or_else(|| {
+			component
+				.get("menuItem")
+				.or_else(|| component.get("menu_item"))
+				.and_then(unavatar_menu_item_parameter_value)
+		})
+}
+
+fn unavatar_menu_item_parameter_value(menu_item: &Value) -> Option<(String, f32)> {
+	unavatar_explicit_parameter_value(menu_item).or_else(|| {
+		menu_item
+			.get("control")
+			.or_else(|| menu_item.get("Control"))
+			.and_then(unavatar_explicit_parameter_value)
+	})
+}
+
+fn unavatar_explicit_parameter_value(value: &Value) -> Option<(String, f32)> {
+	let name = value
+		.get("parameter")
+		.and_then(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(Value::as_str))
+				.or_else(|| parameter.get("Name").and_then(Value::as_str))
+		})
+		.or_else(|| {
+			value
+				.get("parameterName")
+				.or_else(|| value.get("parameter_name"))
+				.and_then(Value::as_str)
+		})
+		.filter(|value| !value.is_empty())?
+		.to_string();
+	let value = json_f32(value.get("value").or_else(|| value.get("Value")))?;
+	Some((name, value))
 }
 
 fn unavatar_scene_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
@@ -7609,6 +7669,12 @@ mod tests {
 						"name": "Jacket Color",
 						"menuPath": "Clothes/Jacket Color",
 						"fields": {
+							"menuItem": {
+								"control": {
+									"parameter": {"name": "JacketColor"},
+									"value": 1.0
+								}
+							},
 							"objects": [{
 								"object": {
 									"nodeId": "node_jacket",
@@ -7638,6 +7704,10 @@ mod tests {
 				},
 				UnaRuntimeActionTrigger::ExpressionMenu {
 					path: "Clothes/Jacket Color".to_string()
+				},
+				UnaRuntimeActionTrigger::ParameterValue {
+					name: "JacketColor".to_string(),
+					value: 1.0
 				}
 			]
 		);

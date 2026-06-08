@@ -122,12 +122,12 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: exporter extracts some toggle/menu candidates as variants.
   - remaining: treat these as wardrobe operations source, not full MA bake replacement.
 - `[~]` MA Material Swap
-  - done: Runtime action importer expands structured Material Swap root / From / To payload into `MaterialSlot` effects by matching current scene primitive material slots under the selected root. Null `From` / `To` materials are represented as empty material slots. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger.
+  - done: Runtime action importer expands structured Material Swap root / From / To payload into `MaterialSlot` effects by matching current scene primitive material slots under the selected root. Null `From` / `To` materials are represented as empty material slots. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger; explicit MenuItem control parameter/value metadata is preserved as a `ParameterValue` trigger.
   - note: upstream `QuickSwapMode` is an Inspector candidate-selection helper for editing the `To` material; runtime reaction registration consumes the serialized `Swaps` From / To list, so no runtime QuickSwap emulation is planned.
   - remaining: asset group / texture references, and full parameter / reactive trigger integration.
 - `[~]` MA Material Setter
-  - done: Runtime action importer resolves structured Material Setter renderer references against the scene when available, then lowers object / material index / material payload into `MaterialSlot` effects for direct renderer slot replacement. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger.
-  - remaining: full reactive object integration with parameter triggers, broader component reference diagnostics, and material property override mapping beyond slot replacement.
+  - done: Runtime action importer resolves structured Material Setter renderer references against the scene when available, then lowers object / material index / material payload into `MaterialSlot` effects for direct renderer slot replacement. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger; explicit MenuItem control parameter/value metadata is preserved as a `ParameterValue` trigger.
+  - remaining: full reactive object integration with parameter evaluation, broader component reference diagnostics, and material property override mapping beyond slot replacement.
 - `[ ]` Blendshape Sync
   - required: source renderer/shape to target renderer/shape binding.
 - `[ ]` Sync Parameter Sequence

@@ -176,6 +176,11 @@ pub enum UnaRuntimeActionTrigger {
 		#[serde(default, skip_serializing_if = "String::is_empty")]
 		name: String,
 	},
+	ParameterValue {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		name: String,
+		value: f32,
+	},
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

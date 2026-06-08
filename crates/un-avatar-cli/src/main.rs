@@ -2603,6 +2603,7 @@ fn runtime_action_trigger_kind(trigger: &UnaRuntimeActionTrigger) -> &'static st
 		UnaRuntimeActionTrigger::ExpressionMenu { .. } => "expression_menu",
 		UnaRuntimeActionTrigger::KeyboardShortcut { .. } => "keyboard_shortcut",
 		UnaRuntimeActionTrigger::AnimationEvent { .. } => "animation_event",
+		UnaRuntimeActionTrigger::ParameterValue { .. } => "parameter_value",
 	}
 }
 
