@@ -335,23 +335,23 @@ pub struct UnaRuntimeState {
 	pub dynamics_enabled_overrides: BTreeMap<String, bool>,
 }
 
-pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 2;
+pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 3;
 
 pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarBoneProxy"
 		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
 		| "ModularAvatarRemoveVertexColor"
-		| "ModularAvatarReplaceObject" => "resolver",
+		| "ModularAvatarReplaceObject"
+		| "ModularAvatarShapeChanger" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
 		"ModularAvatarMenuItem"
 		| "ModularAvatarMenuGroup"
 		| "ModularAvatarMenuInstaller"
 		| "ModularAvatarMenuInstallTarget"
 		| "ModularAvatarParameters"
-		| "ModularAvatarMeshCutter"
-		| "ModularAvatarShapeChanger"
 		| "VertexFilterByAxisComponent"
 		| "VertexFilterByBoneComponent"
 		| "VertexFilterByMaskComponent"
@@ -5010,8 +5010,8 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMenuItem"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarParameters"), "metadata");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "metadata");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "metadata");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("VertexFilterByShapeComponent"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("SomethingElse"), "unsupported");
 	}
