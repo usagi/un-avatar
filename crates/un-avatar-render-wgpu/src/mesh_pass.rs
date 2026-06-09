@@ -1262,7 +1262,7 @@ struct SceneMeshDrawState {
 	runtime_requirements: SceneMeshRuntimeRequirements,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_draw_mesh_primitive_count: usize,
 	pub(crate) resident_draw_mesh_primitive_count: usize,
@@ -1273,11 +1273,13 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) draws_using_inactive_image_texture_count: usize,
 	pub(crate) active_draws_using_inactive_image_texture_count: usize,
 	pub(crate) inactive_image_textures_used_by_active_draw_count: usize,
+	pub(crate) inactive_image_textures_used_by_active_draw: Vec<usize>,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
 	pub(crate) active_draws_using_inactive_material_slot_count: usize,
 	pub(crate) inactive_material_slots_used_by_active_draw_count: usize,
+	pub(crate) inactive_material_slots_used_by_active_draw: Vec<usize>,
 }
 
 #[inline]
@@ -7783,14 +7785,16 @@ impl SceneMeshes {
 						.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
 			})
 			.count();
-		let inactive_image_textures_used_by_active_draw_count = self
+		let inactive_image_textures_used_by_active_draw = self
 			.draws
 			.iter()
 			.filter(|draw| draw.active())
 			.flat_map(|draw| draw.texture_indices.iter().copied())
 			.filter(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
 			.collect::<BTreeSet<_>>()
-			.len();
+			.into_iter()
+			.collect::<Vec<_>>();
+		let inactive_image_textures_used_by_active_draw_count = inactive_image_textures_used_by_active_draw.len();
 		let total_material_slot_count = self.material_slot_residency.len();
 		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
 		let active_draws_using_inactive_material_slot_count = self
@@ -7803,14 +7807,16 @@ impl SceneMeshes {
 						.is_some_and(|index| self.material_slot_residency.get(index).is_some_and(|resident| !resident))
 			})
 			.count();
-		let inactive_material_slots_used_by_active_draw_count = self
+		let inactive_material_slots_used_by_active_draw = self
 			.draws
 			.iter()
 			.filter(|draw| draw.active())
 			.filter_map(|draw| draw.material_slot_index)
 			.filter(|index| self.material_slot_residency.get(*index).is_some_and(|resident| !resident))
 			.collect::<BTreeSet<_>>()
-			.len();
+			.into_iter()
+			.collect::<Vec<_>>();
+		let inactive_material_slots_used_by_active_draw_count = inactive_material_slots_used_by_active_draw.len();
 		SceneMeshAssetResidencyCounts {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
@@ -7821,11 +7827,13 @@ impl SceneMeshes {
 			draws_using_inactive_image_texture_count,
 			active_draws_using_inactive_image_texture_count,
 			inactive_image_textures_used_by_active_draw_count,
+			inactive_image_textures_used_by_active_draw,
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
 			active_draws_using_inactive_material_slot_count,
 			inactive_material_slots_used_by_active_draw_count,
+			inactive_material_slots_used_by_active_draw,
 		}
 	}
 

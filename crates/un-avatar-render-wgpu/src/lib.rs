@@ -4410,11 +4410,13 @@ mod tests {
 				draws_using_inactive_image_texture_count: 2,
 				active_draws_using_inactive_image_texture_count: 1,
 				inactive_image_textures_used_by_active_draw_count: 1,
+				inactive_image_textures_used_by_active_draw: vec![3],
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
 				active_draws_using_inactive_material_slot_count: 1,
 				inactive_material_slots_used_by_active_draw_count: 1,
+				inactive_material_slots_used_by_active_draw: vec![4],
 				scoped_draw_supported: true,
 				all_resident: true,
 				..Default::default()
@@ -4462,6 +4464,13 @@ mod tests {
 				.and_then(|value| value.as_u64()),
 			Some(1)
 		);
+		assert_eq!(
+			upload
+				.get("inactive_image_textures_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![3])
+		);
 		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
 		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("inactive_material_slot_count").and_then(|value| value.as_u64()), Some(1));
@@ -4476,6 +4485,13 @@ mod tests {
 				.get("inactive_material_slots_used_by_active_draw_count")
 				.and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_material_slots_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![4])
 		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
