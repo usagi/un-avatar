@@ -88,8 +88,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - remaining: full renderer culling/cache policy for localBounds and exact rootBone-vs-probeAnchor reference handling.
 - `[ ]` nested MergeArmature topology
   - required: parent/child merge order, cycle diagnostics.
-- `[ ]` Visible Head Accessory
-  - required: head-visible accessory mesh handling and proxy head bone behavior.
+- `[~]` Visible Head Accessory
+  - done: component type is explicitly categorized in `modular_avatar_component_support_kind` and reported as metadata-supported in importer diagnostics.
+  - remaining: implement head-visible accessory mesh handling and proxy head bone behavior in runtime resolver.
 
 ### Reparenting / Proxy / Object Replacement
 
@@ -140,8 +141,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - required: source renderer/shape to target renderer/shape binding.
   - done: Unity Exporter serializes `BlendshapeBinding` entries as structured `referenceMesh`, `blendshape`, `localBlendshape`, and `remapCurve` payload instead of opaque type-name strings. Runtime resolver applies structured bindings to static source morph defaults, uses `localBlendshape` fallback semantics, evaluates keyframe remap curves with in/out tangents for initial weights, and clones shared target meshes before mutating default morph weights. Runtime expression catalog propagation is supported for no-remap and linear origin remap curves by adding target morph binds to the source expression preset. A freshly re-exported `mizuki-split.unavatar` sample reports `blendshape_sync_applied=18`, `missing=0`, and `unsupported=0`.
   - remaining: non-linear runtime expression / animation curve propagation, weighted tangent / wrap mode curve parity, and recursive sync.
-- `[ ]` Sync Parameter Sequence
-  - required: classify as VRC expression/parameter feature; defer if not needed for static wardrobe render.
+- `[~]` Sync Parameter Sequence
+  - done: component type is explicitly categorized as metadata and surfaced in importer component diagnostics.
+  - remaining: evaluate whether runtime VRC expression / parameter integration is needed for wardrobe-only render goals; current behavior is classify-only.
 
 ### Menu / Parameters / Animator
 

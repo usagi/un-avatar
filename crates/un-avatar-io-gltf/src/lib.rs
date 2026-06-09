@@ -11887,6 +11887,8 @@ mod tests {
 			serde_json::json!({"shortType": "ModularAvatarMaterialSwap", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMenuItem", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarSyncParameterSequence", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarVisibleHeadAccessory", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldScaleObject", "enabled": true}),
 			serde_json::json!({"shortType": "MAMoveIndependently", "enabled": true}),
@@ -11900,10 +11902,10 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("total=8"));
+		assert!(message.contains("total=10"));
 		assert!(message.contains("resolver_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
-		assert!(message.contains("metadata_supported=1"));
+		assert!(message.contains("metadata_supported=3"));
 		assert!(message.contains("unsupported=4"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
