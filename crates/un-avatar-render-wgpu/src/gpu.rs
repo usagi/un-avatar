@@ -49,6 +49,7 @@ pub(crate) const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
 pub(crate) const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
+const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
@@ -93,6 +94,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) inactive_image_textures_used_by_active_draw_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) inactive_image_textures_used_by_active_draw: Vec<usize>,
+	pub(crate) inactive_image_textures_used_by_active_draw_truncated: bool,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -100,6 +102,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) inactive_material_slots_used_by_active_draw_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) inactive_material_slots_used_by_active_draw: Vec<usize>,
+	pub(crate) inactive_material_slots_used_by_active_draw_truncated: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -211,12 +214,14 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		active_draws_using_inactive_image_texture_count: 0,
 		inactive_image_textures_used_by_active_draw_count: 0,
 		inactive_image_textures_used_by_active_draw: Vec::new(),
+		inactive_image_textures_used_by_active_draw_truncated: false,
 		total_material_slot_count: 0,
 		resident_material_slot_count: 0,
 		inactive_material_slot_count: 0,
 		active_draws_using_inactive_material_slot_count: 0,
 		inactive_material_slots_used_by_active_draw_count: 0,
 		inactive_material_slots_used_by_active_draw: Vec::new(),
+		inactive_material_slots_used_by_active_draw_truncated: false,
 		missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -252,15 +257,27 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.draws_using_inactive_image_texture_count = draw_counts.draws_using_inactive_image_texture_count;
 	plan.active_draws_using_inactive_image_texture_count = draw_counts.active_draws_using_inactive_image_texture_count;
 	plan.inactive_image_textures_used_by_active_draw_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
-	plan.inactive_image_textures_used_by_active_draw = draw_counts.inactive_image_textures_used_by_active_draw;
+	let (inactive_image_textures_used_by_active_draw, inactive_image_textures_used_by_active_draw_truncated) =
+		wardrobe_residency_gap_index_status_list(draw_counts.inactive_image_textures_used_by_active_draw);
+	plan.inactive_image_textures_used_by_active_draw = inactive_image_textures_used_by_active_draw;
+	plan.inactive_image_textures_used_by_active_draw_truncated = inactive_image_textures_used_by_active_draw_truncated;
 	plan.total_material_slot_count = draw_counts.total_material_slot_count;
 	plan.resident_material_slot_count = draw_counts.resident_material_slot_count;
 	plan.inactive_material_slot_count = draw_counts.inactive_material_slot_count;
 	plan.active_draws_using_inactive_material_slot_count = draw_counts.active_draws_using_inactive_material_slot_count;
 	plan.inactive_material_slots_used_by_active_draw_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
-	plan.inactive_material_slots_used_by_active_draw = draw_counts.inactive_material_slots_used_by_active_draw;
+	let (inactive_material_slots_used_by_active_draw, inactive_material_slots_used_by_active_draw_truncated) =
+		wardrobe_residency_gap_index_status_list(draw_counts.inactive_material_slots_used_by_active_draw);
+	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw;
+	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw_truncated;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
 	plan
+}
+
+fn wardrobe_residency_gap_index_status_list(mut indices: Vec<usize>) -> (Vec<usize>, bool) {
+	let truncated = indices.len() > WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT;
+	indices.truncate(WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
+	(indices, truncated)
 }
 
 fn runtime_action_id_for_parameter(
@@ -4674,6 +4691,7 @@ mod tests {
 		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
 		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
@@ -4915,6 +4933,44 @@ mod tests {
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
+	}
+
+	#[test]
+	fn wardrobe_asset_upload_plan_bounds_renderer_residency_gap_index_lists() {
+		let image_indices = (0..WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2).collect::<Vec<_>>();
+		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
+		let plan = wardrobe_asset_upload_plan_with_draw_counts(
+			WardrobeAssetUploadPlan {
+				mode: "draw-scoped-all-resident".to_string(),
+				all_resident: true,
+				..Default::default()
+			},
+			Some(SceneMeshAssetResidencyCounts {
+				inactive_image_textures_used_by_active_draw_count: image_indices.len(),
+				inactive_image_textures_used_by_active_draw: image_indices,
+				inactive_material_slots_used_by_active_draw_count: material_indices.len(),
+				inactive_material_slots_used_by_active_draw: material_indices,
+				..Default::default()
+			}),
+		);
+
+		assert_eq!(plan.inactive_image_textures_used_by_active_draw_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2);
+		assert_eq!(
+			plan.inactive_image_textures_used_by_active_draw.len(),
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT
+		);
+		assert_eq!(plan.inactive_image_textures_used_by_active_draw.last(), Some(&(WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1)));
+		assert!(plan.inactive_image_textures_used_by_active_draw_truncated);
+		assert_eq!(plan.inactive_material_slots_used_by_active_draw_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3);
+		assert_eq!(
+			plan.inactive_material_slots_used_by_active_draw.len(),
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT
+		);
+		assert_eq!(
+			plan.inactive_material_slots_used_by_active_draw.last(),
+			Some(&(100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
+		);
+		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
