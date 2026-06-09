@@ -99,10 +99,12 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Replace Object
   - done: Runtime resolver moves the replacement object into the original object's parent slot, migrates original children under the replacement while preserving world pose, hides the original node, and remaps Runtime node references such as skin joints, skin root, probe anchor, and node constraints to the replacement. Replacement nodes get a derived resolved node id without changing their source node id.
   - remaining: Exporter schema parity for object/component reference remap diagnostics and recursive / conflicting replacement fixture coverage.
-- `[ ]` MA Move Independently
-  - required: grouped transform parent remapping, if it affects visible render graph.
-- `[ ]` MA World Fixed Object / World Scale Object
-  - required: classify as runtime transform/dynamics concern or unsupported render-only feature.
+- `[~]` MA Move Independently
+  - done: component type is explicitly categorized in `modular_avatar_component_support_kind` and surfaced as unsupported transform metadata in importer report counts.
+  - remaining: implement grouped transform parent remapping behavior when it affects visible render graph.
+- `[~]` MA World Fixed Object / World Scale Object
+  - done: component types are explicitly categorized and reported as unsupported transform metadata in importer diagnostics.
+  - remaining: runtime approximation for fixed-world or fixed-scale transform behavior.
 
 ### Mesh Settings / Geometry Mutation
 

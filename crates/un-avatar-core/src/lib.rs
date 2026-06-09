@@ -351,6 +351,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarReplaceObject"
 		| "ModularAvatarShapeChanger" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
+		"ModularAvatarWorldFixedObject" | "ModularAvatarWorldScaleObject" | "MAMoveIndependently" => "unsupported",
 		"ModularAvatarMenuItem"
 		| "ModularAvatarMenuGroup"
 		| "ModularAvatarMenuInstaller"
@@ -5153,6 +5154,9 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarParameters"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarWorldFixedObject"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarWorldScaleObject"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("MAMoveIndependently"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("VertexFilterByShapeComponent"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("SomethingElse"), "unsupported");
 	}

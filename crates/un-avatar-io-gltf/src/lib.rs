@@ -11869,6 +11869,8 @@ mod tests {
 			serde_json::json!({"shortType": "ModularAvatarMenuItem", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarWorldScaleObject", "enabled": true}),
+			serde_json::json!({"shortType": "MAMoveIndependently", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarUnknownDisabled", "enabled": false}),
 		];
 		let mut report = ImportReport::default();
@@ -11879,19 +11881,34 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("total=6"));
+		assert!(message.contains("total=8"));
 		assert!(message.contains("resolver_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
 		assert!(message.contains("metadata_supported=1"));
-		assert!(message.contains("unsupported=2"));
+		assert!(message.contains("unsupported=4"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
+		assert!(message.contains("ModularAvatarWorldScaleObject:1"));
+		assert!(message.contains("MAMoveIndependently:1"));
 		assert!(message.contains("ModularAvatarUnknownDisabled:1"));
-		assert_eq!(report.lost_features.len(), 1);
-		assert_eq!(report.lost_features[0].feature, "ModularAvatar.ModularAvatarWorldFixedObject");
-		assert!(report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarWorldFixedObject")
-		}));
+		let unsupported_features = report
+			.lost_features
+			.iter()
+			.map(|feature| feature.feature.as_str())
+			.collect::<Vec<_>>();
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
+		assert!(unsupported_features.contains(&"ModularAvatar.MAMoveIndependently"));
+		assert_eq!(report.lost_features.len(), 3);
+		for unsupported_type in [
+			"ModularAvatarWorldFixedObject",
+			"ModularAvatarWorldScaleObject",
+			"MAMoveIndependently",
+		] {
+			assert!(report.diagnostics.iter().any(|diagnostic| {
+				diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(unsupported_type)
+			}));
+		}
 	}
 
 	#[test]
