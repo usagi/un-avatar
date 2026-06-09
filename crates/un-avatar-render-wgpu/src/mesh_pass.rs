@@ -1119,6 +1119,13 @@ struct SceneMeshDrawState {
 	runtime_requirements: SceneMeshRuntimeRequirements,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SceneMeshAssetResidencyCounts {
+	pub(crate) total_draw_mesh_primitive_count: usize,
+	pub(crate) resident_draw_mesh_primitive_count: usize,
+	pub(crate) inactive_draw_mesh_primitive_count: usize,
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -7479,6 +7486,16 @@ impl SceneMeshes {
 			self.rebuild_draw_order();
 		}
 		changed
+	}
+
+	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
+		let total_draw_mesh_primitive_count = self.draws.len();
+		let resident_draw_mesh_primitive_count = self.draws.iter().filter(|draw| draw.asset_resident).count();
+		SceneMeshAssetResidencyCounts {
+			total_draw_mesh_primitive_count,
+			resident_draw_mesh_primitive_count,
+			inactive_draw_mesh_primitive_count: total_draw_mesh_primitive_count.saturating_sub(resident_draw_mesh_primitive_count),
+		}
 	}
 
 	pub fn is_empty(&self) -> bool {

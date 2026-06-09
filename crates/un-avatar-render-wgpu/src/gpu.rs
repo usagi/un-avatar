@@ -28,8 +28,8 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshBuildProgress, SceneMeshLoadOpts,
-		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
+		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshAssetResidencyCounts, SceneMeshBuildProgress,
+		SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
 	},
 	options::{
 		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
@@ -82,9 +82,13 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) resident_material_count: usize,
 	pub(crate) resident_image_count: usize,
 	pub(crate) resident_dynamics_count: usize,
+	pub(crate) total_draw_mesh_primitive_count: usize,
+	pub(crate) resident_draw_mesh_primitive_count: usize,
+	pub(crate) inactive_draw_mesh_primitive_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
+	pub(crate) scoped_draw_supported: bool,
 	pub(crate) scoped_upload_supported: bool,
 	pub(crate) all_resident: bool,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -182,8 +186,12 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		resident_material_count: resident_materials,
 		resident_image_count: resident_images,
 		resident_dynamics_count: resident_dynamics,
+		total_draw_mesh_primitive_count: 0,
+		resident_draw_mesh_primitive_count: 0,
+		inactive_draw_mesh_primitive_count: 0,
 		missing_active_asset_groups,
 		inactive_owned_asset_group_count,
+		scoped_draw_supported: false,
 		scoped_upload_supported: false,
 		all_resident: true,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
@@ -198,6 +206,20 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 			"wardrobe sets do not declare assetGroups".to_string()
 		},
 	}
+}
+
+fn wardrobe_asset_upload_plan_with_draw_counts(
+	mut plan: WardrobeAssetUploadPlan,
+	draw_counts: Option<SceneMeshAssetResidencyCounts>,
+) -> WardrobeAssetUploadPlan {
+	let Some(draw_counts) = draw_counts else {
+		return plan;
+	};
+	plan.total_draw_mesh_primitive_count = draw_counts.total_draw_mesh_primitive_count;
+	plan.resident_draw_mesh_primitive_count = draw_counts.resident_draw_mesh_primitive_count;
+	plan.inactive_draw_mesh_primitive_count = draw_counts.inactive_draw_mesh_primitive_count;
+	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
+	plan
 }
 
 fn runtime_action_id_for_parameter(
@@ -2859,7 +2881,8 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return WardrobeAssetUploadPlan::default();
 		};
-		wardrobe_asset_upload_plan_for_document(&doc)
+		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
+		wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts)
 	}
 
 	pub(crate) fn resolver_cache_key(&self) -> Option<UnaRuntimeResolverCacheKey> {
@@ -4606,11 +4629,11 @@ fn create_startup_splash_pipeline(
 mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
-		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
+		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 	};
-	use crate::mesh_pass::MeshShaderVariantTier;
+	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
@@ -4801,6 +4824,29 @@ mod tests {
 		assert!(plan.all_resident);
 		assert_eq!(plan.mode, "draw-scoped-all-resident");
 		assert!(plan.reason.contains("scopes renderer draw residency"));
+	}
+
+	#[test]
+	fn wardrobe_asset_upload_plan_can_include_renderer_draw_residency_counts() {
+		let plan = wardrobe_asset_upload_plan_with_draw_counts(
+			WardrobeAssetUploadPlan {
+				mode: "draw-scoped-all-resident".to_string(),
+				all_resident: true,
+				..Default::default()
+			},
+			Some(SceneMeshAssetResidencyCounts {
+				total_draw_mesh_primitive_count: 3,
+				resident_draw_mesh_primitive_count: 2,
+				inactive_draw_mesh_primitive_count: 1,
+			}),
+		);
+
+		assert_eq!(plan.total_draw_mesh_primitive_count, 3);
+		assert_eq!(plan.resident_draw_mesh_primitive_count, 2);
+		assert_eq!(plan.inactive_draw_mesh_primitive_count, 1);
+		assert!(plan.scoped_draw_supported);
+		assert!(!plan.scoped_upload_supported);
+		assert!(plan.all_resident);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
