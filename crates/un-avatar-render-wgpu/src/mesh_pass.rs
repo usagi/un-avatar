@@ -1567,7 +1567,11 @@ pub(crate) struct SceneMeshes {
 	material_layout: wgpu::BindGroupLayout,
 	#[allow(dead_code)]
 	outline_material_layout: wgpu::BindGroupLayout,
+	#[allow(dead_code)]
+	shader_variant_tier: MeshShaderVariantTier,
 	screen_grab_sampler: wgpu::Sampler,
+	#[allow(dead_code)]
+	reflection_cube_sampler: wgpu::Sampler,
 	_screen_grab_fallback_texture: wgpu::Texture,
 	_audio_link_texture: wgpu::Texture,
 	audio_link_view: wgpu::TextureView,
@@ -1577,6 +1581,8 @@ pub(crate) struct SceneMeshes {
 	texture_views: SceneTextureViews,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
+	#[allow(dead_code)]
+	image_sampler_indices: Vec<usize>,
 	#[allow(dead_code)]
 	_textures: Vec<wgpu::Texture>,
 	#[allow(dead_code)]
@@ -6980,7 +6986,9 @@ impl SceneMeshes {
 			frame_bind_group,
 			material_layout,
 			outline_material_layout,
+			shader_variant_tier,
 			screen_grab_sampler,
+			reflection_cube_sampler,
 			_screen_grab_fallback_texture: screen_grab_fallback_texture,
 			_audio_link_texture: audio_link_texture,
 			audio_link_view,
@@ -6988,6 +6996,7 @@ impl SceneMeshes {
 			audio_link_frame_params: [0.0; 4],
 			texture_views,
 			_samplers: samplers,
+			image_sampler_indices,
 			_textures: textures,
 			_cube_textures: cube_textures,
 			draws,
