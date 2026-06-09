@@ -2881,6 +2881,7 @@ fn unavatar_modular_avatar_component_conditions(
 		source_node,
 		parameter_name,
 		parameter_value,
+		sub_parameter_names: unavatar_modular_avatar_component_sub_parameter_names(component),
 		inverted: unavatar_modular_avatar_component_inverted(component),
 		active_parent_nodes,
 	};
@@ -2888,6 +2889,7 @@ fn unavatar_modular_avatar_component_conditions(
 		|| condition.source_component_id.is_some()
 		|| condition.source_node.is_some()
 		|| condition.parameter_name.is_some()
+		|| !condition.sub_parameter_names.is_empty()
 		|| !condition.active_parent_nodes.is_empty())
 	.then_some(condition)
 	.into_iter()
@@ -3058,6 +3060,61 @@ fn unavatar_modular_avatar_component_parameter_value(component: &Value) -> Optio
 				.or_else(|| component.get("menu_item"))
 				.and_then(unavatar_menu_item_parameter_value)
 		})
+}
+
+fn unavatar_modular_avatar_component_sub_parameter_names(component: &Value) -> Vec<String> {
+	unavatar_explicit_sub_parameter_names(component)
+		.or_else(|| {
+			component.get("fields").and_then(|fields| {
+				unavatar_explicit_sub_parameter_names(fields)
+					.or_else(|| fields.get("control").and_then(unavatar_explicit_sub_parameter_names))
+					.or_else(|| fields.get("Control").and_then(unavatar_explicit_sub_parameter_names))
+					.or_else(|| fields.get("menuItem").and_then(unavatar_menu_item_sub_parameter_names))
+					.or_else(|| fields.get("menu_item").and_then(unavatar_menu_item_sub_parameter_names))
+			})
+		})
+		.or_else(|| {
+			component
+				.get("control")
+				.or_else(|| component.get("Control"))
+				.and_then(unavatar_explicit_sub_parameter_names)
+		})
+		.or_else(|| {
+			component
+				.get("menuItem")
+				.or_else(|| component.get("menu_item"))
+				.and_then(unavatar_menu_item_sub_parameter_names)
+		})
+		.unwrap_or_default()
+}
+
+fn unavatar_menu_item_sub_parameter_names(menu_item: &Value) -> Option<Vec<String>> {
+	unavatar_explicit_sub_parameter_names(menu_item).or_else(|| {
+		menu_item
+			.get("control")
+			.or_else(|| menu_item.get("Control"))
+			.and_then(unavatar_explicit_sub_parameter_names)
+	})
+}
+
+fn unavatar_explicit_sub_parameter_names(value: &Value) -> Option<Vec<String>> {
+	let parameters = value
+		.get("subParameters")
+		.or_else(|| value.get("sub_parameters"))
+		.or_else(|| value.get("SubParameters"))?
+		.as_array()?;
+	let names = parameters
+		.iter()
+		.filter_map(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(Value::as_str))
+				.or_else(|| parameter.get("Name").and_then(Value::as_str))
+		})
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.collect::<Vec<_>>();
+	(!names.is_empty()).then_some(names)
 }
 
 fn unavatar_menu_item_parameter_value(menu_item: &Value) -> Option<(String, f32)> {
@@ -8558,7 +8615,8 @@ mod tests {
 							"menuItem": {
 								"control": {
 									"Parameter": {"Name": "JacketColor"},
-									"Value": "1"
+									"Value": "1",
+									"subParameters": [{"name": "JacketHue"}, {"Name": "JacketSat"}]
 								}
 							},
 							"objects": [{
@@ -8586,6 +8644,10 @@ mod tests {
 		assert_eq!(actions.actions[0].conditions[0].source_component_id.as_deref(), Some("mat-setter"));
 		assert_eq!(actions.actions[0].conditions[0].parameter_name.as_deref(), Some("JacketColor"));
 		assert_eq!(actions.actions[0].conditions[0].parameter_value, Some(1.0));
+		assert_eq!(
+			actions.actions[0].conditions[0].sub_parameter_names,
+			vec!["JacketHue".to_string(), "JacketSat".to_string()]
+		);
 		assert!(!actions.actions[0].conditions[0].inverted);
 		assert_eq!(
 			actions.actions[0].triggers,

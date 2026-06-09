@@ -207,6 +207,8 @@ pub struct UnaRuntimeActionCondition {
 	pub parameter_name: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub parameter_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub sub_parameter_names: Vec<String>,
 	#[serde(default, skip_serializing_if = "is_false")]
 	pub inverted: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]

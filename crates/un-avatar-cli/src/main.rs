@@ -403,6 +403,8 @@ struct DiagnoseActionConditionSummary {
 	parameter_name: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	parameter_value: Option<f32>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	sub_parameter_names: Vec<String>,
 	inverted: bool,
 	active_parent_count: usize,
 }
@@ -561,6 +563,8 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	control_type: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	parameter: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	sub_parameters: Vec<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	value: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -2155,6 +2159,28 @@ fn modular_avatar_component_ref<'a>(component: &'a serde_json::Value, names: &[&
 	})
 }
 
+fn modular_avatar_sub_parameter_names(value: &serde_json::Value) -> Vec<String> {
+	value
+		.get("subParameters")
+		.or_else(|| value.get("sub_parameters"))
+		.or_else(|| value.get("SubParameters"))
+		.and_then(|value| value.as_array())
+		.map(|parameters| {
+			parameters
+				.iter()
+				.filter_map(|parameter| {
+					parameter
+						.as_str()
+						.or_else(|| parameter.get("name").and_then(|value| value.as_str()))
+						.or_else(|| parameter.get("Name").and_then(|value| value.as_str()))
+				})
+				.filter(|value| !value.is_empty())
+				.map(str::to_owned)
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
 fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> {
 	let value = value?;
 	value
@@ -2202,6 +2228,7 @@ fn modular_avatar_menu_component_summary(component: &serde_json::Value, short_ty
 			.or_else(|| modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"])),
 		control_type: modular_avatar_component_string(control, &["type", "Type", "controlType", "control_type"]),
 		parameter,
+		sub_parameters: modular_avatar_sub_parameter_names(control),
 		value: control
 			.get("value")
 			.or_else(|| control.get("Value"))
@@ -3180,6 +3207,7 @@ fn runtime_action_conditions<'a>(
 			path: condition.source_node.as_ref().and_then(|target| target.path.clone()),
 			parameter_name: condition.parameter_name.clone(),
 			parameter_value: condition.parameter_value,
+			sub_parameter_names: condition.sub_parameter_names.clone(),
 			inverted: condition.inverted,
 			active_parent_count: condition.active_parent_nodes.len(),
 		})
@@ -3385,11 +3413,12 @@ fn run_diagnose(
 							.or(condition.path.as_deref())
 							.unwrap_or("?");
 						format!(
-							"component={:?} target={} parameter={:?}:{:?} inverted={} active_parents={}",
+							"component={:?} target={} parameter={:?}:{:?} sub_parameters={:?} inverted={} active_parents={}",
 							condition.source_component_id,
 							target,
 							condition.parameter_name,
 							condition.parameter_value,
+							condition.sub_parameter_names,
 							condition.inverted,
 							condition.active_parent_count
 						)
@@ -4089,9 +4118,10 @@ mod tests {
 								"MenuSource": "Children",
 								"menuSource_otherObjectChildren": {"path": "Root/HatMenu/Children"},
 								"Control": {
-									"Type": "Toggle",
+									"Type": "RadialPuppet",
 									"Parameter": {"Name": "Hat"},
-									"Value": 1
+									"Value": 1,
+									"subParameters": [{"name": "HatAngle"}]
 								}
 							}
 						}, {
@@ -4171,8 +4201,9 @@ mod tests {
 		assert_eq!(menu.short_type, "ModularAvatarMenuItem");
 		assert_eq!(menu.id.as_deref(), Some("menu-hat"));
 		assert_eq!(menu.label.as_deref(), Some("Hat"));
-		assert_eq!(menu.control_type.as_deref(), Some("Toggle"));
+		assert_eq!(menu.control_type.as_deref(), Some("RadialPuppet"));
 		assert_eq!(menu.parameter.as_deref(), Some("Hat"));
+		assert_eq!(menu.sub_parameters, vec!["HatAngle".to_string()]);
 		assert_eq!(menu.value, Some(1.0));
 		assert_eq!(menu.target_path.as_deref(), Some("Root/HatMenu"));
 		assert_eq!(menu.menu_source.as_deref(), Some("Children"));
