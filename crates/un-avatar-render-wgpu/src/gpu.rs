@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::BTreeMap,
+	collections::{BTreeMap, BTreeSet},
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -78,6 +78,13 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) owned_material_count: usize,
 	pub(crate) owned_image_count: usize,
 	pub(crate) owned_dynamics_count: usize,
+	pub(crate) resident_mesh_primitive_count: usize,
+	pub(crate) resident_material_count: usize,
+	pub(crate) resident_image_count: usize,
+	pub(crate) resident_dynamics_count: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) missing_active_asset_groups: Vec<String>,
+	pub(crate) inactive_owned_asset_group_count: usize,
 	pub(crate) scoped_upload_supported: bool,
 	pub(crate) all_resident: bool,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -118,6 +125,40 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		.map(|scene| scene.asset_group_ownership_counts())
 		.unwrap_or_default();
 	let has_ownership = ownership.groups > 0;
+	let mut active_group_set = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
+	let active_ownership = document
+		.scene
+		.as_ref()
+		.map(|scene| {
+			let mut mesh_primitives = BTreeSet::<(usize, usize)>::new();
+			let mut materials = BTreeSet::new();
+			let mut images = BTreeSet::new();
+			let mut dynamics = BTreeSet::new();
+			let mut owned_groups = BTreeSet::new();
+			for group in &scene.asset_group_ownership {
+				if !active_group_set.contains(&group.group_id) {
+					continue;
+				}
+				owned_groups.insert(group.group_id.clone());
+				mesh_primitives.extend(
+					group
+						.mesh_primitives
+						.iter()
+						.map(|primitive| (primitive.mesh_index, primitive.primitive_index)),
+				);
+				materials.extend(group.materials.iter().copied());
+				images.extend(group.images.iter().copied());
+				dynamics.extend(group.dynamics_source_ids.iter().cloned());
+			}
+			(owned_groups, mesh_primitives.len(), materials.len(), images.len(), dynamics.len())
+		})
+		.unwrap_or_default();
+	let (owned_active_groups, resident_mesh_primitives, resident_materials, resident_images, resident_dynamics) = active_ownership;
+	for group in &owned_active_groups {
+		active_group_set.remove(group);
+	}
+	let missing_active_asset_groups = active_group_set.into_iter().collect::<Vec<_>>();
+	let inactive_owned_asset_group_count = ownership.groups.saturating_sub(owned_active_groups.len());
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
 			"all-resident".to_string()
@@ -132,10 +173,17 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		owned_material_count: ownership.materials,
 		owned_image_count: ownership.images,
 		owned_dynamics_count: ownership.dynamics,
+		resident_mesh_primitive_count: resident_mesh_primitives,
+		resident_material_count: resident_materials,
+		resident_image_count: resident_images,
+		resident_dynamics_count: resident_dynamics,
+		missing_active_asset_groups,
+		inactive_owned_asset_group_count,
 		scoped_upload_supported: false,
 		all_resident: true,
 		reason: if has_declared_groups && has_ownership {
-			"wardrobe asset ownership metadata is present, but scoped GPU upload/unload is not yet implemented".to_string()
+			"wardrobe asset ownership metadata is present and scoped residency can be planned, but GPU resources are still all-resident"
+				.to_string()
 		} else if has_declared_groups {
 			"wardrobe sets declare assetGroups, but mesh/texture/material assets do not yet carry group ownership metadata".to_string()
 		} else {
@@ -4669,6 +4717,14 @@ mod tests {
 		);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
+		assert_eq!(
+			plan.missing_active_asset_groups,
+			vec!["outfit:coat".to_string(), "texture:red".to_string()]
+		);
+		assert_eq!(plan.resident_mesh_primitive_count, 0);
+		assert_eq!(plan.resident_material_count, 0);
+		assert_eq!(plan.resident_image_count, 0);
+		assert_eq!(plan.resident_dynamics_count, 0);
 		assert!(plan
 			.reason
 			.contains("mesh/texture/material assets do not yet carry group ownership metadata"));
@@ -4678,16 +4734,28 @@ mod tests {
 	fn wardrobe_asset_upload_plan_reports_asset_group_ownership_counts() {
 		let mut document = un_avatar_core::UnaDocument {
 			scene: Some(un_avatar_core::UnaSceneSnapshot {
-				asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
-					group_id: "outfit:coat".to_string(),
-					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
-						mesh_index: 1,
-						primitive_index: 2,
-					}],
-					materials: vec![3],
-					images: vec![4, 5],
-					dynamics_source_ids: vec!["physbone:coat".to_string()],
-				}],
+				asset_group_ownership: vec![
+					un_avatar_core::UnaSceneAssetGroupOwnership {
+						group_id: "outfit:coat".to_string(),
+						mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+							mesh_index: 1,
+							primitive_index: 2,
+						}],
+						materials: vec![3],
+						images: vec![4, 5],
+						dynamics_source_ids: vec!["physbone:coat".to_string()],
+					},
+					un_avatar_core::UnaSceneAssetGroupOwnership {
+						group_id: "avatar:base".to_string(),
+						mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+							mesh_index: 0,
+							primitive_index: 0,
+						}],
+						materials: vec![0],
+						images: vec![0],
+						dynamics_source_ids: Vec::new(),
+					},
+				],
 				..Default::default()
 			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
@@ -4708,14 +4776,20 @@ mod tests {
 			.set_active_asset_groups(vec!["outfit:coat".to_string()]);
 
 		let plan = wardrobe_asset_upload_plan_for_document(&document);
-		assert_eq!(plan.owned_asset_group_count, 1);
-		assert_eq!(plan.owned_mesh_primitive_count, 1);
-		assert_eq!(plan.owned_material_count, 1);
-		assert_eq!(plan.owned_image_count, 2);
+		assert_eq!(plan.owned_asset_group_count, 2);
+		assert_eq!(plan.owned_mesh_primitive_count, 2);
+		assert_eq!(plan.owned_material_count, 2);
+		assert_eq!(plan.owned_image_count, 3);
 		assert_eq!(plan.owned_dynamics_count, 1);
+		assert_eq!(plan.resident_mesh_primitive_count, 1);
+		assert_eq!(plan.resident_material_count, 1);
+		assert_eq!(plan.resident_image_count, 2);
+		assert_eq!(plan.resident_dynamics_count, 1);
+		assert!(plan.missing_active_asset_groups.is_empty());
+		assert_eq!(plan.inactive_owned_asset_group_count, 1);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
-		assert!(plan.reason.contains("ownership metadata is present"));
+		assert!(plan.reason.contains("scoped residency can be planned"));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
