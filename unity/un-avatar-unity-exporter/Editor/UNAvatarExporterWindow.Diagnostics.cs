@@ -140,6 +140,11 @@ namespace UNAvatar.UnityExporter
             return string.Join("/", parts);
         }
 
+        private static string BuildTransformPathForProbe(Transform transform)
+        {
+            return FormatTransformPathForProbe(transform);
+        }
+
         private static string FormatTransformPath(Transform transform)
         {
             if (transform == null)
