@@ -212,7 +212,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
 			if has_ownership && has_active_asset_groups {
-				"draw-scoped-all-resident".to_string()
+				"draw-scoped-2d-texture-scoped".to_string()
 			} else {
 				"all-resident".to_string()
 			}
@@ -262,12 +262,12 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
-		scoped_upload_supported: false,
-		all_resident: true,
+		scoped_upload_supported: has_declared_groups && has_ownership && has_active_asset_groups,
+		all_resident: !(has_declared_groups && has_ownership && has_active_asset_groups),
 		active_residency_gaps_detected: false,
 		residency_gap_index_status_limit: 0,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
-			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; GPU resources remain all-resident"
+			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; 2D image texture resources are scoped while mesh buffers and cubemaps remain resident"
 				.to_string()
 		} else if has_declared_groups && has_ownership {
 			"wardrobe asset ownership metadata is present, but no active asset groups are selected; GPU resources remain all-resident"
@@ -312,7 +312,7 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
 	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
-	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
+	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-2d-texture-scoped";
 	plan.active_residency_gaps_detected =
 		draw_counts.active_draws_using_inactive_image_texture_count > 0 || draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
@@ -5107,10 +5107,10 @@ mod tests {
 		assert_eq!(plan.resident_dynamics_count, 1);
 		assert!(plan.missing_active_asset_groups.is_empty());
 		assert_eq!(plan.inactive_owned_asset_group_count, 1);
-		assert!(!plan.scoped_upload_supported);
-		assert!(plan.all_resident);
-		assert_eq!(plan.mode, "draw-scoped-all-resident");
-		assert!(plan.reason.contains("scopes renderer draw/material/texture residency"));
+		assert!(plan.scoped_upload_supported);
+		assert!(!plan.all_resident);
+		assert_eq!(plan.mode, "draw-scoped-2d-texture-scoped");
+		assert!(plan.reason.contains("2D image texture resources are scoped"));
 	}
 
 	#[test]
@@ -5172,8 +5172,9 @@ mod tests {
 	fn wardrobe_asset_upload_plan_can_include_renderer_draw_residency_counts() {
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-all-resident".to_string(),
-				all_resident: true,
+				mode: "draw-scoped-2d-texture-scoped".to_string(),
+				scoped_upload_supported: true,
+				all_resident: false,
 				..Default::default()
 			},
 			Some(SceneMeshAssetResidencyCounts {
@@ -5215,8 +5216,8 @@ mod tests {
 		assert_eq!(plan.pending_image_texture_upload_count, 1);
 		assert_eq!(plan.pending_material_slot_upload_count, 1);
 		assert!(plan.scoped_draw_supported);
-		assert!(!plan.scoped_upload_supported);
-		assert!(plan.all_resident);
+		assert!(plan.scoped_upload_supported);
+		assert!(!plan.all_resident);
 		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
@@ -5227,8 +5228,9 @@ mod tests {
 		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-all-resident".to_string(),
-				all_resident: true,
+				mode: "draw-scoped-2d-texture-scoped".to_string(),
+				scoped_upload_supported: true,
+				all_resident: false,
 				..Default::default()
 			},
 			Some(SceneMeshAssetResidencyCounts {
