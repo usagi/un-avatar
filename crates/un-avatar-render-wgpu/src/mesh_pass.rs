@@ -865,6 +865,33 @@ fn scene_texture_upload_step_count(scene: &UnaSceneSnapshot, texture_roles: &[Te
 		.sum()
 }
 
+fn mesh_primitive_asset_resident(
+	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
+	active_asset_groups: &[String],
+	mesh_index: usize,
+	primitive_index: usize,
+) -> bool {
+	if asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
+		return true;
+	}
+	let active_groups = active_asset_groups.iter().map(String::as_str).collect::<BTreeSet<_>>();
+	let mut owned_by_any_group = false;
+	for group in asset_group_ownership {
+		if !group
+			.mesh_primitives
+			.iter()
+			.any(|primitive| primitive.mesh_index == mesh_index && primitive.primitive_index == primitive_index)
+		{
+			continue;
+		}
+		owned_by_any_group = true;
+		if active_groups.contains(group.group_id.as_str()) {
+			return true;
+		}
+	}
+	!owned_by_any_group
+}
+
 struct ExpandedPrimitive {
 	verts: Vec<Vertex>,
 	indices: Vec<u32>,
@@ -1017,7 +1044,8 @@ struct MeshDraw {
 	morph_bind_group: wgpu::BindGroup,
 	_compute_fur_cards: Option<ComputeFurCardsDrawResources>,
 	world_node_index: usize,
-	active: bool,
+	visible: bool,
+	asset_resident: bool,
 	shading: UnaShadingModel,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_source_indices: Vec<usize>,
@@ -1032,6 +1060,12 @@ struct MeshDraw {
 	probe_anchor_node: Option<usize>,
 	local_bounds: Option<UnaBounds>,
 	world_origin: Vec3,
+}
+
+impl MeshDraw {
+	fn active(&self) -> bool {
+		self.visible && self.asset_resident
+	}
 }
 
 #[allow(dead_code)]
@@ -1273,7 +1307,7 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
 	for (draw_index, draw) in draws.iter().enumerate() {
-		if !draw.active {
+		if !draw.active() {
 			continue;
 		}
 		state.active_draw_indices.push(draw_index);
@@ -6715,7 +6749,8 @@ impl SceneMeshes {
 					morph_bind_group: morph_resources.bind_group,
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
-					active,
+					visible: active,
+					asset_resident: true,
 					shading: mat.shading,
 					morph_pos,
 					morph_source_indices,
@@ -7409,8 +7444,34 @@ impl SceneMeshes {
 		let mut changed = 0;
 		for draw in &mut self.draws {
 			let next = self.visibility_scratch.get(draw.world_node_index).copied().unwrap_or(false);
-			if draw.active != next {
-				draw.active = next;
+			let was_active = draw.active();
+			if draw.visible != next {
+				draw.visible = next;
+			}
+			if draw.active() != was_active {
+				changed += 1;
+			}
+		}
+		if changed > 0 {
+			self.rebuild_draw_order();
+		}
+		changed
+	}
+
+	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
+		let mut changed = 0;
+		for draw in &mut self.draws {
+			let next = mesh_primitive_asset_resident(
+				&scene.asset_group_ownership,
+				active_asset_groups,
+				draw.mesh_index,
+				draw.primitive_index,
+			);
+			let was_active = draw.active();
+			if draw.asset_resident != next {
+				draw.asset_resident = next;
+			}
+			if draw.active() != was_active {
 				changed += 1;
 			}
 		}
@@ -7548,6 +7609,34 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn mesh_primitive_asset_residency_keeps_active_and_unowned_primitives() {
+		let ownership = vec![
+			un_avatar_core::UnaSceneAssetGroupOwnership {
+				group_id: "outfit:coat".to_string(),
+				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+					mesh_index: 1,
+					primitive_index: 0,
+				}],
+				..Default::default()
+			},
+			un_avatar_core::UnaSceneAssetGroupOwnership {
+				group_id: "outfit:hat".to_string(),
+				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+					mesh_index: 2,
+					primitive_index: 0,
+				}],
+				..Default::default()
+			},
+		];
+		let active_groups = vec!["outfit:coat".to_string()];
+
+		assert!(mesh_primitive_asset_resident(&ownership, &active_groups, 0, 0));
+		assert!(mesh_primitive_asset_resident(&ownership, &active_groups, 1, 0));
+		assert!(!mesh_primitive_asset_resident(&ownership, &active_groups, 2, 0));
+		assert!(mesh_primitive_asset_resident(&ownership, &[], 2, 0));
 	}
 
 	#[test]

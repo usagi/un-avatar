@@ -159,9 +159,14 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 	}
 	let missing_active_asset_groups = active_group_set.into_iter().collect::<Vec<_>>();
 	let inactive_owned_asset_group_count = ownership.groups.saturating_sub(owned_active_groups.len());
+	let has_active_asset_groups = !active_asset_groups.is_empty();
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
-			"all-resident".to_string()
+			if has_ownership && has_active_asset_groups {
+				"draw-scoped-all-resident".to_string()
+			} else {
+				"all-resident".to_string()
+			}
 		} else {
 			"unscoped".to_string()
 		},
@@ -181,8 +186,11 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		inactive_owned_asset_group_count,
 		scoped_upload_supported: false,
 		all_resident: true,
-		reason: if has_declared_groups && has_ownership {
-			"wardrobe asset ownership metadata is present and scoped residency can be planned, but GPU resources are still all-resident"
+		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
+			"wardrobe asset ownership metadata scopes renderer draw residency for active asset groups; GPU buffers/textures remain all-resident"
+				.to_string()
+		} else if has_declared_groups && has_ownership {
+			"wardrobe asset ownership metadata is present, but no active asset groups are selected; GPU resources remain all-resident"
 				.to_string()
 		} else if has_declared_groups {
 			"wardrobe sets declare assetGroups, but mesh/texture/material assets do not yet carry group ownership metadata".to_string()
@@ -1953,6 +1961,7 @@ impl GpuState {
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		if document_changed {
 			sm.refresh_draw_materials_from_scene(&self.queue, runtime.scene);
+			sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
 		}
 		sm.update_draw_transforms(
 			&self.queue,
@@ -3164,6 +3173,7 @@ impl GpuSceneBuildContext {
 				texture_summary = Some(sm.texture_summary());
 				let world = crate::scene_transform::scene_world_matrices(runtime.scene);
 				let expression_weights = active_expression_weights_for_doc(false, &document);
+				sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
 				sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
@@ -4789,7 +4799,8 @@ mod tests {
 		assert_eq!(plan.inactive_owned_asset_group_count, 1);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
-		assert!(plan.reason.contains("scoped residency can be planned"));
+		assert_eq!(plan.mode, "draw-scoped-all-resident");
+		assert!(plan.reason.contains("scopes renderer draw residency"));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
