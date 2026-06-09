@@ -199,6 +199,5 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ## Near-Term Order
 
 1. Promote MA Menu Item / Menu Group / Menu Installer menu graph candidates into a full virtual menu graph for wardrobe candidates and runtime UI labels.
-2. Implement ReactiveComponent `Inverted` / parent active condition runtime action evaluation.
-3. Implement Mesh Cutter / Shape Changer resolver-side vertex filtering from the new filter representation.
-4. Add per-asset ownership metadata for Wardrobe asset group lazy GPU upload / unload.
+2. Implement Mesh Cutter / Shape Changer resolver-side vertex filtering from the new filter representation.
+3. Add per-asset ownership metadata for Wardrobe asset group lazy GPU upload / unload.

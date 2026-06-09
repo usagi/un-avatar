@@ -4308,7 +4308,6 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	let mut disabled = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
 	let mut unsupported_active_types = BTreeMap::<String, usize>::new();
-	let mut inverted_runtime_action_types = BTreeMap::<String, usize>::new();
 	for component in components {
 		let component_disabled = component.get("enabled").and_then(Value::as_bool) == Some(false);
 		if component_disabled {
@@ -4322,12 +4321,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		match modular_avatar_component_support_kind(short_type) {
 			"resolver" => resolver_supported += 1,
 			"metadata" => metadata_supported += 1,
-			"runtime_action" => {
-				runtime_action_supported += 1;
-				if !component_disabled && unavatar_modular_avatar_component_inverted(component) {
-					*inverted_runtime_action_types.entry(short_type.to_string()).or_default() += 1;
-				}
-			}
+			"runtime_action" => runtime_action_supported += 1,
 			_ => {
 				unsupported += 1;
 				*unsupported_types.entry(short_type.to_string()).or_default() += 1;
@@ -4345,17 +4339,6 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			feature: format!("ModularAvatar.{short_type}"),
 			detail: Some(format!(
 				"{count} unsupported Modular Avatar component(s) were preserved as source payload but not applied"
-			)),
-		});
-	}
-	for (short_type, count) in &inverted_runtime_action_types {
-		report.push_warning(format!(
-			".unavatar Modular Avatar runtime action approximation: type={short_type}, inverted_ignored={count}"
-		));
-		report.approximations.push(Approximation {
-			feature: format!("ModularAvatar.{short_type}.Inverted"),
-			detail: Some(format!(
-				"{count} inverted Modular Avatar reactive component(s) were imported as direct runtime actions without inverted condition evaluation"
 			)),
 		});
 	}
@@ -7663,7 +7646,7 @@ mod tests {
 	}
 
 	#[test]
-	fn import_marks_inverted_modular_avatar_action_component_partial_success() {
+	fn import_preserves_inverted_modular_avatar_action_condition_without_approximation() {
 		let bin = triangle_bin_bytes();
 		let json = format!(
 			r#"{{
@@ -7723,19 +7706,19 @@ mod tests {
 			)
 			.unwrap();
 
-		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
+		assert_eq!(got.report.status, ReportStatus::Success);
 		assert_eq!(got.report.lost_features.len(), 0);
-		assert_eq!(got.report.approximations.len(), 1);
-		assert_eq!(
-			got.report.approximations[0].feature,
-			"ModularAvatar.ModularAvatarObjectToggle.Inverted"
-		);
+		assert_eq!(got.report.approximations.len(), 0);
 		let actions = got.document.runtime_actions.as_ref().expect("runtime actions");
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:object_toggle:0");
-		assert!(got.report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("inverted_ignored=1")
-		}));
+		assert_eq!(actions.actions[0].conditions.len(), 1);
+		assert!(actions.actions[0].conditions[0].inverted);
+		assert!(!got
+			.report
+			.diagnostics
+			.iter()
+			.any(|diagnostic| diagnostic.text.contains("inverted_ignored")));
 	}
 
 	#[test]
@@ -11003,7 +10986,7 @@ mod tests {
 	}
 
 	#[test]
-	fn modular_avatar_component_catalog_reports_inverted_runtime_action_approximation() {
+	fn modular_avatar_component_catalog_does_not_warn_for_inverted_runtime_actions() {
 		let components = vec![serde_json::json!({
 			"shortType": "ModularAvatarObjectToggle",
 			"enabled": true,
@@ -11015,13 +10998,12 @@ mod tests {
 		let message = report
 			.messages
 			.iter()
-			.find(|message| message.contains("runtime action approximation"))
+			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("type=ModularAvatarObjectToggle"));
-		assert!(message.contains("inverted_ignored=1"));
+		assert!(message.contains("runtime_action_supported=1"));
+		assert!(!report.messages.iter().any(|message| message.contains("inverted_ignored")));
 		assert_eq!(report.lost_features.len(), 0);
-		assert_eq!(report.approximations.len(), 1);
-		assert_eq!(report.approximations[0].feature, "ModularAvatar.ModularAvatarObjectToggle.Inverted");
+		assert_eq!(report.approximations.len(), 0);
 	}
 
 	#[test]

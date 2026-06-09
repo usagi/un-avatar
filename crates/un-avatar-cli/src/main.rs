@@ -4541,8 +4541,8 @@ mod tests {
 			detail: Some("1 unsupported Modular Avatar component(s) were preserved as source payload but not applied".to_string()),
 		});
 		import_report.approximations.push(un_avatar_core::Approximation {
-			feature: "ModularAvatar.ModularAvatarObjectToggle.Inverted".to_string(),
-			detail: Some("inverted condition evaluation is not exact".to_string()),
+			feature: "ModularAvatar.ModularAvatarExample.Approximate".to_string(),
+			detail: Some("example approximation is not exact".to_string()),
 		});
 
 		let report = build_diagnose_report(
@@ -4568,9 +4568,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter")));
-		assert!(report.warnings.iter().any(
-			|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarObjectToggle.Inverted")
-		));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarExample.Approximate")));
 	}
 
 	#[test]
