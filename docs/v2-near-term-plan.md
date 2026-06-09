@@ -101,7 +101,7 @@ MVP control command:
 
 後回し:
 
-- wardrobe asset group 単位の lazy GPU upload / unload。現在は選択 set の `assetGroups` と最小 resolver cache key を runtime state / renderer status / CLI diagnose / wardrobe apply report で観測する段階。
+- wardrobe asset group 単位の lazy GPU upload / unload。現在は選択 set の `assetGroups`、最小 resolver cache key、source asset group ownership count を runtime state / renderer status / CLI diagnose / wardrobe apply report で観測する段階。scoped GPU upload / unload はまだ `all-resident` fallback。
 - crossfade、dissolve、sparkle などのお着替え effect。
 - set ごとの physics reset / blend。
 - user-facing ring-menu UI。

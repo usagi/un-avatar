@@ -450,6 +450,8 @@ Runtime は base state 適用時、親 OFF に由来する子孫の `false` を�
 - Runtime は選択 set に必要な group だけ GPU upload し、不要 group は unload 対象にできる。
 - 数百着規模の衣装を扱うユーザーを想定し、全衣装の GPU 常駐を前提にしない。
 
+Runtime schema では、asset group ownership は scene source data 側の `asset_group_ownership[]` に保持する。各 entry は `group_id` と、所属する `mesh_primitives`、`materials`、`images`、`dynamics_source_ids` を列挙する。現 renderer はこの metadata の件数を runtime status の wardrobe asset upload plan に公開するが、scoped GPU upload / unload が実装されるまでは明示的に `all-resident` として扱う。
+
 ### Capture Diff Workflow
 
 ユーザー負担を減らすため、Unity Exporter は手入力ではなく capture diff を標準導線にする。

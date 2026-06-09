@@ -73,6 +73,11 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) declared_asset_group_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) declared_asset_groups: Vec<String>,
+	pub(crate) owned_asset_group_count: usize,
+	pub(crate) owned_mesh_primitive_count: usize,
+	pub(crate) owned_material_count: usize,
+	pub(crate) owned_image_count: usize,
+	pub(crate) owned_dynamics_count: usize,
 	pub(crate) scoped_upload_supported: bool,
 	pub(crate) all_resident: bool,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -107,6 +112,12 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 	declared_asset_groups.dedup();
 	let active_asset_groups = document.runtime_model().active_asset_groups().to_vec();
 	let has_declared_groups = !declared_asset_groups.is_empty();
+	let ownership = document
+		.scene
+		.as_ref()
+		.map(|scene| scene.asset_group_ownership_counts())
+		.unwrap_or_default();
+	let has_ownership = ownership.groups > 0;
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
 			"all-resident".to_string()
@@ -116,9 +127,16 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		active_asset_groups,
 		declared_asset_group_count: declared_asset_groups.len(),
 		declared_asset_groups,
+		owned_asset_group_count: ownership.groups,
+		owned_mesh_primitive_count: ownership.mesh_primitives,
+		owned_material_count: ownership.materials,
+		owned_image_count: ownership.images,
+		owned_dynamics_count: ownership.dynamics,
 		scoped_upload_supported: false,
 		all_resident: true,
-		reason: if has_declared_groups {
+		reason: if has_declared_groups && has_ownership {
+			"wardrobe asset ownership metadata is present, but scoped GPU upload/unload is not yet implemented".to_string()
+		} else if has_declared_groups {
 			"wardrobe sets declare assetGroups, but mesh/texture/material assets do not yet carry group ownership metadata".to_string()
 		} else {
 			"wardrobe sets do not declare assetGroups".to_string()
@@ -4654,6 +4672,50 @@ mod tests {
 		assert!(plan
 			.reason
 			.contains("mesh/texture/material assets do not yet carry group ownership metadata"));
+	}
+
+	#[test]
+	fn wardrobe_asset_upload_plan_reports_asset_group_ownership_counts() {
+		let mut document = un_avatar_core::UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 1,
+						primitive_index: 2,
+					}],
+					materials: vec![3],
+					images: vec![4, 5],
+					dynamics_source_ids: vec!["physbone:coat".to_string()],
+				}],
+				..Default::default()
+			}),
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"sets": [{
+							"id": "coat",
+							"assetGroups": ["outfit:coat"]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+		document
+			.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:coat".to_string()]);
+
+		let plan = wardrobe_asset_upload_plan_for_document(&document);
+		assert_eq!(plan.owned_asset_group_count, 1);
+		assert_eq!(plan.owned_mesh_primitive_count, 1);
+		assert_eq!(plan.owned_material_count, 1);
+		assert_eq!(plan.owned_image_count, 2);
+		assert_eq!(plan.owned_dynamics_count, 1);
+		assert!(!plan.scoped_upload_supported);
+		assert!(plan.all_resident);
+		assert!(plan.reason.contains("ownership metadata is present"));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

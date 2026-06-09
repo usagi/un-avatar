@@ -6949,6 +6949,7 @@ pub fn scene_snapshot_from_gltf(
 		nodes,
 		roots,
 		node_constraints: Vec::new(),
+		asset_group_ownership: Vec::new(),
 	};
 	Ok(scene)
 }

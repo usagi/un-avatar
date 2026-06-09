@@ -136,6 +136,11 @@ struct DiagnoseSceneSummary {
 	material_count: usize,
 	liltoon_feature_counts: BTreeMap<String, usize>,
 	node_constraint_count: usize,
+	asset_group_ownership_count: usize,
+	asset_group_owned_mesh_primitive_count: usize,
+	asset_group_owned_material_count: usize,
+	asset_group_owned_image_count: usize,
+	asset_group_owned_dynamics_count: usize,
 	shading_counts: BTreeMap<String, usize>,
 	alpha_counts: BTreeMap<String, usize>,
 	visible_shading_counts: BTreeMap<String, usize>,
@@ -2817,6 +2822,7 @@ fn build_diagnose_report(
 				skin_out_of_range
 			));
 		}
+		let asset_ownership_counts = sc.asset_group_ownership_counts();
 		DiagnoseSceneSummary {
 			has_scene: true,
 			mesh_count: sc.meshes.len(),
@@ -2843,6 +2849,11 @@ fn build_diagnose_report(
 			material_count: sc.materials.len(),
 			liltoon_feature_counts,
 			node_constraint_count: sc.node_constraints.len(),
+			asset_group_ownership_count: asset_ownership_counts.groups,
+			asset_group_owned_mesh_primitive_count: asset_ownership_counts.mesh_primitives,
+			asset_group_owned_material_count: asset_ownership_counts.materials,
+			asset_group_owned_image_count: asset_ownership_counts.images,
+			asset_group_owned_dynamics_count: asset_ownership_counts.dynamics,
 			shading_counts,
 			alpha_counts,
 			visible_shading_counts,
@@ -2877,6 +2888,11 @@ fn build_diagnose_report(
 			material_count: 0,
 			liltoon_feature_counts: BTreeMap::new(),
 			node_constraint_count: 0,
+			asset_group_ownership_count: 0,
+			asset_group_owned_mesh_primitive_count: 0,
+			asset_group_owned_material_count: 0,
+			asset_group_owned_image_count: 0,
+			asset_group_owned_dynamics_count: 0,
 			shading_counts: BTreeMap::new(),
 			alpha_counts: BTreeMap::new(),
 			visible_shading_counts: BTreeMap::new(),
@@ -3629,6 +3645,14 @@ fn run_diagnose(
 	}
 	println!("node_constraints: {}", report.scene.node_constraint_count);
 	println!(
+		"asset_ownership: groups={} mesh_primitives={} materials={} images={} dynamics={}",
+		report.scene.asset_group_ownership_count,
+		report.scene.asset_group_owned_mesh_primitive_count,
+		report.scene.asset_group_owned_material_count,
+		report.scene.asset_group_owned_image_count,
+		report.scene.asset_group_owned_dynamics_count
+	);
+	println!(
 		"image_sources: {} / {} images, {} bytes, MIME {:?}",
 		report.scene.image_source_count, report.scene.image_count, report.scene.image_source_bytes, report.scene.image_source_mime_counts
 	);
@@ -4032,6 +4056,19 @@ mod tests {
 	#[test]
 	fn diagnose_report_summarizes_unavatar_asset_groups() {
 		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: "outfit:jacket".to_string(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 0,
+						primitive_index: 1,
+					}],
+					materials: vec![2],
+					images: vec![3],
+					dynamics_source_ids: vec!["physbone:jacket".to_string()],
+				}],
+				..Default::default()
+			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
 				spec_version: "0.1-preview".to_string(),
 				source: serde_json::json!({
@@ -4109,6 +4146,11 @@ mod tests {
 		);
 
 		let unavatar = report.unavatar.as_ref().unwrap();
+		assert_eq!(report.scene.asset_group_ownership_count, 1);
+		assert_eq!(report.scene.asset_group_owned_mesh_primitive_count, 1);
+		assert_eq!(report.scene.asset_group_owned_material_count, 1);
+		assert_eq!(report.scene.asset_group_owned_image_count, 1);
+		assert_eq!(report.scene.asset_group_owned_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
 		assert_eq!(unavatar.modular_avatar_component_count, 4);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));

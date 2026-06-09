@@ -1587,6 +1587,10 @@ pub struct UnaSceneSnapshot {
 	/// VRM 1 `VRMC_node_constraint` 由来のノード拘束。target/source は `nodes` インデックス。
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub node_constraints: Vec<UnaNodeConstraint>,
+	/// Source asset group ownership used by wardrobe lazy upload planning.
+	/// Runtime hot switch state remains in [`UnaRuntimeState::active_asset_groups`].
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub asset_group_ownership: Vec<UnaSceneAssetGroupOwnership>,
 }
 
 impl UnaSceneSnapshot {
@@ -1595,6 +1599,48 @@ impl UnaSceneSnapshot {
 	pub fn resolved_roots(&self) -> Cow<'_, [usize]> {
 		resolved_scene_roots(&self.nodes, &self.roots)
 	}
+
+	pub fn asset_group_ownership_counts(&self) -> UnaSceneAssetGroupOwnershipCounts {
+		let mut counts = UnaSceneAssetGroupOwnershipCounts {
+			groups: self.asset_group_ownership.len(),
+			..Default::default()
+		};
+		for group in &self.asset_group_ownership {
+			counts.mesh_primitives += group.mesh_primitives.len();
+			counts.materials += group.materials.len();
+			counts.images += group.images.len();
+			counts.dynamics += group.dynamics_source_ids.len();
+		}
+		counts
+	}
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaSceneAssetGroupOwnership {
+	pub group_id: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub mesh_primitives: Vec<UnaMeshPrimitiveKey>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub materials: Vec<usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub images: Vec<usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub dynamics_source_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaMeshPrimitiveKey {
+	pub mesh_index: usize,
+	pub primitive_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnaSceneAssetGroupOwnershipCounts {
+	pub groups: usize,
+	pub mesh_primitives: usize,
+	pub materials: usize,
+	pub images: usize,
+	pub dynamics: usize,
 }
 
 pub fn resolved_scene_roots<'a>(nodes: &[UnaSceneNode], roots: &'a [usize]) -> Cow<'a, [usize]> {
@@ -3948,6 +3994,41 @@ impl ExportReport {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn scene_asset_group_ownership_counts_grouped_assets() {
+		let scene = UnaSceneSnapshot {
+			asset_group_ownership: vec![
+				UnaSceneAssetGroupOwnership {
+					group_id: "avatar:base".to_string(),
+					mesh_primitives: vec![UnaMeshPrimitiveKey {
+						mesh_index: 0,
+						primitive_index: 0,
+					}],
+					materials: vec![0],
+					images: vec![0, 1],
+					dynamics_source_ids: Vec::new(),
+				},
+				UnaSceneAssetGroupOwnership {
+					group_id: "physics:hair".to_string(),
+					dynamics_source_ids: vec!["physbone:hair".to_string()],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+
+		assert_eq!(
+			scene.asset_group_ownership_counts(),
+			UnaSceneAssetGroupOwnershipCounts {
+				groups: 2,
+				mesh_primitives: 1,
+				materials: 1,
+				images: 2,
+				dynamics: 1,
+			}
+		);
+	}
 
 	#[test]
 	fn morph_weights_merge_expression_preset() {
