@@ -1277,6 +1277,51 @@ pub(crate) struct SceneMeshActiveResidencyGaps {
 	pub(crate) active_draws_using_inactive_material_slot_count: usize,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SceneMeshAssetResidencyRefresh {
+	pub(crate) active_draw_state_changed_count: usize,
+	pub(crate) image_texture_load_indices: Vec<usize>,
+	pub(crate) image_texture_unload_indices: Vec<usize>,
+	pub(crate) material_slot_load_indices: Vec<usize>,
+	pub(crate) material_slot_unload_indices: Vec<usize>,
+}
+
+impl SceneMeshAssetResidencyRefresh {
+	pub(crate) fn has_scoped_resource_changes(&self) -> bool {
+		!self.image_texture_load_indices.is_empty()
+			|| !self.image_texture_unload_indices.is_empty()
+			|| !self.material_slot_load_indices.is_empty()
+			|| !self.material_slot_unload_indices.is_empty()
+	}
+}
+
+fn residency_load_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+	residency_transition_indices(old, next, false, true)
+}
+
+fn residency_unload_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+	residency_transition_indices(old, next, true, false)
+}
+
+fn residency_transition_indices(
+	old: impl IntoIterator<Item = bool>,
+	next: impl IntoIterator<Item = bool>,
+	from: bool,
+	to: bool,
+) -> Vec<usize> {
+	let old = old.into_iter().collect::<Vec<_>>();
+	let next = next.into_iter().collect::<Vec<_>>();
+	let mut indices = Vec::new();
+	for index in 0..old.len().max(next.len()) {
+		let old_value = old.get(index).copied().unwrap_or(false);
+		let next_value = next.get(index).copied().unwrap_or(false);
+		if old_value == from && next_value == to {
+			indices.push(index);
+		}
+	}
+	indices
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -7725,7 +7770,16 @@ impl SceneMeshes {
 	}
 
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
-		let mut changed = 0;
+		self.refresh_asset_group_residency_with_changes(scene, active_asset_groups)
+			.active_draw_state_changed_count
+	}
+
+	pub(crate) fn refresh_asset_group_residency_with_changes(
+		&mut self,
+		scene: &UnaSceneSnapshot,
+		active_asset_groups: &[String],
+	) -> SceneMeshAssetResidencyRefresh {
+		let mut refresh = SceneMeshAssetResidencyRefresh::default();
 		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		for draw in &mut self.draws {
 			let next = asset_residency.mesh_primitive_resident(draw.mesh_index, draw.primitive_index);
@@ -7734,29 +7788,57 @@ impl SceneMeshes {
 				draw.asset_resident = next;
 			}
 			if draw.active() != was_active {
-				changed += 1;
+				refresh.active_draw_state_changed_count += 1;
 			}
 		}
-		self.image_texture_residency.clear();
-		self.image_texture_residency.extend(
+		refresh.image_texture_load_indices = residency_load_indices(
+			self.image_texture_residency.iter().copied(),
 			scene
 				.images
 				.iter()
 				.enumerate()
 				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
 		);
-		self.material_slot_residency.clear();
-		self.material_slot_residency.extend(
+		refresh.image_texture_unload_indices = residency_unload_indices(
+			self.image_texture_residency.iter().copied(),
+			scene
+				.images
+				.iter()
+				.enumerate()
+				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
+		);
+		self.image_texture_residency = scene
+			.images
+			.iter()
+			.enumerate()
+			.map(|(image_index, _)| asset_residency.image_resident(image_index))
+			.collect();
+		refresh.material_slot_load_indices = residency_load_indices(
+			self.material_slot_residency.iter().copied(),
 			scene
 				.materials
 				.iter()
 				.enumerate()
 				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
 		);
-		if changed > 0 {
+		refresh.material_slot_unload_indices = residency_unload_indices(
+			self.material_slot_residency.iter().copied(),
+			scene
+				.materials
+				.iter()
+				.enumerate()
+				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
+		);
+		self.material_slot_residency = scene
+			.materials
+			.iter()
+			.enumerate()
+			.map(|(material_index, _)| asset_residency.material_resident(material_index))
+			.collect();
+		if refresh.active_draw_state_changed_count > 0 {
 			self.rebuild_draw_order();
 		}
-		changed
+		refresh
 	}
 
 	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
@@ -8006,6 +8088,32 @@ mod tests {
 		assert!(!residency.image_resident(6));
 		let all_resident = SceneAssetResidencySets::for_scene(&scene, &[]);
 		assert!(all_resident.mesh_primitive_resident(2, 0));
+	}
+
+	#[test]
+	fn residency_transition_indices_report_loads_and_unloads() {
+		assert_eq!(
+			residency_load_indices([true, false, false, true], [false, true, false, true]),
+			vec![1]
+		);
+		assert_eq!(
+			residency_unload_indices([true, false, false, true], [false, true, false, true]),
+			vec![0]
+		);
+		assert_eq!(residency_load_indices([], [true, false, true]), vec![0, 2]);
+		assert_eq!(residency_unload_indices([true, false, true], []), vec![0, 2]);
+	}
+
+	#[test]
+	fn asset_residency_refresh_reports_scoped_resource_changes() {
+		let refresh = SceneMeshAssetResidencyRefresh {
+			image_texture_load_indices: vec![2],
+			material_slot_unload_indices: vec![4],
+			..Default::default()
+		};
+
+		assert!(refresh.has_scoped_resource_changes());
+		assert!(!SceneMeshAssetResidencyRefresh::default().has_scoped_resource_changes());
 	}
 
 	#[test]

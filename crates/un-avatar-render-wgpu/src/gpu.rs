@@ -2104,7 +2104,19 @@ impl GpuState {
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		if document_changed {
 			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
-			sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
+			let residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
+			if residency_refresh.has_scoped_resource_changes() && self.debug_log.is_enabled() {
+				self.debug_log.line(
+					"wardrobe",
+					format!(
+						"asset residency refresh image_load={:?} image_unload={:?} material_load={:?} material_unload={:?}",
+						residency_refresh.image_texture_load_indices,
+						residency_refresh.image_texture_unload_indices,
+						residency_refresh.material_slot_load_indices,
+						residency_refresh.material_slot_unload_indices
+					),
+				);
+			}
 			sm.rebuild_material_bind_groups(&self.device);
 		}
 		sm.update_draw_transforms(
