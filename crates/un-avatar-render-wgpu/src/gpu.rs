@@ -2115,6 +2115,7 @@ impl GpuState {
 		if document_changed {
 			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
 			sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
+			sm.rebuild_material_bind_groups(&self.device);
 		}
 		sm.update_draw_transforms(
 			&self.queue,

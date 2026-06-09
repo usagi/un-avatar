@@ -7410,6 +7410,13 @@ impl SceneMeshes {
 		draw.bind_outline_material = bind_outline_material;
 	}
 
+	pub(crate) fn rebuild_material_bind_groups(&mut self, device: &wgpu::Device) -> usize {
+		for draw_index in 0..self.draws.len() {
+			self.rebuild_draw_material_bind_groups(device, draw_index);
+		}
+		self.draws.len()
+	}
+
 	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
 		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
