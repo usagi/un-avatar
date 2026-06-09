@@ -308,6 +308,12 @@ pub struct SpringBoneSimulator {
 	physics: SpringBonePhysicsConfig,
 }
 
+/// Source-neutral v2 dynamics simulator name.
+///
+/// The implementation still reuses the v1 SpringBone solver assets, but runtime input flows
+/// through `UnaRuntimeDynamics` / `UnaDynamicsGroup` rather than source-format SpringBone data.
+pub type DynamicsSimulator = SpringBoneSimulator;
+
 /// 1 フレームで処理する最大蓄積時間 (秒)。スパイラル・オブ・デス防止。
 const MAX_ACCUM: f32 = 0.05;
 

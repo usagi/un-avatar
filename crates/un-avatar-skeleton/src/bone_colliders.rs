@@ -215,6 +215,15 @@ pub fn build_runtime_bone_colliders(
 	out
 }
 
+pub fn build_dynamics_bone_colliders(
+	scene: &UnaSceneSnapshot,
+	profile: Option<&HumanoidProfile>,
+	config: BoneColliderConfig,
+	dynamics: UnaRuntimeDynamics<'_>,
+) -> Vec<BoneColliderPrimitive> {
+	build_runtime_bone_colliders(scene, profile, config, dynamics)
+}
+
 pub fn collider_stats(colliders: &[BoneColliderPrimitive]) -> BoneColliderStats {
 	BoneColliderStats {
 		count: colliders.len() as u32,
