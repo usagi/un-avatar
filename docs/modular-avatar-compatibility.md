@@ -195,8 +195,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - required: print component payload, renderer.bones, rootBone, bindposes, material slots before export.
 - `[ ]` isolated `.unavatar` fixtures
   - required: Hair_Base-only, Field Drape Hair-only, full field_drape.
-- `[ ]` numeric resolver tests
-  - required: MergeArmature one-bone retarget, BoneProxy reparent, MeshSettings rootBone override.
+- `[x]` numeric resolver tests
+  - done: MergeArmature one-bone retarget / cyclic cycle diagnostics, BoneProxy reparent variants, and MeshSettings rootBone override.
 - `[~]` BoneProxy numeric test
   - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, `matchScale`, duplicate target child names, and missing target reporting.
   - remaining: broader component interaction fixture coverage.
