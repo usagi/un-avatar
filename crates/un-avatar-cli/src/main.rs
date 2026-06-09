@@ -523,6 +523,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_disabled_type_counts: BTreeMap<String, usize>,
 	modular_avatar_menu_component_count: usize,
 	modular_avatar_menu_components: Vec<DiagnoseModularAvatarMenuComponentSummary>,
+	modular_avatar_parameter_count: usize,
+	modular_avatar_parameters: Vec<DiagnoseModularAvatarParameterSummary>,
 	modular_avatar_vertex_filter_group_count: usize,
 	modular_avatar_vertex_filter_groups: Vec<DiagnoseModularAvatarVertexFilterGroupSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -582,6 +584,22 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	install_target_menu_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	installer_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarParameterSummary {
+	component_index: usize,
+	name_or_prefix: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	remap_to: Option<String>,
+	internal_parameter: bool,
+	is_prefix: bool,
+	sync_type: String,
+	local_only: bool,
+	default_value: f32,
+	saved: bool,
+	has_explicit_default_value: bool,
+	override_animator_defaults: bool,
 }
 
 #[derive(Serialize)]
@@ -2277,6 +2295,74 @@ fn modular_avatar_menu_component_summary(
 	}
 }
 
+fn modular_avatar_parameter_summaries(component: &serde_json::Value, component_index: usize) -> Vec<DiagnoseModularAvatarParameterSummary> {
+	let parameters = modular_avatar_component_fields(component)
+		.and_then(|fields| fields.get("parameters"))
+		.or_else(|| component.get("parameters"))
+		.and_then(|value| value.as_array());
+	parameters
+		.into_iter()
+		.flatten()
+		.filter_map(|parameter| modular_avatar_parameter_summary(parameter, component_index))
+		.collect()
+}
+
+fn modular_avatar_parameter_summary(
+	parameter: &serde_json::Value,
+	component_index: usize,
+) -> Option<DiagnoseModularAvatarParameterSummary> {
+	let name_or_prefix = parameter
+		.get("nameOrPrefix")
+		.or_else(|| parameter.get("name_or_prefix"))
+		.or_else(|| parameter.get("name"))
+		.and_then(|value| value.as_str())
+		.filter(|value| !value.is_empty())?
+		.to_string();
+	let remap_to = parameter
+		.get("remapTo")
+		.or_else(|| parameter.get("remap_to"))
+		.and_then(|value| value.as_str())
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let sync_type = parameter
+		.get("syncType")
+		.or_else(|| parameter.get("sync_type"))
+		.and_then(|value| value.as_str())
+		.filter(|value| !value.is_empty())
+		.unwrap_or("NotSynced")
+		.to_string();
+	Some(DiagnoseModularAvatarParameterSummary {
+		component_index,
+		name_or_prefix,
+		remap_to,
+		internal_parameter: json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter"))),
+		is_prefix: json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix"))),
+		sync_type,
+		local_only: json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))),
+		default_value: parameter
+			.get("defaultValue")
+			.or_else(|| parameter.get("default_value"))
+			.and_then(json_number_f64)
+			.unwrap_or(0.0) as f32,
+		saved: json_bool(parameter.get("saved")),
+		has_explicit_default_value: json_bool(
+			parameter
+				.get("hasExplicitDefaultValue")
+				.or_else(|| parameter.get("has_explicit_default_value")),
+		),
+		override_animator_defaults: json_bool(
+			parameter
+				.get("overrideAnimatorDefaults")
+				.or_else(|| parameter.get("m_overrideAnimatorDefaults"))
+				.or_else(|| parameter.get("override_animator_defaults")),
+		),
+	})
+}
+
+fn json_bool(value: Option<&serde_json::Value>) -> bool {
+	value.and_then(|value| value.as_bool()).unwrap_or(false)
+}
+
 fn modular_avatar_is_menu_metadata_type(short_type: &str) -> bool {
 	matches!(
 		short_type,
@@ -2486,6 +2572,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_type_counts = BTreeMap::new();
 	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
 	let mut modular_avatar_menu_components = Vec::new();
+	let mut modular_avatar_parameters = Vec::new();
 	let mut modular_avatar_vertex_filter_groups = Vec::new();
 	if let Some(components) = modular_avatar_components {
 		for (component_index, component) in components.iter().enumerate() {
@@ -2505,6 +2592,9 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			}
 			if modular_avatar_is_menu_metadata_type(short_type) {
 				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, component_index, short_type));
+			}
+			if short_type == "ModularAvatarParameters" {
+				modular_avatar_parameters.extend(modular_avatar_parameter_summaries(component, component_index));
 			}
 			if modular_avatar_is_vertex_filter_metadata_type(short_type) {
 				if let Some(summary) = modular_avatar_vertex_filter_group_summary(component, short_type) {
@@ -2596,6 +2686,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_disabled_type_counts,
 		modular_avatar_menu_component_count: modular_avatar_menu_components.len(),
 		modular_avatar_menu_components,
+		modular_avatar_parameter_count: modular_avatar_parameters.len(),
+		modular_avatar_parameters,
 		modular_avatar_vertex_filter_group_count: modular_avatar_vertex_filter_groups.len(),
 		modular_avatar_vertex_filter_groups,
 		base_set,
@@ -3587,6 +3679,22 @@ fn run_diagnose(
 				menu.installer_path
 			);
 		}
+		for parameter in unavatar.modular_avatar_parameters.iter().take(16) {
+			println!(
+				"unavatar.ma_parameter[#{}]: name={} remap={:?} internal={} prefix={} sync={} local_only={} default={} explicit_default={} saved={} override_animator_defaults={}",
+				parameter.component_index,
+				parameter.name_or_prefix,
+				parameter.remap_to,
+				parameter.internal_parameter,
+				parameter.is_prefix,
+				parameter.sync_type,
+				parameter.local_only,
+				parameter.default_value,
+				parameter.has_explicit_default_value,
+				parameter.saved,
+				parameter.override_animator_defaults
+			);
+		}
 		for group in unavatar.modular_avatar_vertex_filter_groups.iter().take(16) {
 			println!(
 				"unavatar.ma_vertex_filter[{}]: enabled={} target={:?} combine={} filters={}",
@@ -4152,6 +4260,28 @@ mod tests {
 								}
 							}
 						}, {
+							"shortType": "ModularAvatarParameters",
+							"enabled": true,
+							"fields": {
+								"parameters": [{
+									"nameOrPrefix": "Hat",
+									"remapTo": "Hat_Remapped",
+									"syncType": "Bool",
+									"localOnly": false,
+									"defaultValue": 1,
+									"saved": true,
+									"hasExplicitDefaultValue": true
+								}, {
+									"nameOrPrefix": "Local/",
+									"isPrefix": true,
+									"internalParameter": true,
+									"syncType": "NotSynced",
+									"localOnly": true,
+									"defaultValue": 0.25,
+									"m_overrideAnimatorDefaults": true
+								}]
+							}
+						}, {
 							"shortType": "ModularAvatarMeshCutter",
 							"enabled": false,
 							"id": "cut-sleeve",
@@ -4209,14 +4339,15 @@ mod tests {
 		assert_eq!(report.scene.asset_group_owned_image_count, 1);
 		assert_eq!(report.scene.asset_group_owned_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
-		assert_eq!(unavatar.modular_avatar_component_count, 4);
+		assert_eq!(unavatar.modular_avatar_component_count, 5);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&2));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&3));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarParameters"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
 		assert_eq!(
 			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
@@ -4238,6 +4369,20 @@ mod tests {
 		assert_eq!(menu.target_path.as_deref(), Some("Root/HatMenu"));
 		assert_eq!(menu.menu_source.as_deref(), Some("Children"));
 		assert_eq!(menu.menu_source_target_path.as_deref(), Some("Root/HatMenu/Children"));
+		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
+		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
+		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
+		assert_eq!(unavatar.modular_avatar_parameters[0].remap_to.as_deref(), Some("Hat_Remapped"));
+		assert_eq!(unavatar.modular_avatar_parameters[0].sync_type, "Bool");
+		assert!(!unavatar.modular_avatar_parameters[0].local_only);
+		assert_eq!(unavatar.modular_avatar_parameters[0].default_value, 1.0);
+		assert!(unavatar.modular_avatar_parameters[0].saved);
+		assert!(unavatar.modular_avatar_parameters[0].has_explicit_default_value);
+		assert!(unavatar.modular_avatar_parameters[1].is_prefix);
+		assert!(unavatar.modular_avatar_parameters[1].internal_parameter);
+		assert_eq!(unavatar.modular_avatar_parameters[1].sync_type, "NotSynced");
+		assert!(unavatar.modular_avatar_parameters[1].local_only);
+		assert!(unavatar.modular_avatar_parameters[1].override_animator_defaults);
 		assert_eq!(
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]

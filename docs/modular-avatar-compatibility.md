@@ -144,8 +144,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Menu Item / Menu Group / Menu Installer
   - done: exporter extracts menu item hints. Runtime / diagnose classify Menu Item, Menu Group, Menu Installer, and Menu Install Target as metadata components rather than unsupported behavior, and CLI diagnose reports saved label, control type, parameter/value, component index, hierarchy path, sibling index, target path, menu source, source target, menuToAppend, install target menu, and installer reference from the captured payload.
   - remaining: build the full virtual menu graph order and submenu installation semantics enough to generate wardrobe candidates and runtime UI labels.
-- `[ ]` MA Parameters
-  - required: parameter definitions, default values, saved/synced metadata where relevant to wardrobe.
+- `[~]` MA Parameters
+  - done: `ModularAvatarParameters` is classified as metadata and CLI diagnose reports captured `ParameterConfig` entries with name/prefix, remap target, internal/prefix flags, sync type, local-only state, default value, saved state, explicit-default flag, and animator-default override flag.
+  - remaining: runtime parameter definition model, conflict merge rules, and expression parameter / animator default application.
 - `[defer]` Merge Animator / Merge Motion / MMD Layer Control
   - reason: full FX Animator evaluation is not a v2 initial goal.
   - required before enabling: compatibility report must expose lost animator behavior.

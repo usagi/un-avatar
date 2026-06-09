@@ -349,6 +349,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMenuGroup"
 		| "ModularAvatarMenuInstaller"
 		| "ModularAvatarMenuInstallTarget"
+		| "ModularAvatarParameters"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarShapeChanger"
 		| "VertexFilterByAxisComponent"
@@ -5008,6 +5009,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMenuItem"), "metadata");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarParameters"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("VertexFilterByShapeComponent"), "metadata");
