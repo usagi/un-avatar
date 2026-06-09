@@ -4027,6 +4027,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	}
 	let mut resolver_supported = 0usize;
 	let mut runtime_action_supported = 0usize;
+	let mut metadata_supported = 0usize;
 	let mut unsupported = 0usize;
 	let mut disabled = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
@@ -4044,6 +4045,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			.unwrap_or("unknown");
 		match modular_avatar_component_support_kind(short_type) {
 			"resolver" => resolver_supported += 1,
+			"metadata" => metadata_supported += 1,
 			"runtime_action" => {
 				runtime_action_supported += 1;
 				if !component_disabled && unavatar_modular_avatar_component_inverted(component) {
@@ -4087,10 +4089,11 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		.collect::<Vec<_>>()
 		.join(",");
 	report.push_info(format!(
-		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, unsupported={}, disabled={}, unsupported_types={}",
+		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, metadata_supported={}, unsupported={}, disabled={}, unsupported_types={}",
 		components.len(),
 		resolver_supported,
 		runtime_action_supported,
+		metadata_supported,
 		unsupported,
 		disabled,
 		unsupported_types

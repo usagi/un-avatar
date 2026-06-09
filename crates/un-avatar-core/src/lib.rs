@@ -208,6 +208,10 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarRemoveVertexColor"
 		| "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
+		"ModularAvatarMenuItem"
+		| "ModularAvatarMenuGroup"
+		| "ModularAvatarMenuInstaller"
+		| "ModularAvatarMenuInstallTarget" => "metadata",
 		_ => "unsupported",
 	}
 }
@@ -4640,6 +4644,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarRemoveVertexColor"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMenuItem"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "unsupported");
 	}
 

@@ -492,6 +492,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_support_counts: BTreeMap<String, usize>,
 	modular_avatar_type_counts: BTreeMap<String, usize>,
 	modular_avatar_disabled_type_counts: BTreeMap<String, usize>,
+	modular_avatar_menu_component_count: usize,
+	modular_avatar_menu_components: Vec<DiagnoseModularAvatarMenuComponentSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
@@ -514,6 +516,30 @@ struct DiagnoseUnavatarWardrobeSetSummary {
 	asset_groups: Vec<String>,
 	operation_count: usize,
 	operation_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarMenuComponentSummary {
+	short_type: String,
+	enabled: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	target_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	label: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	control_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parameter: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	value: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_source: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_source_target_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	install_target_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2039,6 +2065,96 @@ fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
 	value.and_then(|v| v.as_str()).map(str::to_owned)
 }
 
+fn modular_avatar_component_fields(component: &serde_json::Value) -> Option<&serde_json::Value> {
+	component.get("fields")
+}
+
+fn modular_avatar_component_string(component: &serde_json::Value, names: &[&str]) -> Option<String> {
+	names
+		.iter()
+		.find_map(|name| {
+			modular_avatar_component_fields(component)
+				.and_then(|fields| fields.get(*name))
+				.or_else(|| component.get(*name))
+				.and_then(|value| value.as_str())
+				.filter(|value| !value.is_empty())
+		})
+		.map(str::to_owned)
+}
+
+fn modular_avatar_component_ref<'a>(component: &'a serde_json::Value, names: &[&str]) -> Option<&'a serde_json::Value> {
+	names
+		.iter()
+		.find_map(|name| modular_avatar_component_fields(component).and_then(|fields| fields.get(*name)).or_else(|| component.get(*name)))
+}
+
+fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> {
+	let value = value?;
+	value
+		.get("path")
+		.or_else(|| value.get("referencePath"))
+		.or_else(|| value.get("reference_path"))
+		.and_then(|path| path.as_str())
+		.filter(|path| !path.is_empty())
+		.map(str::to_owned)
+		.or_else(|| {
+			value
+				.get("resolvedTarget")
+				.or_else(|| value.get("target"))
+				.or_else(|| value.get("targetObject"))
+				.and_then(|nested| modular_avatar_ref_path(Some(nested)))
+		})
+}
+
+fn modular_avatar_menu_component_summary(
+	component: &serde_json::Value,
+	short_type: &str,
+) -> DiagnoseModularAvatarMenuComponentSummary {
+	let menu_item = modular_avatar_component_ref(component, &["menuItem", "menu_item"]).unwrap_or(component);
+	let control = menu_item
+		.get("Control")
+		.or_else(|| menu_item.get("control"))
+		.or_else(|| modular_avatar_component_ref(component, &["Control", "control"]))
+		.unwrap_or(menu_item);
+	let parameter = control
+		.get("parameter")
+		.or_else(|| control.get("Parameter"))
+		.and_then(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(|value| value.as_str()))
+				.or_else(|| parameter.get("Name").and_then(|value| value.as_str()))
+		})
+		.filter(|value| !value.is_empty())
+		.map(str::to_owned)
+		.or_else(|| modular_avatar_component_string(component, &["parameterName", "parameter_name"]));
+	DiagnoseModularAvatarMenuComponentSummary {
+		short_type: short_type.to_string(),
+		enabled: component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true),
+		id: modular_avatar_component_string(component, &["id", "componentId", "component_id"]),
+		target_path: modular_avatar_ref_path(component.get("target").or_else(|| component.get("resolvedTarget"))),
+		label: modular_avatar_component_string(component, &["label", "Label", "name", "Name", "displayName", "display_name"])
+			.or_else(|| modular_avatar_component_string(menu_item, &["label", "Label", "name", "Name", "displayName", "display_name"]))
+			.or_else(|| modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"])),
+		control_type: modular_avatar_component_string(control, &["type", "Type", "controlType", "control_type"]),
+		parameter,
+		value: control
+			.get("value")
+			.or_else(|| control.get("Value"))
+			.and_then(json_number_f64)
+			.map(|value| value as f32),
+		menu_source: modular_avatar_component_string(component, &["MenuSource", "menuSource", "menu_source"]),
+		menu_source_target_path: modular_avatar_ref_path(modular_avatar_component_ref(
+			component,
+			&["menuSource_otherObjectChildren", "menuSourceOtherObjectChildren", "targetObject", "target_object"],
+		)),
+		install_target_path: modular_avatar_ref_path(modular_avatar_component_ref(
+			component,
+			&["installTargetMenu", "install_target_menu", "menuToAppend", "menu_to_append", "installer"],
+		)),
+	}
+}
+
 fn diagnose_texture_shape_is_cube(shape: Option<&str>) -> bool {
 	shape.is_some_and(|shape| shape.eq_ignore_ascii_case("TextureCube") || shape.eq_ignore_ascii_case("Cube"))
 }
@@ -2054,6 +2170,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_support_counts = BTreeMap::new();
 	let mut modular_avatar_type_counts = BTreeMap::new();
 	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
+	let mut modular_avatar_menu_components = Vec::new();
 	if let Some(components) = modular_avatar_components {
 		for component in components {
 			let short_type = component
@@ -2069,6 +2186,9 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			if component.get("enabled").and_then(|value| value.as_bool()) == Some(false) {
 				bump_count(&mut modular_avatar_support_counts, "disabled");
 				bump_count(&mut modular_avatar_disabled_type_counts, short_type);
+			}
+			if modular_avatar_component_support_kind(short_type) == "metadata" {
+				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, short_type));
 			}
 		}
 	}
@@ -2153,6 +2273,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_support_counts,
 		modular_avatar_type_counts,
 		modular_avatar_disabled_type_counts,
+		modular_avatar_menu_component_count: modular_avatar_menu_components.len(),
+		modular_avatar_menu_components,
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
@@ -3044,7 +3166,7 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?}",
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={}",
 			unavatar.spec_version,
 			unavatar.generator,
 			unavatar.manifest_name,
@@ -3053,8 +3175,24 @@ fn run_diagnose(
 			unavatar.modular_avatar_component_count,
 			unavatar.modular_avatar_support_counts,
 			unavatar.modular_avatar_type_counts,
-			unavatar.modular_avatar_disabled_type_counts
+			unavatar.modular_avatar_disabled_type_counts,
+			unavatar.modular_avatar_menu_component_count
 		);
+		for menu in unavatar.modular_avatar_menu_components.iter().take(16) {
+			println!(
+				"unavatar.ma_menu[{}]: enabled={} label={:?} type={:?} parameter={:?} value={:?} target={:?} menu_source={:?} source_target={:?} install_target={:?}",
+				menu.short_type,
+				menu.enabled,
+				menu.label,
+				menu.control_type,
+				menu.parameter,
+				menu.value,
+				menu.target_path,
+				menu.menu_source,
+				menu.menu_source_target_path,
+				menu.install_target_path
+			);
+		}
 		println!(
 			"wardrobe: base={:?} sets={} {:?} asset_groups={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
 			unavatar.base_set,
@@ -3561,6 +3699,21 @@ mod tests {
 							"shortType": "ModularAvatarMaterialSwap",
 							"enabled": true
 						}, {
+							"shortType": "ModularAvatarMenuItem",
+							"enabled": true,
+							"id": "menu-hat",
+							"target": {"path": "Root/HatMenu"},
+							"fields": {
+								"label": "Hat",
+								"MenuSource": "Children",
+								"menuSource_otherObjectChildren": {"path": "Root/HatMenu/Children"},
+								"Control": {
+									"Type": "Toggle",
+									"Parameter": {"Name": "Hat"},
+									"Value": 1
+								}
+							}
+						}, {
 							"shortType": "ModularAvatarMeshCutter",
 							"enabled": false
 						}]
@@ -3601,17 +3754,30 @@ mod tests {
 
 		let unavatar = report.unavatar.as_ref().unwrap();
 		assert_eq!(unavatar.asset_group_count, 3);
-		assert_eq!(unavatar.modular_avatar_component_count, 3);
+		assert_eq!(unavatar.modular_avatar_component_count, 4);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
 		assert_eq!(
 			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
 			Some(&1)
 		);
+		assert_eq!(unavatar.modular_avatar_menu_component_count, 1);
+		let menu = &unavatar.modular_avatar_menu_components[0];
+		assert_eq!(menu.short_type, "ModularAvatarMenuItem");
+		assert_eq!(menu.id.as_deref(), Some("menu-hat"));
+		assert_eq!(menu.label.as_deref(), Some("Hat"));
+		assert_eq!(menu.control_type.as_deref(), Some("Toggle"));
+		assert_eq!(menu.parameter.as_deref(), Some("Hat"));
+		assert_eq!(menu.value, Some(1.0));
+		assert_eq!(menu.target_path.as_deref(), Some("Root/HatMenu"));
+		assert_eq!(menu.menu_source.as_deref(), Some("Children"));
+		assert_eq!(menu.menu_source_target_path.as_deref(), Some("Root/HatMenu/Children"));
 		assert_eq!(
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
