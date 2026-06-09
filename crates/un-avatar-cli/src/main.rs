@@ -551,10 +551,15 @@ struct DiagnoseUnavatarWardrobeSetSummary {
 
 #[derive(Serialize)]
 struct DiagnoseModularAvatarMenuComponentSummary {
+	component_index: usize,
 	short_type: String,
 	enabled: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	hierarchy_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	sibling_index: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	target_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -572,7 +577,11 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	menu_source_target_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	install_target_path: Option<String>,
+	menu_to_append_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	install_target_menu_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	installer_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2199,7 +2208,11 @@ fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> 
 		})
 }
 
-fn modular_avatar_menu_component_summary(component: &serde_json::Value, short_type: &str) -> DiagnoseModularAvatarMenuComponentSummary {
+fn modular_avatar_menu_component_summary(
+	component: &serde_json::Value,
+	component_index: usize,
+	short_type: &str,
+) -> DiagnoseModularAvatarMenuComponentSummary {
 	let menu_item = modular_avatar_component_ref(component, &["menuItem", "menu_item"]).unwrap_or(component);
 	let control = menu_item
 		.get("Control")
@@ -2219,9 +2232,12 @@ fn modular_avatar_menu_component_summary(component: &serde_json::Value, short_ty
 		.map(str::to_owned)
 		.or_else(|| modular_avatar_component_string(component, &["parameterName", "parameter_name"]));
 	DiagnoseModularAvatarMenuComponentSummary {
+		component_index,
 		short_type: short_type.to_string(),
 		enabled: component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true),
 		id: modular_avatar_component_string(component, &["id", "componentId", "component_id"]),
+		hierarchy_path: modular_avatar_component_string(component, &["hierarchyPath", "hierarchy_path", "componentPath", "component_path"]),
+		sibling_index: modular_avatar_component_usize(component, &["siblingIndex", "sibling_index", "transformSiblingIndex", "order"]),
 		target_path: modular_avatar_ref_path(component.get("target").or_else(|| component.get("resolvedTarget"))),
 		label: modular_avatar_component_string(component, &["label", "Label", "name", "Name", "displayName", "display_name"])
 			.or_else(|| modular_avatar_component_string(menu_item, &["label", "Label", "name", "Name", "displayName", "display_name"]))
@@ -2244,15 +2260,19 @@ fn modular_avatar_menu_component_summary(component: &serde_json::Value, short_ty
 				"target_object",
 			],
 		)),
-		install_target_path: modular_avatar_ref_path(modular_avatar_component_ref(
+		menu_to_append_path: modular_avatar_ref_path(modular_avatar_component_ref(component, &["menuToAppend", "menu_to_append"])),
+		install_target_menu_path: modular_avatar_ref_path(modular_avatar_component_ref(
 			component,
 			&[
 				"installTargetMenu",
 				"install_target_menu",
-				"menuToAppend",
-				"menu_to_append",
-				"installer",
+				"menuToAppendTarget",
+				"menu_to_append_target",
 			],
+		)),
+		installer_path: modular_avatar_ref_path(modular_avatar_component_ref(
+			component,
+			&["installer", "Installer", "sourceInstaller", "source_installer"],
 		)),
 	}
 }
@@ -2468,7 +2488,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_menu_components = Vec::new();
 	let mut modular_avatar_vertex_filter_groups = Vec::new();
 	if let Some(components) = modular_avatar_components {
-		for component in components {
+		for (component_index, component) in components.iter().enumerate() {
 			let short_type = component
 				.get("shortType")
 				.and_then(|value| value.as_str())
@@ -2484,7 +2504,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 				bump_count(&mut modular_avatar_disabled_type_counts, short_type);
 			}
 			if modular_avatar_is_menu_metadata_type(short_type) {
-				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, short_type));
+				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, component_index, short_type));
 			}
 			if modular_avatar_is_vertex_filter_metadata_type(short_type) {
 				if let Some(summary) = modular_avatar_vertex_filter_group_summary(component, short_type) {
@@ -3549,17 +3569,22 @@ fn run_diagnose(
 		);
 		for menu in unavatar.modular_avatar_menu_components.iter().take(16) {
 			println!(
-				"unavatar.ma_menu[{}]: enabled={} label={:?} type={:?} parameter={:?} value={:?} target={:?} menu_source={:?} source_target={:?} install_target={:?}",
+				"unavatar.ma_menu[{}#{}]: enabled={} label={:?} type={:?} parameter={:?} value={:?} hierarchy={:?} sibling={:?} target={:?} menu_source={:?} source_target={:?} menu_to_append={:?} install_target_menu={:?} installer={:?}",
 				menu.short_type,
+				menu.component_index,
 				menu.enabled,
 				menu.label,
 				menu.control_type,
 				menu.parameter,
 				menu.value,
+				menu.hierarchy_path,
+				menu.sibling_index,
 				menu.target_path,
 				menu.menu_source,
 				menu.menu_source_target_path,
-				menu.install_target_path
+				menu.menu_to_append_path,
+				menu.install_target_menu_path,
+				menu.installer_path
 			);
 		}
 		for group in unavatar.modular_avatar_vertex_filter_groups.iter().take(16) {
@@ -4112,6 +4137,8 @@ mod tests {
 							"shortType": "ModularAvatarMenuItem",
 							"enabled": true,
 							"id": "menu-hat",
+							"hierarchyPath": "Root/HatMenu",
+							"siblingIndex": 4,
 							"target": {"path": "Root/HatMenu"},
 							"fields": {
 								"label": "Hat",
@@ -4198,8 +4225,11 @@ mod tests {
 		assert_eq!(unavatar.modular_avatar_menu_component_count, 1);
 		assert_eq!(unavatar.modular_avatar_vertex_filter_group_count, 1);
 		let menu = &unavatar.modular_avatar_menu_components[0];
+		assert_eq!(menu.component_index, 2);
 		assert_eq!(menu.short_type, "ModularAvatarMenuItem");
 		assert_eq!(menu.id.as_deref(), Some("menu-hat"));
+		assert_eq!(menu.hierarchy_path.as_deref(), Some("Root/HatMenu"));
+		assert_eq!(menu.sibling_index, Some(4));
 		assert_eq!(menu.label.as_deref(), Some("Hat"));
 		assert_eq!(menu.control_type.as_deref(), Some("RadialPuppet"));
 		assert_eq!(menu.parameter.as_deref(), Some("Hat"));

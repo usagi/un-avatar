@@ -142,8 +142,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Menu / Parameters / Animator
 
 - `[~]` MA Menu Item / Menu Group / Menu Installer
-  - done: exporter extracts menu item hints. Runtime / diagnose classify Menu Item, Menu Group, Menu Installer, and Menu Install Target as metadata components rather than unsupported behavior, and CLI diagnose reports saved label, control type, parameter/value, target path, menu source, source target, and install target path from the captured payload.
-  - remaining: preserve full virtual menu graph order and submenu installation semantics enough to generate wardrobe candidates and runtime UI labels.
+  - done: exporter extracts menu item hints. Runtime / diagnose classify Menu Item, Menu Group, Menu Installer, and Menu Install Target as metadata components rather than unsupported behavior, and CLI diagnose reports saved label, control type, parameter/value, component index, hierarchy path, sibling index, target path, menu source, source target, menuToAppend, install target menu, and installer reference from the captured payload.
+  - remaining: build the full virtual menu graph order and submenu installation semantics enough to generate wardrobe candidates and runtime UI labels.
 - `[ ]` MA Parameters
   - required: parameter definitions, default values, saved/synced metadata where relevant to wardrobe.
 - `[defer]` Merge Animator / Merge Motion / MMD Layer Control
@@ -197,7 +197,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ## Near-Term Order
 
-1. Preserve MA Menu Item / Menu Group / Menu Installer hierarchy metadata and diagnostics.
+1. Build MA Menu Item / Menu Group / Menu Installer virtual menu graph candidates from preserved hierarchy metadata.
 2. Implement ReactiveComponent `Inverted` / parent active condition runtime action evaluation.
 3. Implement Mesh Cutter / Shape Changer resolver-side vertex filtering from the new filter representation.
 4. Add per-asset ownership metadata for Wardrobe asset group lazy GPU upload / unload.
