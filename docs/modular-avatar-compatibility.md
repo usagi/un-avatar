@@ -86,8 +86,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` rootBone / localBounds / probeAnchor retarget
   - done: Importer preserves glTF `skin.skeleton` as `UnaSkin.skeleton_node`. Runtime MeshRetargeter retargets `skeleton_node` through MergeArmature mappings. Runtime MeshSettings applies RootBone to selected subtree skins, stores ProbeAnchor / localBounds on renderer nodes, and renderer debug/draw metadata can observe them.
   - remaining: full renderer culling/cache policy for localBounds and exact rootBone-vs-probeAnchor reference handling.
-- `[ ]` nested MergeArmature topology
-  - required: parent/child merge order, cycle diagnostics.
+- `[x]` nested MergeArmature topology
+  - done: parent/child merge order now uses target hierarchy ordering for component-local processing and cycle diagnostics for both bone mapping graph and component ancestry.
 - `[~]` Visible Head Accessory
   - done: component type is explicitly categorized in `modular_avatar_component_support_kind` and reported as metadata-supported in importer diagnostics.
   - remaining: implement head-visible accessory mesh handling and proxy head bone behavior in runtime resolver.
