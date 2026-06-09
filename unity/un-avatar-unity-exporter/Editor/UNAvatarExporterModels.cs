@@ -247,6 +247,41 @@ namespace UNAvatar.UnityExporter
         public List<BlendShapeStateDraft> blendShapes = new List<BlendShapeStateDraft>();
     }
 
+    internal sealed class UnavatarRendererAssetRecord
+    {
+        public string nodeId = "";
+        public string path = "";
+        public int mesh = -1;
+        public List<int> materials = new List<int>();
+        public List<int> images = new List<int>();
+
+        public Dictionary<string, object> ToJson()
+        {
+            return new Dictionary<string, object>
+            {
+                ["nodeId"] = nodeId ?? "",
+                ["path"] = path ?? "",
+                ["mesh"] = mesh,
+                ["materials"] = IntsToObjectList(materials),
+                ["images"] = IntsToObjectList(images)
+            };
+        }
+
+        private static List<object> IntsToObjectList(List<int> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
+        }
+    }
+
     internal sealed class WardrobeApplyReport
     {
         public int Total;

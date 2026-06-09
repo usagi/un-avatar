@@ -22,6 +22,7 @@ namespace UNAvatar.UnityExporter
             public string Path;
             public List<ExportedTextureRecord> Textures = new List<ExportedTextureRecord>();
             public List<UnavatarTextureAssetRecord> TextureAssets = new List<UnavatarTextureAssetRecord>();
+            public List<UnavatarRendererAssetRecord> RendererAssets = new List<UnavatarRendererAssetRecord>();
         }
 
         public static ExportResult ExportGlb(GameObject root, string directory, string fileName, HashSet<string> morphTargetNames)
@@ -33,7 +34,8 @@ namespace UNAvatar.UnityExporter
             {
                 Path = path,
                 Textures = writer.ExportedTextures,
-                TextureAssets = writer.TextureAssets
+                TextureAssets = writer.TextureAssets,
+                RendererAssets = writer.RendererAssets
             };
         }
 
@@ -63,10 +65,12 @@ namespace UNAvatar.UnityExporter
             private readonly List<object> samplers = new List<object>();
             private readonly List<ExportedTextureRecord> exportedTextures = new List<ExportedTextureRecord>();
             private readonly List<UnavatarTextureAssetRecord> textureAssets = new List<UnavatarTextureAssetRecord>();
+            private readonly List<UnavatarRendererAssetRecord> rendererAssets = new List<UnavatarRendererAssetRecord>();
             private bool usesTextureTransform;
 
             public List<ExportedTextureRecord> ExportedTextures => exportedTextures;
             public List<UnavatarTextureAssetRecord> TextureAssets => textureAssets;
+            public List<UnavatarRendererAssetRecord> RendererAssets => rendererAssets;
 
             private struct MaterialPropertyKey : IEquatable<MaterialPropertyKey>
             {
@@ -224,7 +228,11 @@ namespace UNAvatar.UnityExporter
                     {
                         var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
                         var mesh = ExportMesh(filter.sharedMesh, meshRenderer.sharedMaterials, null);
-                        if (mesh >= 0) node["mesh"] = mesh;
+                        if (mesh >= 0)
+                        {
+                            node["mesh"] = mesh;
+                            RecordRendererAsset(transform, mesh);
+                        }
                     }
                 }
 
@@ -235,7 +243,11 @@ namespace UNAvatar.UnityExporter
                     {
                         var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
                         var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned);
-                        if (mesh >= 0) node["mesh"] = mesh;
+                        if (mesh >= 0)
+                        {
+                            node["mesh"] = mesh;
+                            RecordRendererAsset(transform, mesh);
+                        }
                         var skin = ExportSkin(skinned);
                         if (skin >= 0)
                         {
@@ -247,6 +259,126 @@ namespace UNAvatar.UnityExporter
                 for (var i = 0; i < transform.childCount; i++)
                 {
                     AttachRenderers(transform.GetChild(i));
+                }
+            }
+
+            private void RecordRendererAsset(Transform transform, int meshIndex)
+            {
+                var record = new UnavatarRendererAssetRecord
+                {
+                    nodeId = WardrobeSnapshotCapture.NodeIdFor(root.transform, transform),
+                    path = VariantExtractor.TransformPath(root.transform, transform),
+                    mesh = meshIndex
+                };
+                foreach (var materialIndex in MaterialIndicesForMesh(meshIndex))
+                {
+                    if (!record.materials.Contains(materialIndex))
+                    {
+                        record.materials.Add(materialIndex);
+                    }
+                    foreach (var imageIndex in ImageIndicesForMaterial(materialIndex))
+                    {
+                        if (!record.images.Contains(imageIndex))
+                        {
+                            record.images.Add(imageIndex);
+                        }
+                    }
+                }
+                record.materials.Sort();
+                record.images.Sort();
+                rendererAssets.Add(record);
+            }
+
+            private IEnumerable<int> MaterialIndicesForMesh(int meshIndex)
+            {
+                if (meshIndex < 0 || meshIndex >= meshes.Count || !(meshes[meshIndex] is Dictionary<string, object> mesh))
+                {
+                    yield break;
+                }
+                if (!mesh.TryGetValue("primitives", out var rawPrimitives) || !(rawPrimitives is List<object> primitives))
+                {
+                    yield break;
+                }
+                foreach (var primitiveObject in primitives)
+                {
+                    if (primitiveObject is Dictionary<string, object> primitive &&
+                        primitive.TryGetValue("material", out var rawMaterial) &&
+                        rawMaterial is int materialIndex)
+                    {
+                        yield return materialIndex;
+                    }
+                }
+            }
+
+            private IEnumerable<int> ImageIndicesForMaterial(int materialIndex)
+            {
+                if (materialIndex < 0 || materialIndex >= materials.Count || !(materials[materialIndex] is Dictionary<string, object> material))
+                {
+                    yield break;
+                }
+                foreach (var textureIndex in TextureIndicesForMaterial(material))
+                {
+                    if (textureIndex < 0 || textureIndex >= textures.Count || !(textures[textureIndex] is Dictionary<string, object> texture))
+                    {
+                        continue;
+                    }
+                    if (texture.TryGetValue("source", out var rawSource) && rawSource is int imageIndex)
+                    {
+                        yield return imageIndex;
+                    }
+                }
+            }
+
+            private static IEnumerable<int> TextureIndicesForMaterial(Dictionary<string, object> material)
+            {
+                if (material.TryGetValue("pbrMetallicRoughness", out var rawPbr) && rawPbr is Dictionary<string, object> pbr)
+                {
+                    foreach (var textureIndex in TextureIndicesForTextureInfo(pbr, "baseColorTexture"))
+                    {
+                        yield return textureIndex;
+                    }
+                    foreach (var textureIndex in TextureIndicesForTextureInfo(pbr, "metallicRoughnessTexture"))
+                    {
+                        yield return textureIndex;
+                    }
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "normalTexture"))
+                {
+                    yield return textureIndex;
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "occlusionTexture"))
+                {
+                    yield return textureIndex;
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "emissiveTexture"))
+                {
+                    yield return textureIndex;
+                }
+                if (material.TryGetValue("extras", out var rawExtras) &&
+                    rawExtras is Dictionary<string, object> extras &&
+                    extras.TryGetValue("UN_avatar_material", out var rawUnAvatarMaterial) &&
+                    rawUnAvatarMaterial is Dictionary<string, object> unAvatarMaterial &&
+                    unAvatarMaterial.TryGetValue("mtoon", out var rawMtoon) &&
+                    rawMtoon is Dictionary<string, object> mtoon)
+                {
+                    foreach (var item in mtoon)
+                    {
+                        if (item.Key.EndsWith("TextureIndex", StringComparison.Ordinal) && item.Value is int textureIndex)
+                        {
+                            yield return textureIndex;
+                        }
+                    }
+                }
+            }
+
+            private static IEnumerable<int> TextureIndicesForTextureInfo(Dictionary<string, object> dictionary, string key)
+            {
+                if (dictionary.TryGetValue(key, out var rawTextureInfo) &&
+                    rawTextureInfo is Dictionary<string, object> textureInfo &&
+                    textureInfo.TryGetValue("index", out var rawIndex) &&
+                    rawIndex is int textureIndex)
+                {
+                    yield return textureIndex;
                 }
             }
 

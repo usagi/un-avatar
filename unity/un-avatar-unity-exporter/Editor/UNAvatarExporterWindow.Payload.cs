@@ -72,7 +72,8 @@ namespace UNAvatar.UnityExporter
             List<object> dynamicsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
             List<WardrobeSetDraft> exportWardrobeSets,
-            List<ExportedTextureRecord> exportedTextures)
+            List<ExportedTextureRecord> exportedTextures,
+            List<UnavatarRendererAssetRecord> rendererAssets)
         {
             exportedTextures = exportedTextures ?? new List<ExportedTextureRecord>();
             var fallbackTextures = new List<ExportedTextureRecord>();
@@ -114,6 +115,7 @@ namespace UNAvatar.UnityExporter
                 ["variants"] = VariantSummariesToJson(variants),
                 ["wardrobeSetCount"] = capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
+                ["wardrobeAssetOwnershipDiagnostics"] = BuildWardrobeAssetOwnershipDiagnostics(rendererAssets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
                 ["dynamics"] = BuildDynamicsReportSummary(dynamicsPayload),
@@ -137,6 +139,25 @@ namespace UNAvatar.UnityExporter
                     ["fallbacks"] = TextureRecordsToJson(fallbackTextures, 16)
                 },
                 ["unsupported"] = unsupported
+            };
+        }
+
+        private static Dictionary<string, object> BuildWardrobeAssetOwnershipDiagnostics(List<UnavatarRendererAssetRecord> rendererAssets)
+        {
+            var items = new List<object>();
+            var rendererCount = rendererAssets != null ? rendererAssets.Count : 0;
+            if (rendererAssets != null)
+            {
+                for (var i = 0; i < rendererAssets.Count && i < 96; i++)
+                {
+                    items.Add(rendererAssets[i].ToJson());
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["rendererAssetCount"] = rendererCount,
+                ["itemLimit"] = 96,
+                ["items"] = items
             };
         }
 
