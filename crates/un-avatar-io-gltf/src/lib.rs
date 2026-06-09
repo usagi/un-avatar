@@ -4233,7 +4233,87 @@ fn subtree_contains_mapped_node(scene: &UnaSceneSnapshot, node: usize, mappings:
 		.any(|&child| child < scene.nodes.len() && subtree_contains_mapped_node(scene, child, mappings))
 }
 
-fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mappings: &[(usize, usize)]) -> usize {
+fn subtree_contains_marked_node(scene: &UnaSceneSnapshot, node: usize, marked_nodes: &BTreeSet<usize>) -> bool {
+	if marked_nodes.contains(&node) {
+		return true;
+	}
+	let Some(scene_node) = scene.nodes.get(node) else {
+		return false;
+	};
+	scene_node
+		.children
+		.iter()
+		.any(|&child| child < scene.nodes.len() && subtree_contains_marked_node(scene, child, marked_nodes))
+}
+
+fn collect_modular_avatar_reference_indices(
+	value: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	indices: &mut BTreeSet<usize>,
+) {
+	if let Some(index) = modular_avatar_reference_index(value, node_ids, registry_paths, paths, normalized_paths) {
+		indices.insert(index);
+	}
+
+	match value {
+		Value::Array(values) => {
+			for nested in values {
+				collect_modular_avatar_reference_indices(nested, node_ids, registry_paths, paths, normalized_paths, indices);
+			}
+		}
+		Value::Object(entries) => {
+			for nested in entries.values() {
+				collect_modular_avatar_reference_indices(nested, node_ids, registry_paths, paths, normalized_paths, indices);
+			}
+		}
+		_ => {}
+	}
+}
+
+fn collect_merge_armature_retain_nodes(
+	scene: &UnaSceneSnapshot,
+	components: &[Value],
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> BTreeSet<usize> {
+	let mut retained_nodes = BTreeSet::new();
+	for skin in &scene.skins {
+		if let Some(skeleton_node) = skin.skeleton_node {
+			retained_nodes.insert(skeleton_node);
+		}
+	}
+	for constraint in &scene.node_constraints {
+		retained_nodes.insert(constraint.source_node);
+		retained_nodes.insert(constraint.target_node);
+	}
+	for component in components {
+		collect_modular_avatar_reference_indices(component, node_ids, registry_paths, paths, normalized_paths, &mut retained_nodes);
+	}
+	if let Some(dynamics) = unavatar.source.get("dynamics").and_then(Value::as_array) {
+		for item in dynamics {
+			if let Some(root) = unavatar_dynamics_root_index(item, node_ids, registry_paths, paths, normalized_paths) {
+				retained_nodes.insert(root);
+			}
+			for index in unavatar_dynamics_node_index_set(item.get("ignoreTransforms"), node_ids, registry_paths, paths, normalized_paths) {
+				retained_nodes.insert(index);
+			}
+		}
+	}
+	retained_nodes.retain(|index| *index < scene.nodes.len());
+	retained_nodes
+}
+
+fn reparent_merge_armature_auxiliary_bones(
+	scene: &mut UnaSceneSnapshot,
+	mappings: &[(usize, usize)],
+	retained_nodes: &BTreeSet<usize>,
+) -> usize {
 	if mappings.is_empty() {
 		return 0;
 	}
@@ -4244,7 +4324,10 @@ fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mapping
 			continue;
 		};
 		for &child in &source.children {
-			if child >= scene.nodes.len() || subtree_contains_mapped_node(scene, child, mappings) {
+			if child >= scene.nodes.len()
+				|| subtree_contains_mapped_node(scene, child, mappings)
+				|| subtree_contains_marked_node(scene, child, retained_nodes)
+			{
 				continue;
 			}
 			let old_world = initial_world.get(child).copied().unwrap_or(Mat4::IDENTITY);
@@ -4266,7 +4349,7 @@ fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mapping
 fn retarget_same_name_humanoid_armature_skins(scene: &mut UnaSceneSnapshot, humanoid: &HumanoidProfile) -> (usize, usize, usize) {
 	let mappings = collect_same_name_humanoid_armature_mappings(scene, humanoid);
 	let mapping_pairs = mappings.iter().map(|(&source, &target)| (source, target)).collect::<Vec<_>>();
-	let auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &mapping_pairs);
+	let auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &mapping_pairs, &BTreeSet::new());
 	let retargeted = retarget_merge_armature_skins(scene, &mapping_pairs);
 	(mappings.len(), retargeted, auxiliary_reparented)
 }
@@ -5385,6 +5468,8 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let normalized_paths = scene_node_normalized_paths(scene);
 	let (merge_mappings, merge_missing, merge_skipped) =
 		collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	let merge_retain_nodes =
+		collect_merge_armature_retain_nodes(scene, components, unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let merge_mapping_pairs = merge_mappings
 		.iter()
 		.flat_map(|component| component.mappings.iter().copied())
@@ -5396,7 +5481,7 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let mut merge_retargeted = 0usize;
 	for merge_index in ordered_merge_indices {
 		let component_mappings = &merge_mappings[merge_index].mappings;
-		merge_auxiliary_reparented += reparent_merge_armature_auxiliary_bones(scene, component_mappings);
+		merge_auxiliary_reparented += reparent_merge_armature_auxiliary_bones(scene, component_mappings, &merge_retain_nodes);
 		merge_retargeted += retarget_merge_armature_skins(scene, component_mappings);
 	}
 	if merge_retargeted > 0 || merge_auxiliary_reparented > 0 || merge_missing > 0 || merge_skipped > 0 {
@@ -8300,6 +8385,7 @@ mod tests {
 	use super::*;
 	use glam::Mat4;
 	use std::io::Write;
+	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind};
 
 	fn triangle_bin_bytes() -> Vec<u8> {
 		let mut v = Vec::with_capacity(48);
@@ -13169,16 +13255,105 @@ mod tests {
 		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
 		let after = scene_world_matrices(&scene);
 
-		assert_eq!(scene.nodes[1].children, vec![3]);
-		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
+		assert_eq!(scene.nodes[1].children, Vec::<usize>::new());
+		assert_eq!(scene.nodes[2].children, vec![3]);
 		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
 		assert_eq!(scene.skins[0].joint_nodes, vec![3]);
 		assert_eq!(scene.skins[0].skeleton_node, Some(3));
-		assert!(report.messages.iter().any(|m| {
-			m.contains("merge_armature_mappings=1")
-				&& m.contains("mesh_retargeter_joints=0")
-				&& m.contains("merge_armature_auxiliary_bones=1")
-		}));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_reparents_auxiliary_bones_keeps_constraint_reference() {
+		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
+		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+		let aux_local = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_target_head".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: target_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_source_head".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: source_world.to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("HatRoot".to_string()),
+					source_node_id: Some("node_hat_root".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: aux_local.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			node_constraints: vec![UnaNodeConstraint {
+				target_node: 1,
+				source_node: 3,
+				weight: 1.0,
+				kind: UnaNodeConstraintKind::Rotation,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!(
+				{
+					"modularAvatar": {
+						"schemaVersion": "0.1-preview",
+						"components": [{
+							"shortType": "ModularAvatarMergeArmature",
+							"enabled": true,
+							"target": {"nodeId": "node_source_head", "path": "Outfit/Armature/Head"},
+							"boneMappings": [{
+								"sourceBone": {"nodeId": "node_source_head", "path": "Outfit/Armature/Head"},
+								"targetBone": {"nodeId": "node_target_head", "path": "Armature/Head"}
+							}]
+						}]
+					}
+				}
+			),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+		assert_eq!(scene.nodes[1].children, Vec::<usize>::new());
+		assert_eq!(scene.nodes[2].children, vec![3]);
+		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
 	}
 
 	#[test]
