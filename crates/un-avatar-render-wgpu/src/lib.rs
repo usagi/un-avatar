@@ -1539,6 +1539,8 @@ impl AvatarApp {
 			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
+			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
+			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3083,6 +3085,10 @@ struct RendererRuntimeSnapshot {
 	wardrobe_actions: Vec<gpu::RuntimeWardrobeActionStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_actions: Vec<gpu::RuntimeActionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_action_candidates: Vec<gpu::RuntimeMenuActionCandidateStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3226,6 +3232,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		runtime_parameter_values: BTreeMap::new(),
 		wardrobe_actions: Vec::new(),
 		runtime_actions: Vec::new(),
+		menu_action_candidates: Vec::new(),
+		menu_wardrobe_candidates: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4466,6 +4474,35 @@ mod tests {
 				.into_iter()
 				.collect(),
 			}];
+			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
+				menu_component_index: 2,
+				menu_label: Some("Wardrobe".to_string()),
+				parameter_name: "Outfit".to_string(),
+				parameter_value: 1.0,
+				action_id: "wardrobe:field_drape".to_string(),
+				action_label: "Field Drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+				effect_count: 4,
+				effect_kinds: [
+					("node_visibility".to_string(), 1),
+					("expression_weight".to_string(), 2),
+					("material_color".to_string(), 1),
+					("material_scalar".to_string(), 1),
+				]
+				.into_iter()
+				.collect(),
+				wardrobe_set_ids: vec!["field_drape".to_string()],
+			}];
+			status.menu_wardrobe_candidates = vec![crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 2,
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_label: Some("Wardrobe".to_string()),
+				action_id: "wardrobe:field_drape".to_string(),
+				wardrobe_set_id: "field_drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			}];
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -4642,6 +4679,37 @@ mod tests {
 				.and_then(|value| value.get("node_visibility"))
 				.and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		let menu_action_candidates = snapshot
+			.get("menu_action_candidates")
+			.and_then(|value| value.as_array())
+			.expect("menu action candidates");
+		assert_eq!(menu_action_candidates.len(), 1);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("menu_component_index")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			menu_action_candidates[0].get("parameter_name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("wardrobe_set_ids")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>()),
+			Some(vec!["field_drape"])
+		);
+		let menu_wardrobe_candidates = snapshot
+			.get("menu_wardrobe_candidates")
+			.and_then(|value| value.as_array())
+			.expect("menu wardrobe candidates");
+		assert_eq!(menu_wardrobe_candidates.len(), 1);
+		assert_eq!(
+			menu_wardrobe_candidates[0].get("wardrobe_set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
 		);
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));

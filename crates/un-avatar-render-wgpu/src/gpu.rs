@@ -13,6 +13,7 @@ use std::{
 };
 
 use glam::{Mat4, Vec3, Vec4};
+use serde_json::Value;
 use un_avatar_core::{
 	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts,
 	UnaRuntimeResolverCacheKey, UnaSceneNode,
@@ -101,6 +102,37 @@ pub(crate) struct RuntimeActionStatus {
 	pub(crate) parameter_name: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) parameter_value: Option<f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeMenuActionCandidateStatus {
+	pub(crate) menu_component_index: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) menu_label: Option<String>,
+	pub(crate) parameter_name: String,
+	pub(crate) parameter_value: f32,
+	pub(crate) action_id: String,
+	pub(crate) action_label: String,
+	pub(crate) match_kind: String,
+	pub(crate) inverted: bool,
+	pub(crate) effect_count: usize,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub(crate) effect_kinds: BTreeMap<String, usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) wardrobe_set_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct RuntimeMenuWardrobeCandidateStatus {
+	pub(crate) menu_component_index: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) menu_path: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) menu_label: Option<String>,
+	pub(crate) action_id: String,
+	pub(crate) wardrobe_set_id: String,
+	pub(crate) match_kind: String,
+	pub(crate) inverted: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -478,6 +510,359 @@ fn runtime_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec
 	}
 	statuses.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.action_id.cmp(&b.action_id)));
 	statuses
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeMenuComponentSummary {
+	component_index: usize,
+	#[allow(clippy::struct_field_names)]
+	hierarchy_path: Option<String>,
+	sibling_index: Option<usize>,
+	label: Option<String>,
+	parameter_name: Option<String>,
+	value: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeMenuGraphCandidate {
+	component_index: usize,
+	label: Option<String>,
+	hierarchy_path: Option<String>,
+	sibling_index: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeMenuGraphNode {
+	component_index: usize,
+	label: Option<String>,
+	hierarchy_path: Option<String>,
+	parent_node_index: Option<usize>,
+}
+
+fn menu_action_candidates_from_runtime(
+	unavatar: Option<&un_avatar_core::UnaUnavatarExtension>,
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+) -> Option<Vec<RuntimeMenuActionCandidateStatus>> {
+	let Some(unavatar) = unavatar else {
+		return Some(Vec::new());
+	};
+	let menu_components = modular_avatar_menu_components(unavatar);
+	if menu_components.is_empty() {
+		return Some(Vec::new());
+	}
+	let mut candidates = Vec::new();
+	for menu in &menu_components {
+		let (Some(parameter_name), Some(parameter_value)) = (&menu.parameter_name, menu.value) else {
+			continue;
+		};
+		for action in &actions.actions {
+			let mut matched = None;
+			for condition in &action.conditions {
+				if condition.parameter_name.as_deref() == Some(parameter_name.as_str())
+					&& condition
+						.parameter_value
+						.is_some_and(|value| (value - parameter_value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON)
+				{
+					matched = Some(("condition", condition.inverted));
+					break;
+				}
+			}
+			if matched.is_none() {
+				for trigger in &action.triggers {
+					if let UnaRuntimeActionTrigger::ParameterValue { name, value } = trigger {
+						if name == parameter_name
+							&& (*value - parameter_value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON
+						{
+							matched = Some(("trigger", false));
+							break;
+						}
+					}
+				}
+			}
+			let Some((match_kind, inverted)) = matched else {
+				continue;
+			};
+			let wardrobe_set_ids = action
+				.effects
+				.iter()
+				.filter_map(|effect| match effect {
+					UnaRuntimeActionEffect::WardrobeSet { set_id } => Some(set_id.clone()),
+					_ => None,
+				})
+				.collect::<Vec<_>>();
+			candidates.push(RuntimeMenuActionCandidateStatus {
+				menu_component_index: menu.component_index,
+				menu_label: menu.label.clone(),
+				parameter_name: parameter_name.clone(),
+				parameter_value,
+				action_id: action.id.clone(),
+				action_label: action.label.clone(),
+				match_kind: match_kind.to_string(),
+				inverted,
+				effect_count: action.effects.len(),
+				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+				wardrobe_set_ids,
+			});
+		}
+	}
+	candidates.sort_by(|a, b| {
+		(a.menu_component_index, a.action_id.as_str(), a.match_kind.as_str()).cmp(&(
+			b.menu_component_index,
+			b.action_id.as_str(),
+			b.match_kind.as_str(),
+		))
+	});
+	Some(candidates)
+}
+
+fn menu_wardrobe_candidates_from_runtime(
+	unavatar: Option<&un_avatar_core::UnaUnavatarExtension>,
+	action_candidates: &[RuntimeMenuActionCandidateStatus],
+) -> Vec<RuntimeMenuWardrobeCandidateStatus> {
+	let Some(modular_avatar_components) = unavatar.map(modular_avatar_menu_components) else {
+		return Vec::new();
+	};
+	let menu_components = modular_avatar_menu_graph_candidates(&modular_avatar_components);
+	let nodes = modular_avatar_menu_graph_nodes(&menu_components);
+	if nodes.is_empty() {
+		return Vec::new();
+	}
+	let menu_path_by_component = nodes
+		.iter()
+		.enumerate()
+		.map(|(index, node)| (node.component_index, menu_graph_node_path(&nodes, index)))
+		.collect::<BTreeMap<_, _>>();
+	let mut candidates = Vec::new();
+	for action_candidate in action_candidates {
+		if action_candidate.wardrobe_set_ids.is_empty() {
+			continue;
+		}
+		let menu_path = menu_path_by_component
+			.get(&action_candidate.menu_component_index)
+			.cloned()
+			.unwrap_or_else(|| action_candidate.menu_label.iter().cloned().collect());
+		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
+			candidates.push(RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: action_candidate.menu_component_index,
+				menu_path: menu_path.clone(),
+				menu_label: action_candidate.menu_label.clone(),
+				action_id: action_candidate.action_id.clone(),
+				wardrobe_set_id: wardrobe_set_id.clone(),
+				match_kind: action_candidate.match_kind.clone(),
+				inverted: action_candidate.inverted,
+			});
+		}
+	}
+	candidates.sort_by(|a, b| {
+		(a.menu_component_index, a.wardrobe_set_id.as_str(), a.action_id.as_str()).cmp(&(
+			b.menu_component_index,
+			b.wardrobe_set_id.as_str(),
+			b.action_id.as_str(),
+		))
+	});
+	candidates
+}
+
+fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {
+	let source = &unavatar.source;
+	let Some(components) = source
+		.get("modularAvatar")
+		.and_then(|modular_avatar| modular_avatar.get("components"))
+		.and_then(|components| components.as_array())
+	else {
+		return Vec::new();
+	};
+	components
+		.iter()
+		.enumerate()
+		.filter_map(|(component_index, component)| {
+			let short_type = component
+				.get("shortType")
+				.and_then(|value| value.as_str())
+				.filter(|value| !value.is_empty())
+				.unwrap_or("unknown");
+			if !modular_avatar_is_menu_metadata_type(short_type) {
+				return None;
+			}
+			Some(modular_avatar_menu_component_summary(component, component_index))
+		})
+		.collect()
+}
+
+fn modular_avatar_menu_component_summary(component: &Value, component_index: usize) -> RuntimeMenuComponentSummary {
+	let menu_item = modular_avatar_component_ref(component, &["menuItem", "menu_item"]).unwrap_or(component);
+	let control = menu_item
+		.get("Control")
+		.or_else(|| menu_item.get("control"))
+		.or_else(|| modular_avatar_component_ref(component, &["Control", "control"]))
+		.unwrap_or(menu_item);
+	let parameter = control
+		.get("parameter")
+		.or_else(|| control.get("Parameter"))
+		.and_then(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(|value| value.as_str()))
+				.or_else(|| parameter.get("Name").and_then(|value| value.as_str()))
+		})
+		.filter(|value| !value.is_empty())
+		.map(str::to_owned)
+		.or_else(|| modular_avatar_component_string(component, &["parameterName", "parameter_name"]));
+	RuntimeMenuComponentSummary {
+		component_index,
+		hierarchy_path: modular_avatar_component_string(component, &["hierarchyPath", "hierarchy_path", "componentPath", "component_path"]),
+		sibling_index: modular_avatar_component_usize(component, &["siblingIndex", "sibling_index", "transformSiblingIndex", "order"]),
+		label: modular_avatar_component_string(component, &["label", "Label", "name", "Name", "displayName", "display_name"])
+			.or_else(|| modular_avatar_component_string(menu_item, &["label", "Label", "name", "Name", "displayName", "display_name"]))
+			.or_else(|| modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"])),
+		parameter_name: parameter,
+		value: control
+			.get("value")
+			.or_else(|| control.get("Value"))
+			.and_then(json_number_f64)
+			.map(|value| value as f32),
+	}
+}
+
+fn modular_avatar_menu_graph_candidates(components: &[RuntimeMenuComponentSummary]) -> Vec<RuntimeMenuGraphCandidate> {
+	let mut candidates = components
+		.iter()
+		.map(|component| RuntimeMenuGraphCandidate {
+			component_index: component.component_index,
+			label: component.label.clone(),
+			hierarchy_path: component.hierarchy_path.clone(),
+			sibling_index: component.sibling_index,
+		})
+		.collect::<Vec<_>>();
+	candidates.sort_by(|a, b| {
+		(
+			a.hierarchy_path.as_deref().and_then(menu_parent_path).unwrap_or(""),
+			a.sibling_index.unwrap_or(usize::MAX),
+			a.component_index,
+		)
+			.cmp(&(
+				b.hierarchy_path.as_deref().and_then(menu_parent_path).unwrap_or(""),
+				b.sibling_index.unwrap_or(usize::MAX),
+				b.component_index,
+			))
+	});
+	candidates
+}
+
+fn modular_avatar_menu_graph_nodes(candidates: &[RuntimeMenuGraphCandidate]) -> Vec<RuntimeMenuGraphNode> {
+	let path_to_node = candidates
+		.iter()
+		.enumerate()
+		.filter_map(|(index, candidate)| candidate.hierarchy_path.as_ref().map(|path| (path.as_str(), index)))
+		.collect::<BTreeMap<_, _>>();
+	let mut nodes = candidates
+		.iter()
+		.enumerate()
+		.map(|(_node_index, candidate)| {
+			let parent_node_index = candidate
+				.hierarchy_path
+				.as_deref()
+				.and_then(menu_parent_path)
+				.and_then(|parent_path| path_to_node.get(parent_path).copied());
+			RuntimeMenuGraphNode {
+				component_index: candidate.component_index,
+				label: candidate.label.clone(),
+				hierarchy_path: candidate.hierarchy_path.clone(),
+				parent_node_index,
+			}
+		})
+		.collect::<Vec<_>>();
+	for index in 0..nodes.len() {
+		let Some(parent_node_index) = nodes[index].parent_node_index else {
+			continue;
+		};
+		if parent_node_index >= nodes.len() {
+			nodes[index].parent_node_index = None;
+		}
+	}
+	nodes
+}
+
+fn menu_graph_node_display_label(node: &RuntimeMenuGraphNode) -> Option<String> {
+	node.label.clone().or_else(|| {
+		node.hierarchy_path
+			.as_deref()
+			.and_then(|path| path.trim_matches('/').rsplit('/').next())
+			.filter(|label| !label.is_empty())
+			.map(str::to_string)
+	})
+}
+
+fn menu_graph_node_path(nodes: &[RuntimeMenuGraphNode], node_index: usize) -> Vec<String> {
+	let mut labels = Vec::new();
+	let mut seen = BTreeSet::new();
+	let mut current_index = Some(node_index);
+	while let Some(index) = current_index {
+		if index >= nodes.len() || !seen.insert(index) {
+			break;
+		}
+		let node = &nodes[index];
+		if let Some(label) = menu_graph_node_display_label(node) {
+			labels.push(label);
+		}
+		current_index = node.parent_node_index;
+	}
+	labels.reverse();
+	labels
+}
+
+fn modular_avatar_component_fields(component: &Value) -> Option<&Value> {
+	component.get("fields")
+}
+
+fn modular_avatar_component_string(component: &Value, names: &[&str]) -> Option<String> {
+	names
+		.iter()
+		.find_map(|name| {
+			modular_avatar_component_fields(component)
+				.and_then(|fields| fields.get(*name))
+				.or_else(|| component.get(*name))
+				.and_then(|value| value.as_str())
+				.filter(|value| !value.is_empty())
+		})
+		.map(str::to_owned)
+}
+
+fn modular_avatar_component_ref<'a>(component: &'a Value, names: &[&str]) -> Option<&'a Value> {
+	names.iter().find_map(|name| {
+		modular_avatar_component_fields(component)
+			.and_then(|fields| fields.get(*name))
+			.or_else(|| component.get(*name))
+	})
+}
+
+fn modular_avatar_component_usize(component: &Value, names: &[&str]) -> Option<usize> {
+	names
+		.iter()
+		.find_map(|name| {
+			modular_avatar_component_fields(component)
+				.and_then(|fields| fields.get(*name))
+				.or_else(|| component.get(*name))
+				.and_then(|value| value.as_u64())
+		})
+		.and_then(|value| usize::try_from(value).ok())
+}
+
+fn json_number_f64(value: &Value) -> Option<f64> {
+	value.as_f64().or_else(|| value.as_i64().map(|value| value as f64))
+}
+
+fn modular_avatar_is_menu_metadata_type(short_type: &str) -> bool {
+	matches!(
+		short_type,
+		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget"
+	)
+}
+
+fn menu_parent_path(path: &str) -> Option<&str> {
+	let path = path.trim_matches('/');
+	let (parent, _) = path.rsplit_once('/')?;
+	(!parent.is_empty()).then_some(parent)
 }
 
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
@@ -3294,6 +3679,37 @@ impl GpuState {
 			.runtime_actions()
 			.map(runtime_action_statuses)
 			.unwrap_or_default()
+	}
+
+	pub(crate) fn menu_action_candidates(&self) -> Vec<RuntimeMenuActionCandidateStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model()
+			.runtime_actions()
+			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions))
+			.unwrap_or_default()
+	}
+
+	pub(crate) fn menu_wardrobe_candidates(&self) -> Vec<RuntimeMenuWardrobeCandidateStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		let action_candidates = doc
+			.runtime_model()
+			.runtime_actions()
+			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions));
+		let menu_action_candidates = match action_candidates {
+			Some(candidates) => candidates,
+			None => return Vec::new(),
+		};
+		menu_wardrobe_candidates_from_runtime(doc.unavatar.as_ref(), &menu_action_candidates)
 	}
 
 	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {
