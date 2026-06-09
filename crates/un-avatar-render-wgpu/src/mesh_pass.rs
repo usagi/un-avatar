@@ -1170,6 +1170,9 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_image_texture_count: usize,
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
+	pub(crate) total_material_slot_count: usize,
+	pub(crate) resident_material_slot_count: usize,
+	pub(crate) inactive_material_slot_count: usize,
 }
 
 #[inline]
@@ -1488,6 +1491,7 @@ pub(crate) struct SceneMeshes {
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	image_texture_residency: Vec<bool>,
+	material_slot_residency: Vec<bool>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	visibility_scratch: Vec<bool>,
@@ -5768,6 +5772,12 @@ impl SceneMeshes {
 
 		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
+		let material_slot_residency = scene
+			.materials
+			.iter()
+			.enumerate()
+			.map(|(material_index, _)| material_asset_resident(&scene.asset_group_ownership, active_asset_groups, material_index))
+			.collect::<Vec<_>>();
 		for (image_index, im) in scene.images.iter().enumerate() {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
@@ -6875,6 +6885,7 @@ impl SceneMeshes {
 			needs_screen_refraction: draw_state.needs_screen_refraction,
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			image_texture_residency,
+			material_slot_residency,
 			texture_summary,
 			runtime_requirements: draw_state.runtime_requirements,
 			visibility_scratch: Vec::new(),
@@ -7545,6 +7556,14 @@ impl SceneMeshes {
 				.enumerate()
 				.map(|(image_index, _)| image_asset_resident(&scene.asset_group_ownership, active_asset_groups, image_index)),
 		);
+		self.material_slot_residency.clear();
+		self.material_slot_residency.extend(
+			scene
+				.materials
+				.iter()
+				.enumerate()
+				.map(|(material_index, _)| material_asset_resident(&scene.asset_group_ownership, active_asset_groups, material_index)),
+		);
 		if changed > 0 {
 			self.rebuild_draw_order();
 		}
@@ -7556,6 +7575,8 @@ impl SceneMeshes {
 		let resident_draw_mesh_primitive_count = self.draws.iter().filter(|draw| draw.asset_resident).count();
 		let total_image_texture_count = self.image_texture_residency.len();
 		let resident_image_texture_count = self.image_texture_residency.iter().filter(|resident| **resident).count();
+		let total_material_slot_count = self.material_slot_residency.len();
+		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
 		SceneMeshAssetResidencyCounts {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
@@ -7563,6 +7584,9 @@ impl SceneMeshes {
 			total_image_texture_count,
 			resident_image_texture_count,
 			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),
+			total_material_slot_count,
+			resident_material_slot_count,
+			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
 		}
 	}
 

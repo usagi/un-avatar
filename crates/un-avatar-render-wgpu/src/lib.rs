@@ -4407,6 +4407,9 @@ mod tests {
 				total_image_texture_count: 4,
 				resident_image_texture_count: 3,
 				inactive_image_texture_count: 1,
+				total_material_slot_count: 5,
+				resident_material_slot_count: 4,
+				inactive_material_slot_count: 1,
 				scoped_draw_supported: true,
 				all_resident: true,
 				..Default::default()
@@ -4436,6 +4439,9 @@ mod tests {
 		assert_eq!(upload.get("total_image_texture_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("resident_image_texture_count").and_then(|value| value.as_u64()), Some(3));
 		assert_eq!(upload.get("inactive_image_texture_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
+		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(upload.get("inactive_material_slot_count").and_then(|value| value.as_u64()), Some(1));
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
 		assert!(snapshot.get("resolver_cache_key").is_none());
