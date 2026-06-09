@@ -24,7 +24,8 @@ use crate::skin_tone::{
 use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compression_preference_for_role, estimated_processed_mip_count, load_or_build_processed_texture,
 	mip_level_count, read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
-	texture_upload_payload, GpuTextureCompressionContext, TextureCacheEvent, TextureRole, TextureUploadKind,
+	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
+	TextureUploadPayload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -2249,6 +2250,98 @@ fn texture_sampler_or<'a>(
 		.and_then(|image_index| image_sampler_indices.get(image_index).copied())
 		.unwrap_or(fallback_index);
 	&samplers[sampler_index]
+}
+
+fn create_source_image_texture(device: &wgpu::Device, queue: &wgpu::Queue, upload: &SourceTextureUpload) -> wgpu::Texture {
+	let tex = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some("gltf_image_source"),
+		size: wgpu::Extent3d {
+			width: upload.width,
+			height: upload.height,
+			depth_or_array_layers: 1,
+		},
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format: upload.format,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		view_formats: &[],
+	});
+	queue.write_texture(
+		wgpu::TexelCopyTextureInfo {
+			texture: &tex,
+			mip_level: 0,
+			origin: wgpu::Origin3d::ZERO,
+			aspect: wgpu::TextureAspect::All,
+		},
+		&upload.data,
+		wgpu::TexelCopyBufferLayout {
+			offset: 0,
+			bytes_per_row: Some(upload.bytes_per_row),
+			rows_per_image: Some(upload.height),
+		},
+		wgpu::Extent3d {
+			width: upload.width,
+			height: upload.height,
+			depth_or_array_layers: 1,
+		},
+	);
+	tex
+}
+
+fn create_payload_image_texture(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	payload: &TextureUploadPayload,
+	format: wgpu::TextureFormat,
+	width: u32,
+	height: u32,
+) -> wgpu::Texture {
+	let tex = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some("gltf_image"),
+		size: wgpu::Extent3d {
+			width,
+			height,
+			depth_or_array_layers: 1,
+		},
+		mip_level_count: payload.mips.len() as u32,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		view_formats: &[],
+	});
+	for (mip_level, mip) in payload.mips.iter().enumerate() {
+		let (bytes_per_row, rows_per_image) = texture_mip_copy_layout(payload.kind, mip.width, mip.height);
+		queue.write_texture(
+			wgpu::TexelCopyTextureInfo {
+				texture: &tex,
+				mip_level: mip_level as u32,
+				origin: wgpu::Origin3d::ZERO,
+				aspect: wgpu::TextureAspect::All,
+			},
+			&mip.data,
+			wgpu::TexelCopyBufferLayout {
+				offset: 0,
+				bytes_per_row: Some(bytes_per_row),
+				rows_per_image: Some(rows_per_image),
+			},
+			wgpu::Extent3d {
+				width: mip.width,
+				height: mip.height,
+				depth_or_array_layers: 1,
+			},
+		);
+	}
+	tex
+}
+
+fn texture_mip_copy_layout(kind: TextureUploadKind, width: u32, height: u32) -> (u32, u32) {
+	match kind {
+		TextureUploadKind::Rgba => (4 * width, height),
+		TextureUploadKind::Bc1Srgb => (width.div_ceil(4) * 8, height.div_ceil(4)),
+		TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Srgb => (width.div_ceil(4) * 16, height.div_ceil(4)),
+	}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6590,39 +6683,7 @@ impl SceneMeshes {
 						source_upload.height,
 						source_upload.data.len() as u64,
 					);
-					let tex = device.create_texture(&wgpu::TextureDescriptor {
-						label: Some("gltf_image_source"),
-						size: wgpu::Extent3d {
-							width: source_upload.width,
-							height: source_upload.height,
-							depth_or_array_layers: 1,
-						},
-						mip_level_count: 1,
-						sample_count: 1,
-						dimension: wgpu::TextureDimension::D2,
-						format: source_upload.format,
-						usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-						view_formats: &[],
-					});
-					queue.write_texture(
-						wgpu::TexelCopyTextureInfo {
-							texture: &tex,
-							mip_level: 0,
-							origin: wgpu::Origin3d::ZERO,
-							aspect: wgpu::TextureAspect::All,
-						},
-						&source_upload.data,
-						wgpu::TexelCopyBufferLayout {
-							offset: 0,
-							bytes_per_row: Some(source_upload.bytes_per_row),
-							rows_per_image: Some(source_upload.height),
-						},
-						wgpu::Extent3d {
-							width: source_upload.width,
-							height: source_upload.height,
-							depth_or_array_layers: 1,
-						},
-					);
+					let tex = create_source_image_texture(device, queue, &source_upload);
 					textures.push(tex);
 					continue;
 				}
@@ -6743,20 +6804,6 @@ impl SceneMeshes {
 				TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
 				TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
 			};
-			let tex = device.create_texture(&wgpu::TextureDescriptor {
-				label: Some("gltf_image"),
-				size: wgpu::Extent3d {
-					width: w,
-					height: h,
-					depth_or_array_layers: 1,
-				},
-				mip_level_count: payload.mips.len() as u32,
-				sample_count: 1,
-				dimension: wgpu::TextureDimension::D2,
-				format: texture_format,
-				usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-				view_formats: &[],
-			});
 			for (mip_level, mip) in payload.mips.iter().enumerate() {
 				report(
 					"gpu-upload",
@@ -6770,31 +6817,8 @@ impl SceneMeshes {
 						mip.height
 					),
 				);
-				let (bytes_per_row, rows_per_image) = match payload.kind {
-					TextureUploadKind::Rgba => (4 * mip.width, mip.height),
-					TextureUploadKind::Bc1Srgb => (mip.width.div_ceil(4) * 8, mip.height.div_ceil(4)),
-					TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Srgb => (mip.width.div_ceil(4) * 16, mip.height.div_ceil(4)),
-				};
-				queue.write_texture(
-					wgpu::TexelCopyTextureInfo {
-						texture: &tex,
-						mip_level: mip_level as u32,
-						origin: wgpu::Origin3d::ZERO,
-						aspect: wgpu::TextureAspect::All,
-					},
-					&mip.data,
-					wgpu::TexelCopyBufferLayout {
-						offset: 0,
-						bytes_per_row: Some(bytes_per_row),
-						rows_per_image: Some(rows_per_image),
-					},
-					wgpu::Extent3d {
-						width: mip.width,
-						height: mip.height,
-						depth_or_array_layers: 1,
-					},
-				);
 			}
+			let tex = create_payload_image_texture(device, queue, &payload, texture_format, w, h);
 			textures.push(tex);
 		}
 
@@ -8114,6 +8138,14 @@ mod tests {
 
 		assert!(refresh.has_scoped_resource_changes());
 		assert!(!SceneMeshAssetResidencyRefresh::default().has_scoped_resource_changes());
+	}
+
+	#[test]
+	fn texture_mip_copy_layout_matches_upload_formats() {
+		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Rgba, 5, 3), (20, 3));
+		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc1Srgb, 5, 3), (16, 1));
+		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc5Unorm, 5, 7), (32, 2));
+		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc7Srgb, 8, 9), (32, 3));
 	}
 
 	#[test]
