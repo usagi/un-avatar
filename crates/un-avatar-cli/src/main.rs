@@ -364,10 +364,13 @@ struct DiagnoseActionItemSummary {
 	id: String,
 	label: String,
 	trigger_count: usize,
+	condition_count: usize,
 	effect_count: usize,
 	trigger_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	parameter_triggers: Vec<DiagnoseActionParameterTrigger>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	conditions: Vec<DiagnoseActionConditionSummary>,
 	effect_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	node_visibility_effects: Vec<DiagnoseActionNodeVisibilityEffect>,
@@ -379,6 +382,24 @@ struct DiagnoseActionItemSummary {
 struct DiagnoseActionParameterTrigger {
 	name: String,
 	value: f32,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionConditionSummary {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_component_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_node_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	resolved_node_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parameter_name: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parameter_value: Option<f32>,
+	inverted: bool,
+	active_parent_count: usize,
 }
 
 #[derive(Serialize)]
@@ -2658,9 +2679,11 @@ fn build_diagnose_report(
 				id: action.id.clone(),
 				label: action.label.clone(),
 				trigger_count: action.triggers.len(),
+				condition_count: action.conditions.len(),
 				effect_count: action.effects.len(),
 				trigger_kinds: runtime_action_trigger_kind_counts(action.triggers.iter()),
 				parameter_triggers: runtime_action_parameter_triggers(action.triggers.iter()),
+				conditions: runtime_action_conditions(action.conditions.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
 				material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
@@ -2879,6 +2902,24 @@ fn runtime_action_parameter_triggers<'a>(
 		.collect()
 }
 
+fn runtime_action_conditions<'a>(
+	conditions: impl IntoIterator<Item = &'a un_avatar_core::UnaRuntimeActionCondition>,
+) -> Vec<DiagnoseActionConditionSummary> {
+	conditions
+		.into_iter()
+		.map(|condition| DiagnoseActionConditionSummary {
+			source_component_id: condition.source_component_id.clone(),
+			source_node_id: condition.source_node.as_ref().and_then(|target| target.source_node_id.clone()),
+			resolved_node_id: condition.source_node.as_ref().and_then(|target| target.resolved_node_id.clone()),
+			path: condition.source_node.as_ref().and_then(|target| target.path.clone()),
+			parameter_name: condition.parameter_name.clone(),
+			parameter_value: condition.parameter_value,
+			inverted: condition.inverted,
+			active_parent_count: condition.active_parent_nodes.len(),
+		})
+		.collect()
+}
+
 fn runtime_action_node_visibility_effects<'a>(
 	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
 ) -> Vec<DiagnoseActionNodeVisibilityEffect> {
@@ -3048,8 +3089,8 @@ fn run_diagnose(
 		);
 		for action in actions.actions.iter().take(16) {
 			println!(
-				"action[{}]: label={:?} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",
-				action.id, action.label, action.trigger_count, action.effect_count, action.trigger_kinds, action.effect_kinds
+				"action[{}]: label={:?} triggers={} conditions={} effects={} trigger_kinds={:?} effect_kinds={:?}",
+				action.id, action.label, action.trigger_count, action.condition_count, action.effect_count, action.trigger_kinds, action.effect_kinds
 			);
 			if !action.parameter_triggers.is_empty() {
 				let triggers = action
@@ -3059,6 +3100,31 @@ fn run_diagnose(
 					.collect::<Vec<_>>()
 					.join(", ");
 				println!("action[{}].parameter_triggers: {}", action.id, triggers);
+			}
+			if !action.conditions.is_empty() {
+				let conditions = action
+					.conditions
+					.iter()
+					.map(|condition| {
+						let target = condition
+							.source_node_id
+							.as_deref()
+							.or(condition.resolved_node_id.as_deref())
+							.or(condition.path.as_deref())
+							.unwrap_or("?");
+						format!(
+							"component={:?} target={} parameter={:?}:{:?} inverted={} active_parents={}",
+							condition.source_component_id,
+							target,
+							condition.parameter_name,
+							condition.parameter_value,
+							condition.inverted,
+							condition.active_parent_count
+						)
+					})
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].conditions: {}", action.id, conditions);
 			}
 			if !action.node_visibility_effects.is_empty() {
 				let effects = action
@@ -3841,6 +3907,7 @@ mod tests {
 						name: "Hat".to_string(),
 						value: 1.0,
 					}],
+					conditions: Vec::new(),
 					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
 						target: un_avatar_core::UnaRuntimeNodeTarget {
 							node_index: None,
@@ -3886,6 +3953,7 @@ mod tests {
 					id: "ma:material_setter:jacket".to_string(),
 					label: "Jacket".to_string(),
 					triggers: Vec::new(),
+					conditions: Vec::new(),
 					effects: vec![UnaRuntimeActionEffect::MaterialSlot {
 						target: un_avatar_core::UnaRuntimeMaterialSlotTarget {
 							node: un_avatar_core::UnaRuntimeNodeTarget {

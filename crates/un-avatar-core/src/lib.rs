@@ -159,6 +159,8 @@ pub struct UnaRuntimeAction {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub triggers: Vec<UnaRuntimeActionTrigger>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub conditions: Vec<UnaRuntimeActionCondition>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub effects: Vec<UnaRuntimeActionEffect>,
 }
 
@@ -176,6 +178,22 @@ impl UnaRuntimeAction {
 			})
 			.collect()
 	}
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeActionCondition {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_component_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_node: Option<UnaRuntimeNodeTarget>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub parameter_name: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub parameter_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub inverted: bool,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub active_parent_nodes: Vec<UnaRuntimeNodeTarget>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1547,6 +1565,10 @@ pub struct UnaSceneNode {
 
 fn default_true() -> bool {
 	true
+}
+
+fn is_false(value: &bool) -> bool {
+	!*value
 }
 
 mod col16 {
@@ -4365,6 +4387,7 @@ mod tests {
 					triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
 						command: "field_drape".to_string(),
 					}],
+					conditions: Vec::new(),
 					effects: vec![
 						UnaRuntimeActionEffect::WardrobeSet {
 							set_id: "field_drape".to_string(),
@@ -4407,6 +4430,7 @@ mod tests {
 						value: 2.0,
 					},
 				],
+				conditions: Vec::new(),
 				effects: vec![UnaRuntimeActionEffect::WardrobeSet {
 					set_id: "field_drape".to_string(),
 				}],

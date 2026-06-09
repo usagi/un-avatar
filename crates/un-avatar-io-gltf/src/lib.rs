@@ -17,9 +17,10 @@ use un_avatar_core::{
 	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
 	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
 	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction,
-	UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget,
-	UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
+	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
+	UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+	UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2224,6 +2225,7 @@ fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension, scene: Option<&U
 					triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
 						command: set_id.to_string(),
 					}],
+					conditions: Vec::new(),
 					effects: vec![UnaRuntimeActionEffect::WardrobeSet {
 						set_id: set_id.to_string(),
 					}],
@@ -2394,6 +2396,7 @@ fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> 
 				path: expression_menu_path,
 			},
 		],
+		conditions: Vec::new(),
 		effects,
 	})
 }
@@ -2449,6 +2452,7 @@ fn unavatar_object_toggle_runtime_action(
 		id: command.clone(),
 		label,
 		triggers: unavatar_modular_avatar_component_triggers(component, command),
+		conditions: unavatar_modular_avatar_component_conditions(component, scene, unavatar),
 		effects,
 	})
 }
@@ -2537,6 +2541,7 @@ fn unavatar_material_setter_runtime_action(
 		id: command.clone(),
 		label,
 		triggers: unavatar_modular_avatar_component_triggers(component, command),
+		conditions: unavatar_modular_avatar_component_conditions(component, scene, unavatar),
 		effects,
 	})
 }
@@ -2689,6 +2694,7 @@ fn unavatar_material_swap_runtime_action(
 		id: command.clone(),
 		label,
 		triggers: unavatar_modular_avatar_component_triggers(component, command),
+		conditions: unavatar_modular_avatar_component_conditions(component, Some(scene), unavatar),
 		effects,
 	})
 }
@@ -2721,6 +2727,109 @@ fn unavatar_modular_avatar_component_triggers(component: &Value, command: String
 		triggers.push(UnaRuntimeActionTrigger::ParameterValue { name, value });
 	}
 	triggers
+}
+
+fn unavatar_modular_avatar_component_conditions(
+	component: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Vec<UnaRuntimeActionCondition> {
+	let source_component_id = component
+		.get("id")
+		.or_else(|| component.get("componentId"))
+		.or_else(|| component.get("component_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let source_node = unavatar_modular_avatar_component_source_node(component, scene, unavatar);
+	let active_parent_nodes = scene
+		.zip(source_node.as_ref())
+		.and_then(|(scene, source_node)| resolve_unavatar_runtime_node_target(scene, source_node).map(|index| (scene, index)))
+		.map(|(scene, index)| {
+			let parents = scene_parent_indices(scene);
+			let mut out = Vec::new();
+			let mut cursor = parents.get(index).copied().flatten();
+			while let Some(parent) = cursor {
+				if let Some(node) = scene.nodes.get(parent) {
+					out.push(UnaRuntimeNodeTarget {
+						node_index: None,
+						source_node_id: node.source_node_id.clone(),
+						resolved_node_id: node.resolved_node_id.clone(),
+						path: scene_node_path_for_index(scene, parent),
+					});
+				}
+				cursor = parents.get(parent).copied().flatten();
+			}
+			out
+		})
+		.unwrap_or_default();
+	let (parameter_name, parameter_value) = unavatar_modular_avatar_component_parameter_value(component)
+		.map(|(name, value)| (Some(name), Some(value)))
+		.unwrap_or((None, None));
+	let condition = UnaRuntimeActionCondition {
+		source_component_id,
+		source_node,
+		parameter_name,
+		parameter_value,
+		inverted: unavatar_modular_avatar_component_inverted(component),
+		active_parent_nodes,
+	};
+	(condition.inverted
+		|| condition.source_component_id.is_some()
+		|| condition.source_node.is_some()
+		|| condition.parameter_name.is_some()
+		|| !condition.active_parent_nodes.is_empty())
+	.then_some(condition)
+	.into_iter()
+	.collect()
+}
+
+fn unavatar_modular_avatar_component_source_node(
+	component: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	unavatar: &UnaUnavatarExtension,
+) -> Option<UnaRuntimeNodeTarget> {
+	let target_ref = component
+		.get("target")
+		.or_else(|| component.get("resolvedTarget"))
+		.or_else(|| component.get("gameObject"))
+		.or_else(|| component.get("GameObject"))?;
+	let source_node_id = target_ref
+		.get("nodeId")
+		.or_else(|| target_ref.get("sourceNodeId"))
+		.or_else(|| target_ref.get("source_node_id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	let path = target_ref
+		.get("path")
+		.or_else(|| target_ref.get("referencePath"))
+		.or_else(|| target_ref.get("reference_path"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if let Some(scene) = scene {
+		let node_ids = scene_node_ids(scene);
+		let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+		let paths = scene_node_paths(scene);
+		let normalized_paths = scene_node_normalized_paths(scene);
+		if let Some(node_index) = modular_avatar_reference_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths) {
+			if let Some(node) = scene.nodes.get(node_index) {
+				return Some(UnaRuntimeNodeTarget {
+					node_index: None,
+					source_node_id: node.source_node_id.clone(),
+					resolved_node_id: node.resolved_node_id.clone(),
+					path: scene_node_path_for_index(scene, node_index),
+				});
+			}
+		}
+	}
+	(source_node_id.is_some() || path.is_some()).then_some(UnaRuntimeNodeTarget {
+		node_index: None,
+		source_node_id,
+		resolved_node_id: None,
+		path,
+	})
 }
 
 fn unavatar_modular_avatar_component_label(component: &Value, fallback: &str) -> String {
@@ -8361,6 +8470,11 @@ mod tests {
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:material_setter:mat-setter");
 		assert_eq!(actions.actions[0].label, "Jacket Color");
+		assert_eq!(actions.actions[0].conditions.len(), 1);
+		assert_eq!(actions.actions[0].conditions[0].source_component_id.as_deref(), Some("mat-setter"));
+		assert_eq!(actions.actions[0].conditions[0].parameter_name.as_deref(), Some("JacketColor"));
+		assert_eq!(actions.actions[0].conditions[0].parameter_value, Some(1.0));
+		assert!(!actions.actions[0].conditions[0].inverted);
 		assert_eq!(
 			actions.actions[0].triggers,
 			vec![
@@ -8450,6 +8564,10 @@ mod tests {
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:object_toggle:hat-toggle");
 		assert_eq!(actions.actions[0].label, "Hat");
+		assert_eq!(actions.actions[0].conditions.len(), 1);
+		assert_eq!(actions.actions[0].conditions[0].source_component_id.as_deref(), Some("hat-toggle"));
+		assert_eq!(actions.actions[0].conditions[0].parameter_name.as_deref(), Some("Hat"));
+		assert_eq!(actions.actions[0].conditions[0].parameter_value, Some(1.0));
 		assert_eq!(
 			actions.actions[0].triggers,
 			vec![
