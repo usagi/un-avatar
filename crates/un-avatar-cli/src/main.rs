@@ -3298,6 +3298,7 @@ fn build_diagnose_report(
 		}
 	} else {
 		warnings.push("imported document has no scene".to_string());
+		let scoped_asset_selection = doc.scoped_asset_selection();
 		DiagnoseSceneSummary {
 			has_scene: false,
 			mesh_count: 0,
@@ -3326,12 +3327,12 @@ fn build_diagnose_report(
 			asset_group_owned_image_count: 0,
 			asset_group_owned_dynamics_count: 0,
 			asset_group_ownership: Vec::new(),
-			scoped_active_asset_group_count: 0,
-			scoped_missing_active_asset_groups: Vec::new(),
-			scoped_resident_mesh_primitive_count: 0,
-			scoped_resident_material_count: 0,
-			scoped_resident_image_count: 0,
-			scoped_resident_dynamics_count: 0,
+			scoped_active_asset_group_count: scoped_asset_selection.owned_active_groups.len(),
+			scoped_missing_active_asset_groups: scoped_asset_selection.missing_active_asset_groups,
+			scoped_resident_mesh_primitive_count: scoped_asset_selection.mesh_primitives.len(),
+			scoped_resident_material_count: scoped_asset_selection.materials.len(),
+			scoped_resident_image_count: scoped_asset_selection.images.len(),
+			scoped_resident_dynamics_count: scoped_asset_selection.dynamics_source_ids.len(),
 			shading_counts: BTreeMap::new(),
 			alpha_counts: BTreeMap::new(),
 			visible_shading_counts: BTreeMap::new(),
@@ -5136,6 +5137,39 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups")));
+	}
+
+	#[test]
+	fn diagnose_report_keeps_scoped_missing_groups_without_scene() {
+		let mut doc = UnaDocument::default();
+		doc.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert!(!report.scene.has_scene);
+		assert_eq!(report.scene.scoped_active_asset_group_count, 0);
+		assert_eq!(
+			report.scene.scoped_missing_active_asset_groups,
+			vec!["outfit:coat".to_string(), "texture:red".to_string()]
+		);
+		assert_eq!(report.scene.scoped_resident_mesh_primitive_count, 0);
+		assert_eq!(report.scene.scoped_resident_material_count, 0);
+		assert_eq!(report.scene.scoped_resident_image_count, 0);
+		assert_eq!(report.scene.scoped_resident_dynamics_count, 0);
 	}
 
 	#[test]
