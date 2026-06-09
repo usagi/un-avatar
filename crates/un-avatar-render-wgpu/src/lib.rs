@@ -105,6 +105,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_apply_vmc_root_translation",
 	"set_primary_motion_source",
 	"set_motion_receivers",
+	"set_dynamics",
 	"set_spring_bones",
 	"set_avatar_outline",
 	"set_avatar_rim",
@@ -287,10 +288,10 @@ enum RendererControlEvent {
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
 	},
-	SetSpringBones {
+	SetDynamics {
 		enabled: bool,
 		bone_colliders: BoneColliderConfig,
-		/// None means no SpringBone physics override; SpringBone itself is controlled by `enabled`.
+		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
 		physics_config: Option<SpringBonePhysicsConfig>,
 	},
 	SetAvatarOutline {
@@ -502,6 +503,14 @@ enum RendererControlCommand {
 		unmotion_zenoh_enabled: bool,
 		#[serde(default)]
 		unmotion_zenoh_key: String,
+	},
+	SetDynamics {
+		enabled: bool,
+		bone_colliders: BoneColliderConfig,
+		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
+		#[serde(default)]
+		#[serde(alias = "physics")]
+		physics_config: Option<SpringBonePhysicsConfig>,
 	},
 	SetSpringBones {
 		enabled: bool,
@@ -724,11 +733,16 @@ impl RendererControlCommand {
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
 			},
-			Self::SetSpringBones {
+			Self::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
-			} => RendererControlEvent::SetSpringBones {
+			}
+			| Self::SetSpringBones {
+				enabled,
+				bone_colliders,
+				physics_config,
+			} => RendererControlEvent::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
@@ -2739,7 +2753,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 				self.request_redraw();
 			}
-			RendererControlEvent::SetSpringBones {
+			RendererControlEvent::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
@@ -5039,6 +5053,44 @@ mod tests {
 		};
 		assert_eq!(name, "JacketColor");
 		assert_eq!(value, 1.0);
+	}
+
+	#[test]
+	fn parses_json_set_dynamics_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0}}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetDynamics {
+			enabled,
+			bone_colliders,
+			physics_config,
+		} = command
+		else {
+			panic!("expected set_dynamics command");
+		};
+		assert!(!enabled);
+		assert!(!bone_colliders.enabled);
+		assert_eq!(physics_config.unwrap().simulation_hz, 120.0);
+	}
+
+	#[test]
+	fn parses_legacy_json_set_spring_bones_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_spring_bones","enabled":true,"bone_colliders":{"enabled":true},"physics":{"simulation_hz":90.0}}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetSpringBones {
+			enabled,
+			bone_colliders,
+			physics_config,
+		} = command
+		else {
+			panic!("expected set_spring_bones command");
+		};
+		assert!(enabled);
+		assert!(bone_colliders.enabled);
+		assert_eq!(physics_config.unwrap().simulation_hz, 90.0);
 	}
 
 	#[test]
