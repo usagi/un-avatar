@@ -4741,26 +4741,40 @@ mod tests {
 				..Default::default()
 			}),
 			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
-				actions: vec![un_avatar_core::UnaRuntimeAction {
-					id: "ma:hat".to_string(),
-					label: "Hat Toggle".to_string(),
-					triggers: Vec::new(),
-					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
-						parameter_name: Some("Hat".to_string()),
-						parameter_value: Some(1.0),
-						..Default::default()
-					}],
-					effects: vec![
-						UnaRuntimeActionEffect::NodeVisibility {
-							target: un_avatar_core::UnaRuntimeNodeTarget {
-								path: Some("Root/Hat".to_string()),
-								..Default::default()
+				actions: vec![
+					un_avatar_core::UnaRuntimeAction {
+						id: "ma:hat".to_string(),
+						label: "Hat Toggle".to_string(),
+						triggers: Vec::new(),
+						conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+							parameter_name: Some("Hat".to_string()),
+							parameter_value: Some(1.0),
+							..Default::default()
+						}],
+						effects: vec![
+							UnaRuntimeActionEffect::NodeVisibility {
+								target: un_avatar_core::UnaRuntimeNodeTarget {
+									path: Some("Root/Hat".to_string()),
+									..Default::default()
+								},
+								visible: true,
 							},
-							visible: true,
-						},
-						UnaRuntimeActionEffect::WardrobeSet { set_id: "hat".to_string() },
-					],
-				}],
+							UnaRuntimeActionEffect::WardrobeSet { set_id: "hat".to_string() },
+						],
+					},
+					un_avatar_core::UnaRuntimeAction {
+						id: "ma:glasses".to_string(),
+						label: "Glasses Toggle".to_string(),
+						triggers: vec![UnaRuntimeActionTrigger::ParameterValue {
+							name: "Glasses".to_string(),
+							value: 1.0,
+						}],
+						conditions: Vec::new(),
+						effects: vec![UnaRuntimeActionEffect::WardrobeSet {
+							set_id: "glasses".to_string(),
+						}],
+					},
+				],
 			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
 				spec_version: "0.1-preview".to_string(),
@@ -5006,7 +5020,7 @@ mod tests {
 		assert_eq!(install_target_edge.target_kind, "installer");
 		assert_eq!(install_target_edge.installer_path.as_deref(), Some("Root/MenuInstaller"));
 		assert!(!install_target_edge.ignored_by_install_target);
-		assert_eq!(report.menu_action_candidates.len(), 1);
+		assert_eq!(report.menu_action_candidates.len(), 2);
 		let menu_action = &report.menu_action_candidates[0];
 		assert_eq!(menu_action.menu_component_index, 2);
 		assert_eq!(menu_action.menu_label.as_deref(), Some("Hat"));
@@ -5018,7 +5032,14 @@ mod tests {
 		assert_eq!(menu_action.effect_kinds.get("node_visibility"), Some(&1));
 		assert_eq!(menu_action.effect_kinds.get("wardrobe_set"), Some(&1));
 		assert_eq!(menu_action.wardrobe_set_ids, vec!["hat".to_string()]);
-		assert_eq!(report.menu_wardrobe_candidates.len(), 1);
+		let nested_menu_action = &report.menu_action_candidates[1];
+		assert_eq!(nested_menu_action.menu_component_index, 5);
+		assert_eq!(nested_menu_action.menu_label.as_deref(), Some("Glasses"));
+		assert_eq!(nested_menu_action.parameter_name, "Glasses");
+		assert_eq!(nested_menu_action.action_id, "ma:glasses");
+		assert_eq!(nested_menu_action.match_kind, "trigger");
+		assert_eq!(nested_menu_action.wardrobe_set_ids, vec!["glasses".to_string()]);
+		assert_eq!(report.menu_wardrobe_candidates.len(), 2);
 		let wardrobe_candidate = &report.menu_wardrobe_candidates[0];
 		assert_eq!(wardrobe_candidate.menu_component_index, 2);
 		assert_eq!(wardrobe_candidate.menu_path, vec!["Hat".to_string()]);
@@ -5027,6 +5048,17 @@ mod tests {
 		assert_eq!(wardrobe_candidate.wardrobe_set_id, "hat");
 		assert_eq!(wardrobe_candidate.match_kind, "condition");
 		assert!(!wardrobe_candidate.inverted);
+		let nested_wardrobe_candidate = &report.menu_wardrobe_candidates[1];
+		assert_eq!(nested_wardrobe_candidate.menu_component_index, 5);
+		assert_eq!(
+			nested_wardrobe_candidate.menu_path,
+			vec!["Accessories".to_string(), "Glasses".to_string()]
+		);
+		assert_eq!(nested_wardrobe_candidate.menu_label.as_deref(), Some("Glasses"));
+		assert_eq!(nested_wardrobe_candidate.action_id, "ma:glasses");
+		assert_eq!(nested_wardrobe_candidate.wardrobe_set_id, "glasses");
+		assert_eq!(nested_wardrobe_candidate.match_kind, "trigger");
+		assert!(!nested_wardrobe_candidate.inverted);
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
