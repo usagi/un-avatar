@@ -2238,6 +2238,7 @@ fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &
 
 fn apply_unavatar_asset_group_ownership(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let ownership = unavatar_asset_group_ownership(unavatar);
+	report_unavatar_asset_group_ownership_ambiguities(unavatar, report);
 	if ownership.is_empty() {
 		return;
 	}
@@ -2306,6 +2307,88 @@ fn unavatar_asset_group_ownership_entry(value: &Value) -> Option<UnaSceneAssetGr
 		images,
 		dynamics_source_ids,
 	})
+}
+
+fn unavatar_asset_group_ownership_ambiguity_items(unavatar: &UnaUnavatarExtension) -> Vec<&Value> {
+	let mut out = Vec::new();
+	let sources = [
+		unavatar
+			.source
+			.get("assetGroupOwnershipAmbiguities")
+			.or_else(|| unavatar.source.get("asset_group_ownership_ambiguities")),
+		unavatar
+			.source
+			.get("wardrobe")
+			.and_then(|wardrobe| {
+				wardrobe
+					.get("assetGroupOwnershipAmbiguities")
+					.or_else(|| wardrobe.get("asset_group_ownership_ambiguities"))
+			}),
+	];
+	for source in sources.into_iter().flatten() {
+		if let Some(items) = source.get("items").and_then(Value::as_array) {
+			out.extend(items.iter());
+		} else if let Some(items) = source.as_array() {
+			out.extend(items.iter());
+		}
+	}
+	out
+}
+
+fn report_unavatar_asset_group_ownership_ambiguities(unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
+	let mut ambiguity_items = unavatar_asset_group_ownership_ambiguity_items(unavatar)
+		.into_iter()
+		.map(|item| {
+			let source_path = item
+				.get("sourcePath")
+				.or_else(|| item.get("source_path"))
+				.or_else(|| item.get("path"))
+				.and_then(Value::as_str)
+				.unwrap_or("sourcePath=<unknown>");
+			let normalized_path = item
+				.get("normalizedPath")
+				.or_else(|| item.get("normalized_path"))
+				.and_then(Value::as_str)
+				.unwrap_or("normalizedPath=<unknown>");
+			let candidates = item
+				.get("candidateGroups")
+				.or_else(|| item.get("candidate_groups"))
+				.and_then(Value::as_array)
+				.map(|groups| {
+					groups
+						.iter()
+						.filter_map(Value::as_str)
+						.filter(|value| !value.is_empty())
+						.map(|value| value.to_string())
+						.collect::<Vec<_>>()
+				})
+				.filter(|value| !value.is_empty())
+				.unwrap_or_default();
+			let candidates = if candidates.is_empty() {
+				"candidateGroups=<none>".to_string()
+			} else {
+				candidates.join(",")
+			};
+			format!("sourcePath={source_path}, normalizedPath={normalized_path}, candidateGroups=[{candidates}]")
+		})
+		.filter(|entry| !entry.is_empty())
+		.collect::<Vec<_>>();
+	if ambiguity_items.is_empty() {
+		return;
+	}
+
+	let sample_count = ambiguity_items.len().min(4);
+	for item in ambiguity_items.drain(0..sample_count) {
+		report.push_warning(format!(
+			"wardrobe assetGroupOwnershipAmbiguities detected: {item}. Resolve by adding wardrobe.sets[*].assetGroupOwnershipHints(path, groupId)."
+		));
+	}
+	if !ambiguity_items.is_empty() {
+		report.push_warning(format!(
+			"... and {} additional wardrobe assetGroupOwnershipAmbiguity item(s) omitted; resolve all with wardrobe.sets[*].assetGroupOwnershipHints(path, groupId).",
+			ambiguity_items.len()
+		));
+	}
 }
 
 fn unavatar_mesh_primitive_key(value: &Value) -> Option<UnaMeshPrimitiveKey> {
@@ -13164,6 +13247,45 @@ mod tests {
 		);
 		assert_eq!(scene.asset_group_ownership_counts().groups, 2);
 		assert!(report.messages.iter().any(|message| message.contains("ownership_groups=2")));
+	}
+
+	#[test]
+	fn unavatar_asset_group_ownership_reports_ambiguities() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"wardrobe": {
+					"assetGroupOwnership": [],
+					"assetGroupOwnershipAmbiguities": {
+						"itemLimit": 10,
+						"itemCount": 2,
+						"items": [{
+							"sourcePath": "Hair/Body",
+							"normalizedPath": "hair/body",
+							"candidateGroups": ["avatar:base", "physics:hair"]
+						}, {
+							"sourcePath": "Eye",
+							"candidateGroups": ["avatar:base"]
+						}]
+					}
+				}
+			}),
+		};
+		let mut scene = UnaSceneSnapshot::default();
+		let mut report = ImportReport::default();
+
+		apply_unavatar_asset_group_ownership(&mut scene, &unavatar, &mut report);
+
+		assert!(scene.asset_group_ownership.is_empty());
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("assetGroupOwnershipAmbiguities detected")));
+		let has_warning = report.diagnostics.iter().any(|diagnostic| {
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning
+				&& diagnostic.text.contains("assetGroupOwnershipAmbiguities detected")
+		});
+		assert!(has_warning);
 	}
 
 	#[test]
