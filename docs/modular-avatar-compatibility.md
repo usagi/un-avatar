@@ -159,17 +159,22 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ### Dynamics / Constraints / Platform
 
-- `[ ]` MA Convert Constraints
-  - required: identify constraints that affect render transform and convert to Runtime-supported node constraints or report unsupported.
-- `[ ]` MA Global Collider / PhysBone Blocker
-  - required: capture blocker / collider intent and feed resolved state into the U.N. dynamics normalization layer.
+- `[~]` MA Convert Constraints
+  - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, and catalog reports include unsupported counts by type.
+  - remaining: identify constraints that affect render transform and convert to runtime-supported node constraints where possible.
+- `[~]` MA Global Collider / PhysBone Blocker
+  - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
+  - remaining: capture blocker / collider intent and feed resolved state into the U.N. dynamics normalization layer.
   - note: PhysBone behavior is not owned by the Modular Avatar resolver; it is lowered through the SpringBone / PhysBone to U.N. dynamics plan.
-- `[ ]` MA Floor Adjuster
-  - required: avatar root transform / floor offset handling.
-- `[ ]` MA Platform Filter
-  - required: platform selection policy for local renderer.
-- `[ ]` MA VRChat Settings / Rename VRChat Collision Tags
-  - required: metadata/report first; render impact likely deferred.
+- `[~]` MA Floor Adjuster
+  - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
+  - remaining: avatar root transform / floor offset handling.
+- `[~]` MA Platform Filter
+  - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
+  - remaining: platform selection policy for local renderer.
+- `[~]` MA VRChat Settings / Rename VRChat Collision Tags
+  - done: Importer classifies both as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
+  - remaining: metadata/report first; render impact likely deferred.
 
 ### Export Format
 
