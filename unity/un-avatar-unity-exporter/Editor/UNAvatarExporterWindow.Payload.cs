@@ -941,7 +941,7 @@ namespace UNAvatar.UnityExporter
             {
                 foreach (var record in rendererAssets)
                 {
-                    var group = WardrobeSnapshotCapture.AssetGroupForPath(record != null ? record.path : "");
+                    var group = WardrobeAssetGroupForPath(record != null ? record.path : "", declaredAssetGroups);
                     if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
                     {
                         continue;
@@ -962,7 +962,7 @@ namespace UNAvatar.UnityExporter
                     {
                         continue;
                     }
-                    var group = WardrobeSnapshotCapture.AssetGroupForPath(DynamicSourcePath(groupPayload, sourceId));
+                    var group = WardrobeAssetGroupForPath(DynamicSourcePath(groupPayload, sourceId), declaredAssetGroups);
                     if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
                     {
                         continue;
@@ -985,6 +985,65 @@ namespace UNAvatar.UnityExporter
                 });
             }
             return result;
+        }
+
+        private static string WardrobeAssetGroupForPath(string path, HashSet<string> declaredAssetGroups)
+        {
+            if (declaredAssetGroups == null || declaredAssetGroups.Count == 0)
+            {
+                return "";
+            }
+            var outfitGroup = WardrobeSnapshotCapture.AssetGroupForPath(path);
+            if (!string.IsNullOrWhiteSpace(outfitGroup) && declaredAssetGroups.Contains(outfitGroup))
+            {
+                return outfitGroup;
+            }
+            var topSlug = WardrobeAssetGroupTopSlug(path);
+            if (string.IsNullOrWhiteSpace(topSlug))
+            {
+                return "";
+            }
+            string match = null;
+            foreach (var group in declaredAssetGroups)
+            {
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    continue;
+                }
+                var suffix = WardrobeAssetGroupSuffixSlug(group);
+                if (!string.Equals(suffix, topSlug, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (match != null)
+                {
+                    return "";
+                }
+                match = group;
+            }
+            return match ?? "";
+        }
+
+        private static string WardrobeAssetGroupTopSlug(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "";
+            }
+            var separator = path.IndexOf('/');
+            var top = (separator >= 0 ? path.Substring(0, separator) : path).Trim();
+            return string.IsNullOrWhiteSpace(top) ? "" : WardrobeSnapshotCapture.MakeId(top);
+        }
+
+        private static string WardrobeAssetGroupSuffixSlug(string group)
+        {
+            if (string.IsNullOrWhiteSpace(group))
+            {
+                return "";
+            }
+            var separator = group.IndexOf(':');
+            var suffix = (separator >= 0 ? group.Substring(separator + 1) : group).Trim();
+            return string.IsNullOrWhiteSpace(suffix) ? "" : WardrobeSnapshotCapture.MakeId(suffix);
         }
 
         private static WardrobeAssetGroupOwnershipBuilder GetWardrobeAssetGroupOwnershipBuilder(
