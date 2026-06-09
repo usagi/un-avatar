@@ -335,9 +335,6 @@ struct ResolvedSpringBonePhysicsParams {
 	gravity_scale: f32,
 	drag_scale: f32,
 	constraint_iterations: u32,
-	max_angle_x_rad: Option<f32>,
-	max_angle_z_rad: Option<f32>,
-	max_stretch_ratio: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -428,22 +425,6 @@ fn convert_univrm_stiffness_to_xpbd_compliance(stiffness: f32) -> f32 {
 	(1.0 / (omega * omega)).clamp(0.0, 10.0)
 }
 
-fn normalize_limit_angle_deg(value_deg: f32) -> Option<f32> {
-	let normalized = value_deg.clamp(0.0, 180.0);
-	if normalized <= 0.0 || !normalized.is_finite() || normalized >= 90.0 {
-		return None;
-	}
-	Some(normalized.to_radians())
-}
-
-fn normalize_limit_stretch_ratio(value: f32) -> Option<f32> {
-	let normalized = value.max(0.0);
-	if !normalized.is_finite() || normalized <= 0.0 {
-		return None;
-	}
-	Some(normalized)
-}
-
 fn resolve_group_params(
 	category_id: &str,
 	group: &UnaSpringBoneGroup,
@@ -460,12 +441,6 @@ fn resolve_group_params(
 		gravity_scale: params.gravity_scale.unwrap_or(converted.gravity_scale),
 		drag_scale: params.drag_scale.unwrap_or(converted.drag_scale),
 		constraint_iterations: params.constraint_iterations.unwrap_or(converted.constraint_iterations).clamp(1, 32),
-		max_angle_x_rad: group.limit.as_ref().and_then(|limit| normalize_limit_angle_deg(limit.max_angle_x)),
-		max_angle_z_rad: group.limit.as_ref().and_then(|limit| normalize_limit_angle_deg(limit.max_angle_z)),
-		max_stretch_ratio: group
-			.limit
-			.as_ref()
-			.and_then(|limit| normalize_limit_stretch_ratio(limit.max_stretch)),
 	}
 }
 
@@ -741,22 +716,12 @@ fn step_group(
 			let target_tail = child_pos + target_axis_world * joint.length;
 			for _ in 0..rt.params.constraint_iterations {
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);
-				next_tail = constrain_tail_limits(
-					next_tail,
-					child_pos,
-					target_axis_world,
-					target_rotation,
-					joint.length,
-					rt.params.max_angle_x_rad,
-					rt.params.max_angle_z_rad,
-					rt.params.max_stretch_ratio,
-				);
-				let constrained_length = (next_tail - child_pos).length();
+				next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
 				next_tail = constrain_tail_colliders(
 					next_tail,
 					child_pos,
 					target_axis_world,
-					constrained_length,
+					joint.length,
 					&rt.world_scratch,
 					bone_colliders,
 					group.hit_radius,
@@ -764,22 +729,12 @@ fn step_group(
 			}
 		} else {
 			joint.rest_lambda = 0.0;
-			next_tail = constrain_tail_limits(
-				next_tail,
-				child_pos,
-				target_axis_world,
-				target_rotation,
-				joint.length,
-				rt.params.max_angle_x_rad,
-				rt.params.max_angle_z_rad,
-				rt.params.max_stretch_ratio,
-			);
-			let constrained_length = (next_tail - child_pos).length();
+			next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
 			next_tail = constrain_tail_colliders(
 				next_tail,
 				child_pos,
 				target_axis_world,
-				constrained_length,
+				joint.length,
 				&rt.world_scratch,
 				bone_colliders,
 				group.hit_radius,
@@ -810,80 +765,13 @@ fn step_group(
 	}
 }
 
-fn constrain_tail_limits(
-	next_tail: Vec3,
-	child_pos: Vec3,
-	fallback_axis: Vec3,
-	target_rotation: Quat,
-	rest_length: f32,
-	max_angle_x_rad: Option<f32>,
-	max_angle_z_rad: Option<f32>,
-	max_stretch_ratio: Option<f32>,
-) -> Vec3 {
-	let target_axis = fallback_axis.normalize_or_zero();
-	let target_len = (next_tail - child_pos).length();
-	if target_len < 1e-12 {
-		return child_pos + target_axis * rest_length;
+fn constrain_tail_length(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32) -> Vec3 {
+	let dir = (next_tail - child_pos).normalize_or_zero();
+	if dir.length_squared() < 1e-12 {
+		child_pos + fallback_axis * length
+	} else {
+		child_pos + dir * length
 	}
-
-	let mut constrained_dir = next_tail - child_pos;
-	let len = constrained_dir.length();
-	if max_angle_x_rad.is_some() || max_angle_z_rad.is_some() {
-		let right = {
-			let mut right = target_rotation * Vec3::X;
-			if right.length_squared() < 1e-12 {
-				right = Vec3::X;
-			}
-			let projected = right - target_axis * right.dot(target_axis);
-			if projected.length_squared() < 1e-12 {
-				let mut fallback = if target_axis.z.abs() < 0.9 { Vec3::Z } else { Vec3::X };
-				fallback = fallback - target_axis * fallback.dot(target_axis);
-				fallback.normalize()
-			} else {
-				projected.normalize()
-			}
-		};
-		let forward = target_axis.cross(right);
-		if forward.length_squared() > 1e-12 {
-			let forward = forward.normalize();
-			let axis_component = constrained_dir.dot(target_axis) / len;
-			let mut right_component = constrained_dir.dot(right) / len;
-			let mut forward_component = constrained_dir.dot(forward) / len;
-
-			if let Some(max_angle_x_rad) = max_angle_x_rad {
-				let tan_limit = max_angle_x_rad.tan();
-				if tan_limit > 0.0 && tan_limit.is_finite() {
-					let limit = axis_component.abs() * tan_limit;
-					if right_component.abs() > limit {
-						right_component = right_component.signum() * limit;
-					}
-				}
-			}
-			if let Some(max_angle_z_rad) = max_angle_z_rad {
-				let tan_limit = max_angle_z_rad.tan();
-				if tan_limit > 0.0 && tan_limit.is_finite() {
-					let limit = axis_component.abs() * tan_limit;
-					if forward_component.abs() > limit {
-						forward_component = forward_component.signum() * limit;
-					}
-				}
-			}
-
-			let limited = axis_component * target_axis + right_component * right + forward_component * forward;
-			if limited.length_squared() > 1e-12 {
-				constrained_dir = limited * len;
-			}
-		}
-	}
-
-	let min_length = rest_length.max(1e-4);
-	let max_length = max_stretch_ratio
-		.map(|ratio| rest_length * (1.0 + ratio))
-		.unwrap_or(rest_length)
-		.max(min_length);
-	let constrained_len = target_len.clamp(min_length, max_length);
-	let constrained_dir = constrained_dir.normalize_or_zero();
-	child_pos + constrained_dir * constrained_len
 }
 
 fn constrain_tail_colliders(
@@ -944,69 +832,6 @@ mod tests {
 			probe_anchor_node: None,
 			local_bounds: None,
 		}
-	}
-
-	#[test]
-	fn resolved_params_include_unavatar_dynamics_limits() {
-		let scene = UnaSceneSnapshot {
-			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
-			roots: vec![0],
-			..Default::default()
-		};
-		let settings = UnaSpringBoneSettings {
-			groups: vec![UnaSpringBoneGroup {
-				source_kind: Default::default(),
-				enabled: true,
-				source_id: String::new(),
-				comment: String::new(),
-				category: "hair".to_string(),
-				stiffness: 0.1,
-				gravity_power: 1.0,
-				gravity_dir: [0.0, -1.0, 0.0],
-				drag_force: 0.3,
-				center_node: None,
-				hit_radius: 0.0,
-				limit: Some(un_avatar_core::UnaDynamicsLimit {
-					limit_type: "Angle".to_string(),
-					max_angle_x: 45.0,
-					max_angle_z: 20.0,
-					max_stretch: 0.2,
-				}),
-				interaction: None,
-				bone_node_indices: vec![0, 1],
-			}],
-			colliders: Vec::new(),
-		};
-		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
-		let rt = sim.runtimes[0].as_ref().expect("runtime");
-		assert_eq!(rt.params.max_angle_x_rad, Some(45.0_f32.to_radians()));
-		assert_eq!(rt.params.max_angle_z_rad, Some(20.0_f32.to_radians()));
-		assert_eq!(rt.params.max_stretch_ratio, Some(0.2));
-	}
-
-	#[test]
-	fn constrain_tail_limits_respects_angle_caps() {
-		let child = Vec3::ZERO;
-		let target = Vec3::new(1.0, 1.0, 0.0);
-		let constrained = constrain_tail_limits(target, child, Vec3::Y, Quat::IDENTITY, 1.0, Some(10.0_f32.to_radians()), None, None);
-		let dir = (constrained - child).normalize_or_zero();
-		assert!(dir.x >= 0.0);
-		let tan_x = (dir.x / dir.y.max(1e-12)).abs();
-		assert!(
-			tan_x <= 10.0_f32.to_radians().tan() + 1e-3,
-			"tan_x={} limit={}",
-			tan_x,
-			10.0_f32.to_radians().tan()
-		);
-	}
-
-	#[test]
-	fn constrain_tail_limits_respects_stretch_caps() {
-		let child = Vec3::ZERO;
-		let unconstrained_tail = Vec3::new(0.0, 2.0, 0.0);
-		let constrained = constrain_tail_limits(unconstrained_tail, child, Vec3::Y, Quat::IDENTITY, 1.0, None, None, Some(0.25));
-		let actual_len = (constrained - child).length();
-		assert!((actual_len - 1.25).abs() < 1e-5);
 	}
 
 	/// 重力で末端 tail が水平方向に流れることを確認する基本テスト。
