@@ -10682,6 +10682,7 @@ mod tests {
 		let components = vec![
 			serde_json::json!({"shortType": "ModularAvatarBoneProxy", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMaterialSwap", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarMenuItem", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": false}),
 		];
@@ -10693,9 +10694,10 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("total=4"));
+		assert!(message.contains("total=5"));
 		assert!(message.contains("resolver_supported=1"));
 		assert!(message.contains("runtime_action_supported=1"));
+		assert!(message.contains("metadata_supported=1"));
 		assert!(message.contains("unsupported=2"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("ModularAvatarMeshCutter:1"));
