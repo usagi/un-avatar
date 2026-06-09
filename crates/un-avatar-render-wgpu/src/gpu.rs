@@ -1357,7 +1357,7 @@ fn reset_runtime_dynamics_nodes_to_rest(
 		return false;
 	}
 	let mut changed = false;
-	for node_index in dynamics.dynamic_bone_node_indices() {
+	for node_index in dynamics.reset_node_indices() {
 		if let (Some(dst), Some(src)) = (scene.nodes.get_mut(node_index), rest_nodes.get(node_index)) {
 			dst.transform = src.transform;
 			changed = true;

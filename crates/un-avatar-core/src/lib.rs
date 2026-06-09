@@ -1054,6 +1054,18 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.groups().iter().flat_map(|group| group.bone_node_indices.iter().copied())
 	}
 
+	pub fn reset_node_indices(self) -> Vec<usize> {
+		let mut nodes = BTreeSet::new();
+		for node in self.dynamic_bone_node_indices() {
+			nodes.insert(node);
+		}
+		for constraint_ref in self.constraint_refs() {
+			nodes.insert(constraint_ref.target_node);
+			nodes.extend(constraint_ref.source_nodes.iter().copied());
+		}
+		nodes.into_iter().collect()
+	}
+
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
 		self.spring_bones.into_iter().flat_map(|settings| settings.colliders.iter())
 	}
@@ -5572,6 +5584,11 @@ mod tests {
 						..Default::default()
 					},
 				],
+				constraint_refs: vec![UnaDynamicsConstraintRef {
+					target_node: 6,
+					source_nodes: vec![2, 7],
+					..Default::default()
+				}],
 				..Default::default()
 			}),
 			..Default::default()
@@ -5594,6 +5611,7 @@ mod tests {
 		assert_eq!(counts.vrm_spring_bone_colliders, 1);
 		assert_eq!(counts.vrc_physbone_colliders, 1);
 		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+		assert_eq!(dynamics.reset_node_indices(), vec![0, 1, 2, 3, 6, 7]);
 		assert_eq!(dynamics.colliders().map(|collider| collider.node).collect::<Vec<_>>(), vec![4, 5]);
 	}
 

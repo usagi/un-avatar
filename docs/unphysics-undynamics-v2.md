@@ -26,7 +26,7 @@ UNDynamics の中核概念:
 - `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は angle cone を SpringBone-like solver へ近似反映し、stretch は metadata / diagnostics に留める。
 - `UnaDynamicsInteraction`: grabbing / posing など interaction capability metadata。v2 初期は runtime action / diagnostics のために保持する。
 - `UnaDynamicsContact`: VRC Contacts を source-neutral event / proximity metadata として保持する。
-- `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する。
+- `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する。v2 初期では solver 入力ではないが、dynamics reset 対象 node には含める。
 
 既存 v1 SpringBone solver / collider code は実装資産として再利用する。
 ただし v2 の設計上は、SpringBone solver に PhysBone feature を直接追加するのではなく、UNDynamics solver がまず SpringBone-like Verlet/PBD primitive を内包している、と扱う。
