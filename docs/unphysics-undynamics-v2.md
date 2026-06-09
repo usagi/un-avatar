@@ -57,7 +57,7 @@ Lowering:
 2. Done: Core scaffolding: source-neutral dynamics group / chain / parameter view を追加し、既存 `UnaRuntimeDynamics` から読めるようにする。
 3. Done: No-behavior-change bridge: 既存 `UnaSpringBoneSettings` を UNDynamics view へ写し、現 solver の挙動を変えずに tests を通す。
 4. Done: Solver naming bridge: `SpringBoneSimulator` を互換名として残しつつ、`DynamicsSimulator` alias と neutral renderer runtime names から呼べる形へ寄せる。
-5. In progress: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
+5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Pending: PhysBone colliders: sphere / capsule / inside bounds の solver 反映を個別 test 付きで追加する。
 7. Pending: PhysBone limits: angle / stretch limit を solver へ反映する。SpringBone 互換挙動と分けて、UNDynamics limit constraint として実装する。
 8. Pending: Interactions / Contacts / Constraints: grabbing / posing / contacts / constraints は metadata、diagnostics、runtime action hooks の順に広げる。solver 反映は source evidence と test model が揃ってから行う。
