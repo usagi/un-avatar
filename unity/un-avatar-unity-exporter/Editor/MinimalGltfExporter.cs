@@ -270,6 +270,13 @@ namespace UNAvatar.UnityExporter
                     path = VariantExtractor.TransformPath(root.transform, transform),
                     mesh = meshIndex
                 };
+                foreach (var primitiveIndex in PrimitiveIndicesForMesh(meshIndex))
+                {
+                    if (!record.primitives.Contains(primitiveIndex))
+                    {
+                        record.primitives.Add(primitiveIndex);
+                    }
+                }
                 foreach (var materialIndex in MaterialIndicesForMesh(meshIndex))
                 {
                     if (!record.materials.Contains(materialIndex))
@@ -284,9 +291,26 @@ namespace UNAvatar.UnityExporter
                         }
                     }
                 }
+                record.primitives.Sort();
                 record.materials.Sort();
                 record.images.Sort();
                 rendererAssets.Add(record);
+            }
+
+            private IEnumerable<int> PrimitiveIndicesForMesh(int meshIndex)
+            {
+                if (meshIndex < 0 || meshIndex >= meshes.Count || !(meshes[meshIndex] is Dictionary<string, object> mesh))
+                {
+                    yield break;
+                }
+                if (!mesh.TryGetValue("primitives", out var rawPrimitives) || !(rawPrimitives is List<object> primitives))
+                {
+                    yield break;
+                }
+                for (var primitiveIndex = 0; primitiveIndex < primitives.Count; primitiveIndex++)
+                {
+                    yield return primitiveIndex;
+                }
             }
 
             private IEnumerable<int> MaterialIndicesForMesh(int meshIndex)

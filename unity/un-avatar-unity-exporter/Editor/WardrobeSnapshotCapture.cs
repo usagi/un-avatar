@@ -594,6 +594,17 @@ namespace UNAvatar.UnityExporter
             return existingId.Trim();
         }
 
+        public static string AssetGroupForPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "";
+            }
+            var separator = path.IndexOf('/');
+            var top = (separator >= 0 ? path.Substring(0, separator) : path).Trim();
+            return string.IsNullOrWhiteSpace(top) ? "" : "outfit:" + MakeId(top);
+        }
+
         private static WardrobeTargetDraft Target(string nodeId, string path)
         {
             return new WardrobeTargetDraft { nodeId = nodeId ?? "", path = path ?? "" };
@@ -611,17 +622,15 @@ namespace UNAvatar.UnityExporter
 
         private static void AddAssetGroupIfVisible(WardrobeSetDraft set, string path, bool visible)
         {
-            if (!visible || string.IsNullOrWhiteSpace(path))
+            if (!visible)
             {
                 return;
             }
-            var separator = path.IndexOf('/');
-            var top = (separator >= 0 ? path.Substring(0, separator) : path).Trim();
-            if (string.IsNullOrWhiteSpace(top))
+            var group = AssetGroupForPath(path);
+            if (string.IsNullOrWhiteSpace(group))
             {
                 return;
             }
-            var group = "outfit:" + MakeId(top);
             if (!set.assetGroups.Contains(group))
             {
                 set.assetGroups.Add(group);

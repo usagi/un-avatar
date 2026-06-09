@@ -22,7 +22,8 @@ namespace UNAvatar.UnityExporter
             List<object> dynamicsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
             List<WardrobeSetDraft> exportWardrobeSets,
-            List<UnavatarTextureAssetRecord> textureAssets)
+            List<UnavatarTextureAssetRecord> textureAssets,
+            List<UnavatarRendererAssetRecord> rendererAssets)
         {
             return new Dictionary<string, object>
             {
@@ -41,7 +42,7 @@ namespace UNAvatar.UnityExporter
                 ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
-                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot),
+                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets),
                 ["modularAvatar"] = BuildModularAvatarPayload(registryRoot),
                 ["provenance"] = new Dictionary<string, object>
                 {
@@ -797,7 +798,8 @@ namespace UNAvatar.UnityExporter
             List<VariantRecord> variants,
             WardrobeSnapshotDraft exportBaseSnapshot = null,
             List<WardrobeSetDraft> exportWardrobeSets = null,
-            GameObject referenceRoot = null)
+            GameObject referenceRoot = null,
+            List<UnavatarRendererAssetRecord> rendererAssets = null)
         {
             var rootForReference = referenceRoot != null ? referenceRoot : avatarRoot;
             var hasExportBaseSnapshot = exportBaseSnapshot != null && exportBaseSnapshot.nodes.Count > 0;
@@ -819,8 +821,10 @@ namespace UNAvatar.UnityExporter
             };
 
             var nonBaseSets = exportWardrobeSets ?? WardrobeSetsForExport();
+            var declaredAssetGroups = new HashSet<string>(StringComparer.Ordinal);
             foreach (var set in nonBaseSets)
             {
+                AddDeclaredAssetGroups(declaredAssetGroups, set);
                 sets.Add(set.ToJson(false));
             }
 
@@ -844,12 +848,139 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            return new Dictionary<string, object>
+            var wardrobe = new Dictionary<string, object>
             {
                 ["baseSet"] = "base",
                 ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
+            var assetGroupOwnership = BuildWardrobeAssetGroupOwnership(rendererAssets, declaredAssetGroups);
+            if (assetGroupOwnership.Count > 0)
+            {
+                wardrobe["assetGroupOwnership"] = assetGroupOwnership;
+            }
+            return wardrobe;
+        }
+
+        private static void AddDeclaredAssetGroups(HashSet<string> groups, WardrobeSetDraft set)
+        {
+            if (groups == null || set == null || set.assetGroups == null)
+            {
+                return;
+            }
+            foreach (var group in set.assetGroups)
+            {
+                if (!string.IsNullOrWhiteSpace(group))
+                {
+                    groups.Add(group.Trim());
+                }
+            }
+        }
+
+        private sealed class WardrobeAssetGroupOwnershipBuilder
+        {
+            public readonly List<object> MeshPrimitives = new List<object>();
+            public readonly List<int> Materials = new List<int>();
+            public readonly List<int> Images = new List<int>();
+            private readonly HashSet<string> meshPrimitiveKeys = new HashSet<string>(StringComparer.Ordinal);
+
+            public void Add(UnavatarRendererAssetRecord record)
+            {
+                if (record == null)
+                {
+                    return;
+                }
+                if (record.mesh >= 0 && record.primitives != null)
+                {
+                    foreach (var primitiveIndex in record.primitives)
+                    {
+                        if (primitiveIndex < 0)
+                        {
+                            continue;
+                        }
+                        var key = record.mesh.ToString(CultureInfo.InvariantCulture) + "/" + primitiveIndex.ToString(CultureInfo.InvariantCulture);
+                        if (meshPrimitiveKeys.Add(key))
+                        {
+                            MeshPrimitives.Add(new Dictionary<string, object>
+                            {
+                                ["meshIndex"] = record.mesh,
+                                ["primitiveIndex"] = primitiveIndex
+                            });
+                        }
+                    }
+                }
+                AddUniqueSorted(Materials, record.materials);
+                AddUniqueSorted(Images, record.images);
+            }
+        }
+
+        private static List<object> BuildWardrobeAssetGroupOwnership(List<UnavatarRendererAssetRecord> rendererAssets, HashSet<string> declaredAssetGroups)
+        {
+            var result = new List<object>();
+            if (rendererAssets == null || rendererAssets.Count == 0 || declaredAssetGroups == null || declaredAssetGroups.Count == 0)
+            {
+                return result;
+            }
+            var byGroup = new Dictionary<string, WardrobeAssetGroupOwnershipBuilder>(StringComparer.Ordinal);
+            foreach (var record in rendererAssets)
+            {
+                var group = WardrobeSnapshotCapture.AssetGroupForPath(record != null ? record.path : "");
+                if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
+                {
+                    continue;
+                }
+                if (!byGroup.TryGetValue(group, out var builder))
+                {
+                    builder = new WardrobeAssetGroupOwnershipBuilder();
+                    byGroup[group] = builder;
+                }
+                builder.Add(record);
+            }
+            var groups = new List<string>(byGroup.Keys);
+            groups.Sort(StringComparer.Ordinal);
+            foreach (var group in groups)
+            {
+                var builder = byGroup[group];
+                result.Add(new Dictionary<string, object>
+                {
+                    ["groupId"] = group,
+                    ["meshPrimitives"] = builder.MeshPrimitives,
+                    ["materials"] = IntsToObjectList(builder.Materials),
+                    ["images"] = IntsToObjectList(builder.Images),
+                    ["dynamicsSourceIds"] = new List<object>()
+                });
+            }
+            return result;
+        }
+
+        private static void AddUniqueSorted(List<int> target, List<int> values)
+        {
+            if (target == null || values == null)
+            {
+                return;
+            }
+            foreach (var value in values)
+            {
+                if (!target.Contains(value))
+                {
+                    target.Add(value);
+                }
+            }
+            target.Sort();
+        }
+
+        private static List<object> IntsToObjectList(List<int> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value);
+            }
+            return json;
         }
 
         private static List<WardrobeOperationDraft> CloneWardrobeOperations(List<WardrobeOperationDraft> operations)

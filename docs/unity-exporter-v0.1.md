@@ -182,7 +182,7 @@ preview exporter では per-set bake を行わない。Export 対象 clone は B
 
 `.unavatar` は全衣装を保持できるが、Runtime は最初から outfit group 単位の lazy upload / unload を前提にする。Exporter は wardrobe set が参照する outfit group を metadata として出す。
 
-ownership 自動生成の前段として、Exporter report は renderer ごとの node id / path / glTF mesh / material / image index を `wardrobeAssetOwnershipDiagnostics` に出す。これは wardrobe group から extension `assetGroupOwnership` を生成するための診断であり、現時点では package metadata 本体には ownership を自動追加しない。
+Exporter report は renderer ごとの node id / path / glTF mesh / primitive / material / image index を `wardrobeAssetOwnershipDiagnostics` に出す。Package metadata 本体には、renderer path の top-level name から既存 capture と同じ `outfit:<top>` group を推定し、wardrobe set が宣言している group だけ `wardrobe.assetGroupOwnership` として自動追加する。推定できない renderer や非 outfit group は未所有のまま残す。
 
 ## 8. PhysBone Extraction
 

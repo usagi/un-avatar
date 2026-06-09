@@ -252,6 +252,7 @@ namespace UNAvatar.UnityExporter
         public string nodeId = "";
         public string path = "";
         public int mesh = -1;
+        public List<int> primitives = new List<int>();
         public List<int> materials = new List<int>();
         public List<int> images = new List<int>();
 
@@ -262,6 +263,7 @@ namespace UNAvatar.UnityExporter
                 ["nodeId"] = nodeId ?? "",
                 ["path"] = path ?? "",
                 ["mesh"] = mesh,
+                ["primitives"] = IntsToObjectList(primitives),
                 ["materials"] = IntsToObjectList(materials),
                 ["images"] = IntsToObjectList(images)
             };
