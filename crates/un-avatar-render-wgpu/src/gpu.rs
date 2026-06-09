@@ -85,6 +85,9 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) total_draw_mesh_primitive_count: usize,
 	pub(crate) resident_draw_mesh_primitive_count: usize,
 	pub(crate) inactive_draw_mesh_primitive_count: usize,
+	pub(crate) total_image_texture_count: usize,
+	pub(crate) resident_image_texture_count: usize,
+	pub(crate) inactive_image_texture_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -189,6 +192,9 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		total_draw_mesh_primitive_count: 0,
 		resident_draw_mesh_primitive_count: 0,
 		inactive_draw_mesh_primitive_count: 0,
+		total_image_texture_count: 0,
+		resident_image_texture_count: 0,
+		inactive_image_texture_count: 0,
 		missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -218,6 +224,9 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.total_draw_mesh_primitive_count = draw_counts.total_draw_mesh_primitive_count;
 	plan.resident_draw_mesh_primitive_count = draw_counts.resident_draw_mesh_primitive_count;
 	plan.inactive_draw_mesh_primitive_count = draw_counts.inactive_draw_mesh_primitive_count;
+	plan.total_image_texture_count = draw_counts.total_image_texture_count;
+	plan.resident_image_texture_count = draw_counts.resident_image_texture_count;
+	plan.inactive_image_texture_count = draw_counts.inactive_image_texture_count;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
 	plan
 }
@@ -3178,6 +3187,7 @@ impl GpuSceneBuildContext {
 				shader_variant_tier,
 				runtime.scene,
 				runtime.expression_catalog,
+				runtime_model.active_asset_groups(),
 				options.mesh_diagnostics.clone(),
 				options.texture_max_dimension,
 				options.texture_compression,
@@ -4838,12 +4848,18 @@ mod tests {
 				total_draw_mesh_primitive_count: 3,
 				resident_draw_mesh_primitive_count: 2,
 				inactive_draw_mesh_primitive_count: 1,
+				total_image_texture_count: 4,
+				resident_image_texture_count: 3,
+				inactive_image_texture_count: 1,
 			}),
 		);
 
 		assert_eq!(plan.total_draw_mesh_primitive_count, 3);
 		assert_eq!(plan.resident_draw_mesh_primitive_count, 2);
 		assert_eq!(plan.inactive_draw_mesh_primitive_count, 1);
+		assert_eq!(plan.total_image_texture_count, 4);
+		assert_eq!(plan.resident_image_texture_count, 3);
+		assert_eq!(plan.inactive_image_texture_count, 1);
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);

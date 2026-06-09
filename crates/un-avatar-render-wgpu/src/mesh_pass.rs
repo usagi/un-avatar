@@ -1167,6 +1167,9 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_draw_mesh_primitive_count: usize,
 	pub(crate) resident_draw_mesh_primitive_count: usize,
 	pub(crate) inactive_draw_mesh_primitive_count: usize,
+	pub(crate) total_image_texture_count: usize,
+	pub(crate) resident_image_texture_count: usize,
+	pub(crate) inactive_image_texture_count: usize,
 }
 
 #[inline]
@@ -1484,6 +1487,7 @@ pub(crate) struct SceneMeshes {
 	active_draw_indices: Vec<usize>,
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
+	image_texture_residency: Vec<bool>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	visibility_scratch: Vec<bool>,
@@ -5147,6 +5151,7 @@ impl SceneMeshes {
 		shader_variant_tier: MeshShaderVariantTier,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
+		active_asset_groups: &[String],
 		opts: SceneMeshLoadOpts,
 		texture_max_dimension: Option<u32>,
 		texture_compression: TextureCompressionMode,
@@ -5762,10 +5767,16 @@ impl SceneMeshes {
 		};
 
 		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
+		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
 		for (image_index, im) in scene.images.iter().enumerate() {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
+			image_texture_residency.push(image_asset_resident(
+				&scene.asset_group_ownership,
+				active_asset_groups,
+				image_index,
+			));
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
 			if texture_source_is_cube(source_metadata) {
@@ -6863,6 +6874,7 @@ impl SceneMeshes {
 			active_draw_indices: draw_state.active_draw_indices,
 			needs_screen_refraction: draw_state.needs_screen_refraction,
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
+			image_texture_residency,
 			texture_summary,
 			runtime_requirements: draw_state.runtime_requirements,
 			visibility_scratch: Vec::new(),
@@ -7525,6 +7537,14 @@ impl SceneMeshes {
 				changed += 1;
 			}
 		}
+		self.image_texture_residency.clear();
+		self.image_texture_residency.extend(
+			scene
+				.images
+				.iter()
+				.enumerate()
+				.map(|(image_index, _)| image_asset_resident(&scene.asset_group_ownership, active_asset_groups, image_index)),
+		);
 		if changed > 0 {
 			self.rebuild_draw_order();
 		}
@@ -7534,10 +7554,15 @@ impl SceneMeshes {
 	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
 		let total_draw_mesh_primitive_count = self.draws.len();
 		let resident_draw_mesh_primitive_count = self.draws.iter().filter(|draw| draw.asset_resident).count();
+		let total_image_texture_count = self.image_texture_residency.len();
+		let resident_image_texture_count = self.image_texture_residency.iter().filter(|resident| **resident).count();
 		SceneMeshAssetResidencyCounts {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
 			inactive_draw_mesh_primitive_count: total_draw_mesh_primitive_count.saturating_sub(resident_draw_mesh_primitive_count),
+			total_image_texture_count,
+			resident_image_texture_count,
+			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),
 		}
 	}
 
