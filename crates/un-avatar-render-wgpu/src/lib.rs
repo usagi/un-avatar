@@ -45,7 +45,7 @@ pub use options::{
 	SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
 	TextureResolutionLimit,
 };
-use un_avatar_skeleton::{BoneColliderConfig, SpringBonePhysicsConfig};
+use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::{
@@ -292,7 +292,7 @@ enum RendererControlEvent {
 		enabled: bool,
 		bone_colliders: BoneColliderConfig,
 		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
-		physics_config: Option<SpringBonePhysicsConfig>,
+		physics_config: Option<DynamicsPhysicsConfig>,
 	},
 	SetAvatarOutline {
 		policy: Option<String>,
@@ -510,7 +510,7 @@ enum RendererControlCommand {
 		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
 		#[serde(default)]
 		#[serde(alias = "physics")]
-		physics_config: Option<SpringBonePhysicsConfig>,
+		physics_config: Option<DynamicsPhysicsConfig>,
 	},
 	SetSpringBones {
 		enabled: bool,
@@ -518,7 +518,7 @@ enum RendererControlCommand {
 		/// None means no SpringBone physics override; SpringBone itself is controlled by `enabled`.
 		#[serde(default)]
 		#[serde(alias = "physics")]
-		physics_config: Option<SpringBonePhysicsConfig>,
+		physics_config: Option<DynamicsPhysicsConfig>,
 	},
 	SetAvatarOutline {
 		#[serde(default)]
@@ -4150,7 +4150,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		},
 		enable_spring_bones: !cli.no_spring_bones,
 		bone_colliders: Default::default(),
-		spring_bone_physics: SpringBonePhysicsConfig::default(),
+		spring_bone_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {
 			log_path: cli.debug_log.clone(),
 			mirror_stderr: cli.debug_stderr,

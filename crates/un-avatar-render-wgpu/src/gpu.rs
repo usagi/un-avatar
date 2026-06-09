@@ -20,7 +20,7 @@ use un_avatar_core::{
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
-	DynamicsSimulator, SpringBonePhysicsConfig,
+	DynamicsPhysicsConfig, DynamicsSimulator,
 };
 use winit::window::Window;
 
@@ -1237,7 +1237,7 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) processed_texture_cache: bool,
 	pub(crate) enable_spring_bones: bool,
 	pub(crate) bone_colliders: BoneColliderConfig,
-	pub(crate) spring_bone_physics: SpringBonePhysicsConfig,
+	pub(crate) spring_bone_physics: DynamicsPhysicsConfig,
 	pub(crate) debug_material_dump: bool,
 	pub(crate) vmc_address: Option<SocketAddr>,
 	pub(crate) unmotion_zenoh: crate::options::UnmotionZenohOptions,
@@ -1302,7 +1302,7 @@ fn build_runtime_physics_for_document(
 	document: &UnaDocument,
 	enable_spring_bones: bool,
 	bone_collider_config: BoneColliderConfig,
-	spring_bone_physics: &SpringBonePhysicsConfig,
+	spring_bone_physics: &DynamicsPhysicsConfig,
 ) -> RuntimePhysicsBuild {
 	let runtime_model = document.runtime_model();
 	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
@@ -2803,7 +2803,7 @@ impl GpuState {
 		&mut self,
 		enabled: bool,
 		bone_collider_config: BoneColliderConfig,
-		spring_bone_physics: SpringBonePhysicsConfig,
+		spring_bone_physics: DynamicsPhysicsConfig,
 	) {
 		self.reset_dynamics_nodes_to_rest();
 		let Some(doc_arc) = self.document.as_ref() else {
