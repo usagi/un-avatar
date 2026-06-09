@@ -82,6 +82,8 @@ struct DiagnoseReport {
 	actions: Option<DiagnoseActionSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	menu_action_candidates: Vec<DiagnoseMenuActionCandidate>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	menu_wardrobe_candidates: Vec<DiagnoseMenuWardrobeCandidate>,
 	dynamics: DiagnoseDynamicsSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	vrm: Option<DiagnoseVrmSummary>,
@@ -456,6 +458,19 @@ struct DiagnoseMenuActionCandidate {
 	effect_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	wardrobe_set_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseMenuWardrobeCandidate {
+	menu_component_index: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	menu_path: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_label: Option<String>,
+	action_id: String,
+	wardrobe_set_id: String,
+	match_kind: String,
+	inverted: bool,
 }
 
 #[derive(Serialize)]
@@ -3412,6 +3427,7 @@ fn build_diagnose_report(
 	});
 	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
 	let menu_action_candidates = diagnose_menu_action_candidates(unavatar.as_ref(), runtime_model.runtime_actions());
+	let menu_wardrobe_candidates = diagnose_menu_wardrobe_candidates(unavatar.as_ref(), &menu_action_candidates);
 	if let Some(unavatar) = &unavatar {
 		for set in &unavatar.wardrobe_sets {
 			if set.operation_count > 0 && set.asset_groups.is_empty() {
@@ -3443,6 +3459,7 @@ fn build_diagnose_report(
 		expressions,
 		actions,
 		menu_action_candidates,
+		menu_wardrobe_candidates,
 		dynamics,
 		vrm,
 		unavatar,
@@ -3715,6 +3732,78 @@ fn diagnose_menu_action_candidates(
 	candidates
 }
 
+fn menu_graph_node_display_label(node: &DiagnoseModularAvatarMenuGraphNode) -> Option<String> {
+	node.label.clone().or_else(|| {
+		node.hierarchy_path
+			.as_deref()
+			.and_then(|path| path.trim_matches('/').rsplit('/').next())
+			.filter(|label| !label.is_empty())
+			.map(str::to_string)
+	})
+}
+
+fn menu_graph_node_path(nodes: &[DiagnoseModularAvatarMenuGraphNode], node_index: usize) -> Vec<String> {
+	let mut labels = Vec::new();
+	let mut seen = BTreeSet::new();
+	let mut current_index = Some(node_index);
+	while let Some(index) = current_index {
+		if index >= nodes.len() || !seen.insert(index) {
+			break;
+		}
+		let node = &nodes[index];
+		if let Some(label) = menu_graph_node_display_label(node) {
+			labels.push(label);
+		}
+		current_index = node.parent_node_index;
+	}
+	labels.reverse();
+	labels
+}
+
+fn diagnose_menu_wardrobe_candidates(
+	unavatar: Option<&DiagnoseUnavatarSummary>,
+	menu_action_candidates: &[DiagnoseMenuActionCandidate],
+) -> Vec<DiagnoseMenuWardrobeCandidate> {
+	let Some(unavatar) = unavatar else {
+		return Vec::new();
+	};
+	let node_by_component = unavatar
+		.modular_avatar_menu_graph_nodes
+		.iter()
+		.enumerate()
+		.map(|(index, node)| (node.component_index, index))
+		.collect::<BTreeMap<_, _>>();
+	let mut candidates = Vec::new();
+	for action_candidate in menu_action_candidates {
+		if action_candidate.wardrobe_set_ids.is_empty() {
+			continue;
+		}
+		let menu_path = node_by_component
+			.get(&action_candidate.menu_component_index)
+			.map(|node_index| menu_graph_node_path(&unavatar.modular_avatar_menu_graph_nodes, *node_index))
+			.unwrap_or_else(|| action_candidate.menu_label.iter().cloned().collect());
+		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
+			candidates.push(DiagnoseMenuWardrobeCandidate {
+				menu_component_index: action_candidate.menu_component_index,
+				menu_path: menu_path.clone(),
+				menu_label: action_candidate.menu_label.clone(),
+				action_id: action_candidate.action_id.clone(),
+				wardrobe_set_id: wardrobe_set_id.clone(),
+				match_kind: action_candidate.match_kind.clone(),
+				inverted: action_candidate.inverted,
+			});
+		}
+	}
+	candidates.sort_by(|a, b| {
+		(a.menu_component_index, a.wardrobe_set_id.as_str(), a.action_id.as_str()).cmp(&(
+			b.menu_component_index,
+			b.wardrobe_set_id.as_str(),
+			b.action_id.as_str(),
+		))
+	});
+	candidates
+}
+
 fn run_diagnose(
 	plugin_dirs: &[PathBuf],
 	path: PathBuf,
@@ -3942,6 +4031,18 @@ fn run_diagnose(
 			candidate.effect_count,
 			candidate.effect_kinds,
 			candidate.wardrobe_set_ids
+		);
+	}
+	for candidate in report.menu_wardrobe_candidates.iter().take(16) {
+		println!(
+			"menu_wardrobe_candidate[#{} -> {}]: path={:?} label={:?} action={} match={} inverted={}",
+			candidate.menu_component_index,
+			candidate.wardrobe_set_id,
+			candidate.menu_path,
+			candidate.menu_label,
+			candidate.action_id,
+			candidate.match_kind,
+			candidate.inverted
 		);
 	}
 	if let Some(vrm) = &report.vrm {
@@ -4917,6 +5018,15 @@ mod tests {
 		assert_eq!(menu_action.effect_kinds.get("node_visibility"), Some(&1));
 		assert_eq!(menu_action.effect_kinds.get("wardrobe_set"), Some(&1));
 		assert_eq!(menu_action.wardrobe_set_ids, vec!["hat".to_string()]);
+		assert_eq!(report.menu_wardrobe_candidates.len(), 1);
+		let wardrobe_candidate = &report.menu_wardrobe_candidates[0];
+		assert_eq!(wardrobe_candidate.menu_component_index, 2);
+		assert_eq!(wardrobe_candidate.menu_path, vec!["Hat".to_string()]);
+		assert_eq!(wardrobe_candidate.menu_label.as_deref(), Some("Hat"));
+		assert_eq!(wardrobe_candidate.action_id, "ma:hat");
+		assert_eq!(wardrobe_candidate.wardrobe_set_id, "hat");
+		assert_eq!(wardrobe_candidate.match_kind, "condition");
+		assert!(!wardrobe_candidate.inverted);
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
