@@ -2003,7 +2003,7 @@ impl GpuState {
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		if document_changed {
-			sm.refresh_draw_materials_from_scene(&self.queue, runtime.scene);
+			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
 			sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
 		}
 		sm.update_draw_transforms(

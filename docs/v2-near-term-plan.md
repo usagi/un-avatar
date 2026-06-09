@@ -96,12 +96,13 @@ MVP control command:
 
 - `set_wardrobe` runtime control command は正規化済み set id を受け、適用失敗理由を control response に返す。
 - renderer は wardrobe 適用後に document revision を進め、draw transform / visibility / scene morph default / runtime requirements を次 frame で再読込する。
+- renderer は wardrobe / runtime action の material slot 差し替え後、draw material uniform だけでなく material / outline material bind group も再生成し、startup 時に upload 済みの texture / sampler / cube map resource へ texture slot を再束縛する。
 - `UnaRuntimeState.active_wardrobe_set` と `active_asset_groups` は wardrobe 適用成功時の resolved runtime state として更新され、`UnaRuntimeState.last_action_id` と `parameter_values` は runtime action 成功時だけ更新される。`UnaRuntimeState.dynamics_enabled_overrides` は wardrobe / runtime action の dynamics enable state を保持する。runtime status は document state から `active_wardrobe_set` / `active_asset_groups` / `last_action_id` / `runtime_parameter_values` を公開し、dynamics は effective enabled count、source authored enabled count、runtime override count を分けて出す。
 - `dynamicsEnable` は `UnaRuntimeDynamicsMut` 経由で runtime dynamics enable override を切り替え、source group の authored default を直接変更しない。適用件数と missing dynamics id は renderer log で観測できる。
 
 後回し:
 
-- wardrobe asset group 単位の lazy GPU upload / unload。現在は選択 set の `assetGroups`、最小 resolver cache key、source asset group ownership count、active group から算出した scoped resident mesh/material/image/dynamics count、renderer draw residency count、image texture slot residency count、inactive image slot を参照する draw count、material slot residency count を runtime state / renderer status / CLI diagnose / wardrobe apply report で観測する段階。実 GPU resource の scoped upload / unload はまだ `all-resident` fallback。
+- wardrobe asset group 単位の lazy GPU upload / unload。現在は選択 set の `assetGroups`、最小 resolver cache key、source asset group ownership count、active group から算出した scoped resident mesh/material/image/dynamics count、renderer draw residency count、image texture slot residency count、inactive image slot を参照する draw count、material slot residency count を runtime state / renderer status / CLI diagnose / wardrobe apply report で観測する段階。material slot hot switch は upload 済み texture / sampler を再束縛するが、実 GPU resource の scoped upload / unload はまだ `all-resident` fallback。
 - crossfade、dissolve、sparkle などのお着替え effect。
 - set ごとの physics reset / blend。
 - user-facing ring-menu UI。
