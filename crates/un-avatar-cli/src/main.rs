@@ -535,6 +535,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_menu_components: Vec<DiagnoseModularAvatarMenuComponentSummary>,
 	modular_avatar_menu_graph_candidate_count: usize,
 	modular_avatar_menu_graph_candidates: Vec<DiagnoseModularAvatarMenuGraphCandidate>,
+	modular_avatar_menu_graph_node_count: usize,
+	modular_avatar_menu_graph_nodes: Vec<DiagnoseModularAvatarMenuGraphNode>,
 	modular_avatar_parameter_count: usize,
 	modular_avatar_parameters: Vec<DiagnoseModularAvatarParameterSummary>,
 	modular_avatar_vertex_filter_group_count: usize,
@@ -613,6 +615,32 @@ struct DiagnoseModularAvatarMenuGraphCandidate {
 	sibling_index: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	target_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_to_append_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	install_target_menu_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	installer_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnoseModularAvatarMenuGraphNode {
+	node_index: usize,
+	component_index: usize,
+	short_type: String,
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	label: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	hierarchy_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parent_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parent_node_index: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	parent_component_index: Option<usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	child_component_indices: Vec<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	menu_to_append_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -2432,6 +2460,49 @@ fn modular_avatar_menu_graph_candidates(
 	candidates
 }
 
+fn modular_avatar_menu_graph_nodes(candidates: &[DiagnoseModularAvatarMenuGraphCandidate]) -> Vec<DiagnoseModularAvatarMenuGraphNode> {
+	let path_to_node = candidates
+		.iter()
+		.enumerate()
+		.filter_map(|(index, candidate)| candidate.hierarchy_path.as_ref().map(|path| (path.as_str(), index)))
+		.collect::<BTreeMap<_, _>>();
+	let mut nodes = candidates
+		.iter()
+		.enumerate()
+		.map(|(node_index, candidate)| {
+			let parent_node_index = candidate
+				.parent_path
+				.as_deref()
+				.and_then(|parent_path| path_to_node.get(parent_path).copied());
+			DiagnoseModularAvatarMenuGraphNode {
+				node_index,
+				component_index: candidate.component_index,
+				short_type: candidate.short_type.clone(),
+				kind: candidate.kind.clone(),
+				label: candidate.label.clone(),
+				hierarchy_path: candidate.hierarchy_path.clone(),
+				parent_path: candidate.parent_path.clone(),
+				parent_node_index,
+				parent_component_index: parent_node_index.map(|index| candidates[index].component_index),
+				child_component_indices: Vec::new(),
+				menu_to_append_path: candidate.menu_to_append_path.clone(),
+				install_target_menu_path: candidate.install_target_menu_path.clone(),
+				installer_path: candidate.installer_path.clone(),
+			}
+		})
+		.collect::<Vec<_>>();
+	for index in 0..nodes.len() {
+		let Some(parent_node_index) = nodes[index].parent_node_index else {
+			continue;
+		};
+		let component_index = nodes[index].component_index;
+		if let Some(parent) = nodes.get_mut(parent_node_index) {
+			parent.child_component_indices.push(component_index);
+		}
+	}
+	nodes
+}
+
 fn modular_avatar_menu_graph_candidate_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarMenuItem" => "control",
@@ -2757,6 +2828,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		.into_iter()
 		.collect();
 	let modular_avatar_menu_graph_candidates = modular_avatar_menu_graph_candidates(&modular_avatar_menu_components);
+	let modular_avatar_menu_graph_nodes = modular_avatar_menu_graph_nodes(&modular_avatar_menu_graph_candidates);
 
 	DiagnoseUnavatarSummary {
 		spec_version: ext.spec_version.clone(),
@@ -2774,6 +2846,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_menu_components,
 		modular_avatar_menu_graph_candidate_count: modular_avatar_menu_graph_candidates.len(),
 		modular_avatar_menu_graph_candidates,
+		modular_avatar_menu_graph_node_count: modular_avatar_menu_graph_nodes.len(),
+		modular_avatar_menu_graph_nodes,
 		modular_avatar_parameter_count: modular_avatar_parameters.len(),
 		modular_avatar_parameters,
 		modular_avatar_vertex_filter_group_count: modular_avatar_vertex_filter_groups.len(),
@@ -3795,6 +3869,22 @@ fn run_diagnose(
 				candidate.installer_path
 			);
 		}
+		for node in unavatar.modular_avatar_menu_graph_nodes.iter().take(16) {
+			println!(
+				"unavatar.ma_menu_graph_node[{}:#{}]: kind={} label={:?} hierarchy={:?} parent_node={:?} parent_component={:?} children={:?} menu_to_append={:?} install_target_menu={:?} installer={:?}",
+				node.node_index,
+				node.component_index,
+				node.kind,
+				node.label,
+				node.hierarchy_path,
+				node.parent_node_index,
+				node.parent_component_index,
+				node.child_component_indices,
+				node.menu_to_append_path,
+				node.install_target_menu_path,
+				node.installer_path
+			);
+		}
 		for parameter in unavatar.modular_avatar_parameters.iter().take(16) {
 			println!(
 				"unavatar.ma_parameter[#{}]: name={} remap={:?} internal={} prefix={} sync={} local_only={} default={} explicit_default={} saved={} override_animator_defaults={}",
@@ -4411,6 +4501,21 @@ mod tests {
 							"siblingIndex": 2,
 							"targetObject": {"path": "Root/Accessories"}
 						}, {
+							"shortType": "ModularAvatarMenuItem",
+							"enabled": true,
+							"id": "menu-glasses",
+							"hierarchyPath": "Root/Accessories/Glasses",
+							"siblingIndex": 0,
+							"target": {"path": "Root/Accessories/Glasses"},
+							"fields": {
+								"label": "Glasses",
+								"Control": {
+									"Type": "Toggle",
+									"Parameter": {"Name": "Glasses"},
+									"Value": 1
+								}
+							}
+						}, {
 							"shortType": "ModularAvatarMenuInstaller",
 							"enabled": true,
 							"id": "installer-root",
@@ -4487,14 +4592,14 @@ mod tests {
 			vec!["physbone:jacket".to_string()]
 		);
 		assert_eq!(unavatar.asset_group_count, 3);
-		assert_eq!(unavatar.modular_avatar_component_count, 7);
+		assert_eq!(unavatar.modular_avatar_component_count, 8);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&4));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&5));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarParameters"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuGroup"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuInstaller"), Some(&1));
@@ -4503,8 +4608,9 @@ mod tests {
 			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
 			Some(&1)
 		);
-		assert_eq!(unavatar.modular_avatar_menu_component_count, 3);
-		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 3);
+		assert_eq!(unavatar.modular_avatar_menu_component_count, 4);
+		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 4);
+		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 4);
 		assert_eq!(unavatar.modular_avatar_vertex_filter_group_count, 1);
 		let menu = &unavatar.modular_avatar_menu_components[0];
 		assert_eq!(menu.component_index, 2);
@@ -4521,7 +4627,7 @@ mod tests {
 		assert_eq!(menu.menu_source.as_deref(), Some("Children"));
 		assert_eq!(menu.menu_source_target_path.as_deref(), Some("Root/HatMenu/Children"));
 		let installer_candidate = &unavatar.modular_avatar_menu_graph_candidates[0];
-		assert_eq!(installer_candidate.component_index, 5);
+		assert_eq!(installer_candidate.component_index, 6);
 		assert_eq!(installer_candidate.kind, "installer");
 		assert_eq!(installer_candidate.parent_path.as_deref(), Some("Root"));
 		assert_eq!(installer_candidate.sibling_index, Some(1));
@@ -4538,6 +4644,18 @@ mod tests {
 		assert_eq!(control_candidate.kind, "control");
 		assert_eq!(control_candidate.label.as_deref(), Some("Hat"));
 		assert_eq!(control_candidate.sibling_index, Some(4));
+		let nested_control_candidate = &unavatar.modular_avatar_menu_graph_candidates[3];
+		assert_eq!(nested_control_candidate.component_index, 5);
+		assert_eq!(nested_control_candidate.kind, "control");
+		assert_eq!(nested_control_candidate.label.as_deref(), Some("Glasses"));
+		assert_eq!(nested_control_candidate.parent_path.as_deref(), Some("Root/Accessories"));
+		let group_node = &unavatar.modular_avatar_menu_graph_nodes[1];
+		assert_eq!(group_node.component_index, 4);
+		assert_eq!(group_node.child_component_indices, vec![5]);
+		let nested_node = &unavatar.modular_avatar_menu_graph_nodes[3];
+		assert_eq!(nested_node.component_index, 5);
+		assert_eq!(nested_node.parent_node_index, Some(1));
+		assert_eq!(nested_node.parent_component_index, Some(4));
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");

@@ -142,8 +142,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ### Menu / Parameters / Animator
 
 - `[~]` MA Menu Item / Menu Group / Menu Installer
-  - done: exporter extracts menu item hints. Runtime / diagnose classify Menu Item, Menu Group, Menu Installer, and Menu Install Target as metadata components rather than unsupported behavior, and CLI diagnose reports saved label, control type, parameter/value, component index, hierarchy path, sibling index, target path, menu source, source target, menuToAppend, install target menu, and installer reference from the captured payload. CLI diagnose also derives deterministic menu graph candidates from component index, hierarchy path, sibling index, menu source target, and installer references.
-  - remaining: build the full virtual menu graph with submenu installation semantics enough to generate wardrobe candidates and runtime UI labels.
+  - done: exporter extracts menu item hints. Runtime / diagnose classify Menu Item, Menu Group, Menu Installer, and Menu Install Target as metadata components rather than unsupported behavior, and CLI diagnose reports saved label, control type, parameter/value, component index, hierarchy path, sibling index, target path, menu source, source target, menuToAppend, install target menu, and installer reference from the captured payload. CLI diagnose derives deterministic menu graph candidates from component index, hierarchy path, sibling index, menu source target, and installer references, then promotes them into graph nodes with parent component edges and child component lists for hierarchy-based UI labels.
+  - remaining: submenu installation semantics, external menu asset expansion, and effect-backed wardrobe candidate generation.
 - `[~]` MA Parameters
   - done: `ModularAvatarParameters` is classified as metadata and CLI diagnose reports captured `ParameterConfig` entries with name/prefix, remap target, internal/prefix flags, sync type, local-only state, default value, saved state, explicit-default flag, and animator-default override flag.
   - remaining: runtime parameter definition model, conflict merge rules, and expression parameter / animator default application.
@@ -198,5 +198,5 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ## Near-Term Order
 
-1. Promote MA Menu Item / Menu Group / Menu Installer menu graph candidates into a full virtual menu graph for wardrobe candidates and runtime UI labels.
+1. Implement MA Menu Installer submenu installation semantics and effect-backed wardrobe candidate generation.
 2. Implement renderer scoped upload / unload using Wardrobe asset group ownership metadata.
