@@ -177,8 +177,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: runtime resolver cache key exposes selected wardrobe set, active asset groups, Modular Avatar component payload hash, material source hash, mesh render identity hash, and resolver version through core, CLI diagnose, and renderer status. Mesh render identity includes vertex attribute layout, including vertex color presence, so resolver mesh mutations such as Remove Vertex Color can invalidate downstream mesh caches.
   - note: resolved graph cache storage and full vertex payload cache keys are renderer implementation work, not part of the metadata surface checklist.
 - `[~]` Wardrobe asset group lazy GPU upload
-  - done: renderer runtime status exposes a wardrobe asset upload plan with active groups, declared wardrobe asset groups, source asset group ownership counts, and explicit `all-resident` mode when scoped upload is not yet safe.
-  - remaining: exporter/importer population of per-asset group ownership metadata, scoped mesh / texture upload, and unload / eviction.
+  - done: importer reads per-asset group ownership metadata from root / wardrobe source payload into scene source data. CLI diagnose reports both ownership counts and per-group mesh primitive / material / image / dynamics membership. Renderer runtime status exposes a wardrobe asset upload plan with active groups, declared wardrobe asset groups, source asset group ownership counts, and explicit `all-resident` mode when scoped upload is not yet safe.
+  - remaining: exporter population of per-asset group ownership metadata, scoped mesh / texture upload, and unload / eviction.
 - `[ ]` report parity
   - required: Unity Exporter report and Runtime importer report use the same feature names.
 
@@ -199,4 +199,4 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ## Near-Term Order
 
 1. Promote MA Menu Item / Menu Group / Menu Installer menu graph candidates into a full virtual menu graph for wardrobe candidates and runtime UI labels.
-2. Add per-asset ownership metadata for Wardrobe asset group lazy GPU upload / unload.
+2. Implement renderer scoped upload / unload using Wardrobe asset group ownership metadata.
