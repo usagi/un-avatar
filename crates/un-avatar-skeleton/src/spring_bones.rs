@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaDynamicsGroup, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
+use un_avatar_core::{UnaDynamicsGroup, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
 
@@ -826,7 +826,7 @@ fn solve_xpbd_rest_constraint(curr_tail: Vec3, target_tail: Vec3, compliance: f3
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::UnaSceneSnapshot;
+	use un_avatar_core::{UnaSceneSnapshot, UnaSpringBoneGroup};
 
 	fn node(rot_y_deg: f32, trans: Vec3, children: Vec<usize>) -> UnaSceneNode {
 		let r = Quat::from_rotation_y(rot_y_deg.to_radians());

@@ -19,8 +19,8 @@ use un_avatar_core::{
 	UnaRuntimeResolverCacheKey, UnaSceneNode,
 };
 use un_avatar_skeleton::{
-	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
-	SpringBonePhysicsConfig, SpringBoneSimulator,
+	build_dynamics_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
+	DynamicsSimulator, SpringBonePhysicsConfig,
 };
 use winit::window::Window;
 
@@ -1250,7 +1250,7 @@ pub(crate) struct PreparedDocumentScene {
 	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	scene_meshes: Option<SceneMeshes>,
 	texture_summary: Option<TextureUploadSummary>,
-	spring_sim: Option<SpringBoneSimulator>,
+	dynamics_sim: Option<DynamicsSimulator>,
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	bone_collider_count: u32,
 	bone_collider_source: BoneColliderSource,
@@ -1293,7 +1293,7 @@ impl MotionRetargetRuntime {
 }
 
 struct RuntimePhysicsBuild {
-	spring_sim: Option<SpringBoneSimulator>,
+	dynamics_sim: Option<DynamicsSimulator>,
 	debug_bone_colliders: Vec<BoneColliderPrimitive>,
 	stats: BoneColliderStats,
 }
@@ -1307,15 +1307,15 @@ fn build_runtime_physics_for_document(
 	let runtime_model = document.runtime_model();
 	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
 	let bone_colliders = if let Some(runtime) = scene_profile_dynamics {
-		build_runtime_bone_colliders(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
+		build_dynamics_bone_colliders(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
 	} else {
 		Vec::new()
 	};
 	let stats = collider_stats(&bone_colliders);
-	let spring_sim = if enable_spring_bones {
+	let dynamics_sim = if enable_spring_bones {
 		if let Some(runtime) = scene_profile_dynamics {
 			if runtime.dynamics.has_groups() {
-				SpringBoneSimulator::new_with_runtime_dynamics(
+				DynamicsSimulator::new_with_runtime_dynamics(
 					runtime.scene,
 					runtime.dynamics,
 					bone_colliders.clone(),
@@ -1330,9 +1330,9 @@ fn build_runtime_physics_for_document(
 	} else {
 		None
 	};
-	let debug_bone_colliders = if spring_sim.is_some() { Vec::new() } else { bone_colliders };
+	let debug_bone_colliders = if dynamics_sim.is_some() { Vec::new() } else { bone_colliders };
 	RuntimePhysicsBuild {
-		spring_sim,
+		dynamics_sim,
 		debug_bone_colliders,
 		stats,
 	}
@@ -2103,7 +2103,7 @@ pub(crate) struct GpuState {
 	last_material_slot_scoped_upload_count: usize,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
-	spring_sim: Option<SpringBoneSimulator>,
+	dynamics_sim: Option<DynamicsSimulator>,
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	aa: AaMode,
 	post_process: Option<PostProcess>,
@@ -2382,7 +2382,7 @@ impl GpuState {
 		let texture_summary = None;
 		let avatar_outline = mesh_diagnostics.avatar_outline;
 		let scene_meshes = None;
-		let spring_sim = None;
+		let dynamics_sim = None;
 		let bone_collider_count = 0;
 		let bone_collider_source = BoneColliderSource::Off;
 
@@ -2465,7 +2465,7 @@ impl GpuState {
 			last_material_slot_scoped_upload_count: 0,
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
-			spring_sim,
+			dynamics_sim,
 			bone_colliders: Vec::new(),
 			bone_collider_count,
 			bone_collider_source,
@@ -2807,7 +2807,7 @@ impl GpuState {
 	) {
 		self.reset_spring_bone_nodes_to_rest();
 		let Some(doc_arc) = self.document.as_ref() else {
-			self.spring_sim = None;
+			self.dynamics_sim = None;
 			self.bone_colliders.clear();
 			self.bone_collider_count = 0;
 			self.bone_collider_source = BoneColliderSource::Off;
@@ -2826,7 +2826,7 @@ impl GpuState {
 		self.bone_collider_vertex_capacity = 0;
 		self.bone_collider_vertex_count = 0;
 		self.bone_collider_vertices.clear();
-		self.spring_sim = physics.spring_sim;
+		self.dynamics_sim = physics.dynamics_sim;
 		self.bone_colliders = physics.debug_bone_colliders;
 	}
 
@@ -3021,9 +3021,9 @@ impl GpuState {
 	fn rebuild_bone_collider_debug_vertices_from_world(&mut self) {
 		self.bone_collider_vertices.clear();
 		let colliders = self
-			.spring_sim
+			.dynamics_sim
 			.as_ref()
-			.map(SpringBoneSimulator::bone_colliders)
+			.map(DynamicsSimulator::bone_colliders)
 			.unwrap_or(&self.bone_colliders);
 		for collider in colliders {
 			append_collider_wire_vertices(*collider, &self.world_scratch, &mut self.bone_collider_vertices);
@@ -3917,7 +3917,7 @@ impl GpuState {
 		self.invalidate_applied_document_state();
 		self.scene_meshes = prepared.scene_meshes;
 		self.texture_summary = prepared.texture_summary;
-		self.spring_sim = prepared.spring_sim;
+		self.dynamics_sim = prepared.dynamics_sim;
 		self.bone_colliders = prepared.bone_colliders;
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
@@ -3952,7 +3952,7 @@ impl GpuSceneBuildContext {
 			options.bone_colliders,
 			&options.spring_bone_physics,
 		);
-		let needs_rest_nodes = runtime_model.has_humanoid_scene() || physics.spring_sim.is_some();
+		let needs_rest_nodes = runtime_model.has_humanoid_scene() || physics.dynamics_sim.is_some();
 		let rest_nodes = if needs_rest_nodes {
 			runtime_model.scene_nodes().map(|nodes| Arc::new(nodes.to_vec()))
 		} else {
@@ -4017,7 +4017,7 @@ impl GpuSceneBuildContext {
 			rest_nodes,
 			scene_meshes,
 			texture_summary,
-			spring_sim: physics.spring_sim,
+			dynamics_sim: physics.dynamics_sim,
 			bone_colliders: physics.debug_bone_colliders,
 			bone_collider_count: physics.stats.count,
 			bone_collider_source: physics.stats.source,
@@ -4498,7 +4498,7 @@ impl GpuState {
 		}
 		let dt = wall_since_last.as_secs_f32();
 		self.apply_pending_motion_frames();
-		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.spring_sim) {
+		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
 				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
 					sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
@@ -4596,7 +4596,7 @@ impl GpuState {
 		let document_revision = self.document_revision.load(Ordering::Acquire);
 		let expression_overrides_changed = self.expression_overrides_revision != self.applied_expression_overrides_revision;
 		let scene_pose_may_change =
-			self.spring_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
+			self.dynamics_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
 		let mut world_scratch_current = false;
 		if draw_scene && scene_pose_may_change {
 			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
