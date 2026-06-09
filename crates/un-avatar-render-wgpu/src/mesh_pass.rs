@@ -1010,7 +1010,10 @@ fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 }
 
 fn json_number_f32(value: &serde_json::Value) -> Option<f32> {
-	value.as_f64().map(|value| value as f32).or_else(|| value.as_i64().map(|value| value as f32))
+	value
+		.as_f64()
+		.map(|value| value as f32)
+		.or_else(|| value.as_i64().map(|value| value as f32))
 }
 
 fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<f32> {
@@ -1031,7 +1034,12 @@ fn material_source_shader_name(material: &UnaMaterialPbr) -> Option<&str> {
 	material
 		.unavatar_material
 		.as_ref()
-		.and_then(|source| source.get("sourceShader").or_else(|| source.get("shaderName")).or_else(|| source.get("shader")))
+		.and_then(|source| {
+			source
+				.get("sourceShader")
+				.or_else(|| source.get("shaderName"))
+				.or_else(|| source.get("shader"))
+		})
 		.and_then(|value| value.as_str())
 }
 
@@ -1044,9 +1052,7 @@ fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
 		}
 		return material_source_shader_name(material).is_some_and(|shader| shader.to_ascii_lowercase().contains("twopass"));
 	}
-	material
-		.mtoon_like_runtime()
-		.is_some_and(|mtoon| mtoon.transparent_with_z_write)
+	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
 fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
@@ -1171,12 +1177,7 @@ impl SceneMeshBufferUpload {
 		}
 	}
 
-	fn create_buffers(
-		&self,
-		device: &wgpu::Device,
-		queue: &wgpu::Queue,
-		index_format: wgpu::IndexFormat,
-	) -> (wgpu::Buffer, wgpu::Buffer) {
+	fn create_buffers(&self, device: &wgpu::Device, queue: &wgpu::Queue, index_format: wgpu::IndexFormat) -> (wgpu::Buffer, wgpu::Buffer) {
 		let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_v"),
 			size: self.vertex_buffer_bytes(),
@@ -1586,7 +1587,12 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 		.material
 		.liltoon_like_runtime()
 		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-	transparent_backpass_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading, liltoon_backpass_enabled)
+	transparent_backpass_enabled(
+		draw.alpha_mode,
+		material_transparent_with_zwrite(&draw.material),
+		shading,
+		liltoon_backpass_enabled,
+	)
 }
 
 fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
@@ -2579,7 +2585,11 @@ fn create_mesh_material_bind_groups(
 	let shadow3_color_view = texture_view_or(&texture_views.images, shadow3_color_texture_index, &texture_views.transparent_black);
 	let liltoon_strength_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
 	let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
-	let shift_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
+	let shift_fallback_view = if liltoon_like.is_some() {
+		&texture_views.white
+	} else {
+		&texture_views.black
+	};
 	let shift_view = texture_view_or(&texture_views.images, shading_shift_texture_index, shift_fallback_view);
 	let shift_sampler = texture_sampler_or(samplers, image_sampler_indices, shading_shift_texture_index, 0);
 	let shadow_border_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.border_mask_texture_index);
@@ -2591,7 +2601,11 @@ fn create_mesh_material_bind_groups(
 	let matcap_texture_index = liltoon_like
 		.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
 		.or(mtoon.matcap_texture_index);
-	let matcap_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
+	let matcap_fallback_view = if liltoon_like.is_some() {
+		&texture_views.white
+	} else {
+		&texture_views.black
+	};
 	let matcap_view = texture_view_or(&texture_views.images, matcap_texture_index, matcap_fallback_view);
 	let matcap_sampler = texture_sampler_or(samplers, image_sampler_indices, matcap_texture_index, 0);
 	let matcap_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
@@ -2614,8 +2628,11 @@ fn create_mesh_material_bind_groups(
 	let main2nd_dissolve_mask_view = texture_view_or(&texture_views.images, main2nd_dissolve_mask_texture_index, &texture_views.white);
 	let main2nd_dissolve_noise_mask_texture_index =
 		liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.noise_mask_texture_index);
-	let main2nd_dissolve_noise_mask_view =
-		texture_view_or(&texture_views.images, main2nd_dissolve_noise_mask_texture_index, &texture_views.white);
+	let main2nd_dissolve_noise_mask_view = texture_view_or(
+		&texture_views.images,
+		main2nd_dissolve_noise_mask_texture_index,
+		&texture_views.white,
+	);
 	let main3rd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_texture_index);
 	let main3rd_view = texture_view_or(&texture_views.images, main3rd_texture_index, &texture_views.white);
 	let main3rd_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
@@ -2625,8 +2642,11 @@ fn create_mesh_material_bind_groups(
 	let main3rd_dissolve_mask_view = texture_view_or(&texture_views.images, main3rd_dissolve_mask_texture_index, &texture_views.white);
 	let main3rd_dissolve_noise_mask_texture_index =
 		liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.noise_mask_texture_index);
-	let main3rd_dissolve_noise_mask_view =
-		texture_view_or(&texture_views.images, main3rd_dissolve_noise_mask_texture_index, &texture_views.white);
+	let main3rd_dissolve_noise_mask_view = texture_view_or(
+		&texture_views.images,
+		main3rd_dissolve_noise_mask_texture_index,
+		&texture_views.white,
+	);
 	let main_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
 	let main_gradation_view = texture_view_or(&texture_views.images, main_gradation_texture_index, &texture_views.white);
 	let main_color_adjust_mask_texture_index =
@@ -2675,7 +2695,11 @@ fn create_mesh_material_bind_groups(
 	let emissive_texture_index = liltoon_like
 		.and_then(|liltoon_like| liltoon_like.emission.texture_index)
 		.or(mat.emissive_texture_index);
-	let emissive_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
+	let emissive_fallback_view = if liltoon_like.is_some() {
+		&texture_views.white
+	} else {
+		&texture_views.black
+	};
 	let emissive_view = texture_view_or(&texture_views.images, emissive_texture_index, emissive_fallback_view);
 	let emissive_sampler = texture_sampler_or(samplers, image_sampler_indices, emissive_texture_index, 0);
 	let emission_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.blend_mask_texture_index);
@@ -2686,8 +2710,7 @@ fn create_mesh_material_bind_groups(
 	let emission2nd_view = texture_view_or(&texture_views.images, emission2nd_texture_index, &texture_views.white);
 	let emission2nd_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_blend_mask_texture_index);
 	let emission2nd_blend_mask_view = texture_view_or(&texture_views.images, emission2nd_blend_mask_texture_index, &texture_views.white);
-	let emission2nd_gradation_texture_index =
-		liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
+	let emission2nd_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
 	let emission2nd_gradation_view = texture_view_or(&texture_views.images, emission2nd_gradation_texture_index, &texture_views.white);
 	let occlusion_view = texture_view_or(&texture_views.images, mat.occlusion_texture_index, &texture_views.white);
 	let occlusion_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.occlusion_texture_index, 0);
@@ -2707,8 +2730,13 @@ fn create_mesh_material_bind_groups(
 	let normal2nd_scale_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_scale_mask_texture_index);
 	let normal2nd_scale_mask_view = texture_view_or(&texture_views.images, normal2nd_scale_mask_texture_index, &texture_views.white);
 	let anisotropy_tangent_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_tangent_texture_index);
-	let anisotropy_tangent_view = texture_view_or(&texture_views.images, anisotropy_tangent_texture_index, &texture_views.neutral_normal);
-	let anisotropy_scale_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
+	let anisotropy_tangent_view = texture_view_or(
+		&texture_views.images,
+		anisotropy_tangent_texture_index,
+		&texture_views.neutral_normal,
+	);
+	let anisotropy_scale_mask_texture_index =
+		liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
 	let anisotropy_scale_mask_view = texture_view_or(&texture_views.images, anisotropy_scale_mask_texture_index, &texture_views.white);
 	let anisotropy_shift_noise_texture_index =
 		liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
@@ -6921,7 +6949,11 @@ impl SceneMeshes {
 					} else {
 						report(
 							"gpu-upload",
-							format!("Deferring precision-preserving source texture {}/{} ({role:?})", image_index + 1, scene.images.len()),
+							format!(
+								"Deferring precision-preserving source texture {}/{} ({role:?})",
+								image_index + 1,
+								scene.images.len()
+							),
 						);
 						image_views.push(transparent_black_view.clone());
 					}
@@ -7063,7 +7095,12 @@ impl SceneMeshes {
 			} else {
 				report(
 					"gpu-upload",
-					format!("Deferring texture {}/{} mips={} ({role:?})", image_index + 1, scene.images.len(), payload.mips.len()),
+					format!(
+						"Deferring texture {}/{} mips={} ({role:?})",
+						image_index + 1,
+						scene.images.len(),
+						payload.mips.len()
+					),
 				);
 			}
 			let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
@@ -7137,8 +7174,12 @@ impl SceneMeshes {
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
-				let material_slot_index = buf.material_index.filter(|material_index| scene.materials.get(*material_index).is_some());
-				let mat = material_slot_index.and_then(|mi| scene.materials.get(mi)).unwrap_or(&default_material);
+				let material_slot_index = buf
+					.material_index
+					.filter(|material_index| scene.materials.get(*material_index).is_some());
+				let mat = material_slot_index
+					.and_then(|mi| scene.materials.get(mi))
+					.unwrap_or(&default_material);
 				if material_is_fully_invisible_for_draw(mat, &opts) {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
@@ -7741,7 +7782,9 @@ impl SceneMeshes {
 			let Some(primitive) = scene.meshes.get(draw_mesh_index).and_then(|mesh| mesh.get(draw_primitive_index)) else {
 				continue;
 			};
-			let material_slot_index = primitive.material_index.filter(|material_index| scene.materials.get(*material_index).is_some());
+			let material_slot_index = primitive
+				.material_index
+				.filter(|material_index| scene.materials.get(*material_index).is_some());
 			let material = material_slot_index
 				.and_then(|material_index| scene.materials.get(material_index))
 				.unwrap_or(&default_material);
@@ -8218,11 +8261,7 @@ impl SceneMeshes {
 		for draw in self.draws.iter().filter(|draw| draw.active()) {
 			let mut draw_uses_inactive_image_texture = false;
 			for texture_index in &draw.texture_indices {
-				if self
-					.image_texture_residency
-					.get(*texture_index)
-					.is_some_and(|resident| !resident)
-				{
+				if self.image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
 					inactive_image_texture_indices.insert(*texture_index);
 					draw_uses_inactive_image_texture = true;
 				}

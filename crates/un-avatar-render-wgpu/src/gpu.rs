@@ -3156,13 +3156,11 @@ impl GpuState {
 		plan.pending_image_texture_upload_count = scoped_upload_work.image_texture_indices.len();
 		plan.pending_material_slot_upload_count = scoped_upload_work.material_slot_indices.len();
 		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
-		plan.last_residency_refresh_active_draw_change_count =
-			self.last_asset_residency_refresh.active_draw_state_changed_count;
+		plan.last_residency_refresh_active_draw_change_count = self.last_asset_residency_refresh.active_draw_state_changed_count;
 		plan.last_residency_refresh_image_load_count = self.last_asset_residency_refresh.image_texture_load_indices.len();
 		plan.last_residency_refresh_image_unload_count = self.last_asset_residency_refresh.image_texture_unload_indices.len();
 		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
-		plan.last_residency_refresh_material_unload_count =
-			self.last_asset_residency_refresh.material_slot_unload_indices.len();
+		plan.last_residency_refresh_material_unload_count = self.last_asset_residency_refresh.material_slot_unload_indices.len();
 		plan.last_mesh_buffer_scoped_load_count = self.last_mesh_buffer_scoped_load_count;
 		plan.last_mesh_buffer_scoped_unload_count = self.last_mesh_buffer_scoped_unload_count;
 		plan.last_image_texture_scoped_load_count = self.last_image_texture_scoped_load_count;
@@ -5175,7 +5173,9 @@ mod tests {
 		assert!(plan.scoped_upload_supported);
 		assert!(!plan.all_resident);
 		assert_eq!(plan.mode, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED);
-		assert!(plan.reason.contains("mesh buffers, image textures, and cubemap resources are scoped"));
+		assert!(plan
+			.reason
+			.contains("mesh buffers, image textures, and cubemap resources are scoped"));
 	}
 
 	#[test]

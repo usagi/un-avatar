@@ -5154,12 +5154,24 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMenuItem"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarParameters"), "metadata");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarSyncParameterSequence"), "metadata");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarVisibleHeadAccessory"), "metadata");
+		assert_eq!(
+			modular_avatar_component_support_kind("ModularAvatarSyncParameterSequence"),
+			"metadata"
+		);
+		assert_eq!(
+			modular_avatar_component_support_kind("ModularAvatarVisibleHeadAccessory"),
+			"metadata"
+		);
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "resolver");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarWorldFixedObject"), "unsupported");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarWorldScaleObject"), "unsupported");
+		assert_eq!(
+			modular_avatar_component_support_kind("ModularAvatarWorldFixedObject"),
+			"unsupported"
+		);
+		assert_eq!(
+			modular_avatar_component_support_kind("ModularAvatarWorldScaleObject"),
+			"unsupported"
+		);
 		assert_eq!(modular_avatar_component_support_kind("MAMoveIndependently"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("VertexFilterByShapeComponent"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("SomethingElse"), "unsupported");

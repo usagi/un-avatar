@@ -401,7 +401,9 @@ mod tests {
 	fn liltoon_gem_refraction_runs_even_when_strength_is_zero() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * refraction_strength"),
+			mesh.contains(
+				"let refract_r = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * refraction_strength"
+			),
 			"lilToon Gem must sample refraction with the authored strength"
 		);
 		assert!(
