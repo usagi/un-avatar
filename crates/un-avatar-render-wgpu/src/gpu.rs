@@ -29,7 +29,8 @@ use crate::{
 	debug_log::DebugLog,
 	mesh_pass::{
 		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts,
-		SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
+		SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes,
+		TextureUploadSummary,
 	},
 	options::{
 		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
@@ -120,6 +121,11 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) inactive_material_slots_used_by_active_draw_truncated: bool,
 	pub(crate) pending_image_texture_upload_count: usize,
 	pub(crate) pending_material_slot_upload_count: usize,
+	pub(crate) last_residency_refresh_active_draw_change_count: usize,
+	pub(crate) last_residency_refresh_image_load_count: usize,
+	pub(crate) last_residency_refresh_image_unload_count: usize,
+	pub(crate) last_residency_refresh_material_load_count: usize,
+	pub(crate) last_residency_refresh_material_unload_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -242,6 +248,11 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		inactive_material_slots_used_by_active_draw_truncated: false,
 		pending_image_texture_upload_count: 0,
 		pending_material_slot_upload_count: 0,
+		last_residency_refresh_active_draw_change_count: 0,
+		last_residency_refresh_image_load_count: 0,
+		last_residency_refresh_image_unload_count: 0,
+		last_residency_refresh_material_load_count: 0,
+		last_residency_refresh_material_unload_count: 0,
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -1595,6 +1606,7 @@ pub(crate) struct GpuState {
 	ssao: crate::SsaoOptions,
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
+	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	spring_sim: Option<SpringBoneSimulator>,
@@ -1949,6 +1961,7 @@ impl GpuState {
 			ssao,
 			contact_shadow,
 			texture_summary,
+			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
 			spring_sim,
@@ -2117,6 +2130,7 @@ impl GpuState {
 					),
 				);
 			}
+			self.last_asset_residency_refresh = residency_refresh;
 			sm.rebuild_material_bind_groups(&self.device);
 		}
 		sm.update_draw_transforms(
@@ -3026,6 +3040,13 @@ impl GpuState {
 		plan.pending_image_texture_upload_count = scoped_upload_work.image_texture_indices.len();
 		plan.pending_material_slot_upload_count = scoped_upload_work.material_slot_indices.len();
 		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
+		plan.last_residency_refresh_active_draw_change_count =
+			self.last_asset_residency_refresh.active_draw_state_changed_count;
+		plan.last_residency_refresh_image_load_count = self.last_asset_residency_refresh.image_texture_load_indices.len();
+		plan.last_residency_refresh_image_unload_count = self.last_asset_residency_refresh.image_texture_unload_indices.len();
+		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
+		plan.last_residency_refresh_material_unload_count =
+			self.last_asset_residency_refresh.material_slot_unload_indices.len();
 		plan
 	}
 
