@@ -450,7 +450,7 @@ Runtime は base state 適用時、親 OFF に由来する子孫の `false` を�
 - Runtime は選択 set に必要な group だけ GPU upload し、不要 group は unload 対象にできる。
 - 数百着規模の衣装を扱うユーザーを想定し、全衣装の GPU 常駐を前提にしない。
 
-Source payload では `assetGroupOwnership[]`（または `wardrobe.assetGroupOwnership[]`）として group ownership を保存できる。各 entry は `groupId` と、所属する `meshPrimitives`、`materials`、`images`、`dynamicsSourceIds` を列挙する。Runtime schema では scene source data 側の `asset_group_ownership[]` へ正規化する。現 renderer はこの metadata の件数、active group 由来の resident count、renderer draw residency、image / material slot residency、active draw が参照する inactive image / material slot count、bounded slot index preview、preview limit、active residency gap flag を runtime status の wardrobe asset upload plan に公開する。ただし scoped GPU upload / unload が実装されるまでは、GPU resource 自体は明示的に `all-resident` として扱う。
+Source payload では `assetGroupOwnership[]`（または `wardrobe.assetGroupOwnership[]`）として group ownership を保存できる。各 entry は `groupId` と、所属する `meshPrimitives`、`materials`、`images`、`dynamicsSourceIds` を列挙する。Runtime schema では scene source data 側の `asset_group_ownership[]` へ正規化する。現 renderer はこの metadata の件数、active group 由来の resident count、renderer draw residency、image / material slot residency、active draw が参照する inactive image / material slot count、bounded slot index preview、preview limit、pending scoped texture / material upload work count、active residency gap flag を runtime status の wardrobe asset upload plan に公開する。ただし scoped GPU upload / unload が実装されるまでは、GPU resource 自体は明示的に `all-resident` として扱う。
 
 ### Capture Diff Workflow
 
