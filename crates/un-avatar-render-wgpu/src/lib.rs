@@ -4408,6 +4408,9 @@ mod tests {
 				total_draw_mesh_primitive_count: 3,
 				resident_draw_mesh_primitive_count: 2,
 				inactive_draw_mesh_primitive_count: 1,
+				total_draw_mesh_buffer_bytes: 3000,
+				resident_draw_mesh_buffer_bytes: 2000,
+				inactive_draw_mesh_buffer_bytes: 1000,
 				total_image_texture_count: 4,
 				resident_image_texture_count: 3,
 				inactive_image_texture_count: 1,
@@ -4472,6 +4475,18 @@ mod tests {
 		assert_eq!(
 			upload.get("inactive_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		assert_eq!(
+			upload.get("total_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(3000)
+		);
+		assert_eq!(
+			upload.get("resident_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(2000)
+		);
+		assert_eq!(
+			upload.get("inactive_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(1000)
 		);
 		assert_eq!(upload.get("total_image_texture_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("resident_image_texture_count").and_then(|value| value.as_u64()), Some(3));

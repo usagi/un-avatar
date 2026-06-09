@@ -1157,6 +1157,8 @@ struct SkinPalette {
 struct MeshDraw {
 	vertex_buffer: wgpu::Buffer,
 	index_buffer: wgpu::Buffer,
+	vertex_buffer_bytes: u64,
+	index_buffer_bytes: u64,
 	index_format: wgpu::IndexFormat,
 	index_count: u32,
 	draw_transform: wgpu::Buffer,
@@ -1272,6 +1274,9 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_draw_mesh_primitive_count: usize,
 	pub(crate) resident_draw_mesh_primitive_count: usize,
 	pub(crate) inactive_draw_mesh_primitive_count: usize,
+	pub(crate) total_draw_mesh_buffer_bytes: u64,
+	pub(crate) resident_draw_mesh_buffer_bytes: u64,
+	pub(crate) inactive_draw_mesh_buffer_bytes: u64,
 	pub(crate) total_image_texture_count: usize,
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
@@ -7091,15 +7096,20 @@ impl SceneMeshes {
 					skin_palette_key,
 					skin,
 				);
+				let vertex_buffer_bytes = (verts.len() * std::mem::size_of::<Vertex>()) as u64;
 				let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
 					label: Some("mesh_v"),
-					size: (verts.len() * std::mem::size_of::<Vertex>()) as u64,
+					size: vertex_buffer_bytes,
 					usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
 				queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
 
 				let index_format = compact_index_format(&indices);
+				let index_buffer_bytes = match index_format {
+					wgpu::IndexFormat::Uint16 => (indices.len() * std::mem::size_of::<u16>()) as u64,
+					wgpu::IndexFormat::Uint32 => (indices.len() * std::mem::size_of::<u32>()) as u64,
+				};
 				let ibuf = match index_format {
 					wgpu::IndexFormat::Uint16 => {
 						let indices16: Vec<u16> = indices.iter().map(|&index| index as u16).collect();
@@ -7202,6 +7212,8 @@ impl SceneMeshes {
 				draws.push(MeshDraw {
 					vertex_buffer: vbuf,
 					index_buffer: ibuf,
+					vertex_buffer_bytes,
+					index_buffer_bytes,
 					index_format,
 					index_count: indices.len() as u32,
 					draw_transform,
@@ -8057,6 +8069,17 @@ impl SceneMeshes {
 	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
 		let total_draw_mesh_primitive_count = self.draws.len();
 		let resident_draw_mesh_primitive_count = self.draws.iter().filter(|draw| draw.asset_resident).count();
+		let total_draw_mesh_buffer_bytes = self
+			.draws
+			.iter()
+			.map(|draw| draw.vertex_buffer_bytes + draw.index_buffer_bytes)
+			.sum::<u64>();
+		let resident_draw_mesh_buffer_bytes = self
+			.draws
+			.iter()
+			.filter(|draw| draw.asset_resident)
+			.map(|draw| draw.vertex_buffer_bytes + draw.index_buffer_bytes)
+			.sum::<u64>();
 		let total_image_texture_count = self.image_texture_residency.len();
 		let resident_image_texture_count = self.image_texture_residency.iter().filter(|resident| **resident).count();
 		let draws_using_inactive_image_texture_count = self
@@ -8075,6 +8098,9 @@ impl SceneMeshes {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
 			inactive_draw_mesh_primitive_count: total_draw_mesh_primitive_count.saturating_sub(resident_draw_mesh_primitive_count),
+			total_draw_mesh_buffer_bytes,
+			resident_draw_mesh_buffer_bytes,
+			inactive_draw_mesh_buffer_bytes: total_draw_mesh_buffer_bytes.saturating_sub(resident_draw_mesh_buffer_bytes),
 			total_image_texture_count,
 			resident_image_texture_count,
 			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),

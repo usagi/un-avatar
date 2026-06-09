@@ -102,6 +102,9 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) total_draw_mesh_primitive_count: usize,
 	pub(crate) resident_draw_mesh_primitive_count: usize,
 	pub(crate) inactive_draw_mesh_primitive_count: usize,
+	pub(crate) total_draw_mesh_buffer_bytes: u64,
+	pub(crate) resident_draw_mesh_buffer_bytes: u64,
+	pub(crate) inactive_draw_mesh_buffer_bytes: u64,
 	pub(crate) total_image_texture_count: usize,
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
@@ -236,6 +239,9 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		total_draw_mesh_primitive_count: 0,
 		resident_draw_mesh_primitive_count: 0,
 		inactive_draw_mesh_primitive_count: 0,
+		total_draw_mesh_buffer_bytes: 0,
+		resident_draw_mesh_buffer_bytes: 0,
+		inactive_draw_mesh_buffer_bytes: 0,
 		total_image_texture_count: 0,
 		resident_image_texture_count: 0,
 		inactive_image_texture_count: 0,
@@ -295,6 +301,9 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.total_draw_mesh_primitive_count = draw_counts.total_draw_mesh_primitive_count;
 	plan.resident_draw_mesh_primitive_count = draw_counts.resident_draw_mesh_primitive_count;
 	plan.inactive_draw_mesh_primitive_count = draw_counts.inactive_draw_mesh_primitive_count;
+	plan.total_draw_mesh_buffer_bytes = draw_counts.total_draw_mesh_buffer_bytes;
+	plan.resident_draw_mesh_buffer_bytes = draw_counts.resident_draw_mesh_buffer_bytes;
+	plan.inactive_draw_mesh_buffer_bytes = draw_counts.inactive_draw_mesh_buffer_bytes;
 	plan.total_image_texture_count = draw_counts.total_image_texture_count;
 	plan.resident_image_texture_count = draw_counts.resident_image_texture_count;
 	plan.inactive_image_texture_count = draw_counts.inactive_image_texture_count;
@@ -5203,6 +5212,9 @@ mod tests {
 				total_draw_mesh_primitive_count: 3,
 				resident_draw_mesh_primitive_count: 2,
 				inactive_draw_mesh_primitive_count: 1,
+				total_draw_mesh_buffer_bytes: 3000,
+				resident_draw_mesh_buffer_bytes: 2000,
+				inactive_draw_mesh_buffer_bytes: 1000,
 				total_image_texture_count: 4,
 				resident_image_texture_count: 3,
 				inactive_image_texture_count: 1,
@@ -5222,6 +5234,9 @@ mod tests {
 		assert_eq!(plan.total_draw_mesh_primitive_count, 3);
 		assert_eq!(plan.resident_draw_mesh_primitive_count, 2);
 		assert_eq!(plan.inactive_draw_mesh_primitive_count, 1);
+		assert_eq!(plan.total_draw_mesh_buffer_bytes, 3000);
+		assert_eq!(plan.resident_draw_mesh_buffer_bytes, 2000);
+		assert_eq!(plan.inactive_draw_mesh_buffer_bytes, 1000);
 		assert_eq!(plan.total_image_texture_count, 4);
 		assert_eq!(plan.resident_image_texture_count, 3);
 		assert_eq!(plan.inactive_image_texture_count, 1);
