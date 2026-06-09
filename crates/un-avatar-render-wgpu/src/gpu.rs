@@ -83,6 +83,26 @@ pub(crate) struct RuntimeWardrobeActionStatus {
 	pub(crate) parameter_value: Option<f32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionStatus {
+	pub(crate) action_id: String,
+	pub(crate) label: String,
+	#[serde(default)]
+	pub(crate) effect_count: usize,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub(crate) effect_kinds: BTreeMap<String, usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) wardrobe_set_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) expression_menu_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) supervisor_command: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) parameter_name: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) parameter_value: Option<f32>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) mode: String,
@@ -395,6 +415,63 @@ fn wardrobe_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Ve
 					status.parameter_value = Some(*value);
 				}
 				_ => {}
+			}
+		}
+		statuses.push(status);
+	}
+	statuses.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.action_id.cmp(&b.action_id)));
+	statuses
+}
+
+fn runtime_action_effect_kind(effect: &UnaRuntimeActionEffect) -> &'static str {
+	match effect {
+		UnaRuntimeActionEffect::WardrobeSet { .. } => "wardrobe_set",
+		UnaRuntimeActionEffect::NodeVisibility { .. } => "node_visibility",
+		UnaRuntimeActionEffect::ExpressionWeight { .. } => "expression_weight",
+		UnaRuntimeActionEffect::MaterialColor { .. } => "material_color",
+		UnaRuntimeActionEffect::MaterialScalar { .. } => "material_scalar",
+		UnaRuntimeActionEffect::MaterialSlot { .. } => "material_slot",
+		UnaRuntimeActionEffect::DynamicsEnabled { .. } => "dynamics_enabled",
+	}
+}
+
+fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>) -> BTreeMap<String, usize> {
+	let mut counts = BTreeMap::new();
+	for effect in effects {
+		*counts.entry(runtime_action_effect_kind(effect).to_string()).or_insert(0) += 1;
+	}
+	counts
+}
+
+fn runtime_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeActionStatus> {
+	let mut statuses = Vec::new();
+	for action in &actions.actions {
+		let mut status = RuntimeActionStatus {
+			action_id: action.id.clone(),
+			label: action.label.clone(),
+			effect_count: action.effects.len(),
+			effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+			..Default::default()
+		};
+		for trigger in &action.triggers {
+			match trigger {
+				UnaRuntimeActionTrigger::ExpressionMenu { path } if status.expression_menu_path.is_none() => {
+					status.expression_menu_path = Some(path.clone());
+				}
+				UnaRuntimeActionTrigger::SupervisorCommand { command } if status.supervisor_command.is_none() => {
+					status.supervisor_command = Some(command.clone());
+				}
+				UnaRuntimeActionTrigger::ParameterValue { name, value } if status.parameter_name.is_none() => {
+					status.parameter_name = Some(name.clone());
+					status.parameter_value = Some(*value);
+				}
+				_ => {}
+			}
+		}
+		for effect in &action.effects {
+			if let UnaRuntimeActionEffect::WardrobeSet { set_id } = effect {
+				status.wardrobe_set_id = Some(set_id.clone());
+				break;
 			}
 		}
 		statuses.push(status);
@@ -3203,6 +3280,19 @@ impl GpuState {
 		doc.runtime_model()
 			.runtime_actions()
 			.map(wardrobe_action_statuses)
+			.unwrap_or_default()
+	}
+
+	pub(crate) fn runtime_actions(&self) -> Vec<RuntimeActionStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model()
+			.runtime_actions()
+			.map(runtime_action_statuses)
 			.unwrap_or_default()
 	}
 

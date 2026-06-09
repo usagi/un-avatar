@@ -1538,6 +1538,7 @@ impl AvatarApp {
 			status.runtime_requires_fur = runtime_requirements.fur;
 			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
+			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3080,6 +3081,8 @@ struct RendererRuntimeSnapshot {
 	runtime_parameter_values: BTreeMap<String, f32>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	wardrobe_actions: Vec<gpu::RuntimeWardrobeActionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_actions: Vec<gpu::RuntimeActionStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3222,6 +3225,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		last_action_id: None,
 		runtime_parameter_values: BTreeMap::new(),
 		wardrobe_actions: Vec::new(),
+		runtime_actions: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4444,6 +4448,24 @@ mod tests {
 				parameter_name: Some("Outfit".to_string()),
 				parameter_value: Some(1.0),
 			}];
+			status.runtime_actions = vec![crate::gpu::RuntimeActionStatus {
+				action_id: "wardrobe:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				effect_count: 4,
+				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+				supervisor_command: Some("field_drape".to_string()),
+				parameter_name: Some("Outfit".to_string()),
+				parameter_value: Some(1.0),
+				wardrobe_set_id: Some("field_drape".to_string()),
+				effect_kinds: [
+					("node_visibility".to_string(), 1),
+					("expression_weight".to_string(), 2),
+					("material_color".to_string(), 1),
+					("material_scalar".to_string(), 1),
+				]
+				.into_iter()
+				.collect(),
+			}];
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -4595,6 +4617,31 @@ mod tests {
 		assert_eq!(
 			wardrobe_actions[0].get("parameter_value").and_then(|value| value.as_f64()),
 			Some(1.0)
+		);
+		let runtime_actions = snapshot
+			.get("runtime_actions")
+			.and_then(|value| value.as_array())
+			.expect("runtime actions");
+		assert_eq!(runtime_actions.len(), 1);
+		assert_eq!(
+			runtime_actions[0].get("action_id").and_then(|value| value.as_str()),
+			Some("wardrobe:field_drape")
+		);
+		assert_eq!(
+			runtime_actions[0].get("label").and_then(|value| value.as_str()),
+			Some("Field Drape")
+		);
+		assert_eq!(
+			runtime_actions[0].get("wardrobe_set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert_eq!(runtime_actions[0].get("effect_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(
+			runtime_actions[0]
+				.get("effect_kinds")
+				.and_then(|value| value.get("node_visibility"))
+				.and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
