@@ -887,6 +887,7 @@ mod tests {
 				bone_node_indices: vec![0, 1, 2],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let tip_before = world_from_snapshot(&scene)[2].transform_point3(Vec3::ZERO);
@@ -932,6 +933,7 @@ mod tests {
 				bone_node_indices: vec![0, 1, 2],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let tip_before = world_from_snapshot(&scene)[2].transform_point3(Vec3::ZERO);
@@ -974,6 +976,7 @@ mod tests {
 				bone_node_indices: vec![0, 1],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 
 		assert!(SpringBoneSimulator::new(&scene, &settings).is_none());
@@ -1010,6 +1013,7 @@ mod tests {
 				bone_node_indices: vec![0, 1, 2],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		for step in 0..120 {
@@ -1095,6 +1099,7 @@ mod tests {
 				bone_node_indices: vec![0, 1],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let config = SpringBonePhysicsConfig {
 			overrides: vec![SpringBoneCategoryOverride {
@@ -1145,6 +1150,7 @@ mod tests {
 				bone_node_indices: vec![0, 1],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let rt = sim.runtimes[0].as_ref().expect("runtime");
@@ -1197,6 +1203,7 @@ mod tests {
 				bone_node_indices: vec![0, 1, 2],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut xpbd_scene = base_scene.clone();
 		let mut verlet_scene = base_scene;
@@ -1260,6 +1267,7 @@ mod tests {
 				bone_node_indices: vec![0, 1],
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 		// 2 ノードチェーン = 1 joint。tail を bone_axis に沿って初期化し動作することを確認。
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");

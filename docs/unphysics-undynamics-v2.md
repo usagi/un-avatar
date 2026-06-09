@@ -60,7 +60,7 @@ Lowering:
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Pending: PhysBone colliders: sphere / capsule / inside bounds の solver 反映を個別 test 付きで追加する。
 7. Pending: PhysBone limits: angle / stretch limit を solver へ反映する。SpringBone 互換挙動と分けて、UNDynamics limit constraint として実装する。
-8. Pending: Interactions / Contacts / Constraints: grabbing / posing / contacts / constraints は metadata、diagnostics、runtime action hooks の順に広げる。solver 反映は source evidence と test model が揃ってから行う。
+8. In progress: Interactions / Contacts / Constraints: grabbing / posing は group metadata、contacts / constraints は source-neutral metadata と runtime counts から始める。runtime action hooks と solver 反映は source evidence と test model が揃ってから行う。
 9. In progress: Runtime integration: wardrobe hot switch / action / animation state が dynamics enabled state、reset、blend を同じ runtime boundary で扱うようにする。
 10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。
 

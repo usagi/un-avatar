@@ -1582,6 +1582,11 @@ impl AvatarApp {
 				status.dynamics_vrm_spring_bone_collider_count = dynamics.vrm_spring_bone_colliders;
 				status.dynamics_vrc_physbone_collider_count = dynamics.vrc_physbone_colliders;
 				status.dynamics_unknown_collider_count = dynamics.unknown_colliders;
+				status.dynamics_contact_count = dynamics.contacts;
+				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
+				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
+				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
+				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
@@ -3227,6 +3232,16 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_unknown_collider_count: u32,
 	#[serde(default)]
+	dynamics_contact_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_sender_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_receiver_count: u32,
+	#[serde(default)]
+	dynamics_constraint_ref_count: u32,
+	#[serde(default)]
+	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
 	window_focused: bool,
@@ -3336,6 +3351,11 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrm_spring_bone_collider_count: 0,
 		dynamics_vrc_physbone_collider_count: 0,
 		dynamics_unknown_collider_count: 0,
+		dynamics_contact_count: 0,
+		dynamics_vrc_contact_sender_count: 0,
+		dynamics_vrc_contact_receiver_count: 0,
+		dynamics_constraint_ref_count: 0,
+		dynamics_vrc_constraint_ref_count: 0,
 		camera_locked: opts.camera_locked,
 		window_focused: false,
 		window_activation_seq: 0,

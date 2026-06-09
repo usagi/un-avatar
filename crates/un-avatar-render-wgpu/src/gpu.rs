@@ -921,6 +921,11 @@ pub struct DynamicsRuntimeCounts {
 	pub vrm_spring_bone_colliders: u32,
 	pub vrc_physbone_colliders: u32,
 	pub unknown_colliders: u32,
+	pub contacts: u32,
+	pub vrc_contact_senders: u32,
+	pub vrc_contact_receivers: u32,
+	pub constraint_refs: u32,
+	pub vrc_constraint_refs: u32,
 }
 
 impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
@@ -937,6 +942,11 @@ impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
 			vrm_spring_bone_colliders: counts.vrm_spring_bone_colliders as u32,
 			vrc_physbone_colliders: counts.vrc_physbone_colliders as u32,
 			unknown_colliders: counts.unknown_colliders as u32,
+			contacts: counts.contacts as u32,
+			vrc_contact_senders: counts.vrc_contact_senders as u32,
+			vrc_contact_receivers: counts.vrc_contact_receivers as u32,
+			constraint_refs: counts.constraint_refs as u32,
+			vrc_constraint_refs: counts.vrc_constraint_refs as u32,
 		}
 	}
 }
@@ -1983,6 +1993,7 @@ mod motion_buffer_tests {
 				..Default::default()
 			}],
 			colliders: Vec::new(),
+			..Default::default()
 		};
 
 		assert!(reset_runtime_dynamics_nodes_to_rest(

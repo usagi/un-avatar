@@ -497,6 +497,11 @@ struct DiagnoseDynamicsSummary {
 	vrm_spring_bone_collider_count: usize,
 	vrc_physbone_collider_count: usize,
 	unknown_collider_count: usize,
+	contact_count: usize,
+	vrc_contact_sender_count: usize,
+	vrc_contact_receiver_count: usize,
+	constraint_ref_count: usize,
+	vrc_constraint_ref_count: usize,
 	source_limit_count: usize,
 	source_collision_disabled_count: usize,
 	source_inside_bounds_collider_count: usize,
@@ -3543,6 +3548,11 @@ fn build_diagnose_report(
 		vrm_spring_bone_collider_count: dynamics_counts.vrm_spring_bone_colliders,
 		vrc_physbone_collider_count: dynamics_counts.vrc_physbone_colliders,
 		unknown_collider_count: dynamics_counts.unknown_colliders,
+		contact_count: dynamics_counts.contacts,
+		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
+		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
+		constraint_ref_count: dynamics_counts.constraint_refs,
+		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,
 		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
@@ -4192,7 +4202,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} source_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4201,6 +4211,11 @@ fn run_diagnose(
 		report.dynamics.vrm_spring_bone_collider_count,
 		report.dynamics.vrc_physbone_collider_count,
 		report.dynamics.unknown_collider_count,
+		report.dynamics.contact_count,
+		report.dynamics.vrc_contact_sender_count,
+		report.dynamics.vrc_contact_receiver_count,
+		report.dynamics.constraint_ref_count,
+		report.dynamics.vrc_constraint_ref_count,
 		report.dynamics.source_limit_count,
 		report.dynamics.source_collision_disabled_count,
 		report.dynamics.source_inside_bounds_collider_count,
@@ -5665,6 +5680,7 @@ mod tests {
 					},
 				],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			runtime_state: un_avatar_core::UnaRuntimeState {
 				dynamics_enabled_overrides: BTreeMap::from([("physbone:hair".to_string(), false)]),

@@ -509,6 +509,7 @@ mod tests {
 				position: [0.2, 0.0, 0.0],
 				..Default::default()
 			}],
+			..Default::default()
 		};
 		let colliders = build_dynamics_bone_colliders(
 			&scene,
@@ -551,6 +552,7 @@ mod tests {
 				inside_bounds: true,
 				..Default::default()
 			}],
+			..Default::default()
 		};
 		let colliders = build_dynamics_bone_colliders(
 			&scene,

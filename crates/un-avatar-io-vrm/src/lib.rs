@@ -1033,6 +1033,7 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 		Some(UnaSpringBoneSettings {
 			groups: out_groups,
 			colliders: Vec::new(),
+			..Default::default()
 		})
 	}
 }
@@ -1093,6 +1094,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 		Some(UnaSpringBoneSettings {
 			groups: out_groups,
 			colliders: Vec::new(),
+			..Default::default()
 		})
 	}
 }
@@ -1347,6 +1349,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![un_avatar_core::UnaSceneNode {
 				source_node_id: None,
+				resolved_node_id: None,
 				name: None,
 				visible: true,
 				transform: Mat4::IDENTITY.to_cols_array(),
@@ -2146,6 +2149,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		drop_flat_neutral_normal_textures(&mut scene);
 		assert_eq!(scene.materials[0].normal_texture_index, None);
@@ -2188,6 +2192,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {
@@ -2248,6 +2253,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {

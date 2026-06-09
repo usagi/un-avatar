@@ -841,6 +841,20 @@ pub struct UnaDynamicsInteraction {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsContactKind {
+	Sender,
+	Receiver,
+	Unknown,
+}
+
+impl Default for UnaDynamicsContactKind {
+	fn default() -> Self {
+		Self::Unknown
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UnaDynamicsColliderShape {
 	Sphere,
 	Capsule,
@@ -870,6 +884,46 @@ pub struct UnaDynamicsCollider {
 	pub rotation: [f32; 4],
 	#[serde(default)]
 	pub inside_bounds: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaDynamicsContact {
+	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+	pub source_kind: UnaDynamicsSourceKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
+	pub node: usize,
+	#[serde(default)]
+	pub kind: UnaDynamicsContactKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub collision_tags: Vec<String>,
+	#[serde(default)]
+	pub shape: UnaDynamicsColliderShape,
+	#[serde(default)]
+	pub radius: f32,
+	#[serde(default)]
+	pub height: f32,
+	#[serde(default)]
+	pub position: [f32; 3],
+	#[serde(default = "identity_quat_array")]
+	pub rotation: [f32; 4],
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaDynamicsConstraintRef {
+	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+	pub source_kind: UnaDynamicsSourceKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
+	pub target_node: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub source_nodes: Vec<usize>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub constraint_type: String,
+	#[serde(default = "one_f32")]
+	pub weight: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -905,6 +959,10 @@ pub struct UnaSpringBoneSettings {
 	pub groups: Vec<UnaSpringBoneGroup>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub colliders: Vec<UnaDynamicsCollider>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub contacts: Vec<UnaDynamicsContact>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub constraint_refs: Vec<UnaDynamicsConstraintRef>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -932,6 +990,11 @@ pub struct UnaRuntimeDynamicsCounts {
 	pub vrm_spring_bone_colliders: usize,
 	pub vrc_physbone_colliders: usize,
 	pub unknown_colliders: usize,
+	pub contacts: usize,
+	pub vrc_contact_senders: usize,
+	pub vrc_contact_receivers: usize,
+	pub constraint_refs: usize,
+	pub vrc_constraint_refs: usize,
 }
 
 impl<'a> UnaRuntimeDynamics<'a> {
@@ -995,6 +1058,14 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.spring_bones.into_iter().flat_map(|settings| settings.colliders.iter())
 	}
 
+	pub fn contacts(self) -> impl Iterator<Item = &'a UnaDynamicsContact> {
+		self.spring_bones.into_iter().flat_map(|settings| settings.contacts.iter())
+	}
+
+	pub fn constraint_refs(self) -> impl Iterator<Item = &'a UnaDynamicsConstraintRef> {
+		self.spring_bones.into_iter().flat_map(|settings| settings.constraint_refs.iter())
+	}
+
 	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.colliders().filter(|collider| collider.source_kind == source_kind).count()
 	}
@@ -1025,6 +1096,22 @@ impl<'a> UnaRuntimeDynamics<'a> {
 				UnaDynamicsSourceKind::VrmSpringBone => counts.vrm_spring_bone_colliders += 1,
 				UnaDynamicsSourceKind::VrcPhysBone => counts.vrc_physbone_colliders += 1,
 				UnaDynamicsSourceKind::Unknown => counts.unknown_colliders += 1,
+			}
+		}
+		for contact in self.contacts() {
+			counts.contacts += 1;
+			if contact.source_kind == UnaDynamicsSourceKind::VrcPhysBone {
+				match contact.kind {
+					UnaDynamicsContactKind::Sender => counts.vrc_contact_senders += 1,
+					UnaDynamicsContactKind::Receiver => counts.vrc_contact_receivers += 1,
+					UnaDynamicsContactKind::Unknown => {}
+				}
+			}
+		}
+		for constraint_ref in self.constraint_refs() {
+			counts.constraint_refs += 1;
+			if constraint_ref.source_kind == UnaDynamicsSourceKind::VrcPhysBone {
+				counts.vrc_constraint_refs += 1;
 			}
 		}
 		counts
@@ -4462,6 +4549,7 @@ mod tests {
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![UnaSpringBoneGroup::default()],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			..Default::default()
 		};
@@ -4801,6 +4889,7 @@ mod tests {
 					},
 				],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			..Default::default()
 		};
@@ -4846,6 +4935,7 @@ mod tests {
 					},
 				],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			..Default::default()
 		};
@@ -4895,6 +4985,7 @@ mod tests {
 					bone_node_indices: vec![1, 2, 3],
 				}],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			..Default::default()
 		};
@@ -4921,6 +5012,59 @@ mod tests {
 		assert_eq!(group.chain.bone_node_indices, &[1, 2, 3]);
 		assert_eq!(group.limit.unwrap().limit_type, "angle");
 		assert_eq!(group.interaction.unwrap().allow_grabbing, Some(true));
+	}
+
+	#[test]
+	fn runtime_dynamics_exposes_contact_and_constraint_metadata() {
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: Vec::new(),
+			contacts: vec![
+				UnaDynamicsContact {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "contact:hand".to_string(),
+					node: 3,
+					kind: UnaDynamicsContactKind::Receiver,
+					parameter: "ContactHand".to_string(),
+					collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
+					shape: UnaDynamicsColliderShape::Sphere,
+					radius: 0.05,
+					..Default::default()
+				},
+				UnaDynamicsContact {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "contact:sender".to_string(),
+					node: 4,
+					kind: UnaDynamicsContactKind::Sender,
+					collision_tags: vec!["Interact".to_string()],
+					..Default::default()
+				},
+			],
+			constraint_refs: vec![UnaDynamicsConstraintRef {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "constraint:world-fixed".to_string(),
+				target_node: 8,
+				source_nodes: vec![1, 2],
+				constraint_type: "parent".to_string(),
+				weight: 0.75,
+			}],
+		};
+
+		let dynamics = settings.runtime_dynamics();
+		let contacts = dynamics.contacts().collect::<Vec<_>>();
+		assert_eq!(contacts.len(), 2);
+		assert_eq!(contacts[0].parameter, "ContactHand");
+		assert_eq!(contacts[0].collision_tags, vec!["Hand", "Interact"]);
+		let constraint_refs = dynamics.constraint_refs().collect::<Vec<_>>();
+		assert_eq!(constraint_refs.len(), 1);
+		assert_eq!(constraint_refs[0].constraint_type, "parent");
+		assert_eq!(constraint_refs[0].source_nodes, vec![1, 2]);
+		let counts = dynamics.counts();
+		assert_eq!(counts.contacts, 2);
+		assert_eq!(counts.vrc_contact_receivers, 1);
+		assert_eq!(counts.vrc_contact_senders, 1);
+		assert_eq!(counts.constraint_refs, 1);
+		assert_eq!(counts.vrc_constraint_refs, 1);
 	}
 
 	#[test]
@@ -5428,6 +5572,7 @@ mod tests {
 						..Default::default()
 					},
 				],
+				..Default::default()
 			}),
 			..Default::default()
 		};

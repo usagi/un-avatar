@@ -1824,7 +1824,11 @@ fn unavatar_dynamics_settings(
 			groups.len(),
 			colliders.len()
 		));
-		Some(UnaSpringBoneSettings { groups, colliders })
+		Some(UnaSpringBoneSettings {
+			groups,
+			colliders,
+			..Default::default()
+		})
 	}
 }
 
@@ -13892,6 +13896,7 @@ mod tests {
 					..Default::default()
 				}],
 				colliders: Vec::new(),
+				..Default::default()
 			}),
 			..Default::default()
 		};
