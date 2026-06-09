@@ -138,11 +138,13 @@ preview 実装では `Wardrobe (Split)` は Modular Avatar bake を実行せず�
 
 Wardrobe Set は「衣装 root を 1 つ選ぶ」だけの機能ではない。Modular Avatar 対応衣装は、配布時点で色違い、パンツ / スカート、帽子、小物、演出用オブジェクトなどの細かな ON/OFF バリエーションを内包していることが多い。UNAvatar の `wardrobe.sets` は、素体側の貫通防止 blendshape、衣装 root、色、スタイル、小物 ON/OFF を合成した見た目プリセットとして扱う。`assetGroups` は lazy upload / unload のための資産単位であり、ユーザーが選ぶ wardrobe set とは 1:1 とは限らない。
 
+`Base` は「裸の素体」ではなく、安全な初期表示状態である。配信や録画中に wardrobe reset / fallback / 操作ミスが起きても露出事故にならないよう、ユーザーはデフォルト衣装込みの状態を `Capture Base` してよい。素体 mesh や body shrink は内部 source asset / operation として扱い、ユーザー向け baseline state に素体だけの姿を強制しない。
+
 ### Capture Diff Workflow
 
 Exporter はユーザーに object path や blendshape 名を手入力させることを主導線にしない。Unity 上で見た目を作り、その状態差分を capture する。
 
-1. 素体状態を整えて `Capture Base`。
+1. 配信中に表示されても安全な初期状態を整えて `Capture Base`。
 2. Color 1 などの衣装状態を Unity 上で整える。
 3. `Capture Wardrobe Set` で base との差分を記録する。
 4. Color 13 などは既存 set を複製し、対象 outfit subtree / asset group の差分だけ変更する。

@@ -403,6 +403,8 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
 
 `wardrobe.sets[].id` は profile / CLI / renderer から参照される外部キーなので、Exporter はユーザー入力名を勝手に slug 化しない。`displayName` は UI 表示用、`assetGroups[]` は lazy upload / unload 用の内部 grouping key であり、ここでは slug 化してよい。
 
+`baseSet` は reset / fallback / startup の基準になる安全な初期表示状態であり、裸の素体である必要はない。むしろ配信用途では、意図しない wardrobe reset や操作ミスで露出事故が起きないよう、デフォルト衣装込みの状態を `baseSet` として保存する運用を推奨する。素体は source graph の一部であって、ユーザーに表示される baseline wardrobe state とは別概念である。
+
 v0.1 の operation 候補。
 
 - `subtreeEnabled`
@@ -456,7 +458,7 @@ Source payload では `assetGroupOwnership[]`（または `wardrobe.assetGroupOw
 
 ユーザー負担を減らすため、Unity Exporter は手入力ではなく capture diff を標準導線にする。
 
-1. Unity 上で素体状態を整えて `Capture Base`。
+1. Unity 上で配信中に表示されても安全な初期状態を整えて `Capture Base`。
 2. Unity 上で衣装状態を整えて `Capture Wardrobe Set`。
 3. Exporter が active state / renderer enabled / blendshape weights の base 差分だけを operations として記録する。
 4. Color 1 と Color 13 のような色違いは set 複製後、対象 outfit subtree の ON/OFF を差し替える。
