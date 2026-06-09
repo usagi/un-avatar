@@ -23,7 +23,7 @@ UNDynamics の中核概念:
 - `UnaDynamicsGroup`: stable source id、enabled state、source provenance、solver parameters、chains、colliders、limits、interactions を束ねる runtime group。
 - `UnaDynamicsChain`: 親から子へ向かう node chain。PhysBone endpointPosition は synthetic endpoint chain node として lower できる。
 - `UnaDynamicsCollider`: sphere / capsule / inside bounds など source-neutral collider。
-- `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は metadata と diagnostics から始め、solver 反映は別 commit に分ける。
+- `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は angle cone を SpringBone-like solver へ近似反映し、stretch は metadata / diagnostics に留める。
 - `UnaDynamicsInteraction`: grabbing / posing など interaction capability metadata。v2 初期は runtime action / diagnostics のために保持する。
 - `UnaDynamicsContact`: VRC Contacts を source-neutral event / proximity metadata として保持する。
 - `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する。
@@ -59,7 +59,7 @@ Lowering:
 4. Done: Solver naming bridge: `SpringBoneSimulator` を互換名として残しつつ、`DynamicsSimulator` alias と neutral renderer runtime names から呼べる形へ寄せる。
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Pending: PhysBone colliders: sphere / capsule / inside bounds の solver 反映を個別 test 付きで追加する。
-7. Pending: PhysBone limits: angle / stretch limit を solver へ反映する。SpringBone 互換挙動と分けて、UNDynamics limit constraint として実装する。
+7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。
 8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
 9. In progress: Runtime integration: wardrobe hot switch / action / animation state が dynamics enabled state、reset、blend を同じ runtime boundary で扱うようにする。
 10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。

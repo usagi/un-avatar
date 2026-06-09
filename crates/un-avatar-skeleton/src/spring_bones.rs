@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaDynamicsGroup, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings};
+use un_avatar_core::{UnaDynamicsGroup, UnaDynamicsLimit, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
 
@@ -740,6 +740,7 @@ fn step_group(
 			for _ in 0..rt.params.constraint_iterations {
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);
 				next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 				next_tail = constrain_tail_colliders(
 					next_tail,
 					child_pos,
@@ -749,10 +750,12 @@ fn step_group(
 					bone_colliders,
 					group.parameters.hit_radius,
 				);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 			}
 		} else {
 			joint.rest_lambda = 0.0;
 			next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 			next_tail = constrain_tail_colliders(
 				next_tail,
 				child_pos,
@@ -762,6 +765,7 @@ fn step_group(
 				bone_colliders,
 				group.parameters.hit_radius,
 			);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 		}
 
 		// 回転補正: rest pose の axis (target_axis_world) を実際の axis (next_tail - child_pos) に向ける。
@@ -794,6 +798,46 @@ fn constrain_tail_length(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, 
 		child_pos + fallback_axis * length
 	} else {
 		child_pos + dir * length
+	}
+}
+
+fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32, limit: Option<&UnaDynamicsLimit>) -> Vec3 {
+	let Some(max_angle_rad) = limit.and_then(undynamics_cone_limit_angle_rad) else {
+		return next_tail;
+	};
+	let rest_axis = fallback_axis.normalize_or_zero();
+	let dir = (next_tail - child_pos).normalize_or_zero();
+	if rest_axis.length_squared() < 1e-12 || dir.length_squared() < 1e-12 {
+		return child_pos + fallback_axis * length;
+	}
+	let dot = rest_axis.dot(dir).clamp(-1.0, 1.0);
+	let angle = dot.acos();
+	if angle <= max_angle_rad {
+		return child_pos + dir * length;
+	}
+	let tangent = (dir - rest_axis * dot).normalize_or_zero();
+	let tangent = if tangent.length_squared() >= 1e-12 {
+		tangent
+	} else {
+		rest_axis.any_orthonormal_vector()
+	};
+	let constrained_dir = rest_axis * max_angle_rad.cos() + tangent * max_angle_rad.sin();
+	child_pos + constrained_dir.normalize_or_zero() * length
+}
+
+fn undynamics_cone_limit_angle_rad(limit: &UnaDynamicsLimit) -> Option<f32> {
+	let limit_type = limit.limit_type.to_ascii_lowercase();
+	if !limit_type.is_empty() && !limit_type.contains("angle") && !limit_type.contains("hinge") && !limit_type.contains("polar") {
+		return None;
+	}
+	let max_angle = [limit.max_angle_x, limit.max_angle_z]
+		.into_iter()
+		.filter(|angle| angle.is_finite() && *angle > 0.0)
+		.fold(0.0_f32, f32::max);
+	if max_angle <= 0.0 {
+		None
+	} else {
+		Some(max_angle.clamp(0.0, 179.0).to_radians())
 	}
 }
 
@@ -901,6 +945,54 @@ mod tests {
 			tip_before.x,
 			tip_after.x
 		);
+	}
+
+	#[test]
+	fn dynamics_angle_limit_clamps_tail_direction() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 0.0,
+				gravity_power: 30.0,
+				gravity_dir: [1.0, 0.0, 0.0],
+				drag_force: 0.0,
+				center_node: None,
+				hit_radius: 0.0,
+				limit: Some(UnaDynamicsLimit {
+					limit_type: "Angle".to_string(),
+					max_angle_x: 10.0,
+					max_angle_z: 0.0,
+					max_stretch: 0.0,
+				}),
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		for _ in 0..60 {
+			sim.step(&mut scene, &settings, 1.0 / 60.0);
+		}
+		let world = world_from_snapshot(&scene);
+		let joint = world[1].transform_point3(Vec3::ZERO);
+		let tip = world[2].transform_point3(Vec3::ZERO);
+		let axis = (tip - joint).normalize_or_zero();
+		let angle = Vec3::Y.angle_between(axis).to_degrees();
+		assert!(angle <= 10.5, "angle={angle} axis={axis:?}");
 	}
 
 	/// 親が静止していて重力 0 なら tail は時間が経っても発散しないことを確認する安定性テスト。
