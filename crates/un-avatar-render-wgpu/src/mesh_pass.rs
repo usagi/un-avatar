@@ -1641,6 +1641,7 @@ pub(crate) struct SceneMeshes {
 	audio_link_uploaded_sequence: u64,
 	audio_link_frame_params: [f32; 4],
 	texture_views: SceneTextureViews,
+	all_image_texture_views: Vec<wgpu::TextureView>,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	image_sampler_indices: Vec<usize>,
@@ -7110,6 +7111,7 @@ impl SceneMeshes {
 			audio_link_uploaded_sequence: 0,
 			audio_link_frame_params: [0.0; 4],
 			texture_views,
+			all_image_texture_views: image_views,
 			_samplers: samplers,
 			image_sampler_indices,
 			_textures: textures,
@@ -7957,6 +7959,33 @@ impl SceneMeshes {
 
 	pub(crate) fn promote_material_slot_residency(&mut self, material_slot_indices: &[usize]) -> usize {
 		promote_residency_indices(&mut self.material_slot_residency, material_slot_indices)
+	}
+
+	pub(crate) fn promote_image_texture_residency(&mut self, image_texture_indices: &[usize]) -> usize {
+		promote_residency_indices(&mut self.image_texture_residency, image_texture_indices)
+	}
+
+	pub(crate) fn apply_image_texture_view_residency(&mut self, load_indices: &[usize], unload_indices: &[usize]) -> (usize, usize) {
+		let mut loaded = 0;
+		for index in load_indices {
+			let Some(source_view) = self.all_image_texture_views.get(*index) else {
+				continue;
+			};
+			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
+				continue;
+			};
+			*current_view = source_view.clone();
+			loaded += 1;
+		}
+		let mut unloaded = 0;
+		for index in unload_indices {
+			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
+				continue;
+			};
+			*current_view = self.texture_views.transparent_black.clone();
+			unloaded += 1;
+		}
+		(loaded, unloaded)
 	}
 
 	pub fn is_empty(&self) -> bool {
