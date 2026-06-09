@@ -5680,6 +5680,20 @@ mod tests {
 					},
 				],
 				colliders: Vec::new(),
+				contacts: vec![un_avatar_core::UnaDynamicsContact {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					node: 1,
+					kind: un_avatar_core::UnaDynamicsContactKind::Receiver,
+					parameter: "ContactHand".into(),
+					..Default::default()
+				}],
+				constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					target_node: 1,
+					source_nodes: vec![0],
+					constraint_type: "parent".into(),
+					..Default::default()
+				}],
 				..Default::default()
 			}),
 			runtime_state: un_avatar_core::UnaRuntimeState {
@@ -5711,6 +5725,10 @@ mod tests {
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
+		assert_eq!(report.dynamics.contact_count, 1);
+		assert_eq!(report.dynamics.vrc_contact_receiver_count, 1);
+		assert_eq!(report.dynamics.constraint_ref_count, 1);
+		assert_eq!(report.dynamics.vrc_constraint_ref_count, 1);
 	}
 
 	#[test]

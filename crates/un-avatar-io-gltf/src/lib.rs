@@ -13,14 +13,14 @@ use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
 	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
-	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsInteraction,
-	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
-	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode,
-	UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership,
-	UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode,
-	UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
+	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog,
+	UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode,
+	UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind,
+	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect,
+	UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget,
+	UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -1406,6 +1406,20 @@ fn unavatar_dynamics_source_kind(value: &Value) -> UnaDynamicsSourceKind {
 	}
 }
 
+fn unavatar_dynamics_metadata_source_kind(value: &Value) -> UnaDynamicsSourceKind {
+	let source = value
+		.get("source")
+		.or_else(|| value.get("sourceKind"))
+		.or_else(|| value.get("source_kind"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	if source.to_ascii_lowercase().starts_with("vrc_") {
+		UnaDynamicsSourceKind::VrcPhysBone
+	} else {
+		unavatar_dynamics_source_kind(value)
+	}
+}
+
 fn unavatar_dynamics_root_index(
 	value: &Value,
 	node_ids: &BTreeMap<String, usize>,
@@ -1523,6 +1537,153 @@ fn unavatar_dynamics_colliders(
 				position: unity_vec3_to_unavatar_runtime(json_vec3(collider.get("position")).unwrap_or([0.0; 3])),
 				rotation: unity_quat_to_unavatar_runtime(json_vec4(collider.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
 				inside_bounds,
+			})
+		})
+		.collect()
+}
+
+fn unavatar_contact_kind(value: &Value) -> UnaDynamicsContactKind {
+	let kind = value
+		.get("kind")
+		.or_else(|| value.get("contactKind"))
+		.or_else(|| value.get("contact_kind"))
+		.or_else(|| value.get("source"))
+		.and_then(Value::as_str)
+		.unwrap_or("");
+	if kind.eq_ignore_ascii_case("sender") || kind.eq_ignore_ascii_case("vrc_contact_sender") {
+		UnaDynamicsContactKind::Sender
+	} else if kind.eq_ignore_ascii_case("receiver") || kind.eq_ignore_ascii_case("vrc_contact_receiver") {
+		UnaDynamicsContactKind::Receiver
+	} else {
+		UnaDynamicsContactKind::Unknown
+	}
+}
+
+fn unavatar_string_array(value: Option<&Value>) -> Vec<String> {
+	match value {
+		Some(Value::Array(values)) => values
+			.iter()
+			.filter_map(Value::as_str)
+			.filter(|tag| !tag.is_empty())
+			.map(ToOwned::to_owned)
+			.collect(),
+		Some(Value::String(value)) if !value.is_empty() => vec![value.clone()],
+		_ => Vec::new(),
+	}
+}
+
+fn unavatar_dynamics_contacts(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsContact> {
+	let Some(contacts) = unavatar
+		.source
+		.get("contacts")
+		.or_else(|| unavatar.source.get("contactMetadata"))
+		.or_else(|| unavatar.source.get("contact_metadata"))
+		.and_then(Value::as_array)
+	else {
+		return Vec::new();
+	};
+	contacts
+		.iter()
+		.filter_map(|contact| {
+			let node_ref = contact
+				.get("node")
+				.or_else(|| contact.get("root"))
+				.or_else(|| contact.get("component"))?;
+			let node = unavatar_node_ref_index(node_ref, node_ids, registry_paths, paths, normalized_paths)?;
+			Some(UnaDynamicsContact {
+				source_kind: unavatar_dynamics_metadata_source_kind(contact),
+				source_id: contact
+					.get("id")
+					.or_else(|| contact.get("sourceId"))
+					.or_else(|| contact.get("source_id"))
+					.and_then(Value::as_str)
+					.unwrap_or("")
+					.to_string(),
+				node,
+				kind: unavatar_contact_kind(contact),
+				parameter: contact
+					.get("parameter")
+					.or_else(|| contact.get("parameterName"))
+					.or_else(|| contact.get("parameter_name"))
+					.and_then(Value::as_str)
+					.unwrap_or("")
+					.to_string(),
+				collision_tags: unavatar_string_array(
+					contact
+						.get("collisionTags")
+						.or_else(|| contact.get("collision_tags"))
+						.or_else(|| contact.get("tags")),
+				),
+				shape: unavatar_dynamics_collider_shape(contact),
+				radius: json_f32(contact.get("radius")).unwrap_or(0.0).max(0.0),
+				height: json_f32(contact.get("height")).unwrap_or(0.0).max(0.0),
+				position: unity_vec3_to_unavatar_runtime(json_vec3(contact.get("position")).unwrap_or([0.0; 3])),
+				rotation: unity_quat_to_unavatar_runtime(json_vec4(contact.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
+			})
+		})
+		.collect()
+}
+
+fn unavatar_dynamics_constraint_refs(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsConstraintRef> {
+	let Some(constraints) = unavatar
+		.source
+		.get("constraintRefs")
+		.or_else(|| unavatar.source.get("constraint_refs"))
+		.or_else(|| unavatar.source.get("constraints"))
+		.and_then(Value::as_array)
+	else {
+		return Vec::new();
+	};
+	constraints
+		.iter()
+		.filter_map(|constraint| {
+			let target_ref = constraint
+				.get("targetNode")
+				.or_else(|| constraint.get("target_node"))
+				.or_else(|| constraint.get("target"))?;
+			let target_node = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths)?;
+			let source_values = constraint
+				.get("sourceNodes")
+				.or_else(|| constraint.get("source_nodes"))
+				.or_else(|| constraint.get("sources"))
+				.and_then(Value::as_array)
+				.map(Vec::as_slice)
+				.unwrap_or(&[]);
+			let source_nodes = source_values
+				.iter()
+				.filter_map(|source| unavatar_node_ref_index(source, node_ids, registry_paths, paths, normalized_paths))
+				.collect::<Vec<_>>();
+			Some(UnaDynamicsConstraintRef {
+				source_kind: unavatar_dynamics_metadata_source_kind(constraint),
+				source_id: constraint
+					.get("id")
+					.or_else(|| constraint.get("sourceId"))
+					.or_else(|| constraint.get("source_id"))
+					.and_then(Value::as_str)
+					.unwrap_or("")
+					.to_string(),
+				target_node,
+				source_nodes,
+				constraint_type: constraint
+					.get("type")
+					.or_else(|| constraint.get("constraintType"))
+					.or_else(|| constraint.get("constraint_type"))
+					.and_then(Value::as_str)
+					.unwrap_or("")
+					.to_string(),
+				weight: json_f32(constraint.get("weight")).unwrap_or(1.0).clamp(0.0, 1.0),
 			})
 		})
 		.collect()
@@ -1704,6 +1865,8 @@ fn unavatar_dynamics_settings(
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
 	let mut colliders = Vec::new();
+	let contacts = unavatar_dynamics_contacts(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
+	let constraint_refs = unavatar_dynamics_constraint_refs(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 
 	for item in dynamics {
 		if item.get("enabled").and_then(Value::as_bool) == Some(false) {
@@ -1816,17 +1979,21 @@ fn unavatar_dynamics_settings(
 	if endpoint_child_count > 0 {
 		report.push_info(format!(".unavatar dynamics: synthesized_endpoint_children={endpoint_child_count}"));
 	}
-	if groups.is_empty() {
+	if groups.is_empty() && colliders.is_empty() && contacts.is_empty() && constraint_refs.is_empty() {
 		None
 	} else {
 		report.push_info(format!(
-			".unavatar dynamics: lowered_groups={} lowered_colliders={}",
+			".unavatar dynamics: lowered_groups={} lowered_colliders={} contacts={} constraint_refs={}",
 			groups.len(),
-			colliders.len()
+			colliders.len(),
+			contacts.len(),
+			constraint_refs.len()
 		));
 		Some(UnaSpringBoneSettings {
 			groups,
 			colliders,
+			contacts,
+			constraint_refs,
 			..Default::default()
 		})
 	}
@@ -8477,6 +8644,26 @@ mod tests {
 					{"nodeId": "node_root", "path": "Root"},
 					{"nodeId": "node_tip", "path": "Root/Tip"}
 				],
+				"contacts": [{
+					"id": "contact_hand",
+					"source": "vrc_contact_receiver",
+					"node": {"nodeId": "node_tip", "path": "Root/Tip"},
+					"kind": "receiver",
+					"parameter": "ContactHand",
+					"collisionTags": ["Hand", "Interact"],
+					"shape": "sphere",
+					"radius": 0.05,
+					"position": [0.1, 0.2, 0.3],
+					"rotation": [0.0, 0.5, 0.0, 0.8660254]
+				}],
+				"constraintRefs": [{
+					"id": "constraint_parent",
+					"source": "vrc_parent_constraint",
+					"targetNode": {"nodeId": "node_tip", "path": "Root/Tip"},
+					"sourceNodes": [{"nodeId": "node_root", "path": "Root"}],
+					"type": "parent",
+					"weight": 0.75
+				}],
 				"dynamics": [{
 					"id": "hair_front",
 					"source": "vrc_physbone",
@@ -8557,6 +8744,20 @@ mod tests {
 		assert!(!settings.colliders[0].inside_bounds);
 		assert_eq!(settings.colliders[1].radius, 0.2);
 		assert!(settings.colliders[1].inside_bounds);
+		assert_eq!(settings.contacts.len(), 1);
+		assert_eq!(settings.contacts[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.contacts[0].kind, UnaDynamicsContactKind::Receiver);
+		assert_eq!(settings.contacts[0].node, 1);
+		assert_eq!(settings.contacts[0].parameter, "ContactHand");
+		assert_eq!(settings.contacts[0].collision_tags, vec!["Hand", "Interact"]);
+		assert_eq!(settings.contacts[0].position, [-0.1, 0.2, 0.3]);
+		assert_eq!(settings.contacts[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
+		assert_eq!(settings.constraint_refs.len(), 1);
+		assert_eq!(settings.constraint_refs[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.constraint_refs[0].target_node, 1);
+		assert_eq!(settings.constraint_refs[0].source_nodes, vec![0]);
+		assert_eq!(settings.constraint_refs[0].constraint_type, "parent");
+		assert_eq!(settings.constraint_refs[0].weight, 0.75);
 	}
 
 	#[test]
