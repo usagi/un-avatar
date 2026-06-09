@@ -4,7 +4,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{
+	borrow::Cow,
+	collections::{BTreeMap, BTreeSet},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1616,6 +1619,50 @@ impl UnaSceneSnapshot {
 		}
 		counts
 	}
+
+	pub fn scoped_asset_selection(&self, active_asset_groups: &[String]) -> UnaSceneScopedAssetSelection {
+		if active_asset_groups.is_empty() {
+			return UnaSceneScopedAssetSelection::default();
+		}
+		let mut remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
+		let mut owned_active_groups = BTreeSet::new();
+		let mut mesh_primitives = BTreeSet::<(usize, usize)>::new();
+		let mut materials = BTreeSet::new();
+		let mut images = BTreeSet::new();
+		let mut dynamics_source_ids = BTreeSet::new();
+		for group in &self.asset_group_ownership {
+			if !remaining_active_groups.contains(&group.group_id) {
+				continue;
+			}
+			owned_active_groups.insert(group.group_id.clone());
+			mesh_primitives.extend(
+				group
+					.mesh_primitives
+					.iter()
+					.map(|primitive| (primitive.mesh_index, primitive.primitive_index)),
+			);
+			materials.extend(group.materials.iter().copied());
+			images.extend(group.images.iter().copied());
+			dynamics_source_ids.extend(group.dynamics_source_ids.iter().cloned());
+		}
+		for group in &owned_active_groups {
+			remaining_active_groups.remove(group);
+		}
+		UnaSceneScopedAssetSelection {
+			owned_active_groups: owned_active_groups.into_iter().collect(),
+			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
+			mesh_primitives: mesh_primitives
+				.into_iter()
+				.map(|(mesh_index, primitive_index)| UnaMeshPrimitiveKey {
+					mesh_index,
+					primitive_index,
+				})
+				.collect(),
+			materials: materials.into_iter().collect(),
+			images: images.into_iter().collect(),
+			dynamics_source_ids: dynamics_source_ids.into_iter().collect(),
+		}
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1644,6 +1691,16 @@ pub struct UnaSceneAssetGroupOwnershipCounts {
 	pub materials: usize,
 	pub images: usize,
 	pub dynamics: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UnaSceneScopedAssetSelection {
+	pub owned_active_groups: Vec<String>,
+	pub missing_active_asset_groups: Vec<String>,
+	pub mesh_primitives: Vec<UnaMeshPrimitiveKey>,
+	pub materials: Vec<usize>,
+	pub images: Vec<usize>,
+	pub dynamics_source_ids: Vec<String>,
 }
 
 pub fn resolved_scene_roots<'a>(nodes: &[UnaSceneNode], roots: &'a [usize]) -> Cow<'a, [usize]> {
@@ -4031,6 +4088,56 @@ mod tests {
 				dynamics: 1,
 			}
 		);
+	}
+
+	#[test]
+	fn scene_scoped_asset_selection_lists_active_group_assets() {
+		let scene = UnaSceneSnapshot {
+			asset_group_ownership: vec![
+				UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					mesh_primitives: vec![
+						UnaMeshPrimitiveKey {
+							mesh_index: 2,
+							primitive_index: 1,
+						},
+						UnaMeshPrimitiveKey {
+							mesh_index: 2,
+							primitive_index: 1,
+						},
+					],
+					materials: vec![5, 3, 3],
+					images: vec![7, 4, 7],
+					dynamics_source_ids: vec!["physbone:coat".to_string()],
+				},
+				UnaSceneAssetGroupOwnership {
+					group_id: "avatar:base".to_string(),
+					mesh_primitives: vec![UnaMeshPrimitiveKey {
+						mesh_index: 0,
+						primitive_index: 0,
+					}],
+					materials: vec![0],
+					images: vec![0],
+					dynamics_source_ids: vec!["spring:base".to_string()],
+				},
+			],
+			..Default::default()
+		};
+
+		let selection =
+			scene.scoped_asset_selection(&["outfit:coat".to_string(), "missing:hat".to_string()]);
+		assert_eq!(selection.owned_active_groups, vec!["outfit:coat".to_string()]);
+		assert_eq!(selection.missing_active_asset_groups, vec!["missing:hat".to_string()]);
+		assert_eq!(
+			selection.mesh_primitives,
+			vec![UnaMeshPrimitiveKey {
+				mesh_index: 2,
+				primitive_index: 1,
+			}]
+		);
+		assert_eq!(selection.materials, vec![3, 5]);
+		assert_eq!(selection.images, vec![4, 7]);
+		assert_eq!(selection.dynamics_source_ids, vec!["physbone:coat".to_string()]);
 	}
 
 	#[test]

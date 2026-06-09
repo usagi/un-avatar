@@ -15,7 +15,7 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{
 	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey,
-	UnaMeshPrimitiveKey, UnaSceneNode,
+	UnaSceneNode,
 };
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -140,65 +140,19 @@ impl WardrobeScopedUploadWork {
 	}
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct WardrobeScopedSourceAssetWork {
-	owned_active_groups: Vec<String>,
-	missing_active_asset_groups: Vec<String>,
-	mesh_primitives: Vec<UnaMeshPrimitiveKey>,
-	materials: Vec<usize>,
-	images: Vec<usize>,
-	dynamics_source_ids: Vec<String>,
-}
-
-fn wardrobe_scoped_source_asset_work_for_document(document: &UnaDocument) -> WardrobeScopedSourceAssetWork {
+fn wardrobe_scoped_source_asset_work_for_document(document: &UnaDocument) -> un_avatar_core::UnaSceneScopedAssetSelection {
 	let active_asset_groups = document.runtime_model().active_asset_groups();
 	if active_asset_groups.is_empty() {
-		return WardrobeScopedSourceAssetWork::default();
+		return un_avatar_core::UnaSceneScopedAssetSelection::default();
 	}
-	let mut remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
+	let remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
 	let Some(scene) = document.scene.as_ref() else {
-		return WardrobeScopedSourceAssetWork {
+		return un_avatar_core::UnaSceneScopedAssetSelection {
 			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
 			..Default::default()
 		};
 	};
-	let mut owned_active_groups = BTreeSet::new();
-	let mut mesh_primitives = BTreeSet::<(usize, usize)>::new();
-	let mut materials = BTreeSet::new();
-	let mut images = BTreeSet::new();
-	let mut dynamics_source_ids = BTreeSet::new();
-	for group in &scene.asset_group_ownership {
-		if !remaining_active_groups.contains(&group.group_id) {
-			continue;
-		}
-		owned_active_groups.insert(group.group_id.clone());
-		mesh_primitives.extend(
-			group
-				.mesh_primitives
-				.iter()
-				.map(|primitive| (primitive.mesh_index, primitive.primitive_index)),
-		);
-		materials.extend(group.materials.iter().copied());
-		images.extend(group.images.iter().copied());
-		dynamics_source_ids.extend(group.dynamics_source_ids.iter().cloned());
-	}
-	for group in &owned_active_groups {
-		remaining_active_groups.remove(group);
-	}
-	WardrobeScopedSourceAssetWork {
-		owned_active_groups: owned_active_groups.into_iter().collect(),
-		missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
-		mesh_primitives: mesh_primitives
-			.into_iter()
-			.map(|(mesh_index, primitive_index)| UnaMeshPrimitiveKey {
-				mesh_index,
-				primitive_index,
-			})
-			.collect(),
-		materials: materials.into_iter().collect(),
-		images: images.into_iter().collect(),
-		dynamics_source_ids: dynamics_source_ids.into_iter().collect(),
-	}
+	scene.scoped_asset_selection(active_asset_groups)
 }
 
 fn wardrobe_scoped_upload_work_for_active_gaps(active_gaps: Option<SceneMeshActiveResidencyGaps>) -> WardrobeScopedUploadWork {
