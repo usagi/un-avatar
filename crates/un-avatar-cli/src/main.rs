@@ -537,6 +537,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_menu_graph_candidates: Vec<DiagnoseModularAvatarMenuGraphCandidate>,
 	modular_avatar_menu_graph_node_count: usize,
 	modular_avatar_menu_graph_nodes: Vec<DiagnoseModularAvatarMenuGraphNode>,
+	modular_avatar_menu_install_edge_count: usize,
+	modular_avatar_menu_install_edges: Vec<DiagnoseModularAvatarMenuInstallEdge>,
 	modular_avatar_parameter_count: usize,
 	modular_avatar_parameters: Vec<DiagnoseModularAvatarParameterSummary>,
 	modular_avatar_vertex_filter_group_count: usize,
@@ -647,6 +649,22 @@ struct DiagnoseModularAvatarMenuGraphNode {
 	install_target_menu_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	installer_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DiagnoseModularAvatarMenuInstallEdge {
+	source_component_index: usize,
+	source_kind: String,
+	target_kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_hierarchy_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	installer_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_to_append_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	install_target_menu_path: Option<String>,
+	ignored_by_install_target: bool,
 }
 
 #[derive(Serialize)]
@@ -2503,6 +2521,57 @@ fn modular_avatar_menu_graph_nodes(candidates: &[DiagnoseModularAvatarMenuGraphC
 	nodes
 }
 
+fn modular_avatar_menu_install_edges(
+	components: &[DiagnoseModularAvatarMenuComponentSummary],
+) -> Vec<DiagnoseModularAvatarMenuInstallEdge> {
+	let referenced_installers = components
+		.iter()
+		.filter(|component| component.short_type == "ModularAvatarMenuInstallTarget")
+		.filter_map(|component| component.installer_path.as_deref())
+		.collect::<BTreeSet<_>>();
+	let mut edges = components
+		.iter()
+		.filter_map(|component| match component.short_type.as_str() {
+			"ModularAvatarMenuInstaller" => {
+				let ignored_by_install_target = component
+					.hierarchy_path
+					.as_deref()
+					.is_some_and(|path| referenced_installers.contains(path));
+				(component.menu_to_append_path.is_some() || component.install_target_menu_path.is_some()).then(|| {
+					DiagnoseModularAvatarMenuInstallEdge {
+						source_component_index: component.component_index,
+						source_kind: "installer".to_string(),
+						target_kind: "target_menu".to_string(),
+						source_hierarchy_path: component.hierarchy_path.clone(),
+						installer_path: None,
+						menu_to_append_path: component.menu_to_append_path.clone(),
+						install_target_menu_path: component.install_target_menu_path.clone(),
+						ignored_by_install_target,
+					}
+				})
+			}
+			"ModularAvatarMenuInstallTarget" => {
+				component
+					.installer_path
+					.as_ref()
+					.map(|installer_path| DiagnoseModularAvatarMenuInstallEdge {
+						source_component_index: component.component_index,
+						source_kind: "install_target".to_string(),
+						target_kind: "installer".to_string(),
+						source_hierarchy_path: component.hierarchy_path.clone(),
+						installer_path: Some(installer_path.clone()),
+						menu_to_append_path: None,
+						install_target_menu_path: None,
+						ignored_by_install_target: false,
+					})
+			}
+			_ => None,
+		})
+		.collect::<Vec<_>>();
+	edges.sort_by(|a, b| (a.source_component_index, a.source_kind.as_str()).cmp(&(b.source_component_index, b.source_kind.as_str())));
+	edges
+}
+
 fn modular_avatar_menu_graph_candidate_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarMenuItem" => "control",
@@ -2829,6 +2898,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		.collect();
 	let modular_avatar_menu_graph_candidates = modular_avatar_menu_graph_candidates(&modular_avatar_menu_components);
 	let modular_avatar_menu_graph_nodes = modular_avatar_menu_graph_nodes(&modular_avatar_menu_graph_candidates);
+	let modular_avatar_menu_install_edges = modular_avatar_menu_install_edges(&modular_avatar_menu_components);
 
 	DiagnoseUnavatarSummary {
 		spec_version: ext.spec_version.clone(),
@@ -2848,6 +2918,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_menu_graph_candidates,
 		modular_avatar_menu_graph_node_count: modular_avatar_menu_graph_nodes.len(),
 		modular_avatar_menu_graph_nodes,
+		modular_avatar_menu_install_edge_count: modular_avatar_menu_install_edges.len(),
+		modular_avatar_menu_install_edges,
 		modular_avatar_parameter_count: modular_avatar_parameters.len(),
 		modular_avatar_parameters,
 		modular_avatar_vertex_filter_group_count: modular_avatar_vertex_filter_groups.len(),
@@ -3885,6 +3957,19 @@ fn run_diagnose(
 				node.installer_path
 			);
 		}
+		for edge in unavatar.modular_avatar_menu_install_edges.iter().take(16) {
+			println!(
+				"unavatar.ma_menu_install_edge[#{}]: source={} target={} hierarchy={:?} installer={:?} menu_to_append={:?} install_target_menu={:?} ignored_by_install_target={}",
+				edge.source_component_index,
+				edge.source_kind,
+				edge.target_kind,
+				edge.source_hierarchy_path,
+				edge.installer_path,
+				edge.menu_to_append_path,
+				edge.install_target_menu_path,
+				edge.ignored_by_install_target
+			);
+		}
 		for parameter in unavatar.modular_avatar_parameters.iter().take(16) {
 			println!(
 				"unavatar.ma_parameter[#{}]: name={} remap={:?} internal={} prefix={} sync={} local_only={} default={} explicit_default={} saved={} override_animator_defaults={}",
@@ -4524,6 +4609,13 @@ mod tests {
 							"menuToAppend": {"path": "Menus/Root"},
 							"installTargetMenu": {"path": "Avatar/Menu"}
 						}, {
+							"shortType": "ModularAvatarMenuInstallTarget",
+							"enabled": true,
+							"id": "install-target-root",
+							"hierarchyPath": "Root/InstallTarget",
+							"siblingIndex": 3,
+							"installer": {"path": "Root/MenuInstaller"}
+						}, {
 							"shortType": "ModularAvatarMeshCutter",
 							"enabled": false,
 							"id": "cut-sleeve",
@@ -4592,10 +4684,10 @@ mod tests {
 			vec!["physbone:jacket".to_string()]
 		);
 		assert_eq!(unavatar.asset_group_count, 3);
-		assert_eq!(unavatar.modular_avatar_component_count, 8);
+		assert_eq!(unavatar.modular_avatar_component_count, 9);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&5));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&6));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
@@ -4603,14 +4695,16 @@ mod tests {
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarParameters"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuGroup"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuInstaller"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuInstallTarget"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
 		assert_eq!(
 			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
 			Some(&1)
 		);
-		assert_eq!(unavatar.modular_avatar_menu_component_count, 4);
-		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 4);
-		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 4);
+		assert_eq!(unavatar.modular_avatar_menu_component_count, 5);
+		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 5);
+		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 5);
+		assert_eq!(unavatar.modular_avatar_menu_install_edge_count, 2);
 		assert_eq!(unavatar.modular_avatar_vertex_filter_group_count, 1);
 		let menu = &unavatar.modular_avatar_menu_components[0];
 		assert_eq!(menu.component_index, 2);
@@ -4639,12 +4733,17 @@ mod tests {
 		assert_eq!(group_candidate.hierarchy_path.as_deref(), Some("Root/Accessories"));
 		assert_eq!(group_candidate.sibling_index, Some(2));
 		assert_eq!(group_candidate.target_path.as_deref(), Some("Root/Accessories"));
-		let control_candidate = &unavatar.modular_avatar_menu_graph_candidates[2];
+		let install_target_candidate = &unavatar.modular_avatar_menu_graph_candidates[2];
+		assert_eq!(install_target_candidate.component_index, 7);
+		assert_eq!(install_target_candidate.kind, "install_target");
+		assert_eq!(install_target_candidate.sibling_index, Some(3));
+		assert_eq!(install_target_candidate.installer_path.as_deref(), Some("Root/MenuInstaller"));
+		let control_candidate = &unavatar.modular_avatar_menu_graph_candidates[3];
 		assert_eq!(control_candidate.component_index, 2);
 		assert_eq!(control_candidate.kind, "control");
 		assert_eq!(control_candidate.label.as_deref(), Some("Hat"));
 		assert_eq!(control_candidate.sibling_index, Some(4));
-		let nested_control_candidate = &unavatar.modular_avatar_menu_graph_candidates[3];
+		let nested_control_candidate = &unavatar.modular_avatar_menu_graph_candidates[4];
 		assert_eq!(nested_control_candidate.component_index, 5);
 		assert_eq!(nested_control_candidate.kind, "control");
 		assert_eq!(nested_control_candidate.label.as_deref(), Some("Glasses"));
@@ -4652,10 +4751,27 @@ mod tests {
 		let group_node = &unavatar.modular_avatar_menu_graph_nodes[1];
 		assert_eq!(group_node.component_index, 4);
 		assert_eq!(group_node.child_component_indices, vec![5]);
-		let nested_node = &unavatar.modular_avatar_menu_graph_nodes[3];
+		let nested_node = &unavatar.modular_avatar_menu_graph_nodes[4];
 		assert_eq!(nested_node.component_index, 5);
 		assert_eq!(nested_node.parent_node_index, Some(1));
 		assert_eq!(nested_node.parent_component_index, Some(4));
+		let install_target_node = &unavatar.modular_avatar_menu_graph_nodes[2];
+		assert_eq!(install_target_node.component_index, 7);
+		assert_eq!(install_target_node.kind, "install_target");
+		assert_eq!(install_target_node.installer_path.as_deref(), Some("Root/MenuInstaller"));
+		let installer_edge = &unavatar.modular_avatar_menu_install_edges[0];
+		assert_eq!(installer_edge.source_component_index, 6);
+		assert_eq!(installer_edge.source_kind, "installer");
+		assert_eq!(installer_edge.target_kind, "target_menu");
+		assert_eq!(installer_edge.menu_to_append_path.as_deref(), Some("Menus/Root"));
+		assert_eq!(installer_edge.install_target_menu_path.as_deref(), Some("Avatar/Menu"));
+		assert!(installer_edge.ignored_by_install_target);
+		let install_target_edge = &unavatar.modular_avatar_menu_install_edges[1];
+		assert_eq!(install_target_edge.source_component_index, 7);
+		assert_eq!(install_target_edge.source_kind, "install_target");
+		assert_eq!(install_target_edge.target_kind, "installer");
+		assert_eq!(install_target_edge.installer_path.as_deref(), Some("Root/MenuInstaller"));
+		assert!(!install_target_edge.ignored_by_install_target);
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
