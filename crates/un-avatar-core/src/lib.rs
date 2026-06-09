@@ -764,6 +764,61 @@ pub struct UnaSpringBoneGroup {
 	pub bone_node_indices: Vec<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UnaDynamicsParameters {
+	pub stiffness: f32,
+	pub gravity_power: f32,
+	pub gravity_dir: [f32; 3],
+	pub drag_force: f32,
+	pub center_node: Option<usize>,
+	pub hit_radius: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UnaDynamicsChain<'a> {
+	pub bone_node_indices: &'a [usize],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnaDynamicsGroup<'a> {
+	pub source_kind: UnaDynamicsSourceKind,
+	pub authored_enabled: bool,
+	pub effective_enabled: bool,
+	pub source_id: &'a str,
+	pub comment: &'a str,
+	pub category: &'a str,
+	pub parameters: UnaDynamicsParameters,
+	pub chain: UnaDynamicsChain<'a>,
+	pub limit: Option<&'a UnaDynamicsLimit>,
+	pub interaction: Option<&'a UnaDynamicsInteraction>,
+}
+
+impl<'a> UnaDynamicsGroup<'a> {
+	fn from_spring_bone_group(group: &'a UnaSpringBoneGroup, effective_enabled: bool) -> Self {
+		Self {
+			source_kind: group.source_kind,
+			authored_enabled: group.enabled,
+			effective_enabled,
+			source_id: &group.source_id,
+			comment: &group.comment,
+			category: &group.category,
+			parameters: UnaDynamicsParameters {
+				stiffness: group.stiffness,
+				gravity_power: group.gravity_power,
+				gravity_dir: group.gravity_dir,
+				drag_force: group.drag_force,
+				center_node: group.center_node,
+				hit_radius: group.hit_radius,
+			},
+			chain: UnaDynamicsChain {
+				bone_node_indices: &group.bone_node_indices,
+			},
+			limit: group.limit.as_ref(),
+			interaction: group.interaction.as_ref(),
+		}
+	}
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaDynamicsLimit {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -886,6 +941,12 @@ impl<'a> UnaRuntimeDynamics<'a> {
 
 	pub fn group(self, index: usize) -> Option<&'a UnaSpringBoneGroup> {
 		self.groups().get(index)
+	}
+
+	pub fn dynamics_groups(self) -> impl Iterator<Item = UnaDynamicsGroup<'a>> + 'a {
+		self.groups()
+			.iter()
+			.map(move |group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
 	}
 
 	pub fn has_groups(self) -> bool {
@@ -4797,6 +4858,64 @@ mod tests {
 		assert!(dynamics.group_enabled(&groups[1]));
 		assert_eq!(dynamics.counts().runtime_enabled_overrides, 0);
 		assert!(document.runtime_state.dynamics_enabled_overrides.is_empty());
+	}
+
+	#[test]
+	fn runtime_dynamics_exposes_source_neutral_group_views() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:hair".to_string(),
+					comment: "Hair".to_string(),
+					category: "hair".to_string(),
+					enabled: false,
+					stiffness: 0.7,
+					gravity_power: 0.2,
+					gravity_dir: [0.0, -1.0, 0.0],
+					drag_force: 0.3,
+					center_node: Some(10),
+					hit_radius: 0.04,
+					limit: Some(UnaDynamicsLimit {
+						limit_type: "angle".to_string(),
+						max_angle_x: 45.0,
+						max_angle_z: 25.0,
+						max_stretch: 0.1,
+					}),
+					interaction: Some(UnaDynamicsInteraction {
+						allow_grabbing: Some(true),
+						allow_posing: Some(false),
+					}),
+					bone_node_indices: vec![1, 2, 3],
+				}],
+				colliders: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document
+			.runtime_state
+			.dynamics_enabled_overrides
+			.insert("physbone:hair".to_string(), true);
+
+		let dynamics = document.runtime_model().dynamics();
+		let groups = dynamics.dynamics_groups().collect::<Vec<_>>();
+		assert_eq!(groups.len(), 1);
+		let group = groups[0];
+		assert_eq!(group.source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert!(!group.authored_enabled);
+		assert!(group.effective_enabled);
+		assert_eq!(group.source_id, "physbone:hair");
+		assert_eq!(group.comment, "Hair");
+		assert_eq!(group.category, "hair");
+		assert_eq!(group.parameters.stiffness, 0.7);
+		assert_eq!(group.parameters.gravity_power, 0.2);
+		assert_eq!(group.parameters.drag_force, 0.3);
+		assert_eq!(group.parameters.center_node, Some(10));
+		assert_eq!(group.parameters.hit_radius, 0.04);
+		assert_eq!(group.chain.bone_node_indices, &[1, 2, 3]);
+		assert_eq!(group.limit.unwrap().limit_type, "angle");
+		assert_eq!(group.interaction.unwrap().allow_grabbing, Some(true));
 	}
 
 	#[test]
