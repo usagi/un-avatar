@@ -7389,6 +7389,27 @@ impl SceneMeshes {
 		}
 	}
 
+	fn rebuild_draw_material_bind_groups(&mut self, device: &wgpu::Device, draw_index: usize) {
+		let (bind_material, bind_outline_material) = create_mesh_material_bind_groups(
+			device,
+			&self.material_layout,
+			&self.outline_material_layout,
+			self.shader_variant_tier,
+			&self.texture_views,
+			&self._samplers,
+			&self.image_sampler_indices,
+			&self.reflection_cube_sampler,
+			MeshMaterialBindingSource {
+				material: &self.draws[draw_index].material,
+				draw_transform: &self.draws[draw_index].draw_transform,
+				draw_material: &self.draws[draw_index].draw_material,
+			},
+		);
+		let draw = &mut self.draws[draw_index];
+		draw.bind_material = bind_material;
+		draw.bind_outline_material = bind_outline_material;
+	}
+
 	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
 		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
@@ -7417,24 +7438,7 @@ impl SceneMeshes {
 					mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			}
-			let (bind_material, bind_outline_material) = create_mesh_material_bind_groups(
-				device,
-				&self.material_layout,
-				&self.outline_material_layout,
-				self.shader_variant_tier,
-				&self.texture_views,
-				&self._samplers,
-				&self.image_sampler_indices,
-				&self.reflection_cube_sampler,
-				MeshMaterialBindingSource {
-					material: &self.draws[draw_index].material,
-					draw_transform: &self.draws[draw_index].draw_transform,
-					draw_material: &self.draws[draw_index].draw_material,
-				},
-			);
-			let draw = &mut self.draws[draw_index];
-			draw.bind_material = bind_material;
-			draw.bind_outline_material = bind_outline_material;
+			self.rebuild_draw_material_bind_groups(device, draw_index);
 			changed += 1;
 		}
 		if changed > 0 {
