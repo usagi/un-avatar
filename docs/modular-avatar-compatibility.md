@@ -47,6 +47,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 この問題は `Hair_Base` 単体の特殊修正ではなく、Modular Avatar bake 相当 resolver の Bone Proxy 対応として直す。MergeArmature / MeshRetargeter は別の衣装 armature 対応として継続する。
 
+2026-06-09 時点で、これまで見つかっていた visual regression はユーザー目視確認により期待動作まで解決済み。
+
 ## Compatibility Checklist
 
 ### Component Discovery / Serialization
@@ -184,12 +186,12 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` BoneProxy numeric test
   - done: one-node `AsChildKeepWorldPose` reparent keeps world position and updates parent hierarchy; nested proxy test preserves child world pose when parent proxy snaps to target; numeric coverage now checks `AsChildAtRoot`, `AsChildKeepPosition`, `AsChildKeepRotation`, `AsChildKeepWorldPose`, `matchScale`, duplicate target child names, and missing target reporting.
   - remaining: broader component interaction fixture coverage.
-- `[ ]` visual regression screenshots
-  - required: front/back/detail views for mizuki field_drape after each resolver milestone.
+- `[x]` visual regression screenshots / visual checks
+  - done: existing `mizuki-split` visual regressions were visually confirmed as resolved on 2026-06-09.
 
 ## Near-Term Order
 
-1. Regression: verify Runtime Bone Proxy resolver removes the `Hair_Base` neck/back artifact in `mizuki-split`.
-2. Runtime: implement MergeArmature / MeshRetargeter resolver on scene snapshot before GPU upload.
-3. Runtime: implement MeshSettings rootBone / bounds / probeAnchor handling.
-4. Add schema / numeric tests for each resolver stage.
+1. Preserve MA Menu Item / Menu Group / Menu Installer hierarchy metadata and diagnostics.
+2. Implement ReactiveComponent `Inverted` / parent active condition runtime action evaluation.
+3. Introduce Mesh Cutter / Shape Changer vertex filter representation.
+4. Add Wardrobe asset group lazy GPU upload / unload.
