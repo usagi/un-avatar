@@ -42,7 +42,7 @@ namespace UNAvatar.UnityExporter
                 ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
-                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets),
+                ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets, dynamicsPayload),
                 ["modularAvatar"] = BuildModularAvatarPayload(registryRoot),
                 ["provenance"] = new Dictionary<string, object>
                 {
@@ -799,7 +799,8 @@ namespace UNAvatar.UnityExporter
             WardrobeSnapshotDraft exportBaseSnapshot = null,
             List<WardrobeSetDraft> exportWardrobeSets = null,
             GameObject referenceRoot = null,
-            List<UnavatarRendererAssetRecord> rendererAssets = null)
+            List<UnavatarRendererAssetRecord> rendererAssets = null,
+            List<object> dynamicsPayload = null)
         {
             var rootForReference = referenceRoot != null ? referenceRoot : avatarRoot;
             var hasExportBaseSnapshot = exportBaseSnapshot != null && exportBaseSnapshot.nodes.Count > 0;
@@ -854,7 +855,7 @@ namespace UNAvatar.UnityExporter
                 ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
-            var assetGroupOwnership = BuildWardrobeAssetGroupOwnership(rendererAssets, declaredAssetGroups);
+            var assetGroupOwnership = BuildWardrobeAssetGroupOwnership(rendererAssets, dynamicsPayload, declaredAssetGroups);
             if (assetGroupOwnership.Count > 0)
             {
                 wardrobe["assetGroupOwnership"] = assetGroupOwnership;
@@ -882,6 +883,7 @@ namespace UNAvatar.UnityExporter
             public readonly List<object> MeshPrimitives = new List<object>();
             public readonly List<int> Materials = new List<int>();
             public readonly List<int> Images = new List<int>();
+            public readonly List<string> DynamicsSourceIds = new List<string>();
             private readonly HashSet<string> meshPrimitiveKeys = new HashSet<string>(StringComparer.Ordinal);
 
             public void Add(UnavatarRendererAssetRecord record)
@@ -912,29 +914,61 @@ namespace UNAvatar.UnityExporter
                 AddUniqueSorted(Materials, record.materials);
                 AddUniqueSorted(Images, record.images);
             }
+
+            public void AddDynamicSourceId(string sourceId)
+            {
+                if (!string.IsNullOrWhiteSpace(sourceId) && !DynamicsSourceIds.Contains(sourceId))
+                {
+                    DynamicsSourceIds.Add(sourceId);
+                    DynamicsSourceIds.Sort(StringComparer.Ordinal);
+                }
+            }
         }
 
-        private static List<object> BuildWardrobeAssetGroupOwnership(List<UnavatarRendererAssetRecord> rendererAssets, HashSet<string> declaredAssetGroups)
+        private static List<object> BuildWardrobeAssetGroupOwnership(List<UnavatarRendererAssetRecord> rendererAssets, List<object> dynamicsPayload, HashSet<string> declaredAssetGroups)
         {
             var result = new List<object>();
-            if (rendererAssets == null || rendererAssets.Count == 0 || declaredAssetGroups == null || declaredAssetGroups.Count == 0)
+            if ((rendererAssets == null || rendererAssets.Count == 0) && (dynamicsPayload == null || dynamicsPayload.Count == 0))
+            {
+                return result;
+            }
+            if (declaredAssetGroups == null || declaredAssetGroups.Count == 0)
             {
                 return result;
             }
             var byGroup = new Dictionary<string, WardrobeAssetGroupOwnershipBuilder>(StringComparer.Ordinal);
-            foreach (var record in rendererAssets)
+            if (rendererAssets != null)
             {
-                var group = WardrobeSnapshotCapture.AssetGroupForPath(record != null ? record.path : "");
-                if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
+                foreach (var record in rendererAssets)
                 {
-                    continue;
+                    var group = WardrobeSnapshotCapture.AssetGroupForPath(record != null ? record.path : "");
+                    if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
+                    {
+                        continue;
+                    }
+                    GetWardrobeAssetGroupOwnershipBuilder(byGroup, group).Add(record);
                 }
-                if (!byGroup.TryGetValue(group, out var builder))
+            }
+            if (dynamicsPayload != null)
+            {
+                foreach (var dynamicGroup in dynamicsPayload)
                 {
-                    builder = new WardrobeAssetGroupOwnershipBuilder();
-                    byGroup[group] = builder;
+                    if (!(dynamicGroup is Dictionary<string, object> groupPayload))
+                    {
+                        continue;
+                    }
+                    var sourceId = DynamicSourceId(groupPayload);
+                    if (string.IsNullOrWhiteSpace(sourceId))
+                    {
+                        continue;
+                    }
+                    var group = WardrobeSnapshotCapture.AssetGroupForPath(DynamicSourcePath(groupPayload, sourceId));
+                    if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
+                    {
+                        continue;
+                    }
+                    GetWardrobeAssetGroupOwnershipBuilder(byGroup, group).AddDynamicSourceId(sourceId);
                 }
-                builder.Add(record);
             }
             var groups = new List<string>(byGroup.Keys);
             groups.Sort(StringComparer.Ordinal);
@@ -947,10 +981,41 @@ namespace UNAvatar.UnityExporter
                     ["meshPrimitives"] = builder.MeshPrimitives,
                     ["materials"] = IntsToObjectList(builder.Materials),
                     ["images"] = IntsToObjectList(builder.Images),
-                    ["dynamicsSourceIds"] = new List<object>()
+                    ["dynamicsSourceIds"] = StringsToObjectList(builder.DynamicsSourceIds)
                 });
             }
             return result;
+        }
+
+        private static WardrobeAssetGroupOwnershipBuilder GetWardrobeAssetGroupOwnershipBuilder(
+            Dictionary<string, WardrobeAssetGroupOwnershipBuilder> byGroup,
+            string group)
+        {
+            if (!byGroup.TryGetValue(group, out var builder))
+            {
+                builder = new WardrobeAssetGroupOwnershipBuilder();
+                byGroup[group] = builder;
+            }
+            return builder;
+        }
+
+        private static string DynamicSourceId(Dictionary<string, object> groupPayload)
+        {
+            return groupPayload.TryGetValue("id", out var rawId) && rawId is string id ? id : "";
+        }
+
+        private static string DynamicSourcePath(Dictionary<string, object> groupPayload, string sourceId)
+        {
+            if (groupPayload.TryGetValue("component", out var rawComponent) &&
+                rawComponent is Dictionary<string, object> component &&
+                component.TryGetValue("path", out var rawPath) &&
+                rawPath is string path)
+            {
+                return path;
+            }
+            return !string.IsNullOrWhiteSpace(sourceId) && sourceId.StartsWith("physbone:", StringComparison.Ordinal)
+                ? sourceId.Substring("physbone:".Length)
+                : "";
         }
 
         private static void AddUniqueSorted(List<int> target, List<int> values)
@@ -979,6 +1044,20 @@ namespace UNAvatar.UnityExporter
             foreach (var value in values)
             {
                 json.Add(value);
+            }
+            return json;
+        }
+
+        private static List<object> StringsToObjectList(List<string> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                json.Add(value ?? "");
             }
             return json;
         }
