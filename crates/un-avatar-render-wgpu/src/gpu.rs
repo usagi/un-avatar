@@ -14,8 +14,8 @@ use std::{
 
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{
-	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaSceneNode,
-	UnaRuntimeResolverCacheKey,
+	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey,
+	UnaSceneNode,
 };
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -67,17 +67,18 @@ pub(crate) struct RuntimeActionActivation {
 
 fn runtime_action_id_for_parameter(
 	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
 	name: &str,
 	value: f32,
 ) -> Option<String> {
 	let condition_match = actions
 		.actions
 		.iter()
-		.find(|action| action.parameter_condition_state(name, value) == Some(true));
+		.find(|action| action.parameter_condition_state_in_scene(scene, name, value) == Some(true));
 	condition_match
 		.or_else(|| {
 			actions.actions.iter().find(|action| {
-				action.parameter_condition_state(name, value).is_none()
+				action.parameter_condition_state_in_scene(scene, name, value).is_none()
 					&& action.matches_query(UnaRuntimeActionQuery {
 						parameter_name: Some(name),
 						parameter_value: Some(value),
@@ -2744,9 +2745,10 @@ impl GpuState {
 		}
 		let matching_action_id = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			doc.runtime_model()
+			let runtime = doc.runtime_model();
+			runtime
 				.runtime_actions()
-				.and_then(|actions| runtime_action_id_for_parameter(actions, name, value))
+				.and_then(|actions| runtime_action_id_for_parameter(actions, runtime.scene(), name, value))
 		};
 		matching_action_id
 			.map(|action_id| self.activate_runtime_action(Some(&action_id), None, None, None, None))
@@ -4452,8 +4454,8 @@ fn create_startup_splash_pipeline(
 #[cfg(test)]
 mod tests {
 	use super::{
-		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter, transparent_alpha_mode,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
+		transparent_alpha_mode, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 	};
 	use crate::mesh_pass::MeshShaderVariantTier;
@@ -4495,8 +4497,70 @@ mod tests {
 			],
 		};
 
-		assert_eq!(runtime_action_id_for_parameter(&actions, "Hat", 1.0).as_deref(), Some("hat:on"));
-		assert_eq!(runtime_action_id_for_parameter(&actions, "Hat", 0.0).as_deref(), Some("hat:off"));
+		assert_eq!(
+			runtime_action_id_for_parameter(&actions, None, "Hat", 1.0).as_deref(),
+			Some("hat:on")
+		);
+		assert_eq!(
+			runtime_action_id_for_parameter(&actions, None, "Hat", 0.0).as_deref(),
+			Some("hat:off")
+		);
+	}
+
+	#[test]
+	fn runtime_action_parameter_selection_checks_active_parent_nodes() {
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![test_scene_node(vec![1]), test_scene_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "hat:on".to_string(),
+				triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+					name: "Hat".to_string(),
+					value: 1.0,
+				}],
+				conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+					parameter_name: Some("Hat".to_string()),
+					parameter_value: Some(1.0),
+					active_parent_nodes: vec![un_avatar_core::UnaRuntimeNodeTarget {
+						node_index: Some(0),
+						..Default::default()
+					}],
+					..Default::default()
+				}],
+				effects: Vec::new(),
+				..Default::default()
+			}],
+		};
+
+		assert_eq!(
+			runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0).as_deref(),
+			Some("hat:on")
+		);
+		scene.nodes[0].visible = false;
+		assert_eq!(runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0), None);
+	}
+
+	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
+		un_avatar_core::UnaSceneNode {
+			name: None,
+			source_node_id: None,
+			resolved_node_id: None,
+			visible: true,
+			transform: [
+				1.0, 0.0, 0.0, 0.0, //
+				0.0, 1.0, 0.0, 0.0, //
+				0.0, 0.0, 1.0, 0.0, //
+				0.0, 0.0, 0.0, 1.0,
+			],
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
 	}
 
 	#[test]

@@ -180,9 +180,13 @@ impl UnaRuntimeAction {
 	}
 
 	pub fn parameter_condition_state(&self, name: &str, value: f32) -> Option<bool> {
+		self.parameter_condition_state_in_scene(None, name, value)
+	}
+
+	pub fn parameter_condition_state_in_scene(&self, scene: Option<&UnaSceneSnapshot>, name: &str, value: f32) -> Option<bool> {
 		let mut saw_parameter_condition = false;
 		for condition in &self.conditions {
-			if let Some(active) = condition.parameter_condition_matches(name, value) {
+			if let Some(active) = condition.parameter_condition_matches_in_scene(scene, name, value) {
 				saw_parameter_condition = true;
 				if !active {
 					return Some(false);
@@ -216,6 +220,25 @@ impl UnaRuntimeActionCondition {
 		let active = condition_name == name && (value - condition_value).abs() <= UNA_RUNTIME_ACTION_PARAMETER_EPSILON;
 		Some(active ^ self.inverted)
 	}
+
+	pub fn parameter_condition_matches_in_scene(&self, scene: Option<&UnaSceneSnapshot>, name: &str, value: f32) -> Option<bool> {
+		let active = self.parameter_condition_matches(name, value)?;
+		Some(active && self.active_parent_nodes_match(scene))
+	}
+
+	pub fn active_parent_nodes_match(&self, scene: Option<&UnaSceneSnapshot>) -> bool {
+		if self.active_parent_nodes.is_empty() {
+			return true;
+		}
+		let Some(scene) = scene else {
+			return false;
+		};
+		self.active_parent_nodes.iter().all(|target| {
+			resolve_runtime_node_target(scene, target)
+				.and_then(|index| scene.nodes.get(index))
+				.is_some_and(|node| node.visible)
+		})
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -248,10 +271,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarRemoveVertexColor"
 		| "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
-		"ModularAvatarMenuItem"
-		| "ModularAvatarMenuGroup"
-		| "ModularAvatarMenuInstaller"
-		| "ModularAvatarMenuInstallTarget" => "metadata",
+		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget" => "metadata",
 		_ => "unsupported",
 	}
 }
@@ -4537,6 +4557,32 @@ mod tests {
 		assert_eq!(inverted.parameter_condition_state("Hat", 1.0), Some(false));
 		assert_eq!(inverted.parameter_condition_state("Hat", 0.0), Some(true));
 		assert_eq!(UnaRuntimeAction::default().parameter_condition_state("Hat", 1.0), None);
+	}
+
+	#[test]
+	fn runtime_action_condition_checks_active_parent_nodes() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_node(vec![1]), test_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let action = UnaRuntimeAction {
+			conditions: vec![UnaRuntimeActionCondition {
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
+				active_parent_nodes: vec![UnaRuntimeNodeTarget {
+					node_index: Some(0),
+					..Default::default()
+				}],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(true));
+		scene.nodes[0].visible = false;
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(false));
+		assert_eq!(action.parameter_condition_state_in_scene(None, "Hat", 1.0), Some(false));
 	}
 
 	#[test]
