@@ -2762,7 +2762,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.opts.bone_colliders = bone_colliders;
 				self.opts.spring_bone_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
 				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.reconfigure_spring_bones(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
+					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
 				}
 				self.request_redraw();
 			}

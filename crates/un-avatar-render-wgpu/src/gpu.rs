@@ -2799,13 +2799,13 @@ impl GpuState {
 		self.show_bone_colliders = enabled;
 	}
 
-	pub fn reconfigure_spring_bones(
+	pub fn reconfigure_dynamics(
 		&mut self,
 		enabled: bool,
 		bone_collider_config: BoneColliderConfig,
 		spring_bone_physics: SpringBonePhysicsConfig,
 	) {
-		self.reset_spring_bone_nodes_to_rest();
+		self.reset_dynamics_nodes_to_rest();
 		let Some(doc_arc) = self.document.as_ref() else {
 			self.dynamics_sim = None;
 			self.bone_colliders.clear();
@@ -2830,7 +2830,7 @@ impl GpuState {
 		self.bone_colliders = physics.debug_bone_colliders;
 	}
 
-	fn reset_spring_bone_nodes_to_rest(&mut self) {
+	fn reset_dynamics_nodes_to_rest(&mut self) {
 		let (Some(doc_arc), Some(rest_nodes)) = (self.document.as_ref(), self.rest_nodes.as_ref()) else {
 			return;
 		};
