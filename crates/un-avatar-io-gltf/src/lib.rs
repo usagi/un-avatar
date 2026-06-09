@@ -8444,8 +8444,26 @@ mod tests {
 		out
 	}
 
-	#[test]
+#[test]
 	fn import_marks_enabled_unsupported_modular_avatar_component_partial_success() {
+		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(
+			"ModularAvatarWorldFixedObject",
+		);
+	}
+
+	#[test]
+	fn import_marks_world_scale_object_as_unsupported_modular_avatar_component() {
+		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(
+			"ModularAvatarWorldScaleObject",
+		);
+	}
+
+	#[test]
+	fn import_marks_move_independently_as_unsupported_modular_avatar_component() {
+		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of("MAMoveIndependently");
+	}
+
+	fn import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(short_type: &str) {
 		let bin = triangle_bin_bytes();
 		let json = format!(
 			r#"{{
@@ -8475,13 +8493,14 @@ mod tests {
 						"modularAvatar": {{
 							"schemaVersion": "0.1-preview",
 							"components": [{{
-								"shortType": "ModularAvatarWorldFixedObject",
+								"shortType": "{}",
 								"enabled": true
 							}}]
 						}}
 					}}
 				}}
 			}}"#,
+			short_type,
 			bin_len = bin.len()
 		);
 		let bytes = glb_bytes_with_bin(&json, &bin);
@@ -8500,9 +8519,9 @@ mod tests {
 
 		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
 		assert_eq!(got.report.lost_features.len(), 1);
-		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarWorldFixedObject");
+		assert_eq!(got.report.lost_features[0].feature, format!("ModularAvatar.{short_type}"));
 		assert!(got.report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarWorldFixedObject")
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(short_type)
 		}));
 	}
 
