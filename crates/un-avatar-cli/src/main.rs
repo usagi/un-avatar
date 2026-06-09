@@ -80,6 +80,8 @@ struct DiagnoseReport {
 	expressions: Option<DiagnoseExpressionSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	actions: Option<DiagnoseActionSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	menu_action_candidates: Vec<DiagnoseMenuActionCandidate>,
 	dynamics: DiagnoseDynamicsSummary,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	vrm: Option<DiagnoseVrmSummary>,
@@ -437,6 +439,21 @@ struct DiagnoseActionMaterialSlotEffect {
 	primitive_index: Option<usize>,
 	material_index: Option<usize>,
 	material_name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseMenuActionCandidate {
+	menu_component_index: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_label: Option<String>,
+	parameter_name: String,
+	parameter_value: f32,
+	action_id: String,
+	action_label: String,
+	match_kind: String,
+	inverted: bool,
+	effect_count: usize,
+	effect_kinds: BTreeMap<String, usize>,
 }
 
 #[derive(Serialize)]
@@ -3392,6 +3409,7 @@ fn build_diagnose_report(
 		spring_group_count: dynamics.vrm_spring_bone_group_count,
 	});
 	let unavatar = doc.unavatar.as_ref().map(unavatar_summary);
+	let menu_action_candidates = diagnose_menu_action_candidates(unavatar.as_ref(), runtime_model.runtime_actions());
 	if let Some(unavatar) = &unavatar {
 		for set in &unavatar.wardrobe_sets {
 			if set.operation_count > 0 && set.asset_groups.is_empty() {
@@ -3422,6 +3440,7 @@ fn build_diagnose_report(
 		humanoid,
 		expressions,
 		actions,
+		menu_action_candidates,
 		dynamics,
 		vrm,
 		unavatar,
@@ -3617,6 +3636,72 @@ fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a U
 		*counts.entry(runtime_action_effect_kind(effect).to_string()).or_insert(0) += 1;
 	}
 	counts
+}
+
+fn diagnose_menu_action_candidates(
+	unavatar: Option<&DiagnoseUnavatarSummary>,
+	actions: Option<&un_avatar_core::UnaRuntimeActionSet>,
+) -> Vec<DiagnoseMenuActionCandidate> {
+	let Some(unavatar) = unavatar else {
+		return Vec::new();
+	};
+	let Some(actions) = actions else {
+		return Vec::new();
+	};
+	let mut candidates = Vec::new();
+	for menu in &unavatar.modular_avatar_menu_components {
+		let (Some(parameter_name), Some(parameter_value)) = (&menu.parameter, menu.value) else {
+			continue;
+		};
+		for action in &actions.actions {
+			let mut matched = None;
+			for condition in &action.conditions {
+				if condition.parameter_name.as_deref() == Some(parameter_name.as_str())
+					&& condition
+						.parameter_value
+						.is_some_and(|value| (value - parameter_value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON)
+				{
+					matched = Some(("condition", condition.inverted));
+					break;
+				}
+			}
+			if matched.is_none() {
+				for trigger in &action.triggers {
+					if let UnaRuntimeActionTrigger::ParameterValue { name, value } = trigger {
+						if name == parameter_name
+							&& (*value - parameter_value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON
+						{
+							matched = Some(("trigger", false));
+							break;
+						}
+					}
+				}
+			}
+			let Some((match_kind, inverted)) = matched else {
+				continue;
+			};
+			candidates.push(DiagnoseMenuActionCandidate {
+				menu_component_index: menu.component_index,
+				menu_label: menu.label.clone(),
+				parameter_name: parameter_name.clone(),
+				parameter_value,
+				action_id: action.id.clone(),
+				action_label: action.label.clone(),
+				match_kind: match_kind.to_string(),
+				inverted,
+				effect_count: action.effects.len(),
+				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+			});
+		}
+	}
+	candidates.sort_by(|a, b| {
+		(a.menu_component_index, a.action_id.as_str(), a.match_kind.as_str()).cmp(&(
+			b.menu_component_index,
+			b.action_id.as_str(),
+			b.match_kind.as_str(),
+		))
+	});
+	candidates
 }
 
 fn run_diagnose(
@@ -3832,6 +3917,20 @@ fn run_diagnose(
 		}
 	} else {
 		println!("actions: none");
+	}
+	for candidate in report.menu_action_candidates.iter().take(16) {
+		println!(
+			"menu_action_candidate[#{} -> {}]: label={:?} parameter={}:{} match={} inverted={} effects={} {:?}",
+			candidate.menu_component_index,
+			candidate.action_id,
+			candidate.menu_label,
+			candidate.parameter_name,
+			candidate.parameter_value,
+			candidate.match_kind,
+			candidate.inverted,
+			candidate.effect_count,
+			candidate.effect_kinds
+		);
 	}
 	if let Some(vrm) = &report.vrm {
 		println!(
@@ -4528,6 +4627,25 @@ mod tests {
 				}],
 				..Default::default()
 			}),
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "ma:hat".to_string(),
+					label: "Hat Toggle".to_string(),
+					triggers: Vec::new(),
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+						target: un_avatar_core::UnaRuntimeNodeTarget {
+							path: Some("Root/Hat".to_string()),
+							..Default::default()
+						},
+						visible: true,
+					}],
+				}],
+			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
 				spec_version: "0.1-preview".to_string(),
 				source: serde_json::json!({
@@ -4772,6 +4890,16 @@ mod tests {
 		assert_eq!(install_target_edge.target_kind, "installer");
 		assert_eq!(install_target_edge.installer_path.as_deref(), Some("Root/MenuInstaller"));
 		assert!(!install_target_edge.ignored_by_install_target);
+		assert_eq!(report.menu_action_candidates.len(), 1);
+		let menu_action = &report.menu_action_candidates[0];
+		assert_eq!(menu_action.menu_component_index, 2);
+		assert_eq!(menu_action.menu_label.as_deref(), Some("Hat"));
+		assert_eq!(menu_action.parameter_name, "Hat");
+		assert_eq!(menu_action.parameter_value, 1.0);
+		assert_eq!(menu_action.action_id, "ma:hat");
+		assert_eq!(menu_action.match_kind, "condition");
+		assert!(!menu_action.inverted);
+		assert_eq!(menu_action.effect_kinds.get("node_visibility"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
