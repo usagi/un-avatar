@@ -845,6 +845,8 @@ pub struct UnaRuntimeDynamicsMut<'a> {
 pub struct UnaRuntimeDynamicsCounts {
 	pub groups: usize,
 	pub enabled_groups: usize,
+	pub source_enabled_groups: usize,
+	pub runtime_enabled_overrides: usize,
 	pub vrm_spring_bone_groups: usize,
 	pub vrc_physbone_groups: usize,
 	pub unknown_groups: usize,
@@ -910,8 +912,15 @@ impl<'a> UnaRuntimeDynamics<'a> {
 
 	pub fn counts(self) -> UnaRuntimeDynamicsCounts {
 		let mut counts = UnaRuntimeDynamicsCounts::default();
+		counts.runtime_enabled_overrides = self
+			.runtime_state
+			.map(|state| state.dynamics_enabled_overrides.len())
+			.unwrap_or_default();
 		for group in self.groups() {
 			counts.groups += 1;
+			if group.enabled {
+				counts.source_enabled_groups += 1;
+			}
 			if self.group_enabled(group) {
 				counts.enabled_groups += 1;
 			}
@@ -4500,6 +4509,10 @@ mod tests {
 			assert!(!readonly.group_enabled(&groups[1]));
 			assert!(readonly.group_enabled(&groups[2]));
 			assert!(groups.iter().all(|group| group.enabled));
+			let counts = readonly.counts();
+			assert_eq!(counts.enabled_groups, 1);
+			assert_eq!(counts.source_enabled_groups, 3);
+			assert_eq!(counts.runtime_enabled_overrides, 1);
 		}
 		assert_eq!(
 			document.runtime_state.dynamics_enabled_overrides,
@@ -4542,6 +4555,7 @@ mod tests {
 		let groups = dynamics.groups();
 		assert!(!dynamics.group_enabled(&groups[0]));
 		assert!(dynamics.group_enabled(&groups[1]));
+		assert_eq!(dynamics.counts().runtime_enabled_overrides, 0);
 		assert!(document.runtime_state.dynamics_enabled_overrides.is_empty());
 	}
 

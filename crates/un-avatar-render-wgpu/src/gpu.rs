@@ -197,6 +197,8 @@ fn apply_mesh_shader_resource_limits(limits: &mut wgpu::Limits, adapter_limits: 
 pub struct DynamicsRuntimeCounts {
 	pub groups: u32,
 	pub enabled_groups: u32,
+	pub source_enabled_groups: u32,
+	pub runtime_enabled_overrides: u32,
 	pub vrm_spring_bone_groups: u32,
 	pub vrc_physbone_groups: u32,
 	pub unknown_groups: u32,
@@ -211,6 +213,8 @@ impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
 		Self {
 			groups: counts.groups as u32,
 			enabled_groups: counts.enabled_groups as u32,
+			source_enabled_groups: counts.source_enabled_groups as u32,
+			runtime_enabled_overrides: counts.runtime_enabled_overrides as u32,
 			vrm_spring_bone_groups: counts.vrm_spring_bone_groups as u32,
 			vrc_physbone_groups: counts.vrc_physbone_groups as u32,
 			unknown_groups: counts.unknown_groups as u32,

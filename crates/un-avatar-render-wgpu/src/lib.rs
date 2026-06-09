@@ -1549,6 +1549,8 @@ impl AvatarApp {
 				let dynamics = gpu.map_or(Default::default(), |g| g.dynamics_counts());
 				status.dynamics_group_count = dynamics.groups;
 				status.dynamics_enabled_group_count = dynamics.enabled_groups;
+				status.dynamics_source_enabled_group_count = dynamics.source_enabled_groups;
+				status.dynamics_enabled_override_count = dynamics.runtime_enabled_overrides;
 				status.dynamics_vrm_spring_bone_group_count = dynamics.vrm_spring_bone_groups;
 				status.dynamics_vrc_physbone_group_count = dynamics.vrc_physbone_groups;
 				status.dynamics_unknown_group_count = dynamics.unknown_groups;
@@ -3137,6 +3139,10 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_enabled_group_count: u32,
 	#[serde(default)]
+	dynamics_source_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_override_count: u32,
+	#[serde(default)]
 	dynamics_vrm_spring_bone_group_count: u32,
 	#[serde(default)]
 	dynamics_vrc_physbone_group_count: u32,
@@ -3247,6 +3253,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		bone_collider_source: "off".to_string(),
 		dynamics_group_count: 0,
 		dynamics_enabled_group_count: 0,
+		dynamics_source_enabled_group_count: 0,
+		dynamics_enabled_override_count: 0,
 		dynamics_vrm_spring_bone_group_count: 0,
 		dynamics_vrc_physbone_group_count: 0,
 		dynamics_unknown_group_count: 0,

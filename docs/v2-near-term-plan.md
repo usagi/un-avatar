@@ -96,7 +96,7 @@ MVP control command:
 
 - `set_wardrobe` runtime control command は正規化済み set id を受け、適用失敗理由を control response に返す。
 - renderer は wardrobe 適用後に document revision を進め、draw transform / visibility / scene morph default / runtime requirements を次 frame で再読込する。
-- `UnaRuntimeState.active_wardrobe_set` と `active_asset_groups` は wardrobe 適用成功時の resolved runtime state として更新され、`UnaRuntimeState.last_action_id` と `parameter_values` は runtime action 成功時だけ更新される。`UnaRuntimeState.dynamics_enabled_overrides` は wardrobe / runtime action の dynamics enable state を保持する。runtime status は document state から `active_wardrobe_set` / `active_asset_groups` / `last_action_id` / `runtime_parameter_values` を公開する。
+- `UnaRuntimeState.active_wardrobe_set` と `active_asset_groups` は wardrobe 適用成功時の resolved runtime state として更新され、`UnaRuntimeState.last_action_id` と `parameter_values` は runtime action 成功時だけ更新される。`UnaRuntimeState.dynamics_enabled_overrides` は wardrobe / runtime action の dynamics enable state を保持する。runtime status は document state から `active_wardrobe_set` / `active_asset_groups` / `last_action_id` / `runtime_parameter_values` を公開し、dynamics は effective enabled count、source authored enabled count、runtime override count を分けて出す。
 - `dynamicsEnable` は `UnaRuntimeDynamicsMut` 経由で runtime dynamics enable override を切り替え、source group の authored default を直接変更しない。適用件数と missing dynamics id は renderer log で観測できる。
 
 後回し:
@@ -155,7 +155,7 @@ PhysBone behavior implementation は runtime state cleanup、runtime dynamics no
 - PhysBone roots、colliders、enabled state は active wardrobe と animation state に依存する。
 - scene source data を直接 mutate する solver は、hot switch と相性が悪い。
 - 初期実装では VRC PhysBone parameters を既存 SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved runtime dynamics view を入力にする。
-- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data も保持する。`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。VRC PhysBone group は authored default として既定 OFF で、wardrobe `dynamicsEnable` と runtime action `DynamicsEnabled` は runtime state override だけを切り替える。CLI diagnose と renderer runtime status は effective enabled 件数を観測できる。残りは limits solver behavior、detailed collision behavior、grabbing/posing behavior。
+- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data も保持する。`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。VRC PhysBone group は authored default として既定 OFF で、wardrobe `dynamicsEnable` と runtime action `DynamicsEnabled` は runtime state override だけを切り替える。CLI diagnose と renderer runtime status は effective enabled と source authored enabled を分けて観測でき、renderer status は runtime override count も公開する。残りは limits solver behavior、detailed collision behavior、grabbing/posing behavior。
 
 ## この段階の非目標
 
