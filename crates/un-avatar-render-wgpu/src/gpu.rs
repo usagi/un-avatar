@@ -2115,6 +2115,9 @@ pub(crate) struct GpuState {
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	dynamics_sim: Option<DynamicsSimulator>,
+	runtime_dynamics_enabled: bool,
+	runtime_bone_collider_config: BoneColliderConfig,
+	runtime_dynamics_physics: DynamicsPhysicsConfig,
 	bone_colliders: Vec<BoneColliderPrimitive>,
 	aa: AaMode,
 	post_process: Option<PostProcess>,
@@ -2477,6 +2480,9 @@ impl GpuState {
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
 			dynamics_sim,
+			runtime_dynamics_enabled: true,
+			runtime_bone_collider_config: BoneColliderConfig::default(),
+			runtime_dynamics_physics: DynamicsPhysicsConfig::default(),
 			bone_colliders: Vec::new(),
 			bone_collider_count,
 			bone_collider_source,
@@ -2816,7 +2822,14 @@ impl GpuState {
 		bone_collider_config: BoneColliderConfig,
 		spring_bone_physics: DynamicsPhysicsConfig,
 	) {
+		self.runtime_dynamics_enabled = enabled;
+		self.runtime_bone_collider_config = bone_collider_config;
+		self.runtime_dynamics_physics = spring_bone_physics;
 		self.reset_dynamics_nodes_to_rest();
+		self.rebuild_runtime_dynamics();
+	}
+
+	fn rebuild_runtime_dynamics(&mut self) {
 		let Some(doc_arc) = self.document.as_ref() else {
 			self.dynamics_sim = None;
 			self.bone_colliders.clear();
@@ -2830,7 +2843,12 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return;
 		};
-		let physics = build_runtime_physics_for_document(&doc, enabled, bone_collider_config, &spring_bone_physics);
+		let physics = build_runtime_physics_for_document(
+			&doc,
+			self.runtime_dynamics_enabled,
+			self.runtime_bone_collider_config,
+			&self.runtime_dynamics_physics,
+		);
 		self.bone_collider_count = physics.stats.count;
 		self.bone_collider_source = physics.stats.source;
 		self.bone_collider_vertex_buffer = None;
@@ -3767,6 +3785,8 @@ impl GpuState {
 			return Err(format!("runtime dynamics source_id `{source_id}` not found"));
 		}
 		drop(doc);
+		self.reset_dynamics_nodes_to_rest();
+		self.rebuild_runtime_dynamics();
 		self.invalidate_applied_document_state();
 		Ok(())
 	}
@@ -3920,8 +3940,14 @@ impl GpuState {
 			unmotion_zenoh,
 			audio_link,
 			debug_vmc,
+			enable_spring_bones,
+			bone_colliders,
+			spring_bone_physics,
 			..
 		} = options;
+		self.runtime_dynamics_enabled = enable_spring_bones;
+		self.runtime_bone_collider_config = bone_colliders;
+		self.runtime_dynamics_physics = spring_bone_physics;
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
 		self.document = Some(prepared.document);

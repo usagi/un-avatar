@@ -61,7 +61,7 @@ Lowering:
 6. Pending: PhysBone colliders: sphere / capsule / inside bounds の solver 反映を個別 test 付きで追加する。
 7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。
 8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
-9. In progress: Runtime integration: wardrobe hot switch / action / animation state が dynamics enabled state、reset、blend を同じ runtime boundary で扱うようにする。
+9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動と blend は未実装。
 10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。
 
 ## Non Goals For v2 Initial Release
