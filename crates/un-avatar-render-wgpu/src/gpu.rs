@@ -51,6 +51,7 @@ pub(crate) const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
+const WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED: &str = "draw-scoped-resource-scoped";
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
 
@@ -219,7 +220,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
 			if has_ownership && has_active_asset_groups {
-				"draw-scoped-texture-scoped".to_string()
+				WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED.to_string()
 			} else {
 				"all-resident".to_string()
 			}
@@ -329,7 +330,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
 	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
-	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-texture-scoped";
+	plan.scoped_draw_supported =
+		draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED;
 	plan.active_residency_gaps_detected =
 		draw_counts.active_draws_using_inactive_image_texture_count > 0 || draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
@@ -4933,7 +4935,7 @@ mod tests {
 		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
@@ -5172,7 +5174,7 @@ mod tests {
 		assert_eq!(plan.inactive_owned_asset_group_count, 1);
 		assert!(plan.scoped_upload_supported);
 		assert!(!plan.all_resident);
-		assert_eq!(plan.mode, "draw-scoped-texture-scoped");
+		assert_eq!(plan.mode, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED);
 		assert!(plan.reason.contains("mesh buffers, image textures, and cubemap resources are scoped"));
 	}
 
@@ -5235,7 +5237,7 @@ mod tests {
 	fn wardrobe_asset_upload_plan_can_include_renderer_draw_residency_counts() {
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-texture-scoped".to_string(),
+				mode: WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED.to_string(),
 				scoped_upload_supported: true,
 				all_resident: false,
 				..Default::default()
@@ -5297,7 +5299,7 @@ mod tests {
 		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-texture-scoped".to_string(),
+				mode: WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED.to_string(),
 				scoped_upload_supported: true,
 				all_resident: false,
 				..Default::default()
