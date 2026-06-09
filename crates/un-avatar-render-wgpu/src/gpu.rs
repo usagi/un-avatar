@@ -28,8 +28,8 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshAssetResidencyCounts, SceneMeshBuildProgress,
-		SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
+		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts,
+		SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
 	},
 	options::{
 		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
@@ -2944,6 +2944,10 @@ impl GpuState {
 		doc.runtime_model().active_asset_groups().to_vec()
 	}
 
+	pub(crate) fn active_wardrobe_residency_gaps(&self) -> Option<SceneMeshActiveResidencyGaps> {
+		self.scene_meshes.as_ref().map(SceneMeshes::active_residency_gaps)
+	}
+
 	pub(crate) fn wardrobe_asset_upload_plan(&self) -> WardrobeAssetUploadPlan {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return WardrobeAssetUploadPlan::default();
@@ -2951,8 +2955,14 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return WardrobeAssetUploadPlan::default();
 		};
+		let active_gaps = self.active_wardrobe_residency_gaps();
 		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
-		wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts)
+		let mut plan = wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts);
+		if let Some(active_gaps) = active_gaps {
+			plan.active_residency_gaps_detected |= !active_gaps.inactive_image_texture_indices.is_empty()
+				|| !active_gaps.inactive_material_slot_indices.is_empty();
+		}
+		plan
 	}
 
 	pub(crate) fn resolver_cache_key(&self) -> Option<UnaRuntimeResolverCacheKey> {
