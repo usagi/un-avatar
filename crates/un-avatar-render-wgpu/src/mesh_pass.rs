@@ -1270,6 +1270,8 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
 	pub(crate) draws_using_inactive_image_texture_count: usize,
+	pub(crate) active_draws_using_inactive_image_texture_count: usize,
+	pub(crate) inactive_image_textures_used_by_active_draw_count: usize,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -7764,6 +7766,25 @@ impl SceneMeshes {
 					.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
 			})
 			.count();
+		let active_draws_using_inactive_image_texture_count = self
+			.draws
+			.iter()
+			.filter(|draw| {
+				draw.active()
+					&& draw
+						.texture_indices
+						.iter()
+						.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
+			})
+			.count();
+		let inactive_image_textures_used_by_active_draw_count = self
+			.draws
+			.iter()
+			.filter(|draw| draw.active())
+			.flat_map(|draw| draw.texture_indices.iter().copied())
+			.filter(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
+			.collect::<BTreeSet<_>>()
+			.len();
 		let total_material_slot_count = self.material_slot_residency.len();
 		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
 		SceneMeshAssetResidencyCounts {
@@ -7774,6 +7795,8 @@ impl SceneMeshes {
 			resident_image_texture_count,
 			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),
 			draws_using_inactive_image_texture_count,
+			active_draws_using_inactive_image_texture_count,
+			inactive_image_textures_used_by_active_draw_count,
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),

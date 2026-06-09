@@ -89,6 +89,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
 	pub(crate) draws_using_inactive_image_texture_count: usize,
+	pub(crate) active_draws_using_inactive_image_texture_count: usize,
+	pub(crate) inactive_image_textures_used_by_active_draw_count: usize,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -200,6 +202,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		resident_image_texture_count: 0,
 		inactive_image_texture_count: 0,
 		draws_using_inactive_image_texture_count: 0,
+		active_draws_using_inactive_image_texture_count: 0,
+		inactive_image_textures_used_by_active_draw_count: 0,
 		total_material_slot_count: 0,
 		resident_material_slot_count: 0,
 		inactive_material_slot_count: 0,
@@ -236,6 +240,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.resident_image_texture_count = draw_counts.resident_image_texture_count;
 	plan.inactive_image_texture_count = draw_counts.inactive_image_texture_count;
 	plan.draws_using_inactive_image_texture_count = draw_counts.draws_using_inactive_image_texture_count;
+	plan.active_draws_using_inactive_image_texture_count = draw_counts.active_draws_using_inactive_image_texture_count;
+	plan.inactive_image_textures_used_by_active_draw_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
 	plan.total_material_slot_count = draw_counts.total_material_slot_count;
 	plan.resident_material_slot_count = draw_counts.resident_material_slot_count;
 	plan.inactive_material_slot_count = draw_counts.inactive_material_slot_count;
@@ -4864,6 +4870,8 @@ mod tests {
 				resident_image_texture_count: 3,
 				inactive_image_texture_count: 1,
 				draws_using_inactive_image_texture_count: 2,
+				active_draws_using_inactive_image_texture_count: 1,
+				inactive_image_textures_used_by_active_draw_count: 1,
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
@@ -4877,6 +4885,8 @@ mod tests {
 		assert_eq!(plan.resident_image_texture_count, 3);
 		assert_eq!(plan.inactive_image_texture_count, 1);
 		assert_eq!(plan.draws_using_inactive_image_texture_count, 2);
+		assert_eq!(plan.active_draws_using_inactive_image_texture_count, 1);
+		assert_eq!(plan.inactive_image_textures_used_by_active_draw_count, 1);
 		assert_eq!(plan.total_material_slot_count, 5);
 		assert_eq!(plan.resident_material_slot_count, 4);
 		assert_eq!(plan.inactive_material_slot_count, 1);

@@ -4408,6 +4408,8 @@ mod tests {
 				resident_image_texture_count: 3,
 				inactive_image_texture_count: 1,
 				draws_using_inactive_image_texture_count: 2,
+				active_draws_using_inactive_image_texture_count: 1,
+				inactive_image_textures_used_by_active_draw_count: 1,
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
@@ -4445,6 +4447,18 @@ mod tests {
 				.get("draws_using_inactive_image_texture_count")
 				.and_then(|value| value.as_u64()),
 			Some(2)
+		);
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_image_texture_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_image_textures_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
 		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
