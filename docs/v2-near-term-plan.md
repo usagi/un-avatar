@@ -14,7 +14,7 @@
 
 1. 現状の v2 renderer / runtime 実装をほどほどにリファクタリングし、最適化する。
 2. VRC import base の `.unavatar` skinning / morph を既存 GPU skinning / morph pipeline に接続・検証し、UNToon dynamic variant planning の resource reservation に接続する。
-3. VRM SpringBone / VRC PhysBone source を U.N. dynamics runtime model へ lower する正規化境界を設計し、runtime model view に接続する。
+3. VRM SpringBone / VRC PhysBone source を UNPhysics umbrella 下の UNDynamics runtime model へ lower する正規化境界を設計し、runtime model view に接続する。
 4. renderer 再起動なしの Wardrobe hot switch を実装する。
 5. VRC Expression Menu、toggle、hotkey、将来の ring menu emulation 向け runtime action model を作る。
 6. action model の上に imported animation / expression / material / visibility evaluation を足す。
@@ -50,24 +50,25 @@
 - refactor 中も lilToon compatibility behavior を維持する。既知の mismatch 修正に必要でない semantic rewrite は避ける。
 - 広い snapshot churn より、state resolution、resource indexing、command application の focused test を優先する。
 
-## Runtime Dynamics Normalization
+## UNPhysics / UNDynamics Runtime Normalization
 
-SpringBone / PhysBone は source format ごとの physics component ではなく、U.N. Avatar の runtime dynamics model へ正規化してから solver / renderer へ渡す。
+SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。
+正本は [`unphysics-undynamics-v2.md`](unphysics-undynamics-v2.md)。
 
 初期方針:
 
-- VRM SpringBone と VRC PhysBone は source metadata を保持しつつ、実行時には共通の U.N. dynamics group / chain / collider / parameter view へ lower する。
-- v1 で実装済みの SpringBone solver / collider 実装は利用してよい。ただし入力は VRM SpringBone 生データではなく、正規化済み runtime dynamics state とする。
-- VRC PhysBone は v2 初期では完全再現を狙わず、既存 SpringBone-like runtime primitives へ近似変換する。
+- VRM SpringBone と VRC PhysBone は source metadata を保持しつつ、実行時には共通の UNDynamics group / chain / collider / parameter / limit / interaction view へ lower する。
+- v1 で実装済みの SpringBone solver / collider 実装は利用してよい。ただし入力は VRM SpringBone 生データではなく、正規化済み UNDynamics runtime state とする。
+- VRC PhysBone は v2 初期では完全再現を狙わず、UNDynamics の SpringBone-like primitive へ近似 lower する。
 - 正規化境界は現在進めている runtime model view の一部として扱う。形式別の VRM / VRC / Unity component 判定を frame loop や solver 内へ散らさない。
 - solver state は source scene を直接 mutate せず、resolved runtime state と pose buffer を入力にする方向へ寄せる。
 
 この段階でやること:
 
-- `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、runtime dynamics view の最小形を決める。
+- `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、UNDynamics runtime view の最小形を決める。
 - Unity Exporter は現在有効な VRC PhysBone component を `.unavatar` `dynamics[]` へ近似出力し、Runtime importer が SpringBone-like group へ lower する。
 - 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `endpointPosition` / `radius` / `pull` / `spring` / `stiffness` / `gravity` / `allowCollision=false` / stable source id / limit metadata / interaction metadata の最小抽出と lower、source collider metadata 保存、branch root の複数 group 化、wardrobe `dynamicsEnable` による runtime group enable override、CLI diagnostics。VRC PhysBone は source metadata / action target として保持するが、現行 SpringBone-like solver では衣装を壊す可能性があるため authored default は既定 OFF とする。
-- 残り: VRC PhysBone limit solver behavior / detailed collision behavior / grabbing / posing の挙動再現、animation state と連動した runtime enable state。
+- 残り: VRC PhysBone Collider の detailed behavior、limit solver behavior、grabbing / posing、Contacts、VRC Constraints reference metadata、animation state と連動した runtime enable state。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
 - PhysBone behavior の詳細再現は Wardrobe hot switch と action model の後まで待つ。
 
@@ -150,19 +151,21 @@ MVP control command:
 
 ## PhysBone Placement
 
-PhysBone behavior implementation は runtime state cleanup、runtime dynamics normalization、Wardrobe hot switch の後に置く。
+PhysBone behavior implementation は runtime state cleanup、UNDynamics normalization、Wardrobe hot switch の後に置く。
 
 理由:
 
 - PhysBone roots、colliders、enabled state は active wardrobe と animation state に依存する。
 - scene source data を直接 mutate する solver は、hot switch と相性が悪い。
-- 初期実装では VRC PhysBone parameters を既存 SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved runtime dynamics view を入力にする。
-- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data も保持する。`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。VRC PhysBone group は authored default として既定 OFF で、wardrobe `dynamicsEnable` と runtime action `DynamicsEnabled` は runtime state override だけを切り替える。CLI diagnose と renderer runtime status は effective enabled と source authored enabled を分けて観測でき、renderer status は runtime override count も公開する。残りは limits solver behavior、detailed collision behavior、grabbing/posing behavior。
+- 初期実装では VRC PhysBone parameters を UNDynamics の SpringBone-like runtime primitives へ lower してよい。ただし source data ではなく resolved UNDynamics runtime view を入力にする。
+- 現在は exporter/importer が PhysBone source を runtime dynamics group / collider data へ lower し、endpointPosition は leaf root の synthetic child として正規化し、normalized collider data も保持する。`allowCollision=false` は source collider を solver へ渡さない。limit / interaction metadata は runtime dynamics group に保持するが solver / interaction 挙動にはまだ反映しない。VRC PhysBone group は authored default として既定 OFF で、wardrobe `dynamicsEnable` と runtime action `DynamicsEnabled` は runtime state override だけを切り替える。CLI diagnose と renderer runtime status は effective enabled と source authored enabled を分けて観測でき、renderer status は runtime override count も公開する。残りは PhysBone Collider detailed behavior、limits solver behavior、grabbing / posing、Contacts、VRC Constraints metadata integration。
 
 ## この段階の非目標
 
 - VRChat client 完全再現。
 - FX Layer / Animator Controller 完全互換。
+- SpringBone solver と PhysBone solver の二重運用。
+- source kind 分岐を frame loop / renderer / solver に散らす実装。
 - Poiyomi 互換。
 - style-only cleanup のための lilToon-like rendering rewrite。
 - instant switching が安定する前の完璧な wardrobe transition effect。

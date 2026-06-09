@@ -474,7 +474,7 @@ Unity Exporter は次の出力モードを持つ。
 
 ## 9. Dynamics
 
-`dynamics` は VRM SpringBone と VRC PhysBone を Runtime primitive へ正規化した情報を持つ。
+`dynamics` は VRM SpringBone と VRC PhysBone の source payload を保持し、Runtime はこれを UNPhysics umbrella 下の UNDynamics primitive へ正規化する。
 
 ```json
 {
@@ -534,12 +534,12 @@ Unity Exporter は次の出力モードを持つ。
 }
 ```
 
-v0.1 は完全な PhysBone 再現を狙わない。まず既存 SpringBone runtime primitive へ近似変換する。
+v0.1 は完全な PhysBone 再現を狙わない。まず UNDynamics の SpringBone-like runtime primitive へ近似変換する。
 `roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
 `sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
-`sourceParams.colliders` は VRC PhysBone collider の保存情報であり、Sphere / Capsule は local collider として SpringBone solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
-`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、diagnostics にも出すが、v0.1 初期の solver 挙動にはまだ反映しない。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
+`sourceParams.colliders` は VRC PhysBone Collider の保存情報であり、Sphere / Capsule は UNDynamics collider として solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
+`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、diagnostics にも出すが、v0.1 初期の solver 挙動にはまだ反映しない。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。VRC Contacts と VRC Constraints は v0.1 初期では solver 入力ではなく source metadata / diagnostics / future UNDynamics integration の対象とする。
 `dynamics[].id` は runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。`enabled:false` の source dynamics は import lower 時に無視し、wardrobe / action の `dynamicsEnable` は lower 済み group の `enabled` を切り替える。
 
 ## 10. Provenance And License
