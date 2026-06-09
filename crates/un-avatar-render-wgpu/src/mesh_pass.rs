@@ -1177,6 +1177,7 @@ struct MeshDraw {
 	morph_weights: Vec<f32>,
 	morph_weight_scratch: Vec<f32>,
 	alpha_mode: UnaAlphaMode,
+	material_slot_index: Option<usize>,
 	material: UnaMaterialPbr,
 	texture_indices: Vec<usize>,
 	mesh_index: usize,
@@ -1275,6 +1276,8 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
+	pub(crate) active_draws_using_inactive_material_slot_count: usize,
+	pub(crate) inactive_material_slots_used_by_active_draw_count: usize,
 }
 
 #[inline]
@@ -6814,7 +6817,8 @@ impl SceneMeshes {
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
-				let mat = buf.material_index.and_then(|mi| scene.materials.get(mi)).unwrap_or(&default_material);
+				let material_slot_index = buf.material_index.filter(|material_index| scene.materials.get(*material_index).is_some());
+				let mat = material_slot_index.and_then(|mi| scene.materials.get(mi)).unwrap_or(&default_material);
 				if material_is_fully_invisible_for_draw(mat, &opts) {
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
@@ -6981,6 +6985,7 @@ impl SceneMeshes {
 					morph_weights: Vec::with_capacity(morph_target_count),
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
+					material_slot_index,
 					material: mat.clone(),
 					texture_indices: material_texture_indices(mat),
 					mesh_index: mesh_i,
@@ -7384,15 +7389,16 @@ impl SceneMeshes {
 			let Some(primitive) = scene.meshes.get(draw_mesh_index).and_then(|mesh| mesh.get(draw_primitive_index)) else {
 				continue;
 			};
-			let material = primitive
-				.material_index
+			let material_slot_index = primitive.material_index.filter(|material_index| scene.materials.get(*material_index).is_some());
+			let material = material_slot_index
 				.and_then(|material_index| scene.materials.get(material_index))
 				.unwrap_or(&default_material);
-			if self.draws[draw_index].material == *material {
+			if self.draws[draw_index].material == *material && self.draws[draw_index].material_slot_index == material_slot_index {
 				continue;
 			}
 			{
 				let draw = &mut self.draws[draw_index];
+				draw.material_slot_index = material_slot_index;
 				draw.material = material.clone();
 				draw.texture_indices = material_texture_indices(&draw.material);
 				draw.shading = material.shading;
@@ -7787,6 +7793,24 @@ impl SceneMeshes {
 			.len();
 		let total_material_slot_count = self.material_slot_residency.len();
 		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
+		let active_draws_using_inactive_material_slot_count = self
+			.draws
+			.iter()
+			.filter(|draw| {
+				draw.active()
+					&& draw
+						.material_slot_index
+						.is_some_and(|index| self.material_slot_residency.get(index).is_some_and(|resident| !resident))
+			})
+			.count();
+		let inactive_material_slots_used_by_active_draw_count = self
+			.draws
+			.iter()
+			.filter(|draw| draw.active())
+			.filter_map(|draw| draw.material_slot_index)
+			.filter(|index| self.material_slot_residency.get(*index).is_some_and(|resident| !resident))
+			.collect::<BTreeSet<_>>()
+			.len();
 		SceneMeshAssetResidencyCounts {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
@@ -7800,6 +7824,8 @@ impl SceneMeshes {
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
+			active_draws_using_inactive_material_slot_count,
+			inactive_material_slots_used_by_active_draw_count,
 		}
 	}
 

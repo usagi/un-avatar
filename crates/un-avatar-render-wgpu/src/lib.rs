@@ -4413,6 +4413,8 @@ mod tests {
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
+				active_draws_using_inactive_material_slot_count: 1,
+				inactive_material_slots_used_by_active_draw_count: 1,
 				scoped_draw_supported: true,
 				all_resident: true,
 				..Default::default()
@@ -4463,6 +4465,18 @@ mod tests {
 		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
 		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("inactive_material_slot_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_material_slot_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_material_slots_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
 		assert!(snapshot.get("resolver_cache_key").is_none());

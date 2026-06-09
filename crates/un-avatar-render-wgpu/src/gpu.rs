@@ -94,6 +94,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
+	pub(crate) active_draws_using_inactive_material_slot_count: usize,
+	pub(crate) inactive_material_slots_used_by_active_draw_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -207,6 +209,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		total_material_slot_count: 0,
 		resident_material_slot_count: 0,
 		inactive_material_slot_count: 0,
+		active_draws_using_inactive_material_slot_count: 0,
+		inactive_material_slots_used_by_active_draw_count: 0,
 		missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -245,6 +249,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.total_material_slot_count = draw_counts.total_material_slot_count;
 	plan.resident_material_slot_count = draw_counts.resident_material_slot_count;
 	plan.inactive_material_slot_count = draw_counts.inactive_material_slot_count;
+	plan.active_draws_using_inactive_material_slot_count = draw_counts.active_draws_using_inactive_material_slot_count;
+	plan.inactive_material_slots_used_by_active_draw_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
 	plan
 }
@@ -4875,6 +4881,8 @@ mod tests {
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
+				active_draws_using_inactive_material_slot_count: 1,
+				inactive_material_slots_used_by_active_draw_count: 1,
 			}),
 		);
 
@@ -4890,6 +4898,8 @@ mod tests {
 		assert_eq!(plan.total_material_slot_count, 5);
 		assert_eq!(plan.resident_material_slot_count, 4);
 		assert_eq!(plan.inactive_material_slot_count, 1);
+		assert_eq!(plan.active_draws_using_inactive_material_slot_count, 1);
+		assert_eq!(plan.inactive_material_slots_used_by_active_draw_count, 1);
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
