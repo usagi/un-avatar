@@ -168,7 +168,7 @@ pub fn build_bone_colliders(
 	out
 }
 
-pub fn build_runtime_bone_colliders(
+pub fn build_dynamics_bone_colliders(
 	scene: &UnaSceneSnapshot,
 	profile: Option<&HumanoidProfile>,
 	config: BoneColliderConfig,
@@ -215,13 +215,13 @@ pub fn build_runtime_bone_colliders(
 	out
 }
 
-pub fn build_dynamics_bone_colliders(
+pub fn build_runtime_bone_colliders(
 	scene: &UnaSceneSnapshot,
 	profile: Option<&HumanoidProfile>,
 	config: BoneColliderConfig,
 	dynamics: UnaRuntimeDynamics<'_>,
 ) -> Vec<BoneColliderPrimitive> {
-	build_runtime_bone_colliders(scene, profile, config, dynamics)
+	build_dynamics_bone_colliders(scene, profile, config, dynamics)
 }
 
 pub fn collider_stats(colliders: &[BoneColliderPrimitive]) -> BoneColliderStats {
@@ -510,7 +510,7 @@ mod tests {
 				..Default::default()
 			}],
 		};
-		let colliders = build_runtime_bone_colliders(
+		let colliders = build_dynamics_bone_colliders(
 			&scene,
 			None,
 			BoneColliderConfig {
@@ -552,7 +552,7 @@ mod tests {
 				..Default::default()
 			}],
 		};
-		let colliders = build_runtime_bone_colliders(
+		let colliders = build_dynamics_bone_colliders(
 			&scene,
 			None,
 			BoneColliderConfig {
