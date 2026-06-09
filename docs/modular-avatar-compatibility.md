@@ -136,8 +136,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - remaining: full reactive object integration with continuous parameter evaluator behavior, broader component reference diagnostics, and material property override mapping beyond slot replacement.
 - `[~]` Blendshape Sync
   - required: source renderer/shape to target renderer/shape binding.
-  - done: Unity Exporter serializes `BlendshapeBinding` entries as structured `referenceMesh`, `blendshape`, `localBlendshape`, and `remapCurve` payload instead of opaque type-name strings. Runtime resolver applies structured bindings to static source morph defaults, uses `localBlendshape` fallback semantics, evaluates keyframe remap curves with in/out tangents for initial weights, and clones shared target meshes before mutating default morph weights.
-  - remaining: runtime expression / animation updates, weighted tangent / wrap mode curve parity, recursive sync, and validation against a freshly re-exported sample containing structured BlendshapeBinding payload.
+  - done: Unity Exporter serializes `BlendshapeBinding` entries as structured `referenceMesh`, `blendshape`, `localBlendshape`, and `remapCurve` payload instead of opaque type-name strings. Runtime resolver applies structured bindings to static source morph defaults, uses `localBlendshape` fallback semantics, evaluates keyframe remap curves with in/out tangents for initial weights, and clones shared target meshes before mutating default morph weights. A freshly re-exported `mizuki-split.unavatar` sample reports `blendshape_sync_applied=18`, `missing=0`, and `unsupported=0`.
+  - remaining: runtime expression / animation updates, weighted tangent / wrap mode curve parity, and recursive sync.
 - `[ ]` Sync Parameter Sequence
   - required: classify as VRC expression/parameter feature; defer if not needed for static wardrobe render.
 
