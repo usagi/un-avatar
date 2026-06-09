@@ -2092,6 +2092,7 @@ mod tests {
 			nodes: vec![unknown_node()],
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		let mut frame = UNMotionFrame::new(0);
@@ -2608,6 +2609,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		let mut frame = UNMotionFrame::new(0);
@@ -2655,6 +2657,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		let mut frame = UNMotionFrame::new(0);
@@ -2702,6 +2705,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -2771,6 +2775,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -2850,6 +2855,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -2943,6 +2949,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -3017,6 +3024,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -3092,6 +3100,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftupperarm".to_string(), 1)].into_iter().collect(),
@@ -3171,6 +3180,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftshoulder".to_string(), 1), ("leftupperarm".to_string(), 3)]
@@ -3450,6 +3460,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("lefthand".to_string(), 1), ("leftmiddleproximal".to_string(), 3)]
@@ -3499,6 +3510,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftupperleg".to_string(), 1), ("leftlowerleg".to_string(), 2)]
@@ -3553,6 +3565,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftfoot".to_string(), 1)].into_iter().collect(),
@@ -3590,6 +3603,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("lefthand".to_string(), 1)].into_iter().collect(),
@@ -3689,6 +3703,7 @@ mod tests {
 				nodes: rest_nodes.clone(),
 				roots: vec![0],
 				node_constraints: vec![],
+				asset_group_ownership: vec![],
 			});
 			document.humanoid_profile = Some(HumanoidProfile {
 				bone_node_indices: [(hand_key.to_string(), 1), (middle_key.to_string(), 2)].into_iter().collect(),
@@ -3754,6 +3769,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("rightindexintermediate".to_string(), 1), ("rightindexdistal".to_string(), 2)]
@@ -3842,6 +3858,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftthumbproximal".to_string(), 1), ("leftthumbintermediate".to_string(), 2)]
@@ -3926,6 +3943,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [
@@ -4004,6 +4022,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("leftlowerarm".to_string(), 1)].into_iter().collect(),
@@ -4073,6 +4092,7 @@ mod tests {
 			nodes: rest_nodes.clone(),
 			roots: vec![0],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile {
 			bone_node_indices: [("head".to_string(), 1)].into_iter().collect(),
@@ -4126,6 +4146,7 @@ mod tests {
 				nodes: rest_nodes.clone(),
 				roots: vec![0],
 				node_constraints: vec![],
+				asset_group_ownership: vec![],
 			}),
 			humanoid_profile: Some(HumanoidProfile {
 				bone_node_indices: [("head".to_string(), 1)].into_iter().collect(),
@@ -4208,6 +4229,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
@@ -4247,6 +4269,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
@@ -4289,6 +4312,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
@@ -4334,6 +4358,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
@@ -4379,6 +4404,7 @@ mod tests {
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		});
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
