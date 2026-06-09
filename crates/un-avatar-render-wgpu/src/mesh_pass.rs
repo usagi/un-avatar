@@ -796,6 +796,7 @@ const _: () = assert!(std::mem::size_of::<Vertex>() == 112);
 pub(crate) struct TextureUploadSummary {
 	pub image_count: u32,
 	pub deferred_image_upload_count: u32,
+	pub deferred_image_mip_bytes: u64,
 	pub resized_count: u32,
 	pub cubemap_count: u32,
 	pub cubemap_converted_count: u32,
@@ -825,10 +826,23 @@ pub(crate) struct TextureUploadSummary {
 }
 
 impl TextureUploadSummary {
-	fn record_image(&mut self, source_width: u32, source_height: u32, uploaded_width: u32, uploaded_height: u32, uploaded_mip_bytes: u64) {
+	fn record_image(
+		&mut self,
+		source_width: u32,
+		source_height: u32,
+		uploaded_width: u32,
+		uploaded_height: u32,
+		uploaded_mip_bytes: u64,
+		uploaded: bool,
+	) {
 		self.image_count += 1;
 		self.source_bytes += (source_width as u64) * (source_height as u64) * 4;
-		self.uploaded_mip_bytes += uploaded_mip_bytes;
+		if uploaded {
+			self.uploaded_mip_bytes += uploaded_mip_bytes;
+		} else {
+			self.deferred_image_upload_count += 1;
+			self.deferred_image_mip_bytes += uploaded_mip_bytes;
+		}
 		self.max_source_dimension = self.max_source_dimension.max(source_width.max(source_height));
 		self.max_uploaded_dimension = self.max_uploaded_dimension.max(uploaded_width.max(uploaded_height));
 		if source_width != uploaded_width || source_height != uploaded_height {
@@ -6754,6 +6768,7 @@ impl SceneMeshes {
 						source_upload.width,
 						source_upload.height,
 						source_upload.data.len() as u64,
+						image_resident,
 					);
 					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
 					if image_resident {
@@ -6763,7 +6778,6 @@ impl SceneMeshes {
 							image_views.push(transparent_black_view.clone());
 						}
 					} else {
-						texture_summary.deferred_image_upload_count += 1;
 						report(
 							"gpu-upload",
 							format!("Deferring precision-preserving source texture {}/{} ({role:?})", image_index + 1, scene.images.len()),
@@ -6882,7 +6896,7 @@ impl SceneMeshes {
 			{
 				texture_summary.compression_fallback_count += 1;
 			}
-			texture_summary.record_image(src_w, src_h, w, h, payload.byte_len());
+			texture_summary.record_image(src_w, src_h, w, h, payload.byte_len(), image_resident);
 			let texture_format = match payload.kind {
 				TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
 				TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -6906,7 +6920,6 @@ impl SceneMeshes {
 					);
 				}
 			} else {
-				texture_summary.deferred_image_upload_count += 1;
 				report(
 					"gpu-upload",
 					format!("Deferring texture {}/{} mips={} ({role:?})", image_index + 1, scene.images.len(), payload.mips.len()),
@@ -8313,6 +8326,21 @@ mod tests {
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc1Srgb, 5, 3), (16, 1));
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc5Unorm, 5, 7), (32, 2));
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc7Srgb, 8, 9), (32, 3));
+	}
+
+	#[test]
+	fn texture_upload_summary_separates_deferred_mip_bytes() {
+		let mut summary = TextureUploadSummary::default();
+
+		summary.record_image(4, 4, 4, 4, 64, true);
+		summary.record_image(8, 4, 4, 2, 32, false);
+
+		assert_eq!(summary.image_count, 2);
+		assert_eq!(summary.uploaded_mip_bytes, 64);
+		assert_eq!(summary.deferred_image_upload_count, 1);
+		assert_eq!(summary.deferred_image_mip_bytes, 32);
+		assert_eq!(summary.source_bytes, 192);
+		assert_eq!(summary.resized_count, 1);
 	}
 
 	#[test]
