@@ -1283,11 +1283,11 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct SceneMeshActiveResidencyGaps {
-	inactive_image_texture_indices: Vec<usize>,
-	inactive_material_slot_indices: Vec<usize>,
-	active_draws_using_inactive_image_texture_count: usize,
-	active_draws_using_inactive_material_slot_count: usize,
+pub(crate) struct SceneMeshActiveResidencyGaps {
+	pub(crate) inactive_image_texture_indices: Vec<usize>,
+	pub(crate) inactive_material_slot_indices: Vec<usize>,
+	pub(crate) active_draws_using_inactive_image_texture_count: usize,
+	pub(crate) active_draws_using_inactive_material_slot_count: usize,
 }
 
 #[inline]
@@ -7805,7 +7805,7 @@ impl SceneMeshes {
 		}
 	}
 
-	fn active_residency_gaps(&self) -> SceneMeshActiveResidencyGaps {
+	pub(crate) fn active_residency_gaps(&self) -> SceneMeshActiveResidencyGaps {
 		let mut inactive_image_texture_indices = BTreeSet::new();
 		let mut inactive_material_slot_indices = BTreeSet::new();
 		let mut active_draws_using_inactive_image_texture_count = 0;
