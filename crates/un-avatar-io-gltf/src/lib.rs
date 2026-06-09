@@ -1908,10 +1908,7 @@ pub struct WardrobeApplyReport {
 }
 
 fn refresh_wardrobe_apply_report_scoped_assets(document: &UnaDocument, report: &mut WardrobeApplyReport) {
-	let Some(scene) = document.scene.as_ref() else {
-		return;
-	};
-	let selection = scene.scoped_asset_selection(&report.active_asset_groups);
+	let selection = document.scoped_asset_selection();
 	report.scoped_active_asset_group_count = selection.owned_active_groups.len();
 	report.scoped_missing_active_asset_groups = selection.missing_active_asset_groups;
 	report.scoped_resident_mesh_primitive_count = selection.mesh_primitives.len();

@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
+	collections::BTreeMap,
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -140,21 +140,6 @@ impl WardrobeScopedUploadWork {
 	}
 }
 
-fn wardrobe_scoped_source_asset_work_for_document(document: &UnaDocument) -> un_avatar_core::UnaSceneScopedAssetSelection {
-	let active_asset_groups = document.runtime_model().active_asset_groups();
-	if active_asset_groups.is_empty() {
-		return un_avatar_core::UnaSceneScopedAssetSelection::default();
-	}
-	let remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
-	let Some(scene) = document.scene.as_ref() else {
-		return un_avatar_core::UnaSceneScopedAssetSelection {
-			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
-			..Default::default()
-		};
-	};
-	scene.scoped_asset_selection(active_asset_groups)
-}
-
 fn wardrobe_scoped_upload_work_for_active_gaps(active_gaps: Option<SceneMeshActiveResidencyGaps>) -> WardrobeScopedUploadWork {
 	let Some(active_gaps) = active_gaps else {
 		return WardrobeScopedUploadWork::default();
@@ -197,7 +182,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		.map(|scene| scene.asset_group_ownership_counts())
 		.unwrap_or_default();
 	let has_ownership = ownership.groups > 0;
-	let source_asset_work = wardrobe_scoped_source_asset_work_for_document(document);
+	let source_asset_work = document.scoped_asset_selection();
 	let inactive_owned_asset_group_count = ownership.groups.saturating_sub(source_asset_work.owned_active_groups.len());
 	let has_active_asset_groups = !active_asset_groups.is_empty();
 	WardrobeAssetUploadPlan {
@@ -4727,8 +4712,8 @@ mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
 		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_source_asset_work_for_document, wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
@@ -4926,7 +4911,7 @@ mod tests {
 	}
 
 	#[test]
-	fn wardrobe_scoped_source_asset_work_lists_active_group_assets() {
+	fn wardrobe_asset_upload_plan_uses_document_scoped_source_assets() {
 		let mut document = un_avatar_core::UnaDocument {
 			scene: Some(un_avatar_core::UnaSceneSnapshot {
 				asset_group_ownership: vec![
@@ -4965,7 +4950,7 @@ mod tests {
 			.runtime_model_mut()
 			.set_active_asset_groups(vec!["outfit:coat".to_string(), "missing:hat".to_string()]);
 
-		let work = wardrobe_scoped_source_asset_work_for_document(&document);
+		let work = document.scoped_asset_selection();
 		assert_eq!(work.owned_active_groups, vec!["outfit:coat".to_string()]);
 		assert_eq!(work.missing_active_asset_groups, vec!["missing:hat".to_string()]);
 		assert_eq!(

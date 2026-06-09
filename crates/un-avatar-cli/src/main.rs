@@ -3236,7 +3236,7 @@ fn build_diagnose_report(
 			));
 		}
 		let asset_ownership_counts = sc.asset_group_ownership_counts();
-		let scoped_asset_selection = sc.scoped_asset_selection(doc.runtime_model().active_asset_groups());
+		let scoped_asset_selection = doc.scoped_asset_selection();
 		let asset_group_ownership = sc
 			.asset_group_ownership
 			.iter()

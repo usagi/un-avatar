@@ -1076,6 +1076,20 @@ impl UnaDocument {
 	pub fn runtime_scene_and_dynamics_mut(&mut self) -> Option<UnaRuntimeSceneDynamicsMut<'_>> {
 		self.runtime_model_mut().scene_and_dynamics_mut()
 	}
+
+	pub fn scoped_asset_selection(&self) -> UnaSceneScopedAssetSelection {
+		let active_asset_groups = self.runtime_model().active_asset_groups();
+		if active_asset_groups.is_empty() {
+			return UnaSceneScopedAssetSelection::default();
+		}
+		let Some(scene) = self.scene.as_ref() else {
+			return UnaSceneScopedAssetSelection {
+				missing_active_asset_groups: active_asset_groups.to_vec(),
+				..Default::default()
+			};
+		};
+		scene.scoped_asset_selection(active_asset_groups)
+	}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -4138,6 +4152,25 @@ mod tests {
 		assert_eq!(selection.materials, vec![3, 5]);
 		assert_eq!(selection.images, vec![4, 7]);
 		assert_eq!(selection.dynamics_source_ids, vec!["physbone:coat".to_string()]);
+	}
+
+	#[test]
+	fn document_scoped_asset_selection_reports_missing_groups_without_scene() {
+		let mut document = UnaDocument::default();
+		document
+			.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+
+		let selection = document.scoped_asset_selection();
+		assert!(selection.owned_active_groups.is_empty());
+		assert_eq!(
+			selection.missing_active_asset_groups,
+			vec!["outfit:coat".to_string(), "texture:red".to_string()]
+		);
+		assert!(selection.mesh_primitives.is_empty());
+		assert!(selection.materials.is_empty());
+		assert!(selection.images.is_empty());
+		assert!(selection.dynamics_source_ids.is_empty());
 	}
 
 	#[test]
