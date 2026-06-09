@@ -2236,6 +2236,17 @@ fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &
 		.collect()
 }
 
+fn merged_wardrobe_asset_groups(base: &[String], selected: &[String]) -> Vec<String> {
+	let mut merged = Vec::new();
+	let mut seen = BTreeSet::new();
+	for group in base.iter().chain(selected.iter()) {
+		if seen.insert(group.clone()) {
+			merged.push(group.clone());
+		}
+	}
+	merged
+}
+
 fn apply_unavatar_asset_group_ownership(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
 	let ownership = unavatar_asset_group_ownership(unavatar);
 	report_unavatar_asset_group_ownership_ambiguities(unavatar, report);
@@ -5603,12 +5614,25 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(operations) = unavatar_wardrobe_set_operations(&unavatar, set_id) else {
 		return Err(format!(".unavatar wardrobe set not found: {set_id}"));
 	};
-	let active_asset_groups = unavatar_wardrobe_set_asset_groups(&unavatar, set_id);
+	let base_id = unavatar_base_wardrobe_set(&unavatar).map(|(id, _)| id.to_string());
+	let base_asset_groups = if base_id.as_deref() != Some(set_id) {
+		base_id
+			.as_deref()
+			.map(|base_set_id| unavatar_wardrobe_set_asset_groups(&unavatar, base_set_id))
+			.unwrap_or_default()
+	} else {
+		Vec::new()
+	};
+	let selected_asset_groups = unavatar_wardrobe_set_asset_groups(&unavatar, set_id);
+	let active_asset_groups = if base_id.as_deref() == Some(set_id) {
+		selected_asset_groups
+	} else {
+		merged_wardrobe_asset_groups(&base_asset_groups, &selected_asset_groups)
+	};
 	let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
 		return Err("document has no scene".to_string());
 	};
 	reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
-	let base_id = unavatar_base_wardrobe_set(&unavatar).map(|(id, _)| id.to_string());
 	if base_id.as_deref() == Some(set_id) {
 		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar)
 		else {
@@ -13875,11 +13899,11 @@ mod tests {
 		let applied = apply_unavatar_wardrobe_set(&mut doc, "no_hair_physics").expect("apply wardrobe");
 		assert_eq!(
 			applied.active_asset_groups,
-			vec!["outfit:hair".to_string(), "physics:hair".to_string()]
+			vec!["avatar:base".to_string(), "outfit:hair".to_string(), "physics:hair".to_string()]
 		);
-		assert_eq!(applied.scoped_active_asset_group_count, 1);
+		assert_eq!(applied.scoped_active_asset_group_count, 2);
 		assert_eq!(applied.scoped_missing_active_asset_groups, vec!["physics:hair".to_string()]);
-		assert_eq!(applied.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(applied.scoped_resident_mesh_primitive_count, 2);
 		assert_eq!(applied.scoped_resident_material_count, 1);
 		assert_eq!(applied.scoped_resident_image_count, 1);
 		assert_eq!(applied.scoped_resident_dynamics_count, 1);
@@ -13892,7 +13916,7 @@ mod tests {
 		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("no_hair_physics"));
 		assert_eq!(
 			doc.runtime_model().active_asset_groups(),
-			&["outfit:hair".to_string(), "physics:hair".to_string()]
+			&["avatar:base".to_string(), "outfit:hair".to_string(), "physics:hair".to_string()]
 		);
 
 		let applied = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
