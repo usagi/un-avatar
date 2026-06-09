@@ -4404,7 +4404,7 @@ mod tests {
 		{
 			let mut status = status.lock().unwrap();
 			status.wardrobe_asset_upload = WardrobeAssetUploadPlan {
-				mode: "draw-scoped-all-resident".to_string(),
+				mode: "draw-scoped-2d-texture-scoped".to_string(),
 				total_draw_mesh_primitive_count: 3,
 				resident_draw_mesh_primitive_count: 2,
 				inactive_draw_mesh_primitive_count: 1,
@@ -4424,7 +4424,8 @@ mod tests {
 				pending_image_texture_upload_count: 1,
 				pending_material_slot_upload_count: 1,
 				scoped_draw_supported: true,
-				all_resident: true,
+				scoped_upload_supported: true,
+				all_resident: false,
 				active_residency_gaps_detected: true,
 				residency_gap_index_status_limit: 64,
 				..Default::default()
@@ -4458,7 +4459,7 @@ mod tests {
 		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
 		assert_eq!(
 			upload.get("mode").and_then(|value| value.as_str()),
-			Some("draw-scoped-all-resident")
+			Some("draw-scoped-2d-texture-scoped")
 		);
 		assert_eq!(
 			upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
@@ -4531,7 +4532,8 @@ mod tests {
 			Some(1)
 		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
-		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(upload.get("scoped_upload_supported").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(false));
 		assert_eq!(
 			upload.get("active_residency_gaps_detected").and_then(|value| value.as_bool()),
 			Some(true)
