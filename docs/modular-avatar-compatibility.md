@@ -196,8 +196,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ### Tests / Regression
 
-- `[ ]` Unity diagnostic probe for selected GameObject
-  - required: print component payload, renderer.bones, rootBone, bindposes, material slots before export.
+- `[x]` Unity diagnostic probe for selected GameObject
+  - done: dev diagnostics now prints the selected GameObject path, active state, component payload (serialized), renderer type/enabled/material slots, and for `SkinnedMeshRenderer` includes `rootBone`, `bones`, and shared mesh bindpose count immediately from the selected scene object.
 - `[ ]` isolated `.unavatar` fixtures
   - required: Hair_Base-only, Field Drape Hair-only, full field_drape.
 - `[x]` numeric resolver tests

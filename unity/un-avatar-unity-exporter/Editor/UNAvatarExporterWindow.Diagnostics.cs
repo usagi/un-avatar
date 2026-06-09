@@ -48,12 +48,201 @@ namespace UNAvatar.UnityExporter
                 "Wardrobe preview state probe:",
                 BuildWardrobePreviewStateDiagnostics(),
                 "",
+                "Selected GameObject probe:",
+                BuildSelectedGameObjectProbe(),
+                "",
                 "Hints:",
                 "JPG/JPEG source bytes are usually worth preserving.",
                 "Large PNG normal/mask textures may be smaller after exporter PNG fallback or later optimizer transcode.",
                 "If generated/fallback textures are high, export time will include GPU readback and PNG encode."
             };
             return string.Join("\n", lines);
+        }
+
+        private string BuildSelectedGameObjectProbe()
+        {
+            if (Selection.activeGameObject == null)
+            {
+                return "No selected GameObject.";
+            }
+
+            var selected = Selection.activeGameObject;
+            if (avatarRoot != null)
+            {
+                var transform = selected.transform;
+                if (transform != avatarRoot.transform && !transform.IsChildOf(avatarRoot.transform))
+                {
+                    return $"Selected object is outside avatarRoot: {selected.name}";
+                }
+            }
+
+            var lines = new List<string>
+            {
+                "name: " + selected.name,
+                "path: " + BuildTransformPathForProbe(selected.transform),
+                "instanceId: " + selected.GetInstanceID().ToString(CultureInfo.InvariantCulture),
+                "activeSelf: " + selected.activeSelf,
+                "activeInHierarchy: " + selected.activeInHierarchy,
+                "tag: " + selected.tag,
+                "layer: " + selected.layer.ToString(CultureInfo.InvariantCulture) + "/" + LayerMask.LayerToName(selected.layer),
+                "componentCount: " + selected.GetComponents<Component>().Length
+            };
+
+            lines.Add("renderer summary:");
+            var renderer = selected.GetComponent<Renderer>();
+            if (renderer == null)
+            {
+                lines.Add("  [none]");
+            }
+            else
+            {
+                lines.Add("  type: " + renderer.GetType().Name);
+                lines.Add("  enabled: " + renderer.enabled);
+                lines.Add("  sharedMaterials: " + FormatRendererMaterialSlots(renderer.sharedMaterials));
+                if (renderer is SkinnedMeshRenderer skinnedMeshRenderer)
+                {
+                    lines.Add("  skinnedMeshRenderer rootBone: " + FormatTransformPath(skinnedMeshRenderer.rootBone));
+                    lines.Add("  skinnedMeshRenderer bones: " + FormatBonePaths(skinnedMeshRenderer.bones));
+                    lines.Add("  skinnedMeshRenderer sharedMesh bindposes: " + FormatBindPoseSummary(skinnedMeshRenderer.sharedMesh));
+                }
+            }
+
+            lines.Add("components:");
+            foreach (var component in selected.GetComponents<Component>())
+            {
+                if (component == null)
+                {
+                    lines.Add("  <missing component>");
+                    continue;
+                }
+
+                lines.Add("  " + component.GetType().FullName);
+                lines.Add("  payload:");
+                lines.AddRange(IndentLines(TruncateDiagnosticText(DescribeComponentPayload(component), 3000), "    "));
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private static string FormatTransformPathForProbe(Transform transform)
+        {
+            if (transform == null)
+            {
+                return "<missing transform>";
+            }
+
+            var parts = new List<string>();
+            for (var current = transform; current != null; current = current.parent)
+            {
+                parts.Add(current.name);
+            }
+            parts.Reverse();
+            return string.Join("/", parts);
+        }
+
+        private static string FormatTransformPath(Transform transform)
+        {
+            if (transform == null)
+            {
+                return "<null>";
+            }
+            return BuildTransformPathForProbe(transform);
+        }
+
+        private static string FormatRendererMaterialSlots(Material[] materials)
+        {
+            if (materials == null || materials.Length == 0)
+            {
+                return "<none>";
+            }
+
+            var slots = new List<string>(materials.Length);
+            for (var i = 0; i < materials.Length; i++)
+            {
+                var material = materials[i];
+                slots.Add(i.ToString(CultureInfo.InvariantCulture) + ":" + (material != null ? material.name : "<null>"));
+            }
+            return string.Join(", ", slots);
+        }
+
+        private static string FormatBonePaths(Transform[] bones)
+        {
+            if (bones == null || bones.Length == 0)
+            {
+                return "<none>";
+            }
+
+            var parts = new List<string>(bones.Length);
+            for (var i = 0; i < bones.Length; i++)
+            {
+                var bone = bones[i];
+                if (bone == null)
+                {
+                    parts.Add(i.ToString(CultureInfo.InvariantCulture) + ":<null>");
+                }
+                else
+                {
+                    parts.Add(i.ToString(CultureInfo.InvariantCulture) + ":" + bone.name);
+                }
+            }
+            return string.Join(", ", parts);
+        }
+
+        private static string FormatBindPoseSummary(Mesh mesh)
+        {
+            if (mesh == null || mesh.bindposes == null)
+            {
+                return "<none>";
+            }
+
+            return mesh.bindposes.Length.ToString(CultureInfo.InvariantCulture) + " entries in " + mesh.name;
+        }
+
+        private static string DescribeComponentPayload(Component component)
+        {
+            try
+            {
+                var payload = EditorJsonUtility.ToJson(component, true);
+                if (string.IsNullOrEmpty(payload))
+                {
+                    return "<empty>";
+                }
+                return payload;
+            }
+            catch
+            {
+                return "<unserializable>";
+            }
+        }
+
+        private static string TruncateDiagnosticText(string value, int maxCharacters)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "<empty>";
+            }
+            return value.Length <= maxCharacters ? value : value.Substring(0, maxCharacters) + "...(truncated)";
+        }
+
+        private static IEnumerable<string> IndentLines(string value, string indent)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                yield return indent + "<empty>";
+                yield break;
+            }
+            using (var reader = new StringReader(value))
+            {
+                while (true)
+                {
+                    var line = reader.ReadLine();
+                    if (line == null)
+                    {
+                        break;
+                    }
+                    yield return indent + line;
+                }
+            }
         }
 
         private static List<Material> DistinctRendererMaterials(Renderer[] renderers)
