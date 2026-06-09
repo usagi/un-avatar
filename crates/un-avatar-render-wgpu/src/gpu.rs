@@ -223,7 +223,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		scoped_upload_supported: false,
 		all_resident: true,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
-			"wardrobe asset ownership metadata scopes renderer draw residency for active asset groups; GPU buffers/textures remain all-resident"
+			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; GPU resources remain all-resident"
 				.to_string()
 		} else if has_declared_groups && has_ownership {
 			"wardrobe asset ownership metadata is present, but no active asset groups are selected; GPU resources remain all-resident"
@@ -4865,7 +4865,7 @@ mod tests {
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
 		assert_eq!(plan.mode, "draw-scoped-all-resident");
-		assert!(plan.reason.contains("scopes renderer draw residency"));
+		assert!(plan.reason.contains("scopes renderer draw/material/texture residency"));
 	}
 
 	#[test]
