@@ -343,6 +343,7 @@ pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 3;
 pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarBoneProxy"
+		| "ModularAvatarBlendshapeSync"
 		| "ModularAvatarMergeArmature"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
@@ -4138,8 +4139,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let selection =
-			scene.scoped_asset_selection(&["outfit:coat".to_string(), "missing:hat".to_string()]);
+		let selection = scene.scoped_asset_selection(&["outfit:coat".to_string(), "missing:hat".to_string()]);
 		assert_eq!(selection.owned_active_groups, vec!["outfit:coat".to_string()]);
 		assert_eq!(selection.missing_active_asset_groups, vec!["missing:hat".to_string()]);
 		assert_eq!(
@@ -5145,6 +5145,7 @@ mod tests {
 	#[test]
 	fn modular_avatar_component_support_kind_classifies_known_runtime_features() {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBoneProxy"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBlendshapeSync"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarRemoveVertexColor"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");

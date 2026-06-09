@@ -5105,10 +5105,10 @@ mod tests {
 		assert_eq!(report.scene.scoped_resident_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
 		assert_eq!(unavatar.modular_avatar_component_count, 10);
-		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&2));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&3));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&6));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&2));

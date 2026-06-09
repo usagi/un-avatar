@@ -1853,6 +1853,36 @@ fn apply_blend_shape_weight(scene: &mut UnaSceneSnapshot, node_idx: usize, name:
 	applied
 }
 
+fn blend_shape_weight(scene: &UnaSceneSnapshot, node_idx: usize, name: &str) -> Option<f32> {
+	let mesh_idx = scene.nodes.get(node_idx).and_then(|node| node.mesh)?;
+	let primitives = scene.meshes.get(mesh_idx)?;
+	for primitive in primitives {
+		let Some(target_idx) = primitive.morph_target_names.iter().position(|candidate| candidate == name) else {
+			continue;
+		};
+		if target_idx >= primitive.morph_targets.len() {
+			continue;
+		}
+		return Some(primitive.default_morph_weights.get(target_idx).copied().unwrap_or(0.0));
+	}
+	None
+}
+
+fn ensure_unique_mesh_for_node(scene: &mut UnaSceneSnapshot, node_idx: usize) -> Option<usize> {
+	let mesh_idx = scene.nodes.get(node_idx).and_then(|node| node.mesh)?;
+	let users = scene.nodes.iter().filter(|node| node.mesh == Some(mesh_idx)).count();
+	if users <= 1 {
+		return Some(mesh_idx);
+	}
+	let mesh = scene.meshes.get(mesh_idx)?.clone();
+	scene.meshes.push(mesh);
+	let cloned_idx = scene.meshes.len() - 1;
+	if let Some(node) = scene.nodes.get_mut(node_idx) {
+		node.mesh = Some(cloned_idx);
+	}
+	Some(cloned_idx)
+}
+
 fn expression_catalog_from_morph_target_names(scene: &UnaSceneSnapshot) -> Option<UnaExpressionCatalog> {
 	let mut binds_by_name: BTreeMap<String, Vec<UnaMorphTargetBind>> = BTreeMap::new();
 	for (mesh_index, primitives) in scene.meshes.iter().enumerate() {
@@ -4351,6 +4381,142 @@ fn modular_avatar_component_f32(component: &Value, names: &[&str]) -> Option<f32
 	modular_avatar_component_value(component, names).and_then(json_number_f32)
 }
 
+fn modular_avatar_blendshape_sync_binding_reference(binding: &Value) -> Option<&Value> {
+	binding
+		.get("referenceMesh")
+		.or_else(|| binding.get("ReferenceMesh"))
+		.or_else(|| binding.get("reference_mesh"))
+}
+
+fn modular_avatar_blendshape_sync_binding_shape(binding: &Value, names: &[&str]) -> Option<String> {
+	names
+		.iter()
+		.find_map(|name| binding.get(*name))
+		.and_then(Value::as_str)
+		.map(str::trim)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+}
+
+fn modular_avatar_curve_key_time_value(key: &Value) -> Option<(f32, f32)> {
+	let time = key.get("time").and_then(json_number_f32)?;
+	let value = key.get("value").and_then(json_number_f32)?;
+	Some((time, value))
+}
+
+fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32 {
+	let Some(keys) = curve
+		.and_then(|curve| curve.get("keys").or_else(|| curve.get("Keys")))
+		.and_then(Value::as_array)
+	else {
+		return input;
+	};
+	if keys.len() < 2 {
+		return input;
+	}
+	let mut keys = keys
+		.iter()
+		.filter_map(modular_avatar_curve_key_time_value)
+		.filter(|(time, value)| time.is_finite() && value.is_finite())
+		.collect::<Vec<_>>();
+	if keys.len() < 2 {
+		return input;
+	}
+	keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+	if input <= keys[0].0 {
+		return keys[0].1;
+	}
+	for pair in keys.windows(2) {
+		let (t0, v0) = pair[0];
+		let (t1, v1) = pair[1];
+		if input <= t1 {
+			let span = t1 - t0;
+			if span.abs() <= f32::EPSILON {
+				return v1;
+			}
+			let f = ((input - t0) / span).clamp(0.0, 1.0);
+			return v0 + (v1 - v0) * f;
+		}
+	}
+	keys.last().map(|(_, value)| *value).unwrap_or(input)
+}
+
+fn apply_unavatar_blendshape_syncs(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize, usize) {
+	let mut applied = 0usize;
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	let mut unsupported = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarBlendshapeSync") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(target_ref) = component.get("target").or_else(|| component.get("resolvedTarget")) else {
+			missing += 1;
+			continue;
+		};
+		let Some(target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let Some(bindings) = unavatar_modular_avatar_component_array(component, &["Bindings", "bindings", "m_bindings"]) else {
+			missing += 1;
+			continue;
+		};
+		for binding in bindings {
+			if !binding.is_object() {
+				unsupported += 1;
+				continue;
+			}
+			let Some(reference) = modular_avatar_blendshape_sync_binding_reference(binding) else {
+				missing += 1;
+				continue;
+			};
+			let Some(source) = modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths) else {
+				missing += 1;
+				continue;
+			};
+			let Some(source_shape) = modular_avatar_blendshape_sync_binding_shape(binding, &["blendshape", "Blendshape", "blendShape"])
+			else {
+				missing += 1;
+				continue;
+			};
+			let target_shape =
+				modular_avatar_blendshape_sync_binding_shape(binding, &["localBlendshape", "LocalBlendshape", "localBlendShape"])
+					.unwrap_or_else(|| source_shape.clone());
+			let Some(source_weight) = blend_shape_weight(scene, source, &source_shape) else {
+				missing += 1;
+				continue;
+			};
+			let remapped = modular_avatar_remap_curve_evaluate(
+				binding
+					.get("remapCurve")
+					.or_else(|| binding.get("RemapCurve"))
+					.or_else(|| binding.get("remap_curve")),
+				source_weight,
+			);
+			if ensure_unique_mesh_for_node(scene, target).is_some()
+				&& apply_blend_shape_weight(scene, target, &target_shape, (remapped * 100.0).clamp(0.0, 100.0))
+			{
+				applied += 1;
+			} else {
+				missing += 1;
+			}
+		}
+	}
+	(applied, missing, skipped, unsupported)
+}
+
 fn modular_avatar_shape_change_type(shape: &Value) -> Option<&str> {
 	shape
 		.get("ChangeType")
@@ -4765,6 +4931,13 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	{
 		report.push_info(format!(
 			".unavatar Modular Avatar: vertex_filter_nodes={vertex_filter_nodes}, vertex_filter_primitives={vertex_filter_primitives}, vertex_filter_triangles={vertex_filter_triangles}, vertex_filter_missing={vertex_filter_missing}, vertex_filter_skipped={vertex_filter_skipped}, vertex_filter_unsupported={vertex_filter_unsupported}"
+		));
+	}
+	let (blendshape_sync_applied, blendshape_sync_missing, blendshape_sync_skipped, blendshape_sync_unsupported) =
+		apply_unavatar_blendshape_syncs(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if blendshape_sync_applied > 0 || blendshape_sync_missing > 0 || blendshape_sync_skipped > 0 || blendshape_sync_unsupported > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: blendshape_sync_applied={blendshape_sync_applied}, blendshape_sync_missing={blendshape_sync_missing}, blendshape_sync_skipped={blendshape_sync_skipped}, blendshape_sync_unsupported={blendshape_sync_unsupported}"
 		));
 	}
 	let (mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing) =
@@ -11266,6 +11439,30 @@ mod tests {
 		}
 	}
 
+	fn test_morph_primitive(shape_name: &str, default_weight: f32) -> UnaMeshBuffers {
+		UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![UnaMorphTargetDeltas {
+				position_deltas: vec![[0.0, 0.0, 0.0]],
+				normal_deltas: None,
+			}],
+			morph_target_names: vec![shape_name.to_string()],
+			default_morph_weights: vec![default_weight],
+		}
+	}
+
 	#[test]
 	fn unavatar_path_diagnostics_reports_ambiguous_paths() {
 		let mut scene = UnaSceneSnapshot {
@@ -11578,6 +11775,77 @@ mod tests {
 		assert_eq!(scene.nodes[2].mesh, Some(0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[0, 1, 2, 1, 3, 2][..]));
 		assert_eq!(scene.meshes[1][0].indices.as_deref(), Some(&[0, 1, 2][..]));
+	}
+
+	#[test]
+	fn modular_avatar_blendshape_sync_propagates_static_default_weight() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Body".to_string()),
+					source_node_id: Some("node_body".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("JacketCopy".to_string()),
+					source_node_id: Some("node_jacket_copy".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![test_morph_primitive("Breast_Big", 0.25)],
+				vec![test_morph_primitive("Jacket_Breast_Big", 0.0)],
+			],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarBlendshapeSync",
+			"enabled": true,
+			"target": {"nodeId": "node_jacket", "path": "Root/Jacket"},
+			"fields": {
+				"Bindings": [{
+					"referenceMesh": {"resolvedTarget": {"nodeId": "node_body", "path": "Root/Body"}},
+					"blendshape": "Breast_Big",
+					"localBlendshape": "Jacket_Breast_Big",
+					"remapCurve": {
+						"keyCount": 2,
+						"keys": [
+							{"time": 0.0, "value": 0.0},
+							{"time": 1.0, "value": 0.5}
+						]
+					}
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let result = apply_unavatar_blendshape_syncs(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!(result, (1, 0, 0, 0));
+		assert_eq!(scene.nodes[2].mesh, Some(2));
+		assert_eq!(scene.nodes[3].mesh, Some(1));
+		assert_eq!(scene.meshes[2][0].default_morph_weights, vec![0.125]);
+		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.0]);
 	}
 
 	#[test]
@@ -12642,10 +12910,7 @@ mod tests {
 			vec!["outfit:hair".to_string(), "physics:hair".to_string()]
 		);
 		assert_eq!(applied.scoped_active_asset_group_count, 1);
-		assert_eq!(
-			applied.scoped_missing_active_asset_groups,
-			vec!["physics:hair".to_string()]
-		);
+		assert_eq!(applied.scoped_missing_active_asset_groups, vec!["physics:hair".to_string()]);
 		assert_eq!(applied.scoped_resident_mesh_primitive_count, 1);
 		assert_eq!(applied.scoped_resident_material_count, 1);
 		assert_eq!(applied.scoped_resident_image_count, 1);
