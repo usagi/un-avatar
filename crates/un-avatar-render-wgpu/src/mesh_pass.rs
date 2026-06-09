@@ -795,6 +795,7 @@ const _: () = assert!(std::mem::size_of::<Vertex>() == 112);
 #[derive(Clone, Debug, Default, Serialize)]
 pub(crate) struct TextureUploadSummary {
 	pub image_count: u32,
+	pub deferred_image_upload_count: u32,
 	pub resized_count: u32,
 	pub cubemap_count: u32,
 	pub cubemap_converted_count: u32,
@@ -1609,6 +1610,58 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 	state
 }
 
+enum SceneImageTextureUpload {
+	Source(SourceTextureUpload),
+	Payload {
+		payload: TextureUploadPayload,
+		format: wgpu::TextureFormat,
+		width: u32,
+		height: u32,
+	},
+}
+
+struct SceneImageTextureSlot {
+	upload: SceneImageTextureUpload,
+	texture: Option<wgpu::Texture>,
+	view: Option<wgpu::TextureView>,
+}
+
+impl SceneImageTextureSlot {
+	fn new(upload: SceneImageTextureUpload) -> Self {
+		Self {
+			upload,
+			texture: None,
+			view: None,
+		}
+	}
+
+	fn ensure_uploaded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<wgpu::TextureView> {
+		if let Some(view) = &self.view {
+			return Some(view.clone());
+		}
+		let texture = match &self.upload {
+			SceneImageTextureUpload::Source(upload) => create_source_image_texture(device, queue, upload),
+			SceneImageTextureUpload::Payload {
+				payload,
+				format,
+				width,
+				height,
+			} => create_payload_image_texture(device, queue, payload, *format, *width, *height),
+		};
+		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+		self.texture = Some(texture);
+		self.view = Some(view.clone());
+		Some(view)
+	}
+
+	fn unload(&mut self) -> bool {
+		let had_resource = self.texture.is_some() || self.view.is_some();
+		self.view = None;
+		self.texture = None;
+		had_resource
+	}
+}
+
 pub(crate) struct SceneMeshes {
 	pipeline_outline_toon: wgpu::RenderPipeline,
 	_compute_fur_cards_compute_pipeline: ComputeFurCardsComputePipeline,
@@ -1641,7 +1694,7 @@ pub(crate) struct SceneMeshes {
 	audio_link_uploaded_sequence: u64,
 	audio_link_frame_params: [f32; 4],
 	texture_views: SceneTextureViews,
-	all_image_texture_views: Vec<wgpu::TextureView>,
+	image_texture_slots: Vec<SceneImageTextureSlot>,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	image_sampler_indices: Vec<usize>,
@@ -6575,7 +6628,6 @@ impl SceneMeshes {
 			wgpu::TextureFormat::Rgba8UnormSrgb,
 			[0, 0, 255, 255],
 		);
-		let scene_texture_base = textures.len();
 		report("gpu-upload", "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
 			limit_max_dimension: texture_max_dimension,
@@ -6589,6 +6641,8 @@ impl SceneMeshes {
 		};
 
 		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
+		let mut image_views: Vec<wgpu::TextureView> = Vec::with_capacity(scene.images.len());
+		let mut image_texture_slots: Vec<SceneImageTextureSlot> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
 		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		let material_slot_residency = scene
@@ -6601,7 +6655,8 @@ impl SceneMeshes {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			image_texture_residency.push(asset_residency.image_resident(image_index));
+			let image_resident = asset_residency.image_resident(image_index);
+			image_texture_residency.push(image_resident);
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
 			if texture_source_is_cube(source_metadata) {
@@ -6680,17 +6735,19 @@ impl SceneMeshes {
 			}
 			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
 				if let Some(source_upload) = source_texture_upload(im) {
-					report(
-						"gpu-upload",
-						format!(
-							"Uploading precision-preserving source texture {}/{} {}x{} {:?} ({role:?})",
-							image_index + 1,
-							scene.images.len(),
-							source_upload.width,
-							source_upload.height,
-							source_upload.format
-						),
-					);
+					if image_resident {
+						report(
+							"gpu-upload",
+							format!(
+								"Uploading precision-preserving source texture {}/{} {}x{} {:?} ({role:?})",
+								image_index + 1,
+								scene.images.len(),
+								source_upload.width,
+								source_upload.height,
+								source_upload.format
+							),
+						);
+					}
 					texture_summary.record_image(
 						src_w,
 						src_h,
@@ -6698,8 +6755,22 @@ impl SceneMeshes {
 						source_upload.height,
 						source_upload.data.len() as u64,
 					);
-					let tex = create_source_image_texture(device, queue, &source_upload);
-					textures.push(tex);
+					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
+					if image_resident {
+						if let Some(view) = slot.ensure_uploaded(device, queue) {
+							image_views.push(view);
+						} else {
+							image_views.push(transparent_black_view.clone());
+						}
+					} else {
+						texture_summary.deferred_image_upload_count += 1;
+						report(
+							"gpu-upload",
+							format!("Deferring precision-preserving source texture {}/{} ({role:?})", image_index + 1, scene.images.len()),
+						);
+						image_views.push(transparent_black_view.clone());
+					}
+					image_texture_slots.push(slot);
 					continue;
 				}
 			}
@@ -6819,29 +6890,46 @@ impl SceneMeshes {
 				TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
 				TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
 			};
-			for (mip_level, mip) in payload.mips.iter().enumerate() {
+			if image_resident {
+				for (mip_level, mip) in payload.mips.iter().enumerate() {
+					report(
+						"gpu-upload",
+						format!(
+							"Uploading texture {}/{} mip {}/{} {}x{} ({role:?})",
+							image_index + 1,
+							scene.images.len(),
+							mip_level + 1,
+							payload.mips.len(),
+							mip.width,
+							mip.height
+						),
+					);
+				}
+			} else {
+				texture_summary.deferred_image_upload_count += 1;
 				report(
 					"gpu-upload",
-					format!(
-						"Uploading texture {}/{} mip {}/{} {}x{} ({role:?})",
-						image_index + 1,
-						scene.images.len(),
-						mip_level + 1,
-						payload.mips.len(),
-						mip.width,
-						mip.height
-					),
+					format!("Deferring texture {}/{} mips={} ({role:?})", image_index + 1, scene.images.len(), payload.mips.len()),
 				);
 			}
-			let tex = create_payload_image_texture(device, queue, &payload, texture_format, w, h);
-			textures.push(tex);
+			let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+				payload,
+				format: texture_format,
+				width: w,
+				height: h,
+			});
+			if image_resident {
+				if let Some(view) = slot.ensure_uploaded(device, queue) {
+					image_views.push(view);
+				} else {
+					image_views.push(transparent_black_view.clone());
+				}
+			} else {
+				image_views.push(transparent_black_view.clone());
+			}
+			image_texture_slots.push(slot);
 		}
 
-		let image_views: Vec<wgpu::TextureView> = textures
-			.iter()
-			.skip(scene_texture_base)
-			.map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
-			.collect();
 		assert_eq!(
 			image_views.len(),
 			scene.images.len(),
@@ -7079,7 +7167,7 @@ impl SceneMeshes {
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
 		let expression_value_capacity = expression_names.len();
 
-		Ok(Self {
+		let mut scene_meshes = Self {
 			pipeline_outline_toon,
 			_compute_fur_cards_compute_pipeline: compute_fur_cards_compute_pipeline,
 			pipeline_compute_fur_cards_pre_toon,
@@ -7111,7 +7199,7 @@ impl SceneMeshes {
 			audio_link_uploaded_sequence: 0,
 			audio_link_frame_params: [0.0; 4],
 			texture_views,
-			all_image_texture_views: image_views,
+			image_texture_slots,
 			_samplers: samplers,
 			image_sampler_indices,
 			_textures: textures,
@@ -7135,7 +7223,15 @@ impl SceneMeshes {
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
 			has_morph_draws,
 			opts,
-		})
+		};
+		let active_gaps = scene_meshes.active_residency_gaps();
+		if !active_gaps.inactive_image_texture_indices.is_empty() || !active_gaps.inactive_material_slot_indices.is_empty() {
+			scene_meshes.promote_image_texture_residency(&active_gaps.inactive_image_texture_indices);
+			scene_meshes.apply_image_texture_view_residency(device, queue, &active_gaps.inactive_image_texture_indices, &[]);
+			scene_meshes.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
+			scene_meshes.rebuild_material_bind_groups(device);
+		}
+		Ok(scene_meshes)
 	}
 
 	fn write_skin_palette(
@@ -7965,25 +8061,39 @@ impl SceneMeshes {
 		promote_residency_indices(&mut self.image_texture_residency, image_texture_indices)
 	}
 
-	pub(crate) fn apply_image_texture_view_residency(&mut self, load_indices: &[usize], unload_indices: &[usize]) -> (usize, usize) {
+	pub(crate) fn apply_image_texture_view_residency(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		load_indices: &[usize],
+		unload_indices: &[usize],
+	) -> (usize, usize) {
 		let mut loaded = 0;
 		for index in load_indices {
-			let Some(source_view) = self.all_image_texture_views.get(*index) else {
+			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
+				continue;
+			};
+			let Some(source_view) = slot.ensure_uploaded(device, queue) else {
 				continue;
 			};
 			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
 				continue;
 			};
-			*current_view = source_view.clone();
+			*current_view = source_view;
 			loaded += 1;
 		}
 		let mut unloaded = 0;
 		for index in unload_indices {
+			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
+				continue;
+			};
 			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
 				continue;
 			};
 			*current_view = self.texture_views.transparent_black.clone();
-			unloaded += 1;
+			if slot.unload() {
+				unloaded += 1;
+			}
 		}
 		(loaded, unloaded)
 	}

@@ -126,8 +126,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_residency_refresh_image_unload_count: usize,
 	pub(crate) last_residency_refresh_material_load_count: usize,
 	pub(crate) last_residency_refresh_material_unload_count: usize,
-	pub(crate) last_image_texture_scoped_bind_load_count: usize,
-	pub(crate) last_image_texture_scoped_bind_unload_count: usize,
+	pub(crate) last_image_texture_scoped_load_count: usize,
+	pub(crate) last_image_texture_scoped_unload_count: usize,
 	pub(crate) last_material_slot_scoped_upload_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
@@ -256,8 +256,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_residency_refresh_image_unload_count: 0,
 		last_residency_refresh_material_load_count: 0,
 		last_residency_refresh_material_unload_count: 0,
-		last_image_texture_scoped_bind_load_count: 0,
-		last_image_texture_scoped_bind_unload_count: 0,
+		last_image_texture_scoped_load_count: 0,
+		last_image_texture_scoped_unload_count: 0,
 		last_material_slot_scoped_upload_count: 0,
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
@@ -1613,8 +1613,8 @@ pub(crate) struct GpuState {
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
 	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
-	last_image_texture_scoped_bind_load_count: usize,
-	last_image_texture_scoped_bind_unload_count: usize,
+	last_image_texture_scoped_load_count: usize,
+	last_image_texture_scoped_unload_count: usize,
 	last_material_slot_scoped_upload_count: usize,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
@@ -1971,8 +1971,8 @@ impl GpuState {
 			contact_shadow,
 			texture_summary,
 			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
-			last_image_texture_scoped_bind_load_count: 0,
-			last_image_texture_scoped_bind_unload_count: 0,
+			last_image_texture_scoped_load_count: 0,
+			last_image_texture_scoped_unload_count: 0,
 			last_material_slot_scoped_upload_count: 0,
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
@@ -2163,9 +2163,9 @@ impl GpuState {
 				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
 			let (image_texture_bind_load_count, image_texture_bind_unload_count) =
-				sm.apply_image_texture_view_residency(&image_load_indices, &image_unload_indices);
-			self.last_image_texture_scoped_bind_load_count = image_texture_bind_load_count;
-			self.last_image_texture_scoped_bind_unload_count = image_texture_bind_unload_count;
+				sm.apply_image_texture_view_residency(&self.device, &self.queue, &image_load_indices, &image_unload_indices);
+			self.last_image_texture_scoped_load_count = image_texture_bind_load_count;
+			self.last_image_texture_scoped_unload_count = image_texture_bind_unload_count;
 			if (image_texture_bind_load_count > 0 || image_texture_bind_unload_count > 0) && self.debug_log.is_enabled() {
 				self.debug_log.line(
 					"wardrobe",
@@ -3102,8 +3102,8 @@ impl GpuState {
 		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
 		plan.last_residency_refresh_material_unload_count =
 			self.last_asset_residency_refresh.material_slot_unload_indices.len();
-		plan.last_image_texture_scoped_bind_load_count = self.last_image_texture_scoped_bind_load_count;
-		plan.last_image_texture_scoped_bind_unload_count = self.last_image_texture_scoped_bind_unload_count;
+		plan.last_image_texture_scoped_load_count = self.last_image_texture_scoped_load_count;
+		plan.last_image_texture_scoped_unload_count = self.last_image_texture_scoped_unload_count;
 		plan.last_material_slot_scoped_upload_count = self.last_material_slot_scoped_upload_count;
 		plan
 	}

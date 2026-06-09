@@ -119,6 +119,7 @@ impl TextureUploadKind {
 	}
 }
 
+#[derive(Clone)]
 pub(crate) struct TextureUploadMip {
 	// For compressed formats, these are block-aligned upload dimensions, not original image dimensions.
 	// Returning logical dimensions here regressed non-4-aligned BCn textures into startup hangs.
@@ -127,11 +128,13 @@ pub(crate) struct TextureUploadMip {
 	pub(crate) data: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub(crate) struct TextureUploadPayload {
 	pub(crate) kind: TextureUploadKind,
 	pub(crate) mips: Vec<TextureUploadMip>,
 }
 
+#[derive(Clone)]
 pub(crate) struct SourceTextureUpload {
 	pub(crate) format: wgpu::TextureFormat,
 	pub(crate) width: u32,
