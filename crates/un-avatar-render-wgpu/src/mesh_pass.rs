@@ -1282,6 +1282,14 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) inactive_material_slots_used_by_active_draw: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SceneMeshActiveResidencyGaps {
+	inactive_image_texture_indices: Vec<usize>,
+	inactive_material_slot_indices: Vec<usize>,
+	active_draws_using_inactive_image_texture_count: usize,
+	active_draws_using_inactive_material_slot_count: usize,
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -7774,49 +7782,9 @@ impl SceneMeshes {
 					.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
 			})
 			.count();
-		let active_draws_using_inactive_image_texture_count = self
-			.draws
-			.iter()
-			.filter(|draw| {
-				draw.active()
-					&& draw
-						.texture_indices
-						.iter()
-						.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
-			})
-			.count();
-		let inactive_image_textures_used_by_active_draw = self
-			.draws
-			.iter()
-			.filter(|draw| draw.active())
-			.flat_map(|draw| draw.texture_indices.iter().copied())
-			.filter(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
-			.collect::<BTreeSet<_>>()
-			.into_iter()
-			.collect::<Vec<_>>();
-		let inactive_image_textures_used_by_active_draw_count = inactive_image_textures_used_by_active_draw.len();
 		let total_material_slot_count = self.material_slot_residency.len();
 		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
-		let active_draws_using_inactive_material_slot_count = self
-			.draws
-			.iter()
-			.filter(|draw| {
-				draw.active()
-					&& draw
-						.material_slot_index
-						.is_some_and(|index| self.material_slot_residency.get(index).is_some_and(|resident| !resident))
-			})
-			.count();
-		let inactive_material_slots_used_by_active_draw = self
-			.draws
-			.iter()
-			.filter(|draw| draw.active())
-			.filter_map(|draw| draw.material_slot_index)
-			.filter(|index| self.material_slot_residency.get(*index).is_some_and(|resident| !resident))
-			.collect::<BTreeSet<_>>()
-			.into_iter()
-			.collect::<Vec<_>>();
-		let inactive_material_slots_used_by_active_draw_count = inactive_material_slots_used_by_active_draw.len();
+		let active_gaps = self.active_residency_gaps();
 		SceneMeshAssetResidencyCounts {
 			total_draw_mesh_primitive_count,
 			resident_draw_mesh_primitive_count,
@@ -7825,15 +7793,54 @@ impl SceneMeshes {
 			resident_image_texture_count,
 			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),
 			draws_using_inactive_image_texture_count,
-			active_draws_using_inactive_image_texture_count,
-			inactive_image_textures_used_by_active_draw_count,
-			inactive_image_textures_used_by_active_draw,
+			active_draws_using_inactive_image_texture_count: active_gaps.active_draws_using_inactive_image_texture_count,
+			inactive_image_textures_used_by_active_draw_count: active_gaps.inactive_image_texture_indices.len(),
+			inactive_image_textures_used_by_active_draw: active_gaps.inactive_image_texture_indices,
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
+			active_draws_using_inactive_material_slot_count: active_gaps.active_draws_using_inactive_material_slot_count,
+			inactive_material_slots_used_by_active_draw_count: active_gaps.inactive_material_slot_indices.len(),
+			inactive_material_slots_used_by_active_draw: active_gaps.inactive_material_slot_indices,
+		}
+	}
+
+	fn active_residency_gaps(&self) -> SceneMeshActiveResidencyGaps {
+		let mut inactive_image_texture_indices = BTreeSet::new();
+		let mut inactive_material_slot_indices = BTreeSet::new();
+		let mut active_draws_using_inactive_image_texture_count = 0;
+		let mut active_draws_using_inactive_material_slot_count = 0;
+		for draw in self.draws.iter().filter(|draw| draw.active()) {
+			let mut draw_uses_inactive_image_texture = false;
+			for texture_index in &draw.texture_indices {
+				if self
+					.image_texture_residency
+					.get(*texture_index)
+					.is_some_and(|resident| !resident)
+				{
+					inactive_image_texture_indices.insert(*texture_index);
+					draw_uses_inactive_image_texture = true;
+				}
+			}
+			if draw_uses_inactive_image_texture {
+				active_draws_using_inactive_image_texture_count += 1;
+			}
+			if let Some(material_slot_index) = draw.material_slot_index {
+				if self
+					.material_slot_residency
+					.get(material_slot_index)
+					.is_some_and(|resident| !resident)
+				{
+					inactive_material_slot_indices.insert(material_slot_index);
+					active_draws_using_inactive_material_slot_count += 1;
+				}
+			}
+		}
+		SceneMeshActiveResidencyGaps {
+			inactive_image_texture_indices: inactive_image_texture_indices.into_iter().collect(),
+			inactive_material_slot_indices: inactive_material_slot_indices.into_iter().collect(),
+			active_draws_using_inactive_image_texture_count,
 			active_draws_using_inactive_material_slot_count,
-			inactive_material_slots_used_by_active_draw_count,
-			inactive_material_slots_used_by_active_draw,
 		}
 	}
 
