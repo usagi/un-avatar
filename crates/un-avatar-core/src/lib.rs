@@ -196,6 +196,15 @@ pub struct UnaRuntimeActionCondition {
 	pub active_parent_nodes: Vec<UnaRuntimeNodeTarget>,
 }
 
+impl UnaRuntimeActionCondition {
+	pub fn parameter_condition_matches(&self, name: &str, value: f32) -> Option<bool> {
+		let condition_name = self.parameter_name.as_deref()?;
+		let condition_value = self.parameter_value?;
+		let active = condition_name == name && (value - condition_value).abs() <= UNA_RUNTIME_ACTION_PARAMETER_EPSILON;
+		Some(active ^ self.inverted)
+	}
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeState {
 	/// Currently resolved wardrobe set. Source package wardrobe metadata remains in `UnaUnavatarExtension`;
@@ -4467,6 +4476,26 @@ mod tests {
 			actions.actions[0].parameter_assignments(),
 			BTreeMap::from([("Outfit".to_string(), 2.0)])
 		);
+	}
+
+	#[test]
+	fn runtime_action_condition_matches_parameter_with_inversion() {
+		let condition = UnaRuntimeActionCondition {
+			parameter_name: Some("Hat".to_string()),
+			parameter_value: Some(1.0),
+			..Default::default()
+		};
+		assert_eq!(condition.parameter_condition_matches("Hat", 1.004), Some(true));
+		assert_eq!(condition.parameter_condition_matches("Hat", 1.006), Some(false));
+		assert_eq!(condition.parameter_condition_matches("Other", 1.0), Some(false));
+
+		let inverted = UnaRuntimeActionCondition {
+			inverted: true,
+			..condition
+		};
+		assert_eq!(inverted.parameter_condition_matches("Hat", 1.004), Some(false));
+		assert_eq!(inverted.parameter_condition_matches("Hat", 1.006), Some(true));
+		assert_eq!(UnaRuntimeActionCondition::default().parameter_condition_matches("Hat", 1.0), None);
 	}
 
 	#[test]
