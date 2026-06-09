@@ -146,6 +146,12 @@ struct DiagnoseSceneSummary {
 	asset_group_owned_image_count: usize,
 	asset_group_owned_dynamics_count: usize,
 	asset_group_ownership: Vec<DiagnoseAssetGroupOwnershipSummary>,
+	scoped_active_asset_group_count: usize,
+	scoped_missing_active_asset_groups: Vec<String>,
+	scoped_resident_mesh_primitive_count: usize,
+	scoped_resident_material_count: usize,
+	scoped_resident_image_count: usize,
+	scoped_resident_dynamics_count: usize,
 	shading_counts: BTreeMap<String, usize>,
 	alpha_counts: BTreeMap<String, usize>,
 	visible_shading_counts: BTreeMap<String, usize>,
@@ -3230,6 +3236,7 @@ fn build_diagnose_report(
 			));
 		}
 		let asset_ownership_counts = sc.asset_group_ownership_counts();
+		let scoped_asset_selection = sc.scoped_asset_selection(doc.runtime_model().active_asset_groups());
 		let asset_group_ownership = sc
 			.asset_group_ownership
 			.iter()
@@ -3273,6 +3280,12 @@ fn build_diagnose_report(
 			asset_group_owned_image_count: asset_ownership_counts.images,
 			asset_group_owned_dynamics_count: asset_ownership_counts.dynamics,
 			asset_group_ownership,
+			scoped_active_asset_group_count: scoped_asset_selection.owned_active_groups.len(),
+			scoped_missing_active_asset_groups: scoped_asset_selection.missing_active_asset_groups,
+			scoped_resident_mesh_primitive_count: scoped_asset_selection.mesh_primitives.len(),
+			scoped_resident_material_count: scoped_asset_selection.materials.len(),
+			scoped_resident_image_count: scoped_asset_selection.images.len(),
+			scoped_resident_dynamics_count: scoped_asset_selection.dynamics_source_ids.len(),
 			shading_counts,
 			alpha_counts,
 			visible_shading_counts,
@@ -3313,6 +3326,12 @@ fn build_diagnose_report(
 			asset_group_owned_image_count: 0,
 			asset_group_owned_dynamics_count: 0,
 			asset_group_ownership: Vec::new(),
+			scoped_active_asset_group_count: 0,
+			scoped_missing_active_asset_groups: Vec::new(),
+			scoped_resident_mesh_primitive_count: 0,
+			scoped_resident_material_count: 0,
+			scoped_resident_image_count: 0,
+			scoped_resident_dynamics_count: 0,
 			shading_counts: BTreeMap::new(),
 			alpha_counts: BTreeMap::new(),
 			visible_shading_counts: BTreeMap::new(),
@@ -4317,6 +4336,15 @@ fn run_diagnose(
 		report.scene.asset_group_owned_image_count,
 		report.scene.asset_group_owned_dynamics_count
 	);
+	println!(
+		"scoped_assets: active_groups={} missing={:?} mesh_primitives={} materials={} images={} dynamics={}",
+		report.scene.scoped_active_asset_group_count,
+		report.scene.scoped_missing_active_asset_groups,
+		report.scene.scoped_resident_mesh_primitive_count,
+		report.scene.scoped_resident_material_count,
+		report.scene.scoped_resident_image_count,
+		report.scene.scoped_resident_dynamics_count
+	);
 	for group in report.scene.asset_group_ownership.iter().take(16) {
 		println!(
 			"asset_ownership[{}]: mesh_primitives={:?} materials={:?} images={:?} dynamics={:?}",
@@ -4726,7 +4754,7 @@ mod tests {
 
 	#[test]
 	fn diagnose_report_summarizes_unavatar_asset_groups() {
-		let doc = UnaDocument {
+		let mut doc = UnaDocument {
 			scene: Some(un_avatar_core::UnaSceneSnapshot {
 				asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
 					group_id: "outfit:jacket".to_string(),
@@ -4898,6 +4926,8 @@ mod tests {
 			}),
 			..Default::default()
 		};
+		doc.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:jacket".to_string(), "missing:gloves".to_string()]);
 
 		let report = build_diagnose_report(
 			Path::new("avatar.unavatar"),
@@ -4931,6 +4961,15 @@ mod tests {
 			report.scene.asset_group_ownership[0].dynamics_source_ids,
 			vec!["physbone:jacket".to_string()]
 		);
+		assert_eq!(report.scene.scoped_active_asset_group_count, 1);
+		assert_eq!(
+			report.scene.scoped_missing_active_asset_groups,
+			vec!["missing:gloves".to_string()]
+		);
+		assert_eq!(report.scene.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(report.scene.scoped_resident_material_count, 1);
+		assert_eq!(report.scene.scoped_resident_image_count, 1);
+		assert_eq!(report.scene.scoped_resident_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
 		assert_eq!(unavatar.modular_avatar_component_count, 9);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&2));
