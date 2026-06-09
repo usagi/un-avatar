@@ -865,74 +865,61 @@ fn scene_texture_upload_step_count(scene: &UnaSceneSnapshot, texture_roles: &[Te
 		.sum()
 }
 
-fn mesh_primitive_asset_resident(
-	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
-	active_asset_groups: &[String],
-	mesh_index: usize,
-	primitive_index: usize,
-) -> bool {
-	if asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
-		return true;
-	}
-	let active_groups = active_asset_group_set(active_asset_groups);
-	let mut owned_by_any_group = false;
-	for group in asset_group_ownership {
-		if !group
-			.mesh_primitives
-			.iter()
-			.any(|primitive| primitive.mesh_index == mesh_index && primitive.primitive_index == primitive_index)
-		{
-			continue;
-		}
-		owned_by_any_group = true;
-		if active_groups.contains(group.group_id.as_str()) {
-			return true;
-		}
-	}
-	!owned_by_any_group
+#[derive(Clone, Debug, Default)]
+struct SceneAssetResidencySets {
+	all_resident: bool,
+	owned_mesh_primitives: BTreeSet<(usize, usize)>,
+	resident_mesh_primitives: BTreeSet<(usize, usize)>,
+	owned_materials: BTreeSet<usize>,
+	resident_materials: BTreeSet<usize>,
+	owned_images: BTreeSet<usize>,
+	resident_images: BTreeSet<usize>,
 }
 
-fn active_asset_group_set(active_asset_groups: &[String]) -> BTreeSet<&str> {
-	active_asset_groups.iter().map(String::as_str).collect()
-}
-
-fn indexed_asset_resident(
-	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
-	active_asset_groups: &[String],
-	asset_index: usize,
-	assets_for_group: impl Fn(&un_avatar_core::UnaSceneAssetGroupOwnership) -> &[usize],
-) -> bool {
-	if asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
-		return true;
-	}
-	let active_groups = active_asset_group_set(active_asset_groups);
-	let mut owned_by_any_group = false;
-	for group in asset_group_ownership {
-		if !assets_for_group(group).contains(&asset_index) {
-			continue;
+impl SceneAssetResidencySets {
+	fn for_scene(scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> Self {
+		if scene.asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
+			return Self {
+				all_resident: true,
+				..Default::default()
+			};
 		}
-		owned_by_any_group = true;
-		if active_groups.contains(group.group_id.as_str()) {
-			return true;
+		let mut sets = Self::default();
+		for group in &scene.asset_group_ownership {
+			sets.owned_mesh_primitives.extend(
+				group
+					.mesh_primitives
+					.iter()
+					.map(|primitive| (primitive.mesh_index, primitive.primitive_index)),
+			);
+			sets.owned_materials.extend(group.materials.iter().copied());
+			sets.owned_images.extend(group.images.iter().copied());
 		}
+		let selection = scene.scoped_asset_selection(active_asset_groups);
+		sets.resident_mesh_primitives.extend(
+			selection
+				.mesh_primitives
+				.iter()
+				.map(|primitive| (primitive.mesh_index, primitive.primitive_index)),
+		);
+		sets.resident_materials.extend(selection.materials);
+		sets.resident_images.extend(selection.images);
+		sets
 	}
-	!owned_by_any_group
-}
 
-fn material_asset_resident(
-	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
-	active_asset_groups: &[String],
-	material_index: usize,
-) -> bool {
-	indexed_asset_resident(asset_group_ownership, active_asset_groups, material_index, |group| &group.materials)
-}
+	fn mesh_primitive_resident(&self, mesh_index: usize, primitive_index: usize) -> bool {
+		self.all_resident
+			|| !self.owned_mesh_primitives.contains(&(mesh_index, primitive_index))
+			|| self.resident_mesh_primitives.contains(&(mesh_index, primitive_index))
+	}
 
-fn image_asset_resident(
-	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
-	active_asset_groups: &[String],
-	image_index: usize,
-) -> bool {
-	indexed_asset_resident(asset_group_ownership, active_asset_groups, image_index, |group| &group.images)
+	fn material_resident(&self, material_index: usize) -> bool {
+		self.all_resident || !self.owned_materials.contains(&material_index) || self.resident_materials.contains(&material_index)
+	}
+
+	fn image_resident(&self, image_index: usize) -> bool {
+		self.all_resident || !self.owned_images.contains(&image_index) || self.resident_images.contains(&image_index)
+	}
 }
 
 struct ExpandedPrimitive {
@@ -6450,21 +6437,18 @@ impl SceneMeshes {
 
 		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
+		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		let material_slot_residency = scene
 			.materials
 			.iter()
 			.enumerate()
-			.map(|(material_index, _)| material_asset_resident(&scene.asset_group_ownership, active_asset_groups, material_index))
+			.map(|(material_index, _)| asset_residency.material_resident(material_index))
 			.collect::<Vec<_>>();
 		for (image_index, im) in scene.images.iter().enumerate() {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			image_texture_residency.push(image_asset_resident(
-				&scene.asset_group_ownership,
-				active_asset_groups,
-				image_index,
-			));
+			image_texture_residency.push(asset_residency.image_resident(image_index));
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
 			if texture_source_is_cube(source_metadata) {
@@ -6986,7 +6970,7 @@ impl SceneMeshes {
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
 					visible: active,
-					asset_resident: true,
+					asset_resident: asset_residency.mesh_primitive_resident(mesh_i, prim_i),
 					shading: mat.shading,
 					morph_pos,
 					morph_source_indices,
@@ -7742,13 +7726,9 @@ impl SceneMeshes {
 
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
 		let mut changed = 0;
+		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		for draw in &mut self.draws {
-			let next = mesh_primitive_asset_resident(
-				&scene.asset_group_ownership,
-				active_asset_groups,
-				draw.mesh_index,
-				draw.primitive_index,
-			);
+			let next = asset_residency.mesh_primitive_resident(draw.mesh_index, draw.primitive_index);
 			let was_active = draw.active();
 			if draw.asset_resident != next {
 				draw.asset_resident = next;
@@ -7763,7 +7743,7 @@ impl SceneMeshes {
 				.images
 				.iter()
 				.enumerate()
-				.map(|(image_index, _)| image_asset_resident(&scene.asset_group_ownership, active_asset_groups, image_index)),
+				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
 		);
 		self.material_slot_residency.clear();
 		self.material_slot_residency.extend(
@@ -7771,7 +7751,7 @@ impl SceneMeshes {
 				.materials
 				.iter()
 				.enumerate()
-				.map(|(material_index, _)| material_asset_resident(&scene.asset_group_ownership, active_asset_groups, material_index)),
+				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
 		);
 		if changed > 0 {
 			self.rebuild_draw_order();
@@ -7987,40 +7967,45 @@ mod tests {
 
 	#[test]
 	fn mesh_primitive_asset_residency_keeps_active_and_unowned_primitives() {
-		let ownership = vec![
-			un_avatar_core::UnaSceneAssetGroupOwnership {
-				group_id: "outfit:coat".to_string(),
-				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
-					mesh_index: 1,
-					primitive_index: 0,
-				}],
-				materials: vec![3],
-				images: vec![5],
-				..Default::default()
-			},
-			un_avatar_core::UnaSceneAssetGroupOwnership {
-				group_id: "outfit:hat".to_string(),
-				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
-					mesh_index: 2,
-					primitive_index: 0,
-				}],
-				materials: vec![4],
-				images: vec![6],
-				..Default::default()
-			},
-		];
+		let scene = UnaSceneSnapshot {
+			asset_group_ownership: vec![
+				un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 1,
+						primitive_index: 0,
+					}],
+					materials: vec![3],
+					images: vec![5],
+					..Default::default()
+				},
+				un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: "outfit:hat".to_string(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 2,
+						primitive_index: 0,
+					}],
+					materials: vec![4],
+					images: vec![6],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
 		let active_groups = vec!["outfit:coat".to_string()];
+		let residency = SceneAssetResidencySets::for_scene(&scene, &active_groups);
 
-		assert!(mesh_primitive_asset_resident(&ownership, &active_groups, 0, 0));
-		assert!(mesh_primitive_asset_resident(&ownership, &active_groups, 1, 0));
-		assert!(!mesh_primitive_asset_resident(&ownership, &active_groups, 2, 0));
-		assert!(mesh_primitive_asset_resident(&ownership, &[], 2, 0));
-		assert!(material_asset_resident(&ownership, &active_groups, 0));
-		assert!(material_asset_resident(&ownership, &active_groups, 3));
-		assert!(!material_asset_resident(&ownership, &active_groups, 4));
-		assert!(image_asset_resident(&ownership, &active_groups, 0));
-		assert!(image_asset_resident(&ownership, &active_groups, 5));
-		assert!(!image_asset_resident(&ownership, &active_groups, 6));
+		assert!(residency.mesh_primitive_resident(0, 0));
+		assert!(residency.mesh_primitive_resident(1, 0));
+		assert!(!residency.mesh_primitive_resident(2, 0));
+		assert!(residency.material_resident(0));
+		assert!(residency.material_resident(3));
+		assert!(!residency.material_resident(4));
+		assert!(residency.image_resident(0));
+		assert!(residency.image_resident(5));
+		assert!(!residency.image_resident(6));
+		let all_resident = SceneAssetResidencySets::for_scene(&scene, &[]);
+		assert!(all_resident.mesh_primitive_resident(2, 0));
 	}
 
 	#[test]
