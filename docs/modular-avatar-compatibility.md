@@ -198,5 +198,5 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 ## Near-Term Order
 
-1. Implement MA Menu Installer submenu installation semantics and effect-backed wardrobe candidate generation.
-2. Implement renderer scoped upload / unload using Wardrobe asset group ownership metadata.
+1. Implement renderer scoped upload / unload using Wardrobe asset group ownership metadata.
+2. Expand Menu / Parameter runtime surface beyond diagnose, including external menu asset expansion and UI consumption of `menu_wardrobe_candidates`.

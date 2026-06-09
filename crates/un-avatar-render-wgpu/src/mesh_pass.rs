@@ -874,7 +874,7 @@ fn mesh_primitive_asset_resident(
 	if asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
 		return true;
 	}
-	let active_groups = active_asset_groups.iter().map(String::as_str).collect::<BTreeSet<_>>();
+	let active_groups = active_asset_group_set(active_asset_groups);
 	let mut owned_by_any_group = false;
 	for group in asset_group_ownership {
 		if !group
@@ -890,6 +890,49 @@ fn mesh_primitive_asset_resident(
 		}
 	}
 	!owned_by_any_group
+}
+
+fn active_asset_group_set(active_asset_groups: &[String]) -> BTreeSet<&str> {
+	active_asset_groups.iter().map(String::as_str).collect()
+}
+
+fn indexed_asset_resident(
+	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
+	active_asset_groups: &[String],
+	asset_index: usize,
+	assets_for_group: impl Fn(&un_avatar_core::UnaSceneAssetGroupOwnership) -> &[usize],
+) -> bool {
+	if asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
+		return true;
+	}
+	let active_groups = active_asset_group_set(active_asset_groups);
+	let mut owned_by_any_group = false;
+	for group in asset_group_ownership {
+		if !assets_for_group(group).contains(&asset_index) {
+			continue;
+		}
+		owned_by_any_group = true;
+		if active_groups.contains(group.group_id.as_str()) {
+			return true;
+		}
+	}
+	!owned_by_any_group
+}
+
+fn material_asset_resident(
+	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
+	active_asset_groups: &[String],
+	material_index: usize,
+) -> bool {
+	indexed_asset_resident(asset_group_ownership, active_asset_groups, material_index, |group| &group.materials)
+}
+
+fn image_asset_resident(
+	asset_group_ownership: &[un_avatar_core::UnaSceneAssetGroupOwnership],
+	active_asset_groups: &[String],
+	image_index: usize,
+) -> bool {
+	indexed_asset_resident(asset_group_ownership, active_asset_groups, image_index, |group| &group.images)
 }
 
 struct ExpandedPrimitive {
@@ -7637,6 +7680,8 @@ mod tests {
 					mesh_index: 1,
 					primitive_index: 0,
 				}],
+				materials: vec![3],
+				images: vec![5],
 				..Default::default()
 			},
 			un_avatar_core::UnaSceneAssetGroupOwnership {
@@ -7645,6 +7690,8 @@ mod tests {
 					mesh_index: 2,
 					primitive_index: 0,
 				}],
+				materials: vec![4],
+				images: vec![6],
 				..Default::default()
 			},
 		];
@@ -7654,6 +7701,12 @@ mod tests {
 		assert!(mesh_primitive_asset_resident(&ownership, &active_groups, 1, 0));
 		assert!(!mesh_primitive_asset_resident(&ownership, &active_groups, 2, 0));
 		assert!(mesh_primitive_asset_resident(&ownership, &[], 2, 0));
+		assert!(material_asset_resident(&ownership, &active_groups, 0));
+		assert!(material_asset_resident(&ownership, &active_groups, 3));
+		assert!(!material_asset_resident(&ownership, &active_groups, 4));
+		assert!(image_asset_resident(&ownership, &active_groups, 0));
+		assert!(image_asset_resident(&ownership, &active_groups, 5));
+		assert!(!image_asset_resident(&ownership, &active_groups, 6));
 	}
 
 	#[test]
