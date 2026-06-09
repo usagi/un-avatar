@@ -4355,8 +4355,16 @@ fn run_diagnose(
 	);
 	for group in report.scene.asset_group_ownership.iter().take(16) {
 		println!(
-			"asset_ownership[{}]: mesh_primitives={:?} materials={:?} images={:?} dynamics={:?}",
-			group.group_id, group.mesh_primitives, group.materials, group.images, group.dynamics_source_ids
+			"asset_ownership[{}]: mesh_primitives={} {} materials={} {} images={} {} dynamics={} {}",
+			group.group_id,
+			group.mesh_primitives.len(),
+			debug_preview(&group.mesh_primitives, 8),
+			group.materials.len(),
+			debug_preview(&group.materials, 12),
+			group.images.len(),
+			debug_preview(&group.images, 12),
+			group.dynamics_source_ids.len(),
+			debug_preview(&group.dynamics_source_ids, 8)
 		);
 	}
 	println!(
@@ -4611,6 +4619,13 @@ fn run_convert(
 		write_convert_json_report(path, &bundle)?;
 	}
 	Ok(())
+}
+
+fn debug_preview<T: std::fmt::Debug>(items: &[T], limit: usize) -> String {
+	if items.len() <= limit {
+		return format!("{items:?}");
+	}
+	format!("{:?} ... (+{} more)", &items[..limit], items.len() - limit)
 }
 
 #[cfg(test)]
