@@ -4404,7 +4404,7 @@ mod tests {
 		{
 			let mut status = status.lock().unwrap();
 			status.wardrobe_asset_upload = WardrobeAssetUploadPlan {
-				mode: "draw-scoped-2d-texture-scoped".to_string(),
+				mode: "draw-scoped-texture-scoped".to_string(),
 				total_draw_mesh_primitive_count: 3,
 				resident_draw_mesh_primitive_count: 2,
 				inactive_draw_mesh_primitive_count: 1,
@@ -4459,7 +4459,7 @@ mod tests {
 		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
 		assert_eq!(
 			upload.get("mode").and_then(|value| value.as_str()),
-			Some("draw-scoped-2d-texture-scoped")
+			Some("draw-scoped-texture-scoped")
 		);
 		assert_eq!(
 			upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()),

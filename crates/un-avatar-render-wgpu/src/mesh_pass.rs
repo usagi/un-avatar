@@ -799,6 +799,7 @@ pub(crate) struct TextureUploadSummary {
 	pub deferred_image_mip_bytes: u64,
 	pub resized_count: u32,
 	pub cubemap_count: u32,
+	pub deferred_cubemap_upload_count: u32,
 	pub cubemap_converted_count: u32,
 	pub cubemap_fallback_count: u32,
 	pub compression_mode: TextureCompressionMode,
@@ -818,6 +819,7 @@ pub(crate) struct TextureUploadSummary {
 	pub source_bytes: u64,
 	pub uploaded_mip_bytes: u64,
 	pub cubemap_uploaded_bytes: u64,
+	pub deferred_cubemap_mip_bytes: u64,
 	pub max_source_dimension: u32,
 	pub max_uploaded_dimension: u32,
 	pub limit_max_dimension: Option<u32>,
@@ -1676,6 +1678,44 @@ impl SceneImageTextureSlot {
 	}
 }
 
+struct SceneCubeTextureSlot {
+	upload: CubeUpload,
+	texture: Option<wgpu::Texture>,
+	view: Option<wgpu::TextureView>,
+}
+
+impl SceneCubeTextureSlot {
+	fn new(upload: CubeUpload) -> Self {
+		Self {
+			upload,
+			texture: None,
+			view: None,
+		}
+	}
+
+	fn ensure_uploaded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<wgpu::TextureView> {
+		if let Some(view) = &self.view {
+			return Some(view.clone());
+		}
+		let texture = create_cube_texture_from_upload(device, queue, &self.upload);
+		let view = texture.create_view(&wgpu::TextureViewDescriptor {
+			label: Some("gltf_image_cube_view"),
+			dimension: Some(wgpu::TextureViewDimension::Cube),
+			..Default::default()
+		});
+		self.texture = Some(texture);
+		self.view = Some(view.clone());
+		Some(view)
+	}
+
+	fn unload(&mut self) -> bool {
+		let had_resource = self.texture.is_some() || self.view.is_some();
+		self.view = None;
+		self.texture = None;
+		had_resource
+	}
+}
+
 pub(crate) struct SceneMeshes {
 	pipeline_outline_toon: wgpu::RenderPipeline,
 	_compute_fur_cards_compute_pipeline: ComputeFurCardsComputePipeline,
@@ -1709,6 +1749,7 @@ pub(crate) struct SceneMeshes {
 	audio_link_frame_params: [f32; 4],
 	texture_views: SceneTextureViews,
 	image_texture_slots: Vec<SceneImageTextureSlot>,
+	cube_texture_slots: Vec<Option<SceneCubeTextureSlot>>,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	image_sampler_indices: Vec<usize>,
@@ -3312,12 +3353,53 @@ fn create_solid_cube_texture_1x1(
 	texture
 }
 
+fn create_cube_texture_from_upload(device: &wgpu::Device, queue: &wgpu::Queue, upload: &CubeUpload) -> wgpu::Texture {
+	let tex = device.create_texture(&wgpu::TextureDescriptor {
+		label: Some("gltf_image_cube"),
+		size: wgpu::Extent3d {
+			width: upload.face_size,
+			height: upload.face_size,
+			depth_or_array_layers: 6,
+		},
+		mip_level_count: upload.mips.len() as u32,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format: wgpu::TextureFormat::Rgba16Float,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		view_formats: &[],
+	});
+	for (mip_level, mip) in upload.mips.iter().enumerate() {
+		queue.write_texture(
+			wgpu::TexelCopyTextureInfo {
+				texture: &tex,
+				mip_level: mip_level as u32,
+				origin: wgpu::Origin3d::ZERO,
+				aspect: wgpu::TextureAspect::All,
+			},
+			&mip.data_rgba16f,
+			wgpu::TexelCopyBufferLayout {
+				offset: 0,
+				bytes_per_row: Some(mip.face_size * 8),
+				rows_per_image: Some(mip.face_size),
+			},
+			wgpu::Extent3d {
+				width: mip.face_size,
+				height: mip.face_size,
+				depth_or_array_layers: 6,
+			},
+		);
+	}
+	tex
+}
+
+#[derive(Clone)]
 struct CubeUpload {
 	face_size: u32,
 	mips: Vec<CubeMipUpload>,
 	layout: &'static str,
 }
 
+#[derive(Clone)]
 struct CubeMipUpload {
 	face_size: u32,
 	data_rgba16f: Vec<u8>,
@@ -6655,6 +6737,7 @@ impl SceneMeshes {
 		};
 
 		let mut cube_image_views: Vec<Option<wgpu::TextureView>> = Vec::with_capacity(scene.images.len());
+		let mut cube_texture_slots: Vec<Option<SceneCubeTextureSlot>> = Vec::with_capacity(scene.images.len());
 		let mut image_views: Vec<wgpu::TextureView> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_slots: Vec<SceneImageTextureSlot> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
@@ -6677,61 +6760,40 @@ impl SceneMeshes {
 				texture_summary.cubemap_count += 1;
 			}
 			if let Some(cube_upload) = cube_upload_from_image(im, source_metadata) {
-				report(
-					"gpu-upload",
-					format!(
-						"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
-						image_index + 1,
-						scene.images.len(),
-						cube_upload.face_size,
-						cube_upload.mips.len(),
-						cube_upload.layout
-					),
-				);
-				let tex = device.create_texture(&wgpu::TextureDescriptor {
-					label: Some("gltf_image_cube"),
-					size: wgpu::Extent3d {
-						width: cube_upload.face_size,
-						height: cube_upload.face_size,
-						depth_or_array_layers: 6,
-					},
-					mip_level_count: cube_upload.mips.len() as u32,
-					sample_count: 1,
-					dimension: wgpu::TextureDimension::D2,
-					format: wgpu::TextureFormat::Rgba16Float,
-					usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-					view_formats: &[],
-				});
-				for (mip_level, mip) in cube_upload.mips.iter().enumerate() {
-					queue.write_texture(
-						wgpu::TexelCopyTextureInfo {
-							texture: &tex,
-							mip_level: mip_level as u32,
-							origin: wgpu::Origin3d::ZERO,
-							aspect: wgpu::TextureAspect::All,
-						},
-						&mip.data_rgba16f,
-						wgpu::TexelCopyBufferLayout {
-							offset: 0,
-							bytes_per_row: Some(mip.face_size * 8),
-							rows_per_image: Some(mip.face_size),
-						},
-						wgpu::Extent3d {
-							width: mip.face_size,
-							height: mip.face_size,
-							depth_or_array_layers: 6,
-						},
-					);
-				}
 				texture_summary.cubemap_converted_count += 1;
-				texture_summary.cubemap_uploaded_bytes += cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
-				let view = tex.create_view(&wgpu::TextureViewDescriptor {
-					label: Some("gltf_image_cube_view"),
-					dimension: Some(wgpu::TextureViewDimension::Cube),
-					..Default::default()
-				});
-				cube_textures.push(tex);
-				cube_image_views.push(Some(view));
+				let cube_bytes = cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
+				let mut slot = SceneCubeTextureSlot::new(cube_upload);
+				if image_resident {
+					report(
+						"gpu-upload",
+						format!(
+							"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
+							image_index + 1,
+							scene.images.len(),
+							slot.upload.face_size,
+							slot.upload.mips.len(),
+							slot.upload.layout
+						),
+					);
+					texture_summary.cubemap_uploaded_bytes += cube_bytes;
+					cube_image_views.push(slot.ensure_uploaded(device, queue));
+				} else {
+					texture_summary.deferred_cubemap_upload_count += 1;
+					texture_summary.deferred_cubemap_mip_bytes += cube_bytes;
+					report(
+						"gpu-upload",
+						format!(
+							"Deferring cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
+							image_index + 1,
+							scene.images.len(),
+							slot.upload.face_size,
+							slot.upload.mips.len(),
+							slot.upload.layout
+						),
+					);
+					cube_image_views.push(None);
+				}
+				cube_texture_slots.push(Some(slot));
 			} else {
 				if texture_source_is_cube(source_metadata) {
 					texture_summary.cubemap_fallback_count += 1;
@@ -6746,6 +6808,7 @@ impl SceneMeshes {
 					);
 				}
 				cube_image_views.push(None);
+				cube_texture_slots.push(None);
 			}
 			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
 				if let Some(source_upload) = source_texture_upload(im) {
@@ -7213,6 +7276,7 @@ impl SceneMeshes {
 			audio_link_frame_params: [0.0; 4],
 			texture_views,
 			image_texture_slots,
+			cube_texture_slots,
 			_samplers: samplers,
 			image_sampler_indices,
 			_textures: textures,
@@ -8080,8 +8144,9 @@ impl SceneMeshes {
 		queue: &wgpu::Queue,
 		load_indices: &[usize],
 		unload_indices: &[usize],
-	) -> (usize, usize) {
+	) -> (usize, usize, usize, usize) {
 		let mut loaded = 0;
+		let mut cube_loaded = 0;
 		for index in load_indices {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
 				continue;
@@ -8094,8 +8159,13 @@ impl SceneMeshes {
 			};
 			*current_view = source_view;
 			loaded += 1;
+			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
+				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue);
+				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
+			}
 		}
 		let mut unloaded = 0;
+		let mut cube_unloaded = 0;
 		for index in unload_indices {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
 				continue;
@@ -8107,8 +8177,16 @@ impl SceneMeshes {
 			if slot.unload() {
 				unloaded += 1;
 			}
+			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
+				if let Some(current_cube_view) = self.texture_views.cubes.get_mut(*index) {
+					*current_cube_view = None;
+				}
+				if cube_slot.unload() {
+					cube_unloaded += 1;
+				}
+			}
 		}
-		(loaded, unloaded)
+		(loaded, unloaded, cube_loaded, cube_unloaded)
 	}
 
 	pub fn is_empty(&self) -> bool {

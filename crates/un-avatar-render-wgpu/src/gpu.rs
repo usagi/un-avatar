@@ -128,6 +128,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_residency_refresh_material_unload_count: usize,
 	pub(crate) last_image_texture_scoped_load_count: usize,
 	pub(crate) last_image_texture_scoped_unload_count: usize,
+	pub(crate) last_cubemap_scoped_load_count: usize,
+	pub(crate) last_cubemap_scoped_unload_count: usize,
 	pub(crate) last_material_slot_scoped_upload_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
@@ -212,7 +214,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 	WardrobeAssetUploadPlan {
 		mode: if has_declared_groups {
 			if has_ownership && has_active_asset_groups {
-				"draw-scoped-2d-texture-scoped".to_string()
+				"draw-scoped-texture-scoped".to_string()
 			} else {
 				"all-resident".to_string()
 			}
@@ -258,6 +260,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_residency_refresh_material_unload_count: 0,
 		last_image_texture_scoped_load_count: 0,
 		last_image_texture_scoped_unload_count: 0,
+		last_cubemap_scoped_load_count: 0,
+		last_cubemap_scoped_unload_count: 0,
 		last_material_slot_scoped_upload_count: 0,
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
@@ -267,7 +271,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		active_residency_gaps_detected: false,
 		residency_gap_index_status_limit: 0,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
-			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; 2D image texture resources are scoped while mesh buffers and cubemaps remain resident"
+			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; image texture and cubemap resources are scoped while mesh buffers remain resident"
 				.to_string()
 		} else if has_declared_groups && has_ownership {
 			"wardrobe asset ownership metadata is present, but no active asset groups are selected; GPU resources remain all-resident"
@@ -312,7 +316,7 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
 	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
-	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-2d-texture-scoped";
+	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-texture-scoped";
 	plan.active_residency_gaps_detected =
 		draw_counts.active_draws_using_inactive_image_texture_count > 0 || draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
@@ -1615,6 +1619,8 @@ pub(crate) struct GpuState {
 	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
 	last_image_texture_scoped_load_count: usize,
 	last_image_texture_scoped_unload_count: usize,
+	last_cubemap_scoped_load_count: usize,
+	last_cubemap_scoped_unload_count: usize,
 	last_material_slot_scoped_upload_count: usize,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
@@ -1973,6 +1979,8 @@ impl GpuState {
 			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
 			last_image_texture_scoped_load_count: 0,
 			last_image_texture_scoped_unload_count: 0,
+			last_cubemap_scoped_load_count: 0,
+			last_cubemap_scoped_unload_count: 0,
 			last_material_slot_scoped_upload_count: 0,
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
@@ -2162,16 +2170,28 @@ impl GpuState {
 				.filter(|index| !image_load_set.contains(index))
 				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
-			let (image_texture_bind_load_count, image_texture_bind_unload_count) =
+			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) =
 				sm.apply_image_texture_view_residency(&self.device, &self.queue, &image_load_indices, &image_unload_indices);
 			self.last_image_texture_scoped_load_count = image_texture_bind_load_count;
 			self.last_image_texture_scoped_unload_count = image_texture_bind_unload_count;
-			if (image_texture_bind_load_count > 0 || image_texture_bind_unload_count > 0) && self.debug_log.is_enabled() {
+			self.last_cubemap_scoped_load_count = cubemap_load_count;
+			self.last_cubemap_scoped_unload_count = cubemap_unload_count;
+			if (image_texture_bind_load_count > 0
+				|| image_texture_bind_unload_count > 0
+				|| cubemap_load_count > 0
+				|| cubemap_unload_count > 0)
+				&& self.debug_log.is_enabled()
+			{
 				self.debug_log.line(
 					"wardrobe",
 					format!(
-						"image texture scoped bind load_count={} unload_count={} load={:?} unload={:?}",
-						image_texture_bind_load_count, image_texture_bind_unload_count, image_load_indices, image_unload_indices
+						"image texture scoped load_count={} unload_count={} cubemap_load_count={} cubemap_unload_count={} load={:?} unload={:?}",
+						image_texture_bind_load_count,
+						image_texture_bind_unload_count,
+						cubemap_load_count,
+						cubemap_unload_count,
+						image_load_indices,
+						image_unload_indices
 					),
 				);
 			}
@@ -3104,6 +3124,8 @@ impl GpuState {
 			self.last_asset_residency_refresh.material_slot_unload_indices.len();
 		plan.last_image_texture_scoped_load_count = self.last_image_texture_scoped_load_count;
 		plan.last_image_texture_scoped_unload_count = self.last_image_texture_scoped_unload_count;
+		plan.last_cubemap_scoped_load_count = self.last_cubemap_scoped_load_count;
+		plan.last_cubemap_scoped_unload_count = self.last_cubemap_scoped_unload_count;
 		plan.last_material_slot_scoped_upload_count = self.last_material_slot_scoped_upload_count;
 		plan
 	}
@@ -5109,8 +5131,8 @@ mod tests {
 		assert_eq!(plan.inactive_owned_asset_group_count, 1);
 		assert!(plan.scoped_upload_supported);
 		assert!(!plan.all_resident);
-		assert_eq!(plan.mode, "draw-scoped-2d-texture-scoped");
-		assert!(plan.reason.contains("2D image texture resources are scoped"));
+		assert_eq!(plan.mode, "draw-scoped-texture-scoped");
+		assert!(plan.reason.contains("image texture and cubemap resources are scoped"));
 	}
 
 	#[test]
@@ -5172,7 +5194,7 @@ mod tests {
 	fn wardrobe_asset_upload_plan_can_include_renderer_draw_residency_counts() {
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-2d-texture-scoped".to_string(),
+				mode: "draw-scoped-texture-scoped".to_string(),
 				scoped_upload_supported: true,
 				all_resident: false,
 				..Default::default()
@@ -5228,7 +5250,7 @@ mod tests {
 		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
 		let plan = wardrobe_asset_upload_plan_with_draw_counts(
 			WardrobeAssetUploadPlan {
-				mode: "draw-scoped-2d-texture-scoped".to_string(),
+				mode: "draw-scoped-texture-scoped".to_string(),
 				scoped_upload_supported: true,
 				all_resident: false,
 				..Default::default()
