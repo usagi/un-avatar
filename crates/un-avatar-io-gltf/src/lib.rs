@@ -3050,6 +3050,43 @@ fn unavatar_modular_avatar_component_expression_menu_path(component: &Value) -> 
 		})
 }
 
+fn add_expression_catalog_bind(
+	catalog: &mut UnaExpressionCatalog,
+	preset_name: &str,
+	mesh_index: usize,
+	primitive_index: usize,
+	morph_target_index: usize,
+	weight_scale: f32,
+) -> bool {
+	if weight_scale.abs() <= f32::EPSILON {
+		return false;
+	}
+	let Some(preset) = catalog.presets.iter_mut().find(|preset| preset.name == preset_name) else {
+		catalog.presets.push(UnaExpressionPreset {
+			name: preset_name.to_string(),
+			binds: vec![UnaMorphTargetBind {
+				mesh_index,
+				primitive_index,
+				morph_target_index,
+				weight_scale,
+			}],
+		});
+		return true;
+	};
+	if preset.binds.iter().any(|bind| {
+		bind.mesh_index == mesh_index && bind.primitive_index == primitive_index && bind.morph_target_index == morph_target_index
+	}) {
+		return false;
+	}
+	preset.binds.push(UnaMorphTargetBind {
+		mesh_index,
+		primitive_index,
+		morph_target_index,
+		weight_scale,
+	});
+	true
+}
+
 fn unavatar_explicit_expression_menu_path(value: &Value) -> Option<String> {
 	value
 		.get("expressionMenuPath")
@@ -4463,6 +4500,166 @@ fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32
 		}
 	}
 	keys.last().map(|key| key.value).unwrap_or(input)
+}
+
+fn modular_avatar_remap_curve_linear_origin_scale(curve: Option<&Value>) -> Option<f32> {
+	let Some(keys) = curve
+		.and_then(|curve| curve.get("keys").or_else(|| curve.get("Keys")))
+		.and_then(Value::as_array)
+	else {
+		return Some(1.0);
+	};
+	if keys.len() < 2 {
+		return Some(1.0);
+	}
+	let mut keys = keys
+		.iter()
+		.filter_map(modular_avatar_curve_key)
+		.filter(|key| key.time.is_finite() && key.value.is_finite())
+		.collect::<Vec<_>>();
+	if keys.len() < 2 {
+		return Some(1.0);
+	}
+	keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+	let last = keys.last().copied()?;
+	if keys[0].time.abs() > 0.0001 || keys[0].value.abs() > 0.0001 || last.time.abs() <= 0.0001 {
+		return None;
+	}
+	let scale = last.value / last.time;
+	if !scale.is_finite() {
+		return None;
+	}
+	for key in &keys {
+		if (key.value - key.time * scale).abs() > 0.0001 {
+			return None;
+		}
+		if key
+			.in_tangent
+			.filter(|value| value.is_finite())
+			.is_some_and(|tangent| (tangent - scale).abs() > 0.0001)
+		{
+			return None;
+		}
+		if key
+			.out_tangent
+			.filter(|value| value.is_finite())
+			.is_some_and(|tangent| (tangent - scale).abs() > 0.0001)
+		{
+			return None;
+		}
+	}
+	Some(scale)
+}
+
+fn scene_node_morph_bind(scene: &UnaSceneSnapshot, node_idx: usize, shape_name: &str) -> Option<(usize, usize, usize)> {
+	let mesh_idx = scene.nodes.get(node_idx).and_then(|node| node.mesh)?;
+	let primitives = scene.meshes.get(mesh_idx)?;
+	for (primitive_index, primitive) in primitives.iter().enumerate() {
+		let Some(morph_target_index) = primitive.morph_target_names.iter().position(|candidate| candidate == shape_name) else {
+			continue;
+		};
+		if morph_target_index < primitive.morph_targets.len() {
+			return Some((mesh_idx, primitive_index, morph_target_index));
+		}
+	}
+	None
+}
+
+fn apply_unavatar_blendshape_sync_expression_binds(
+	catalog: &mut UnaExpressionCatalog,
+	scene: &UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+	report: &mut ImportReport,
+) {
+	let Some(components) = unavatar
+		.source
+		.get("modularAvatar")
+		.and_then(|value| value.get("components"))
+		.and_then(Value::as_array)
+	else {
+		return;
+	};
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	let mut added = 0usize;
+	let mut skipped_non_linear = 0usize;
+	let mut missing = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarBlendshapeSync") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			continue;
+		}
+		let Some(target_ref) = component.get("target").or_else(|| component.get("resolvedTarget")) else {
+			missing += 1;
+			continue;
+		};
+		let Some(target) = modular_avatar_reference_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let Some(bindings) = unavatar_modular_avatar_component_array(component, &["Bindings", "bindings", "m_bindings"]) else {
+			missing += 1;
+			continue;
+		};
+		for binding in bindings {
+			if !binding.is_object() {
+				missing += 1;
+				continue;
+			}
+			let Some(reference) = modular_avatar_blendshape_sync_binding_reference(binding) else {
+				missing += 1;
+				continue;
+			};
+			let Some(source) = modular_avatar_reference_index(reference, &node_ids, &registry_paths, &paths, &normalized_paths) else {
+				missing += 1;
+				continue;
+			};
+			let Some(source_shape) = modular_avatar_blendshape_sync_binding_shape(binding, &["blendshape", "Blendshape", "blendShape"])
+			else {
+				missing += 1;
+				continue;
+			};
+			let target_shape =
+				modular_avatar_blendshape_sync_binding_shape(binding, &["localBlendshape", "LocalBlendshape", "localBlendShape"])
+					.unwrap_or_else(|| source_shape.clone());
+			if scene_node_morph_bind(scene, source, &source_shape).is_none() {
+				missing += 1;
+				continue;
+			}
+			let Some((mesh_index, primitive_index, morph_target_index)) = scene_node_morph_bind(scene, target, &target_shape) else {
+				missing += 1;
+				continue;
+			};
+			let Some(weight_scale) = modular_avatar_remap_curve_linear_origin_scale(
+				binding
+					.get("remapCurve")
+					.or_else(|| binding.get("RemapCurve"))
+					.or_else(|| binding.get("remap_curve")),
+			) else {
+				skipped_non_linear += 1;
+				continue;
+			};
+			if add_expression_catalog_bind(
+				catalog,
+				&source_shape,
+				mesh_index,
+				primitive_index,
+				morph_target_index,
+				weight_scale,
+			) {
+				added += 1;
+			}
+		}
+	}
+	if added > 0 || skipped_non_linear > 0 || missing > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: blendshape_sync_expression_binds={added}, blendshape_sync_expression_non_linear={skipped_non_linear}, blendshape_sync_expression_missing={missing}"
+		));
+	}
 }
 
 fn apply_unavatar_blendshape_syncs(
@@ -7806,11 +8003,14 @@ impl AvatarImporter for GltfImporter {
 			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
 			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
 		}
-		let expression_catalog = if unavatar.is_some() {
+		let mut expression_catalog = if unavatar.is_some() {
 			expression_catalog_from_morph_target_names(&scene)
 		} else {
 			None
 		};
+		if let (Some(unavatar), Some(catalog)) = (unavatar.as_ref(), expression_catalog.as_mut()) {
+			apply_unavatar_blendshape_sync_expression_binds(catalog, &scene, unavatar, &mut report);
+		}
 		let spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
@@ -11885,6 +12085,88 @@ mod tests {
 		let value = modular_avatar_remap_curve_evaluate(Some(&curve), 0.25);
 
 		assert!((value - 0.15625).abs() < 0.00001, "value={value}");
+	}
+
+	#[test]
+	fn modular_avatar_blendshape_sync_adds_runtime_expression_bind_for_linear_mapping() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Body".to_string()),
+					source_node_id: Some("node_body".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![test_morph_primitive("Breast_Big", 0.0)],
+				vec![test_morph_primitive("Jacket_Breast_Big", 0.0)],
+			],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarBlendshapeSync",
+						"enabled": true,
+						"target": {"nodeId": "node_jacket", "path": "Root/Jacket"},
+						"fields": {
+							"Bindings": [{
+								"referenceMesh": {"resolvedTarget": {"nodeId": "node_body", "path": "Root/Body"}},
+								"blendshape": "Breast_Big",
+								"localBlendshape": "Jacket_Breast_Big",
+								"remapCurve": {
+									"keyCount": 2,
+									"keys": [
+										{"time": 0.0, "value": 0.0, "outTangent": 0.5},
+										{"time": 1.0, "value": 0.5, "inTangent": 0.5}
+									]
+								}
+							}]
+						}
+					}]
+				}
+			}),
+		};
+		let mut catalog = expression_catalog_from_morph_target_names(&scene).expect("expression catalog");
+		let mut report = ImportReport::default();
+
+		apply_unavatar_blendshape_sync_expression_binds(&mut catalog, &scene, &unavatar, &mut report);
+
+		let preset = catalog
+			.presets
+			.iter()
+			.find(|preset| preset.name == "Breast_Big")
+			.expect("source preset");
+		assert!(preset
+			.binds
+			.iter()
+			.any(|bind| bind.mesh_index == 1 && bind.primitive_index == 0 && bind.morph_target_index == 0 && bind.weight_scale == 0.5));
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("blendshape_sync_expression_binds=1")));
+		let mut weights = UnaExpressionWeights::default();
+		weights.preset_weights.insert("Breast_Big".to_string(), 0.8);
+		let morphs = un_avatar_core::morph_weights_for_primitive(&scene.meshes[1][0], Some(&catalog), Some(&weights), 1, 0);
+		assert_eq!(morphs, vec![0.4]);
 	}
 
 	#[test]
