@@ -103,6 +103,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) inactive_material_slots_used_by_active_draw: Vec<usize>,
 	pub(crate) inactive_material_slots_used_by_active_draw_truncated: bool,
+	pub(crate) pending_image_texture_upload_count: usize,
+	pub(crate) pending_material_slot_upload_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -284,6 +286,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		inactive_material_slots_used_by_active_draw_count: 0,
 		inactive_material_slots_used_by_active_draw: Vec::new(),
 		inactive_material_slots_used_by_active_draw_truncated: false,
+		pending_image_texture_upload_count: 0,
+		pending_material_slot_upload_count: 0,
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -335,6 +339,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 		wardrobe_residency_gap_index_status_list(draw_counts.inactive_material_slots_used_by_active_draw);
 	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw.indices;
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
+	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
+	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
 	plan.active_residency_gaps_detected = draw_counts.active_draws_using_inactive_image_texture_count > 0
 		|| draw_counts.active_draws_using_inactive_material_slot_count > 0;
@@ -3014,6 +3020,8 @@ impl GpuState {
 		let scoped_upload_work = wardrobe_scoped_upload_work_for_active_gaps(active_gaps.clone());
 		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
 		let mut plan = wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts);
+		plan.pending_image_texture_upload_count = scoped_upload_work.image_texture_indices.len();
+		plan.pending_material_slot_upload_count = scoped_upload_work.material_slot_indices.len();
 		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
 		plan
 	}
@@ -5061,6 +5069,8 @@ mod tests {
 		assert_eq!(plan.active_draws_using_inactive_material_slot_count, 1);
 		assert_eq!(plan.inactive_material_slots_used_by_active_draw_count, 1);
 		assert_eq!(plan.inactive_material_slots_used_by_active_draw, vec![4]);
+		assert_eq!(plan.pending_image_texture_upload_count, 1);
+		assert_eq!(plan.pending_material_slot_upload_count, 1);
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
@@ -5106,6 +5116,8 @@ mod tests {
 			Some(&(100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
 		);
 		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
+		assert_eq!(plan.pending_image_texture_upload_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2);
+		assert_eq!(plan.pending_material_slot_upload_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3);
 		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}

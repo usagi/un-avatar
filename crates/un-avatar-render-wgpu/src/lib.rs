@@ -4417,6 +4417,8 @@ mod tests {
 				active_draws_using_inactive_material_slot_count: 1,
 				inactive_material_slots_used_by_active_draw_count: 1,
 				inactive_material_slots_used_by_active_draw: vec![4],
+				pending_image_texture_upload_count: 1,
+				pending_material_slot_upload_count: 1,
 				scoped_draw_supported: true,
 				all_resident: true,
 				active_residency_gaps_detected: true,
@@ -4494,6 +4496,14 @@ mod tests {
 				.and_then(|value| value.as_array())
 				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
 			Some(vec![4])
+		);
+		assert_eq!(
+			upload.get("pending_image_texture_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("pending_material_slot_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
