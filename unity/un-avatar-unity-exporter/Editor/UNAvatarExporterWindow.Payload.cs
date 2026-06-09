@@ -499,8 +499,11 @@ namespace UNAvatar.UnityExporter
         private Dictionary<string, object> BuildModularAvatarReportSummary(GameObject root)
         {
             var typeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var supportCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var disabledTypeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             var samples = new List<object>(32);
             var componentCount = 0;
+            var disabledCount = 0;
             if (root != null)
             {
                 var components = root.GetComponentsInChildren<Component>(true);
@@ -512,14 +515,23 @@ namespace UNAvatar.UnityExporter
                     }
                     componentCount++;
                     var typeName = component.GetType().Name;
+                    var enabled = !(component is Behaviour behaviour) || behaviour.enabled;
                     typeCounts[typeName] = typeCounts.TryGetValue(typeName, out var count) ? count + 1 : 1;
+                    var supportKind = ModularAvatarComponentSupportKind(typeName);
+                    supportCounts[supportKind] = supportCounts.TryGetValue(supportKind, out var supportCount) ? supportCount + 1 : 1;
+                    if (!enabled)
+                    {
+                        disabledCount += 1;
+                        supportCounts["disabled"] = supportCounts.TryGetValue("disabled", out var disabledSupport) ? disabledSupport + 1 : 1;
+                        disabledTypeCounts[typeName] = disabledTypeCounts.TryGetValue(typeName, out var disabledTypeCount) ? disabledTypeCount + 1 : 1;
+                    }
                     if (samples.Count < 32 && (typeName == "ModularAvatarBoneProxy" || typeName == "ModularAvatarMergeArmature" || typeName == "ModularAvatarMeshSettings"))
                     {
                         var sample = new Dictionary<string, object>
                         {
                             ["shortType"] = typeName,
                             ["target"] = TransformTargetJson(root.transform, component.transform),
-                            ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled
+                            ["enabled"] = enabled
                         };
                         if (typeName == "ModularAvatarBoneProxy")
                         {
@@ -534,13 +546,70 @@ namespace UNAvatar.UnityExporter
             {
                 countsJson[pair.Key] = pair.Value;
             }
+            var supportCountsJson = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var pair in supportCounts)
+            {
+                supportCountsJson[pair.Key] = pair.Value;
+            }
+            var disabledTypeCountsJson = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (var pair in disabledTypeCounts)
+            {
+                disabledTypeCountsJson[pair.Key] = pair.Value;
+            }
             return new Dictionary<string, object>
             {
                 ["schemaVersion"] = "0.1-preview",
                 ["available"] = ModularAvatarBridge.IsAvailable,
                 ["componentCount"] = componentCount,
                 ["componentCounts"] = countsJson,
+                ["supportCounts"] = supportCountsJson,
+                ["disabledTypeCounts"] = disabledTypeCountsJson,
+                ["disabledComponentCount"] = disabledCount,
                 ["samples"] = samples
+            };
+        }
+
+        private static string ModularAvatarComponentSupportKind(string shortType)
+        {
+            return shortType switch
+            {
+                "ModularAvatarBoneProxy" or
+                "ModularAvatarBlendshapeSync" or
+                "ModularAvatarMergeArmature" or
+                "ModularAvatarMeshCutter" or
+                "ModularAvatarMeshSettings" or
+                "ModularAvatarRemoveVertexColor" or
+                "ModularAvatarReplaceObject" or
+                "ModularAvatarShapeChanger" => "resolver",
+                "ModularAvatarMaterialSetter" or
+                "ModularAvatarMaterialSwap" or
+                "ModularAvatarObjectToggle" => "runtime_action",
+                "ModularAvatarConvertConstraints" or
+                "ModularAvatarFloorAdjuster" or
+                "ModularAvatarGlobalCollider" or
+                "ModularAvatarMMDLayerControl" or
+                "ModularAvatarMergeAnimator" or
+                "ModularAvatarMergeBlendTree" or
+                "ModularAvatarPBBlocker" or
+                "ModularAvatarPlatformFilter" or
+                "ModularAvatarRenameVRChatCollisionTags" or
+                "ModularAvatarScaleAdjuster" or
+                "ModularAvatarVRChatSettings" or
+                "ModularAvatarWorldFixedObject" or
+                "ModularAvatarWorldScaleObject" or
+                "MAMoveIndependently" => "unsupported",
+                "ModularAvatarMenuItem" or
+                "ModularAvatarMenuGroup" or
+                "ModularAvatarMenuInstaller" or
+                "ModularAvatarMenuInstallTarget" or
+                "ModularAvatarParameters" or
+                "ModularAvatarSyncParameterSequence" or
+                "ModularAvatarVisibleHeadAccessory" or
+                "VertexFilterByAxisComponent" or
+                "VertexFilterByBoneComponent" or
+                "VertexFilterByMaskComponent" or
+                "VertexFilterByShapeComponent" => "metadata",
+                _ => "unsupported",
             };
         }
 

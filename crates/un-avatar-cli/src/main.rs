@@ -568,9 +568,20 @@ struct DiagnoseUnavatarSummary {
 	variant_count: usize,
 	dynamics_entry_count: usize,
 	modular_avatar_component_count: usize,
+	#[serde(rename = "componentCount", skip_serializing_if = "zero_usize")]
+	modular_avatar_component_count_alias: usize,
 	modular_avatar_support_counts: BTreeMap<String, usize>,
+	#[serde(rename = "supportCounts", skip_serializing_if = "BTreeMap::is_empty")]
+	modular_avatar_support_counts_alias: BTreeMap<String, usize>,
 	modular_avatar_type_counts: BTreeMap<String, usize>,
+	#[serde(rename = "typeCounts", skip_serializing_if = "BTreeMap::is_empty")]
+	modular_avatar_type_counts_alias: BTreeMap<String, usize>,
 	modular_avatar_disabled_type_counts: BTreeMap<String, usize>,
+	#[serde(rename = "disabledTypeCounts", skip_serializing_if = "BTreeMap::is_empty")]
+	modular_avatar_disabled_type_counts_alias: BTreeMap<String, usize>,
+	modular_avatar_disabled_component_count: usize,
+	#[serde(rename = "disabledComponentCount", skip_serializing_if = "zero_usize")]
+	modular_avatar_disabled_component_count_alias: usize,
 	modular_avatar_menu_component_count: usize,
 	modular_avatar_menu_components: Vec<DiagnoseModularAvatarMenuComponentSummary>,
 	modular_avatar_menu_graph_candidate_count: usize,
@@ -2914,6 +2925,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_support_counts = BTreeMap::new();
 	let mut modular_avatar_type_counts = BTreeMap::new();
 	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
+	let mut modular_avatar_disabled_component_count = 0;
 	let mut modular_avatar_menu_components = Vec::new();
 	let mut modular_avatar_parameters = Vec::new();
 	let mut modular_avatar_blendshape_syncs = Vec::new();
@@ -2933,6 +2945,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			if component.get("enabled").and_then(|value| value.as_bool()) == Some(false) {
 				bump_count(&mut modular_avatar_support_counts, "disabled");
 				bump_count(&mut modular_avatar_disabled_type_counts, short_type);
+				modular_avatar_disabled_component_count += 1;
 			}
 			if modular_avatar_is_menu_metadata_type(short_type) {
 				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, component_index, short_type));
@@ -3021,6 +3034,10 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let modular_avatar_menu_graph_candidates = modular_avatar_menu_graph_candidates(&modular_avatar_menu_components);
 	let modular_avatar_menu_graph_nodes = modular_avatar_menu_graph_nodes(&modular_avatar_menu_graph_candidates);
 	let modular_avatar_menu_install_edges = modular_avatar_menu_install_edges(&modular_avatar_menu_components);
+	let modular_avatar_component_count = modular_avatar_components.map(Vec::len).unwrap_or(0);
+	let modular_avatar_support_counts_alias = modular_avatar_support_counts.clone();
+	let modular_avatar_type_counts_alias = modular_avatar_type_counts.clone();
+	let modular_avatar_disabled_type_counts_alias = modular_avatar_disabled_type_counts.clone();
 
 	DiagnoseUnavatarSummary {
 		spec_version: ext.spec_version.clone(),
@@ -3030,10 +3047,16 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		extension_node_count: source.get("nodes").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		variant_count: source.get("variants").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
 		dynamics_entry_count: source.get("dynamics").and_then(|v| v.as_array()).map(Vec::len).unwrap_or(0),
-		modular_avatar_component_count: modular_avatar_components.map(Vec::len).unwrap_or(0),
+		modular_avatar_component_count,
+		modular_avatar_component_count_alias: modular_avatar_component_count,
 		modular_avatar_support_counts,
+		modular_avatar_support_counts_alias,
 		modular_avatar_type_counts,
+		modular_avatar_type_counts_alias,
 		modular_avatar_disabled_type_counts,
+		modular_avatar_disabled_type_counts_alias,
+		modular_avatar_disabled_component_count,
+		modular_avatar_disabled_component_count_alias: modular_avatar_disabled_component_count,
 		modular_avatar_menu_component_count: modular_avatar_menu_components.len(),
 		modular_avatar_menu_components,
 		modular_avatar_menu_graph_candidate_count: modular_avatar_menu_graph_candidates.len(),
@@ -3057,6 +3080,10 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		base_operation_count: base_operations.map(Vec::len).unwrap_or(0),
 		base_operation_counts,
 	}
+}
+
+fn zero_usize(value: &usize) -> bool {
+	*value == 0
 }
 
 fn build_diagnose_report(
@@ -5105,22 +5132,50 @@ mod tests {
 		assert_eq!(report.scene.scoped_resident_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
 		assert_eq!(unavatar.modular_avatar_component_count, 10);
+		assert_eq!(unavatar.modular_avatar_component_count_alias, 10);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&3));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("resolver"), Some(&3));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("runtime_action"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&6));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("metadata"), Some(&6));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
+		assert!(unavatar.modular_avatar_support_counts_alias.get("unsupported").is_none());
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
+		assert_eq!(
+			unavatar.modular_avatar_type_counts_alias.get("ModularAvatarRemoveVertexColor"),
+			Some(&1)
+		);
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&2));
+		assert_eq!(unavatar.modular_avatar_type_counts_alias.get("ModularAvatarMenuItem"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarParameters"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts_alias.get("ModularAvatarParameters"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuGroup"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts_alias.get("ModularAvatarMenuGroup"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuInstaller"), Some(&1));
+		assert_eq!(
+			unavatar.modular_avatar_type_counts_alias.get("ModularAvatarMenuInstaller"),
+			Some(&1)
+		);
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuInstallTarget"), Some(&1));
+		assert_eq!(
+			unavatar.modular_avatar_type_counts_alias.get("ModularAvatarMenuInstallTarget"),
+			Some(&1)
+		);
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMeshCutter"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_type_counts_alias.get("ModularAvatarMeshCutter"), Some(&1));
 		assert_eq!(
 			unavatar.modular_avatar_disabled_type_counts.get("ModularAvatarMeshCutter"),
 			Some(&1)
 		);
+		assert_eq!(
+			unavatar.modular_avatar_disabled_type_counts_alias.get("ModularAvatarMeshCutter"),
+			Some(&1)
+		);
+		assert_eq!(unavatar.modular_avatar_disabled_component_count, 1);
+		assert_eq!(unavatar.modular_avatar_disabled_component_count_alias, 1);
 		assert_eq!(unavatar.modular_avatar_menu_component_count, 5);
 		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 5);
 		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 5);
