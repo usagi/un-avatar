@@ -16,10 +16,11 @@ use un_avatar_core::{
 	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsInteraction,
 	UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat,
 	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction,
-	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
-	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
-	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode,
+	UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
+	UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership,
+	UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode,
+	UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2187,6 +2188,110 @@ fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &
 			}
 		})
 		.collect()
+}
+
+fn apply_unavatar_asset_group_ownership(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
+	let ownership = unavatar_asset_group_ownership(unavatar);
+	if ownership.is_empty() {
+		return;
+	}
+	scene.asset_group_ownership = ownership;
+	let counts = scene.asset_group_ownership_counts();
+	report.push_info(format!(
+		".unavatar asset groups: ownership_groups={}, mesh_primitives={}, materials={}, images={}, dynamics={}",
+		counts.groups, counts.mesh_primitives, counts.materials, counts.images, counts.dynamics
+	));
+}
+
+fn unavatar_asset_group_ownership(unavatar: &UnaUnavatarExtension) -> Vec<UnaSceneAssetGroupOwnership> {
+	let ownership_arrays = [
+		unavatar
+			.source
+			.get("assetGroupOwnership")
+			.or_else(|| unavatar.source.get("asset_group_ownership")),
+		unavatar.source.get("wardrobe").and_then(|wardrobe| {
+			wardrobe
+				.get("assetGroupOwnership")
+				.or_else(|| wardrobe.get("asset_group_ownership"))
+		}),
+	];
+	ownership_arrays
+		.into_iter()
+		.flatten()
+		.filter_map(Value::as_array)
+		.flat_map(|entries| entries.iter().filter_map(unavatar_asset_group_ownership_entry))
+		.collect()
+}
+
+fn unavatar_asset_group_ownership_entry(value: &Value) -> Option<UnaSceneAssetGroupOwnership> {
+	let group_id = value
+		.get("groupId")
+		.or_else(|| value.get("group_id"))
+		.or_else(|| value.get("id"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())?
+		.to_string();
+	let mesh_primitives = value
+		.get("meshPrimitives")
+		.or_else(|| value.get("mesh_primitives"))
+		.and_then(Value::as_array)
+		.map(|items| items.iter().filter_map(unavatar_mesh_primitive_key).collect())
+		.unwrap_or_default();
+	let materials = unavatar_usize_array(value.get("materials"));
+	let images = unavatar_usize_array(value.get("images").or_else(|| value.get("textures")));
+	let dynamics_source_ids = value
+		.get("dynamicsSourceIds")
+		.or_else(|| value.get("dynamics_source_ids"))
+		.or_else(|| value.get("dynamics"))
+		.and_then(Value::as_array)
+		.map(|items| {
+			items
+				.iter()
+				.filter_map(Value::as_str)
+				.filter(|value| !value.is_empty())
+				.map(str::to_string)
+				.collect()
+		})
+		.unwrap_or_default();
+	Some(UnaSceneAssetGroupOwnership {
+		group_id,
+		mesh_primitives,
+		materials,
+		images,
+		dynamics_source_ids,
+	})
+}
+
+fn unavatar_mesh_primitive_key(value: &Value) -> Option<UnaMeshPrimitiveKey> {
+	let mesh_index = value
+		.get("meshIndex")
+		.or_else(|| value.get("mesh_index"))
+		.or_else(|| value.get("mesh"))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok())?;
+	let primitive_index = value
+		.get("primitiveIndex")
+		.or_else(|| value.get("primitive_index"))
+		.or_else(|| value.get("primitive"))
+		.and_then(Value::as_u64)
+		.and_then(|value| usize::try_from(value).ok())?;
+	Some(UnaMeshPrimitiveKey {
+		mesh_index,
+		primitive_index,
+	})
+}
+
+fn unavatar_usize_array(value: Option<&Value>) -> Vec<usize> {
+	value
+		.and_then(Value::as_array)
+		.map(|items| {
+			items
+				.iter()
+				.filter_map(Value::as_u64)
+				.filter_map(|value| usize::try_from(value).ok())
+				.collect()
+		})
+		.unwrap_or_default()
 }
 
 fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<(&'a str, &'a [Value])> {
@@ -7068,6 +7173,7 @@ impl AvatarImporter for GltfImporter {
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
 		if let Some(unavatar) = &unavatar {
 			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
+			apply_unavatar_asset_group_ownership(&mut scene, unavatar, &mut report);
 			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
 			if let Some(humanoid_profile) = &humanoid_profile {
 				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
@@ -11908,6 +12014,60 @@ mod tests {
 
 		assert!(unavatar_wardrobe_set_operations(&unavatar, "field_drape").is_some());
 		assert!(unavatar_wardrobe_set_operations(&unavatar, "Field Drape").is_none());
+	}
+
+	#[test]
+	fn unavatar_asset_group_ownership_imports_scene_metadata() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"assetGroupOwnership": [{
+					"groupId": "outfit:coat",
+					"meshPrimitives": [{"meshIndex": 1, "primitiveIndex": 2}],
+					"materials": [3],
+					"images": [4, 5],
+					"dynamicsSourceIds": ["physbone:coat"]
+				}],
+				"wardrobe": {
+					"asset_group_ownership": [{
+						"id": "texture:red",
+						"mesh_primitives": [{"mesh": 6, "primitive": 7}],
+						"materials": [8],
+						"textures": [9],
+						"dynamics": ["spring:red"]
+					}]
+				}
+			}),
+		};
+		let mut scene = UnaSceneSnapshot::default();
+		let mut report = ImportReport::default();
+
+		apply_unavatar_asset_group_ownership(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.asset_group_ownership.len(), 2);
+		assert_eq!(scene.asset_group_ownership[0].group_id, "outfit:coat");
+		assert_eq!(
+			scene.asset_group_ownership[0].mesh_primitives,
+			vec![UnaMeshPrimitiveKey {
+				mesh_index: 1,
+				primitive_index: 2,
+			}]
+		);
+		assert_eq!(scene.asset_group_ownership[0].materials, vec![3]);
+		assert_eq!(scene.asset_group_ownership[0].images, vec![4, 5]);
+		assert_eq!(
+			scene.asset_group_ownership[0].dynamics_source_ids,
+			vec!["physbone:coat".to_string()]
+		);
+		assert_eq!(
+			scene.asset_group_ownership[1].mesh_primitives,
+			vec![UnaMeshPrimitiveKey {
+				mesh_index: 6,
+				primitive_index: 7,
+			}]
+		);
+		assert_eq!(scene.asset_group_ownership_counts().groups, 2);
+		assert!(report.messages.iter().any(|message| message.contains("ownership_groups=2")));
 	}
 
 	#[test]
