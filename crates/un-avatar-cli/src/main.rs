@@ -463,6 +463,7 @@ struct DiagnoseDynamicsGroupSummary {
 	index: usize,
 	source_kind: UnaDynamicsSourceKind,
 	enabled: bool,
+	source_enabled: bool,
 	#[serde(skip_serializing_if = "String::is_empty")]
 	source_id: String,
 	#[serde(skip_serializing_if = "String::is_empty")]
@@ -1640,6 +1641,7 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				index,
 				source_kind: group.source_kind,
 				enabled: runtime.dynamics.group_enabled(group),
+				source_enabled: group.enabled,
 				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
 				category: group.category.clone(),
@@ -3467,10 +3469,11 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} enabled={} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.enabled,
+			group.source_enabled,
 			group.source_id,
 			group.bone_count,
 			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
@@ -4437,12 +4440,14 @@ mod tests {
 				groups: vec![
 					un_avatar_core::UnaSpringBoneGroup {
 						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						enabled: true,
 						source_id: "physbone:hair".into(),
 						bone_node_indices: vec![0, 1],
 						..Default::default()
 					},
 					un_avatar_core::UnaSpringBoneGroup {
 						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						enabled: true,
 						source_id: "physbone:hair".into(),
 						bone_node_indices: vec![2, 3],
 						..Default::default()
@@ -4450,6 +4455,10 @@ mod tests {
 				],
 				colliders: Vec::new(),
 			}),
+			runtime_state: un_avatar_core::UnaRuntimeState {
+				dynamics_enabled_overrides: BTreeMap::from([("physbone:hair".to_string(), false)]),
+				..Default::default()
+			},
 			..Default::default()
 		};
 
@@ -4472,6 +4481,9 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups")));
+		assert_eq!(report.dynamics.groups.len(), 2);
+		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
+		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
 	}
 
 	#[test]
