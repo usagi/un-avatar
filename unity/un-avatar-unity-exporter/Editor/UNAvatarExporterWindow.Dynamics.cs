@@ -33,6 +33,30 @@ namespace UNAvatar.UnityExporter
             return payload;
         }
 
+        private List<object> BuildContactsPayload(GameObject root)
+        {
+            var payload = new List<object>();
+            if (root == null)
+            {
+                return payload;
+            }
+
+            var components = root.GetComponentsInChildren<Component>(true);
+            foreach (var component in components)
+            {
+                if (!IsVrcContactComponent(component))
+                {
+                    continue;
+                }
+                if (component is Behaviour behaviour && (!behaviour.enabled || !behaviour.gameObject.activeInHierarchy))
+                {
+                    continue;
+                }
+                payload.Add(BuildVrcContactPayload(root.transform, component));
+            }
+            return payload;
+        }
+
         private Dictionary<string, object> BuildDynamicsReportSummary(List<object> groups)
         {
             groups = groups ?? new List<object>();
@@ -64,6 +88,37 @@ namespace UNAvatar.UnityExporter
             return new Dictionary<string, object>
             {
                 ["groupCount"] = groups.Count,
+                ["sampleLimit"] = 32,
+                ["samples"] = samples
+            };
+        }
+
+        private Dictionary<string, object> BuildContactsReportSummary(List<object> contacts)
+        {
+            contacts = contacts ?? new List<object>();
+            var samples = new List<object>();
+            for (var i = 0; i < contacts.Count && samples.Count < 32; i++)
+            {
+                if (contacts[i] is Dictionary<string, object> contact)
+                {
+                    samples.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = contact.TryGetValue("id", out var id) ? id : "",
+                        ["source"] = contact.TryGetValue("source", out var source) ? source : "",
+                        ["component"] = contact.TryGetValue("component", out var component) ? component : null,
+                        ["node"] = contact.TryGetValue("node", out var node) ? node : null,
+                        ["kind"] = contact.TryGetValue("kind", out var kind) ? kind : "",
+                        ["parameter"] = contact.TryGetValue("parameter", out var parameter) ? parameter : "",
+                        ["collisionTags"] = contact.TryGetValue("collisionTags", out var tags) ? tags : new List<object>(),
+                        ["shape"] = contact.TryGetValue("shape", out var shape) ? shape : "",
+                        ["radius"] = contact.TryGetValue("radius", out var radius) ? radius : 0.0f,
+                        ["height"] = contact.TryGetValue("height", out var height) ? height : 0.0f
+                    });
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["contactCount"] = contacts.Count,
                 ["sampleLimit"] = 32,
                 ["samples"] = samples
             };
@@ -110,6 +165,55 @@ namespace UNAvatar.UnityExporter
             var type = component.GetType();
             return type.Name == "VRCPhysBone" ||
                 string.Equals(type.FullName, "VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone", StringComparison.Ordinal);
+        }
+
+        private static bool IsVrcContactComponent(Component component)
+        {
+            if (component == null)
+            {
+                return false;
+            }
+            var type = component.GetType();
+            return IsVrcContactSenderComponent(type) || IsVrcContactReceiverComponent(type);
+        }
+
+        private static bool IsVrcContactSenderComponent(Type type)
+        {
+            return type.Name == "VRCContactSender" ||
+                string.Equals(type.FullName, "VRC.SDK3.Dynamics.Contact.Components.VRCContactSender", StringComparison.Ordinal);
+        }
+
+        private static bool IsVrcContactReceiverComponent(Type type)
+        {
+            return type.Name == "VRCContactReceiver" ||
+                string.Equals(type.FullName, "VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver", StringComparison.Ordinal);
+        }
+
+        private Dictionary<string, object> BuildVrcContactPayload(Transform root, Component component)
+        {
+            var type = component.GetType();
+            var rootTransform = ReadMember(type, component, "rootTransform") as Transform;
+            if (rootTransform == null)
+            {
+                rootTransform = component.transform;
+            }
+            var isReceiver = IsVrcContactReceiverComponent(type);
+            var kind = isReceiver ? "receiver" : "sender";
+            return new Dictionary<string, object>
+            {
+                ["id"] = "contact:" + VariantExtractor.TransformPath(root, component.transform),
+                ["source"] = isReceiver ? "vrc_contact_receiver" : "vrc_contact_sender",
+                ["component"] = TransformTargetJson(root, component.transform),
+                ["node"] = TransformTargetJson(root, rootTransform),
+                ["kind"] = kind,
+                ["parameter"] = isReceiver ? ReadMember(type, component, "parameter")?.ToString() ?? "" : "",
+                ["collisionTags"] = StringsJson(ReadStringListMember(type, component, "collisionTags")),
+                ["shape"] = ReadMember(type, component, "shapeType")?.ToString() ?? "",
+                ["radius"] = ReadFloatMember(type, component, "radius", 0.0f),
+                ["height"] = ReadFloatMember(type, component, "height", 0.0f),
+                ["position"] = Vector3Json(ReadVector3Member(type, component, "position", Vector3.zero)),
+                ["rotation"] = QuaternionJson(ReadQuaternionMember(type, component, "rotation", Quaternion.identity))
+            };
         }
 
         private Dictionary<string, object> BuildVrcPhysBonePayload(Transform root, Component component)
@@ -286,6 +390,23 @@ namespace UNAvatar.UnityExporter
             return json;
         }
 
+        private static List<object> StringsJson(List<string> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    json.Add(value);
+                }
+            }
+            return json;
+        }
+
         private static List<object> Vector3Json(Vector3 value)
         {
             return new List<object> { value.x, value.y, value.z };
@@ -294,6 +415,24 @@ namespace UNAvatar.UnityExporter
         private static List<object> QuaternionJson(Quaternion value)
         {
             return new List<object> { value.x, value.y, value.z, value.w };
+        }
+
+        private static List<string> ReadStringListMember(Type type, object instance, string name)
+        {
+            var value = ReadMember(type, instance, name);
+            var strings = new List<string>();
+            if (value is IEnumerable enumerable)
+            {
+                foreach (var item in enumerable)
+                {
+                    var text = item != null ? item.ToString() : "";
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        strings.Add(text);
+                    }
+                }
+            }
+            return strings;
         }
 
         private static List<Component> ReadComponentListMember(Type type, object instance, string name)
