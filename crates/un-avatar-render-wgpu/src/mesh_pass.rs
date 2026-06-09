@@ -1044,6 +1044,86 @@ fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
 		.is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
+fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
+	if let Some(index) = index {
+		indices.insert(index);
+	}
+}
+
+fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
+	let mut indices = BTreeSet::new();
+	push_texture_index(&mut indices, material.base_color_texture_index);
+	push_texture_index(&mut indices, material.normal_texture_index);
+	push_texture_index(&mut indices, material.occlusion_texture_index);
+	push_texture_index(&mut indices, material.emissive_texture_index);
+	if let Some(mtoon) = material.mtoon_like_runtime() {
+		push_texture_index(&mut indices, mtoon.shade_multiply_texture_index);
+		push_texture_index(&mut indices, mtoon.shading_shift_texture_index);
+		push_texture_index(&mut indices, mtoon.matcap_texture_index);
+		push_texture_index(&mut indices, mtoon.rim_multiply_texture_index);
+		push_texture_index(&mut indices, mtoon.outline_width_multiply_texture_index);
+		push_texture_index(&mut indices, mtoon.uv_animation_mask_texture_index);
+		push_texture_index(&mut indices, mtoon.reflection_cube_texture_index);
+	}
+	if let Some(liltoon) = material.liltoon_like_runtime() {
+		push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.gradation_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.second_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.second_blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.second_dissolve.mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.second_dissolve.noise_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.third_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.third_blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.third_dissolve.mask_texture_index);
+		push_texture_index(&mut indices, liltoon.main_color.third_dissolve.noise_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.color_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.strength_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.border_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.blur_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.second_color_texture_index);
+		push_texture_index(&mut indices, liltoon.shadow.third_color_texture_index);
+		push_texture_index(&mut indices, liltoon.normal.second_texture_index);
+		push_texture_index(&mut indices, liltoon.normal.second_scale_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.bump_texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.second_texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.second_blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.matcap.second_bump_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.metallic_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.cube_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.color_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.smoothness_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.anisotropy_tangent_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.anisotropy_scale_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.reflection.anisotropy_shift_noise_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.rim.texture_index);
+		push_texture_index(&mut indices, liltoon.rim.shade_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.emission.texture_index);
+		push_texture_index(&mut indices, liltoon.emission.blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.emission.gradation_texture_index);
+		push_texture_index(&mut indices, liltoon.emission.second_texture_index);
+		push_texture_index(&mut indices, liltoon.emission.second_blend_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.emission.second_gradation_texture_index);
+		push_texture_index(&mut indices, liltoon.alpha_mask.texture_index);
+		push_texture_index(&mut indices, liltoon.audio_link.mask_texture_index);
+		push_texture_index(&mut indices, liltoon.audio_link.local_map_texture_index);
+		push_texture_index(&mut indices, liltoon.outline.texture_index);
+		push_texture_index(&mut indices, liltoon.outline.width_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.backlight.texture_index);
+		push_texture_index(&mut indices, liltoon.glitter.color_texture_index);
+		push_texture_index(&mut indices, liltoon.glitter.shape_texture_index);
+		push_texture_index(&mut indices, liltoon.dissolve.mask_texture_index);
+		push_texture_index(&mut indices, liltoon.dissolve.noise_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.parallax.texture_index);
+		push_texture_index(&mut indices, liltoon.fur.vector_texture_index);
+		push_texture_index(&mut indices, liltoon.fur.length_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.fur.noise_mask_texture_index);
+		push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
+	}
+	indices.into_iter().collect()
+}
+
 fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
 	match pipeline {
 		DrawPipelineKind::TransparentToonBackpass | DrawPipelineKind::TransparentToonBackpassNoZWrite => 0,
@@ -1098,6 +1178,7 @@ struct MeshDraw {
 	morph_weight_scratch: Vec<f32>,
 	alpha_mode: UnaAlphaMode,
 	material: UnaMaterialPbr,
+	texture_indices: Vec<usize>,
 	mesh_index: usize,
 	primitive_index: usize,
 	probe_anchor_node: Option<usize>,
@@ -1170,6 +1251,7 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) total_image_texture_count: usize,
 	pub(crate) resident_image_texture_count: usize,
 	pub(crate) inactive_image_texture_count: usize,
+	pub(crate) draws_using_inactive_image_texture_count: usize,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -6831,6 +6913,7 @@ impl SceneMeshes {
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
 					material: mat.clone(),
+					texture_indices: material_texture_indices(mat),
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
 					probe_anchor_node: node.probe_anchor_node,
@@ -7232,6 +7315,7 @@ impl SceneMeshes {
 				continue;
 			}
 			draw.material = material.clone();
+			draw.texture_indices = material_texture_indices(&draw.material);
 			draw.shading = material.shading;
 			draw.alpha_mode = material.alpha_mode;
 			let material_gpu =
@@ -7575,6 +7659,15 @@ impl SceneMeshes {
 		let resident_draw_mesh_primitive_count = self.draws.iter().filter(|draw| draw.asset_resident).count();
 		let total_image_texture_count = self.image_texture_residency.len();
 		let resident_image_texture_count = self.image_texture_residency.iter().filter(|resident| **resident).count();
+		let draws_using_inactive_image_texture_count = self
+			.draws
+			.iter()
+			.filter(|draw| {
+				draw.texture_indices
+					.iter()
+					.any(|index| self.image_texture_residency.get(*index).is_some_and(|resident| !resident))
+			})
+			.count();
 		let total_material_slot_count = self.material_slot_residency.len();
 		let resident_material_slot_count = self.material_slot_residency.iter().filter(|resident| **resident).count();
 		SceneMeshAssetResidencyCounts {
@@ -7584,6 +7677,7 @@ impl SceneMeshes {
 			total_image_texture_count,
 			resident_image_texture_count,
 			inactive_image_texture_count: total_image_texture_count.saturating_sub(resident_image_texture_count),
+			draws_using_inactive_image_texture_count,
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
@@ -7756,6 +7850,19 @@ mod tests {
 		assert!(image_asset_resident(&ownership, &active_groups, 0));
 		assert!(image_asset_resident(&ownership, &active_groups, 5));
 		assert!(!image_asset_resident(&ownership, &active_groups, 6));
+	}
+
+	#[test]
+	fn material_texture_indices_collects_unique_pbr_slots() {
+		let mat = UnaMaterialPbr {
+			base_color_texture_index: Some(3),
+			normal_texture_index: Some(4),
+			occlusion_texture_index: Some(3),
+			emissive_texture_index: Some(7),
+			..Default::default()
+		};
+
+		assert_eq!(material_texture_indices(&mat), vec![3, 4, 7]);
 	}
 
 	#[test]
