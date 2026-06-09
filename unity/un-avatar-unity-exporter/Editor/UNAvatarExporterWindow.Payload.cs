@@ -823,11 +823,13 @@ namespace UNAvatar.UnityExporter
 
             var nonBaseSets = exportWardrobeSets ?? WardrobeSetsForExport();
             var declaredAssetGroups = new HashSet<string>(StringComparer.Ordinal);
+            var ownershipAmbiguities = new List<object>();
             foreach (var set in nonBaseSets)
             {
                 AddDeclaredAssetGroups(declaredAssetGroups, set);
                 sets.Add(set.ToJson(false));
             }
+            var ownershipPathHints = BuildWardrobeAssetGroupOwnershipPathHints(nonBaseSets, declaredAssetGroups);
 
             if (nonBaseSets.Count == 0 && variants != null)
             {
@@ -855,10 +857,26 @@ namespace UNAvatar.UnityExporter
                 ["captureBase"] = hasExportBaseSnapshot ? SnapshotSummary(exportBaseSnapshot) : hasBaseSnapshot ? SnapshotSummary(baseSnapshot) : new Dictionary<string, object>(),
                 ["sets"] = sets
             };
-            var assetGroupOwnership = BuildWardrobeAssetGroupOwnership(rendererAssets, dynamicsPayload, declaredAssetGroups);
+            var ambiguitySignatures = new HashSet<string>(StringComparer.Ordinal);
+            var assetGroupOwnership = BuildWardrobeAssetGroupOwnership(
+                rendererAssets,
+                dynamicsPayload,
+                declaredAssetGroups,
+                ownershipPathHints,
+                ownershipAmbiguities,
+                ambiguitySignatures);
             if (assetGroupOwnership.Count > 0)
             {
                 wardrobe["assetGroupOwnership"] = assetGroupOwnership;
+            }
+            if (ownershipAmbiguities.Count > 0)
+            {
+                wardrobe["assetGroupOwnershipAmbiguities"] = new Dictionary<string, object>
+                {
+                    ["itemLimit"] = 64,
+                    ["itemCount"] = ownershipAmbiguities.Count,
+                    ["items"] = ownershipAmbiguities
+                };
             }
             return wardrobe;
         }
@@ -925,7 +943,13 @@ namespace UNAvatar.UnityExporter
             }
         }
 
-        private static List<object> BuildWardrobeAssetGroupOwnership(List<UnavatarRendererAssetRecord> rendererAssets, List<object> dynamicsPayload, HashSet<string> declaredAssetGroups)
+        private static List<object> BuildWardrobeAssetGroupOwnership(
+            List<UnavatarRendererAssetRecord> rendererAssets,
+            List<object> dynamicsPayload,
+            HashSet<string> declaredAssetGroups,
+            Dictionary<string, string> explicitPathHints,
+            List<object> ambiguousMatches,
+            HashSet<string> ambiguousMatchSignatures)
         {
             var result = new List<object>();
             if ((rendererAssets == null || rendererAssets.Count == 0) && (dynamicsPayload == null || dynamicsPayload.Count == 0))
@@ -941,7 +965,13 @@ namespace UNAvatar.UnityExporter
             {
                 foreach (var record in rendererAssets)
                 {
-                    var group = WardrobeAssetGroupForPath(record != null ? record.path : "", declaredAssetGroups);
+                    var path = NormalizeWardrobeAssetPath(record != null ? record.path : "");
+                    var group = WardrobeAssetGroupForPath(path, declaredAssetGroups, explicitPathHints, out var ambiguous);
+                    if (ambiguous)
+                    {
+                        RecordWardrobeAssetGroupAmbiguity(ambiguousMatches, ambiguousMatchSignatures, path, declaredAssetGroups, path);
+                        continue;
+                    }
                     if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
                     {
                         continue;
@@ -962,7 +992,14 @@ namespace UNAvatar.UnityExporter
                     {
                         continue;
                     }
-                    var group = WardrobeAssetGroupForPath(DynamicSourcePath(groupPayload, sourceId), declaredAssetGroups);
+                    var dynamicPath = DynamicSourcePath(groupPayload, sourceId);
+                    var path = NormalizeWardrobeAssetPath(dynamicPath);
+                    var group = WardrobeAssetGroupForPath(path, declaredAssetGroups, explicitPathHints, out var ambiguous);
+                    if (ambiguous)
+                    {
+                        RecordWardrobeAssetGroupAmbiguity(ambiguousMatches, ambiguousMatchSignatures, path, declaredAssetGroups, dynamicPath);
+                        continue;
+                    }
                     if (string.IsNullOrWhiteSpace(group) || !declaredAssetGroups.Contains(group))
                     {
                         continue;
@@ -987,10 +1024,114 @@ namespace UNAvatar.UnityExporter
             return result;
         }
 
+        private static Dictionary<string, string> BuildWardrobeAssetGroupOwnershipPathHints(
+            IEnumerable<WardrobeSetDraft> sets,
+            HashSet<string> declaredAssetGroups)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (declaredAssetGroups == null || declaredAssetGroups.Count == 0 || sets == null)
+            {
+                return result;
+            }
+            foreach (var set in sets)
+            {
+                if (set == null || set.assetGroupOwnershipHints == null)
+                {
+                    continue;
+                }
+                foreach (var hint in set.assetGroupOwnershipHints)
+                {
+                    if (hint == null || string.IsNullOrWhiteSpace(hint.path) || string.IsNullOrWhiteSpace(hint.groupId))
+                    {
+                        continue;
+                    }
+                    var path = NormalizeWardrobeAssetPath(hint.path);
+                    if (string.IsNullOrWhiteSpace(path) || !declaredAssetGroups.Contains(hint.groupId.Trim()))
+                    {
+                        continue;
+                    }
+                    result[path] = hint.groupId.Trim();
+                }
+            }
+            return result;
+        }
+
+        private static string NormalizeWardrobeAssetPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "";
+            }
+            return path.Replace('\\', '/').Trim('/');
+        }
+
+        private static void RecordWardrobeAssetGroupAmbiguity(
+            List<object> diagnostics,
+            HashSet<string> seenSignatures,
+            string path,
+            HashSet<string> declaredAssetGroups,
+            string sourcePath)
+        {
+            if (diagnostics == null || declaredAssetGroups == null || declaredAssetGroups.Count == 0 || string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+            var candidates = new List<string>();
+            var topSlug = WardrobeAssetGroupTopSlug(path);
+            foreach (var group in declaredAssetGroups)
+            {
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    continue;
+                }
+                if (string.Equals(WardrobeAssetGroupSuffixSlug(group), topSlug, StringComparison.Ordinal))
+                {
+                    candidates.Add(group);
+                }
+            }
+            if (candidates.Count <= 1)
+            {
+                return;
+            }
+            candidates.Sort(StringComparer.Ordinal);
+            var signature = path + "||" + string.Join("|", candidates);
+            if (seenSignatures != null && !seenSignatures.Add(signature))
+            {
+                return;
+            }
+            diagnostics.Add(new Dictionary<string, object>
+            {
+                ["sourcePath"] = sourcePath ?? "",
+                ["normalizedPath"] = path,
+                ["topSlug"] = topSlug,
+                ["candidateGroups"] = candidates
+            });
+        }
+
         private static string WardrobeAssetGroupForPath(string path, HashSet<string> declaredAssetGroups)
         {
+            return WardrobeAssetGroupForPath(path, declaredAssetGroups, null, out _);
+        }
+
+        private static string WardrobeAssetGroupForPath(
+            string path,
+            HashSet<string> declaredAssetGroups,
+            Dictionary<string, string> explicitPathHints,
+            out bool isAmbiguous)
+        {
+            isAmbiguous = false;
             if (declaredAssetGroups == null || declaredAssetGroups.Count == 0)
             {
+                return "";
+            }
+            if (!string.IsNullOrWhiteSpace(path) &&
+                explicitPathHints != null &&
+                explicitPathHints.TryGetValue(path, out var explicitGroup))
+            {
+                if (declaredAssetGroups.Contains(explicitGroup))
+                {
+                    return explicitGroup;
+                }
                 return "";
             }
             var outfitGroup = WardrobeSnapshotCapture.AssetGroupForPath(path);
@@ -1017,6 +1158,7 @@ namespace UNAvatar.UnityExporter
                 }
                 if (match != null)
                 {
+                    isAmbiguous = true;
                     return "";
                 }
                 match = group;

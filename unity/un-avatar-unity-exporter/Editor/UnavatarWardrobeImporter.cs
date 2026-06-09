@@ -88,6 +88,24 @@ namespace UNAvatar.UnityExporter
                     }
                 }
             }
+            if (TryGetList(map, "assetGroupOwnershipHints", out var hints))
+            {
+                set.assetGroupOwnershipHints = new List<WardrobeAssetGroupOwnershipHint>(hints.Count);
+                foreach (var item in hints)
+                {
+                    if (!(item is Dictionary<string, object> hintMap))
+                    {
+                        continue;
+                    }
+                    var path = ReadString(hintMap, "path", "");
+                    var groupId = ReadString(hintMap, "groupId", "");
+                    if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(groupId))
+                    {
+                        continue;
+                    }
+                    set.assetGroupOwnershipHints.Add(new WardrobeAssetGroupOwnershipHint { path = path, groupId = groupId });
+                }
+            }
 
             if (TryGetList(map, "operations", out var operations))
             {

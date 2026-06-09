@@ -306,6 +306,7 @@ namespace UNAvatar.UnityExporter
                 displayName = source.displayName,
                 source = source.source,
                 assetGroups = source.assetGroups != null ? new List<string>(source.assetGroups) : new List<string>(),
+                assetGroupOwnershipHints = WardrobeSetDraft.CloneHints(source.assetGroupOwnershipHints),
                 operations = CloneWardrobeSetOperations(source.operations),
                 previewImages = ClonePreviewImages(source.previewImages),
                 capturedSnapshot = source.capturedSnapshot

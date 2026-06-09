@@ -91,6 +91,7 @@ namespace UNAvatar.UnityExporter
         public string displayName;
         public string source = "unity_capture_diff";
         public List<string> assetGroups = new List<string>();
+        public List<WardrobeAssetGroupOwnershipHint> assetGroupOwnershipHints = new List<WardrobeAssetGroupOwnershipHint>();
         public List<WardrobeOperationDraft> operations = new List<WardrobeOperationDraft>();
         public List<WardrobePreviewImageDraft> previewImages = new List<WardrobePreviewImageDraft>();
         public WardrobeSnapshotDraft capturedSnapshot;
@@ -107,6 +108,11 @@ namespace UNAvatar.UnityExporter
                 ["operations"] = OperationsToJson(operations),
                 ["previewImages"] = PreviewImagesToJson(previewImages)
             };
+            var hintEntries = AssetGroupOwnershipHintsToJson(assetGroupOwnershipHints);
+            if (hintEntries.Count > 0)
+            {
+                json["assetGroupOwnershipHints"] = hintEntries;
+            }
             return json;
         }
 
@@ -120,6 +126,34 @@ namespace UNAvatar.UnityExporter
             foreach (var value in values)
             {
                 json.Add(value);
+            }
+            return json;
+        }
+
+        private static List<object> AssetGroupOwnershipHintsToJson(List<WardrobeAssetGroupOwnershipHint> values)
+        {
+            var json = new List<object>(values != null ? values.Count : 0);
+            if (values == null)
+            {
+                return json;
+            }
+            foreach (var value in values)
+            {
+                if (value == null)
+                {
+                    continue;
+                }
+                var path = string.IsNullOrWhiteSpace(value.path) ? "" : value.path;
+                var groupId = string.IsNullOrWhiteSpace(value.groupId) ? "" : value.groupId;
+                if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(groupId))
+                {
+                    continue;
+                }
+                json.Add(new Dictionary<string, object>
+                {
+                    ["path"] = path,
+                    ["groupId"] = groupId
+                });
             }
             return json;
         }
@@ -157,6 +191,35 @@ namespace UNAvatar.UnityExporter
             }
             return json;
         }
+
+        public static List<WardrobeAssetGroupOwnershipHint> CloneHints(List<WardrobeAssetGroupOwnershipHint> source)
+        {
+            if (source == null)
+            {
+                return new List<WardrobeAssetGroupOwnershipHint>();
+            }
+            var result = new List<WardrobeAssetGroupOwnershipHint>(source.Count);
+            foreach (var hint in source)
+            {
+                if (hint == null)
+                {
+                    continue;
+                }
+                result.Add(new WardrobeAssetGroupOwnershipHint
+                {
+                    path = hint.path,
+                    groupId = hint.groupId
+                });
+            }
+            return result;
+        }
+    }
+
+    [Serializable]
+    internal sealed class WardrobeAssetGroupOwnershipHint
+    {
+        public string path;
+        public string groupId;
     }
 
     [Serializable]

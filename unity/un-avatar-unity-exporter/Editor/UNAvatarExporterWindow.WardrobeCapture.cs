@@ -138,6 +138,7 @@ namespace UNAvatar.UnityExporter
                 displayName = source.displayName + " Copy",
                 source = "unity_capture_diff_duplicate",
                 assetGroups = new List<string>(source.assetGroups),
+                assetGroupOwnershipHints = WardrobeSetDraft.CloneHints(source.assetGroupOwnershipHints),
                 operations = CloneWardrobeSetOperations(source.operations),
                 previewImages = ClonePreviewImages(source.previewImages),
                 capturedSnapshot = source.capturedSnapshot

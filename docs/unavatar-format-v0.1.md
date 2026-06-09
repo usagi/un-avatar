@@ -453,6 +453,7 @@ Runtime は base state 適用時、親 OFF に由来する子孫の `false` を�
 - 数百着規模の衣装を扱うユーザーを想定し、全衣装の GPU 常駐を前提にしない。
 
 Source payload では `assetGroupOwnership[]`（または `wardrobe.assetGroupOwnership[]`）として group ownership を保存できる。各 entry は `groupId` と、所属する `meshPrimitives`、`materials`、`images`、`dynamicsSourceIds` を列挙する。Runtime schema では scene source data 側の `asset_group_ownership[]` へ正規化する。Unity Exporter は wardrobe set が宣言した `outfit:<top>` group と renderer / PhysBone source path の top-level name が一致する範囲で、`wardrobe.assetGroupOwnership[]` を保守的に自動生成する。現 renderer はこの metadata の件数、active group 由来の resident count、renderer draw residency、renderer mesh buffer byte residency、image / material slot residency、active draw が参照する inactive image / material slot count、bounded slot index preview、preview limit、pending scoped texture / material upload work count、active residency gap flag、直近の mesh buffer scoped load / unload count と image/cubemap texture scoped load / unload count を runtime status の wardrobe asset upload plan に公開する。mesh buffer / image texture / cubemap は active group に応じて GPU upload / drop できる。
+`wardrobe.sets` の `assetGroupOwnershipHints[]` (`path` + `groupId`) を併用すると、同名 suffix で曖昧な group でも明示的に所有関係を固定できる。
 
 ### Capture Diff Workflow
 
