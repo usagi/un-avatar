@@ -134,8 +134,10 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Material Setter
   - done: Runtime action importer resolves structured Material Setter renderer references against the scene when available, then lowers object / material index / material payload into `MaterialSlot` effects for direct renderer slot replacement. Explicit component / fields / menuItem expression menu path metadata is imported as an `ExpressionMenu` trigger; explicit MenuItem control parameter/value metadata is preserved as a `ParameterValue` trigger, and MenuItem `subParameters` are retained as puppet metadata on runtime action conditions / CLI diagnose. Renderer `set_parameter` can drive matching material setter actions without using explicit action ids and still persists unmatched parameter state for later evaluators.
   - remaining: full reactive object integration with continuous parameter evaluator behavior, broader component reference diagnostics, and material property override mapping beyond slot replacement.
-- `[ ]` Blendshape Sync
+- `[~]` Blendshape Sync
   - required: source renderer/shape to target renderer/shape binding.
+  - done: Unity Exporter serializes `BlendshapeBinding` entries as structured `referenceMesh`, `blendshape`, `localBlendshape`, and `remapCurve` payload instead of opaque type-name strings.
+  - remaining: importer / resolver propagation of source morph defaults and runtime expression / animation updates, including remap curves and recursive sync.
 - `[ ]` Sync Parameter Sequence
   - required: classify as VRC expression/parameter feature; defer if not needed for static wardrobe render.
 

@@ -211,6 +211,10 @@ namespace UNAvatar.UnityExporter
             {
                 return ModularAvatarObjectReferenceToJson(root, unityObject);
             }
+            if (type.FullName == "nadena.dev.modular_avatar.core.BlendshapeBinding")
+            {
+                return BlendshapeBindingToJson(root, owner, value);
+            }
             if (type.FullName == "nadena.dev.modular_avatar.core.AvatarObjectReference")
             {
                 return AvatarObjectReferenceToJson(root, owner, value);
@@ -230,6 +234,47 @@ namespace UNAvatar.UnityExporter
             }
 
             return value.ToString();
+        }
+
+        private object BlendshapeBindingToJson(Transform root, Component owner, object binding)
+        {
+            var type = binding.GetType();
+            var referenceMesh = ReadMember(type, binding, "ReferenceMesh");
+            var remapCurve = ReadMember(type, binding, "RemapCurve") as AnimationCurve;
+            return new Dictionary<string, object>
+            {
+                ["referenceMesh"] = referenceMesh != null ? AvatarObjectReferenceToJson(root, owner, referenceMesh) : null,
+                ["blendshape"] = ReadMember(type, binding, "Blendshape") as string ?? "",
+                ["localBlendshape"] = ReadMember(type, binding, "LocalBlendshape") as string ?? "",
+                ["remapCurve"] = AnimationCurveToJson(remapCurve)
+            };
+        }
+
+        private static object AnimationCurveToJson(AnimationCurve curve)
+        {
+            if (curve == null)
+            {
+                return null;
+            }
+            var keys = new List<object>(curve.keys != null ? curve.keys.Length : 0);
+            if (curve.keys != null)
+            {
+                foreach (var key in curve.keys)
+                {
+                    keys.Add(new Dictionary<string, object>
+                    {
+                        ["time"] = key.time,
+                        ["value"] = key.value,
+                        ["inTangent"] = key.inTangent,
+                        ["outTangent"] = key.outTangent
+                    });
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["keyCount"] = keys.Count,
+                ["keys"] = keys
+            };
         }
 
         private object AvatarObjectReferenceToJson(Transform root, Component owner, object reference)
