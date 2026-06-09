@@ -11954,7 +11954,9 @@ mod tests {
 		assert_eq!(applied.dynamics_applied, 1);
 		assert_eq!(applied.dynamics_missing, 1);
 		assert_eq!(applied.missing_dynamics_ids, vec!["physbone:missing"]);
-		assert!(!doc.spring_bones.as_ref().unwrap().groups[0].enabled);
+		let dynamics = doc.runtime_model().dynamics();
+		assert!(!dynamics.group_enabled(&dynamics.groups()[0]));
+		assert!(doc.spring_bones.as_ref().unwrap().groups[0].enabled);
 		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("no_hair_physics"));
 		assert_eq!(
 			doc.runtime_model().active_asset_groups(),
@@ -11965,7 +11967,8 @@ mod tests {
 		assert_eq!(applied.active_asset_groups, vec!["avatar:base".to_string()]);
 		assert_eq!(applied.dynamics_applied, 0);
 		assert_eq!(applied.dynamics_missing, 0);
-		assert!(doc.spring_bones.as_ref().unwrap().groups[0].enabled);
+		let dynamics = doc.runtime_model().dynamics();
+		assert!(dynamics.group_enabled(&dynamics.groups()[0]));
 		assert_eq!(doc.runtime_model().active_wardrobe_set(), Some("base"));
 		assert_eq!(doc.runtime_model().active_asset_groups(), &["avatar:base".to_string()]);
 	}

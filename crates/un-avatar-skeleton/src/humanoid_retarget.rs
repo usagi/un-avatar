@@ -1834,6 +1834,7 @@ mod tests {
 	fn unknown_node() -> UnaSceneNode {
 		UnaSceneNode {
 			source_node_id: None,
+			resolved_node_id: None,
 			name: None,
 			visible: true,
 			transform: Mat4::IDENTITY.to_cols_array(),

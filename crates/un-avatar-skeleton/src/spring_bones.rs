@@ -497,7 +497,7 @@ impl SpringBoneSimulator {
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
 		for g in groups {
-			if !g.enabled {
+			if !dynamics.group_enabled(g) {
 				runtimes.push(None);
 				continue;
 			}
@@ -624,7 +624,7 @@ impl SpringBoneSimulator {
 				let (Some(g), Some(Some(rt))) = (dynamics.group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
-				if !g.enabled {
+				if !dynamics.group_enabled(g) {
 					continue;
 				}
 				for _ in 0..substeps {
@@ -822,6 +822,7 @@ mod tests {
 		let m = Mat4::from_scale_rotation_translation(Vec3::ONE, r, trans);
 		UnaSceneNode {
 			source_node_id: None,
+			resolved_node_id: None,
 			name: None,
 			visible: true,
 			transform: m.to_cols_array(),

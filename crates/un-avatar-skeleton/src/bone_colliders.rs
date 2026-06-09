@@ -434,6 +434,7 @@ mod tests {
 	fn node(name: &str, translation: Vec3, children: Vec<usize>) -> UnaSceneNode {
 		UnaSceneNode {
 			source_node_id: None,
+			resolved_node_id: None,
 			name: Some(name.to_string()),
 			visible: true,
 			transform: Mat4::from_translation(translation).to_cols_array(),

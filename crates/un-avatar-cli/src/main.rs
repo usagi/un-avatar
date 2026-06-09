@@ -1639,7 +1639,7 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 			DiagnoseDynamicsGroupSummary {
 				index,
 				source_kind: group.source_kind,
-				enabled: group.enabled,
+				enabled: runtime.dynamics.group_enabled(group),
 				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
 				category: group.category.clone(),

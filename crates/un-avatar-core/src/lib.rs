@@ -327,6 +327,10 @@ pub struct UnaRuntimeState {
 	/// `UnaRuntimeActionSet`; this map records only the current transient state.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub parameter_values: BTreeMap<String, f32>,
+	/// Runtime dynamics enable overrides keyed by source id. Authored dynamics defaults remain on source groups; wardrobe
+	/// and runtime actions write only this transient state.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub dynamics_enabled_overrides: BTreeMap<String, bool>,
 }
 
 pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 2;
@@ -828,11 +832,13 @@ pub struct UnaSpringBoneSettings {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnaRuntimeDynamics<'a> {
 	spring_bones: Option<&'a UnaSpringBoneSettings>,
+	runtime_state: Option<&'a UnaRuntimeState>,
 }
 
 #[derive(Debug, Default)]
 pub struct UnaRuntimeDynamicsMut<'a> {
 	spring_bones: Option<&'a mut UnaSpringBoneSettings>,
+	runtime_state: Option<&'a mut UnaRuntimeState>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -866,7 +872,20 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn enabled_group_count(self) -> usize {
-		self.groups().iter().filter(|group| group.enabled).count()
+		self.groups().iter().filter(|group| self.group_enabled(group)).count()
+	}
+
+	pub fn group_enabled(self, group: &UnaSpringBoneGroup) -> bool {
+		if !group.source_id.is_empty() {
+			if let Some(enabled) = self
+				.runtime_state
+				.and_then(|state| state.dynamics_enabled_overrides.get(&group.source_id))
+				.copied()
+			{
+				return enabled;
+			}
+		}
+		group.enabled
 	}
 
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
@@ -893,7 +912,7 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		let mut counts = UnaRuntimeDynamicsCounts::default();
 		for group in self.groups() {
 			counts.groups += 1;
-			if group.enabled {
+			if self.group_enabled(group) {
 				counts.enabled_groups += 1;
 			}
 			match group.source_kind {
@@ -918,6 +937,7 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 	pub fn as_readonly(&self) -> UnaRuntimeDynamics<'_> {
 		UnaRuntimeDynamics {
 			spring_bones: self.spring_bones.as_deref(),
+			runtime_state: self.runtime_state.as_deref(),
 		}
 	}
 
@@ -929,26 +949,31 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 	}
 
 	pub fn reset_enabled(&mut self) {
-		for group in self.groups_mut() {
-			group.enabled = group.source_kind != UnaDynamicsSourceKind::VrcPhysBone;
+		if let Some(runtime_state) = self.runtime_state.as_deref_mut() {
+			runtime_state.dynamics_enabled_overrides.clear();
 		}
 	}
 
 	pub fn set_group_enabled_by_source_id(&mut self, source_id: &str, enabled: bool) -> bool {
-		let mut applied = false;
-		for group in self.groups_mut() {
-			if group.source_id == source_id {
-				group.enabled = enabled;
-				applied = true;
+		if source_id.is_empty() {
+			return false;
+		}
+		let matches = self.groups_mut().iter().any(|group| group.source_id == source_id);
+		if matches {
+			if let Some(runtime_state) = self.runtime_state.as_deref_mut() {
+				runtime_state.dynamics_enabled_overrides.insert(source_id.to_string(), enabled);
 			}
 		}
-		applied
+		matches
 	}
 }
 
 impl UnaSpringBoneSettings {
 	pub fn runtime_dynamics(&self) -> UnaRuntimeDynamics<'_> {
-		UnaRuntimeDynamics { spring_bones: Some(self) }
+		UnaRuntimeDynamics {
+			spring_bones: Some(self),
+			runtime_state: None,
+		}
 	}
 }
 
@@ -1203,17 +1228,24 @@ impl<'a> UnaRuntimeModel<'a> {
 	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
 		UnaRuntimeDynamics {
 			spring_bones: self.document.spring_bones.as_ref(),
+			runtime_state: Some(&self.document.runtime_state),
 		}
 	}
 }
 
 impl<'a> UnaRuntimeModelMut<'a> {
 	pub fn scene_and_dynamics_mut(self) -> Option<UnaRuntimeSceneDynamicsMut<'a>> {
-		let UnaDocument { scene, spring_bones, .. } = self.document;
+		let UnaDocument {
+			scene,
+			spring_bones,
+			runtime_state,
+			..
+		} = self.document;
 		Some(UnaRuntimeSceneDynamicsMut {
 			scene: scene.as_mut()?,
 			dynamics: UnaRuntimeDynamicsMut {
 				spring_bones: spring_bones.as_mut(),
+				runtime_state: Some(runtime_state),
 			},
 		})
 	}
@@ -4432,7 +4464,7 @@ mod tests {
 	}
 
 	#[test]
-	fn runtime_dynamics_mut_sets_groups_by_source_id() {
+	fn runtime_dynamics_mut_sets_runtime_enabled_overrides_by_source_id() {
 		let mut document = UnaDocument {
 			scene: Some(UnaSceneSnapshot::default()),
 			spring_bones: Some(UnaSpringBoneSettings {
@@ -4458,29 +4490,39 @@ mod tests {
 			..Default::default()
 		};
 
-		let mut runtime = document.runtime_scene_and_dynamics_mut().unwrap();
-		assert!(runtime.dynamics.set_group_enabled_by_source_id("physbone:hair", false));
-		assert!(!runtime.dynamics.set_group_enabled_by_source_id("physbone:missing", false));
-		let groups = runtime.dynamics.as_readonly().groups();
-		assert!(!groups[0].enabled);
-		assert!(!groups[1].enabled);
-		assert!(groups[2].enabled);
+		{
+			let mut runtime = document.runtime_scene_and_dynamics_mut().unwrap();
+			assert!(runtime.dynamics.set_group_enabled_by_source_id("physbone:hair", false));
+			assert!(!runtime.dynamics.set_group_enabled_by_source_id("physbone:missing", false));
+			let readonly = runtime.dynamics.as_readonly();
+			let groups = readonly.groups();
+			assert!(!readonly.group_enabled(&groups[0]));
+			assert!(!readonly.group_enabled(&groups[1]));
+			assert!(readonly.group_enabled(&groups[2]));
+			assert!(groups.iter().all(|group| group.enabled));
+		}
+		assert_eq!(
+			document.runtime_state.dynamics_enabled_overrides,
+			BTreeMap::from([("physbone:hair".to_string(), false)])
+		);
 	}
 
 	#[test]
-	fn runtime_dynamics_reset_keeps_vrc_physbone_default_disabled() {
+	fn runtime_dynamics_reset_clears_runtime_enabled_overrides() {
 		let mut document = UnaDocument {
 			scene: Some(UnaSceneSnapshot::default()),
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![
 					UnaSpringBoneGroup {
 						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
-						enabled: true,
+						source_id: "physbone:hair".to_string(),
+						enabled: false,
 						..Default::default()
 					},
 					UnaSpringBoneGroup {
 						source_kind: UnaDynamicsSourceKind::VrmSpringBone,
-						enabled: false,
+						source_id: "spring:tail".to_string(),
+						enabled: true,
 						..Default::default()
 					},
 				],
@@ -4489,11 +4531,18 @@ mod tests {
 			..Default::default()
 		};
 
-		document.runtime_scene_and_dynamics_mut().unwrap().dynamics.reset_enabled();
+		{
+			let mut runtime = document.runtime_scene_and_dynamics_mut().unwrap();
+			assert!(runtime.dynamics.set_group_enabled_by_source_id("physbone:hair", true));
+			assert!(runtime.dynamics.set_group_enabled_by_source_id("spring:tail", false));
+			runtime.dynamics.reset_enabled();
+		}
 
-		let groups = &document.spring_bones.as_ref().unwrap().groups;
-		assert!(!groups[0].enabled);
-		assert!(groups[1].enabled);
+		let dynamics = document.runtime_model().dynamics();
+		let groups = dynamics.groups();
+		assert!(!dynamics.group_enabled(&groups[0]));
+		assert!(dynamics.group_enabled(&groups[1]));
+		assert!(document.runtime_state.dynamics_enabled_overrides.is_empty());
 	}
 
 	#[test]
