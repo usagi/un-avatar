@@ -3450,7 +3450,8 @@ fn build_diagnose_report(
 	let menu_wardrobe_candidates = diagnose_menu_wardrobe_candidates(unavatar.as_ref(), &menu_action_candidates);
 	if let Some(unavatar) = &unavatar {
 		for set in &unavatar.wardrobe_sets {
-			if set.operation_count > 0 && set.asset_groups.is_empty() {
+			let is_base_set = unavatar.base_set.as_deref() == Some(set.id.as_str());
+			if !is_base_set && set.operation_count > 0 && set.asset_groups.is_empty() {
 				warnings.push(format!(
 					"wardrobe set {:?} has {} operation(s) but no assetGroups; lazy GPU upload cannot scope this set yet",
 					set.id, set.operation_count
@@ -4916,7 +4917,11 @@ mod tests {
 						}]
 					},
 					"wardrobe": {
+						"baseSet": "base",
 						"sets": [{
+							"id": "base",
+							"operations": [{"op": "subtreeEnabled"}]
+						}, {
 							"id": "jacket",
 							"assetGroups": ["outfit:jacket", "texture:red"],
 							"operations": [{"op": "nodeVisibility"}]
@@ -4969,10 +4974,7 @@ mod tests {
 			vec!["physbone:jacket".to_string()]
 		);
 		assert_eq!(report.scene.scoped_active_asset_group_count, 1);
-		assert_eq!(
-			report.scene.scoped_missing_active_asset_groups,
-			vec!["missing:gloves".to_string()]
-		);
+		assert_eq!(report.scene.scoped_missing_active_asset_groups, vec!["missing:gloves".to_string()]);
 		assert_eq!(report.scene.scoped_resident_mesh_primitive_count, 1);
 		assert_eq!(report.scene.scoped_resident_material_count, 1);
 		assert_eq!(report.scene.scoped_resident_image_count, 1);
@@ -5137,6 +5139,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups")));
+		assert!(!report
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("wardrobe set \"base\"") && warning.contains("no assetGroups")));
 	}
 
 	#[test]
