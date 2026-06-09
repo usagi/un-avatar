@@ -34,7 +34,7 @@ use std::{
 
 pub use debug_log::WindowDebugOptions;
 pub use gpu::FrameTimings;
-use gpu::{DocumentAttachOptions, GpuState, PreparedDocumentScene};
+use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
 pub use mesh_pass::{
 	AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, AvatarRimOptions,
 	AvatarRimPolicy, AvatarSpecularOptions, SceneMeshLoadOpts,
@@ -1536,6 +1536,7 @@ impl AvatarApp {
 			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
 			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
 			status.runtime_requires_fur = runtime_requirements.fur;
+			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -1655,6 +1656,15 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_wardrobe_asset_upload(&self, plan: WardrobeAssetUploadPlan) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.wardrobe_asset_upload = plan;
+		}
+	}
+
 	fn update_runtime_resolver_cache_key(&self, key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -1686,6 +1696,7 @@ impl AvatarApp {
 		if let Some(active_set_id) = &activation.active_wardrobe_set {
 			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
 			self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+			self.update_runtime_wardrobe_asset_upload(self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default());
 			self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 		}
 		self.update_runtime_last_action(Some(activation.action_id.clone()));
@@ -2478,6 +2489,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				if outcome.is_ok() {
 					self.update_runtime_wardrobe_set(active_set_id);
 					self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+					self.update_runtime_wardrobe_asset_upload(
+						self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default(),
+					);
 					self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 					self.request_redraw();
 				}
@@ -2494,15 +2508,13 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				result,
 			} => {
 				let outcome = match self.gpu.as_mut() {
-					Some(gpu) => {
-						gpu.activate_runtime_action(
-							action_id.as_deref(),
-							supervisor_command.as_deref(),
-							expression_menu_path.as_deref(),
-							parameter_name.as_deref(),
-							parameter_value,
-						)
-					}
+					Some(gpu) => gpu.activate_runtime_action(
+						action_id.as_deref(),
+						supervisor_command.as_deref(),
+						expression_menu_path.as_deref(),
+						parameter_name.as_deref(),
+						parameter_value,
+					),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(activation) = &outcome {
@@ -2897,14 +2909,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.update_runtime_texture_summary(actual_texture_summary);
 						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
 						self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+						self.update_runtime_wardrobe_asset_upload(
+							self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default(),
+						);
 						self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
-						self.update_runtime_parameters(
-							self.gpu
-								.as_ref()
-								.map(|gpu| gpu.runtime_parameter_values())
-								.unwrap_or_default(),
-						);
+						self.update_runtime_parameters(self.gpu.as_ref().map(|gpu| gpu.runtime_parameter_values()).unwrap_or_default());
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
@@ -3057,6 +3067,8 @@ struct RendererRuntimeSnapshot {
 	active_wardrobe_set: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	active_asset_groups: Vec<String>,
+	#[serde(default, skip_serializing_if = "wardrobe_asset_upload_plan_is_default")]
+	wardrobe_asset_upload: WardrobeAssetUploadPlan,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	resolver_cache_key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>,
 	#[serde(default)]
@@ -3196,6 +3208,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_summary: None,
 		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
 		active_asset_groups: Vec::new(),
+		wardrobe_asset_upload: WardrobeAssetUploadPlan::default(),
 		resolver_cache_key: None,
 		last_action_id: None,
 		runtime_parameter_values: BTreeMap::new(),
@@ -3499,7 +3512,14 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			expression_menu_path,
 			parameter_name,
 			parameter_value,
-		}) => dispatch_activate_action_command(proxy, action_id, supervisor_command, expression_menu_path, parameter_name, parameter_value),
+		}) => dispatch_activate_action_command(
+			proxy,
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			parameter_name,
+			parameter_value,
+		),
 		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
@@ -4514,8 +4534,8 @@ mod tests {
 
 	#[test]
 	fn parses_json_set_parameter_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_parameter","parameterName":"JacketColor","parameterValue":1.0}"#)
-			.unwrap();
+		let command =
+			parse_renderer_control_command(r#"{"command":"set_parameter","parameterName":"JacketColor","parameterValue":1.0}"#).unwrap();
 		let RendererControlCommand::SetParameter { name, value } = command else {
 			panic!("expected set_parameter command");
 		};

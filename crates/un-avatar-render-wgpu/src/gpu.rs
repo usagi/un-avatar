@@ -65,6 +65,67 @@ pub(crate) struct RuntimeActionActivation {
 	pub(crate) parameter_values: BTreeMap<String, f32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct WardrobeAssetUploadPlan {
+	pub(crate) mode: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) active_asset_groups: Vec<String>,
+	pub(crate) declared_asset_group_count: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) declared_asset_groups: Vec<String>,
+	pub(crate) scoped_upload_supported: bool,
+	pub(crate) all_resident: bool,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) reason: String,
+}
+
+pub(crate) fn wardrobe_asset_upload_plan_is_default(plan: &WardrobeAssetUploadPlan) -> bool {
+	plan == &WardrobeAssetUploadPlan::default()
+}
+
+fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAssetUploadPlan {
+	let mut declared_asset_groups = document
+		.unavatar
+		.as_ref()
+		.and_then(|unavatar| unavatar.source.get("wardrobe"))
+		.and_then(|wardrobe| wardrobe.get("sets"))
+		.and_then(|sets| sets.as_array())
+		.map(|sets| {
+			sets.iter()
+				.flat_map(|set| {
+					set.get("assetGroups")
+						.or_else(|| set.get("asset_groups"))
+						.and_then(|groups| groups.as_array())
+						.into_iter()
+						.flatten()
+						.filter_map(|group| group.as_str().filter(|group| !group.is_empty()).map(str::to_owned))
+				})
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
+	declared_asset_groups.sort();
+	declared_asset_groups.dedup();
+	let active_asset_groups = document.runtime_model().active_asset_groups().to_vec();
+	let has_declared_groups = !declared_asset_groups.is_empty();
+	WardrobeAssetUploadPlan {
+		mode: if has_declared_groups {
+			"all-resident".to_string()
+		} else {
+			"unscoped".to_string()
+		},
+		active_asset_groups,
+		declared_asset_group_count: declared_asset_groups.len(),
+		declared_asset_groups,
+		scoped_upload_supported: false,
+		all_resident: true,
+		reason: if has_declared_groups {
+			"wardrobe sets declare assetGroups, but mesh/texture/material assets do not yet carry group ownership metadata".to_string()
+		} else {
+			"wardrobe sets do not declare assetGroups".to_string()
+		},
+	}
+}
+
 fn runtime_action_id_for_parameter(
 	actions: &un_avatar_core::UnaRuntimeActionSet,
 	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
@@ -2712,6 +2773,16 @@ impl GpuState {
 		doc.runtime_model().active_asset_groups().to_vec()
 	}
 
+	pub(crate) fn wardrobe_asset_upload_plan(&self) -> WardrobeAssetUploadPlan {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return WardrobeAssetUploadPlan::default();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return WardrobeAssetUploadPlan::default();
+		};
+		wardrobe_asset_upload_plan_for_document(&doc)
+	}
+
 	pub(crate) fn resolver_cache_key(&self) -> Option<UnaRuntimeResolverCacheKey> {
 		let doc_arc = self.document.as_ref()?;
 		let doc = doc_arc.read().ok()?;
@@ -4455,8 +4526,9 @@ fn create_startup_splash_pipeline(
 mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		transparent_alpha_mode, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 	};
 	use crate::mesh_pass::MeshShaderVariantTier;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
@@ -4541,6 +4613,43 @@ mod tests {
 		);
 		scene.nodes[0].visible = false;
 		assert_eq!(runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0), None);
+	}
+
+	#[test]
+	fn wardrobe_asset_upload_plan_reports_all_resident_until_assets_are_grouped() {
+		let mut document = un_avatar_core::UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"sets": [{
+							"id": "base",
+							"assetGroups": ["avatar:base", "texture:red"]
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat", "texture:red"]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+		document
+			.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+
+		let plan = wardrobe_asset_upload_plan_for_document(&document);
+		assert_eq!(plan.mode, "all-resident");
+		assert_eq!(plan.active_asset_groups, vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+		assert_eq!(
+			plan.declared_asset_groups,
+			vec!["avatar:base".to_string(), "outfit:coat".to_string(), "texture:red".to_string()]
+		);
+		assert!(!plan.scoped_upload_supported);
+		assert!(plan.all_resident);
+		assert!(plan
+			.reason
+			.contains("mesh/texture/material assets do not yet carry group ownership metadata"));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

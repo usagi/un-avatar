@@ -175,6 +175,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[x]` resolver cache key
   - done: runtime resolver cache key exposes selected wardrobe set, active asset groups, Modular Avatar component payload hash, material source hash, mesh render identity hash, and resolver version through core, CLI diagnose, and renderer status. Mesh render identity includes vertex attribute layout, including vertex color presence, so resolver mesh mutations such as Remove Vertex Color can invalidate downstream mesh caches.
   - note: resolved graph cache storage and full vertex payload cache keys are renderer implementation work, not part of the metadata surface checklist.
+- `[~]` Wardrobe asset group lazy GPU upload
+  - done: renderer runtime status exposes a wardrobe asset upload plan with active groups, declared wardrobe asset groups, and explicit `all-resident` mode when scoped upload is not yet safe. This keeps hot-switch status honest while set-level `assetGroups` exist but mesh / texture / material ownership metadata is not yet available.
+  - remaining: per-asset group ownership metadata, scoped mesh / texture upload, and unload / eviction.
 - `[ ]` report parity
   - required: Unity Exporter report and Runtime importer report use the same feature names.
 
@@ -197,4 +200,4 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 1. Preserve MA Menu Item / Menu Group / Menu Installer hierarchy metadata and diagnostics.
 2. Implement ReactiveComponent `Inverted` / parent active condition runtime action evaluation.
 3. Implement Mesh Cutter / Shape Changer resolver-side vertex filtering from the new filter representation.
-4. Add Wardrobe asset group lazy GPU upload / unload.
+4. Add per-asset ownership metadata for Wardrobe asset group lazy GPU upload / unload.
