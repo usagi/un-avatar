@@ -4658,6 +4658,11 @@ mod tests {
 				match_kind: "trigger".to_string(),
 				inverted: false,
 			}];
+			status.dynamics_contact_count = 2;
+			status.dynamics_vrc_contact_sender_count = 1;
+			status.dynamics_vrc_contact_receiver_count = 1;
+			status.dynamics_constraint_ref_count = 3;
+			status.dynamics_vrc_constraint_ref_count = 2;
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -4673,6 +4678,23 @@ mod tests {
 		assert_eq!(
 			snapshot.get("active_wardrobe_set").and_then(|value| value.as_str()),
 			Some("field_drape")
+		);
+		assert_eq!(snapshot.get("dynamics_contact_count").and_then(|value| value.as_u64()), Some(2));
+		assert_eq!(
+			snapshot.get("dynamics_vrc_contact_sender_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_vrc_contact_receiver_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
+			Some(2)
 		);
 		assert!(snapshot.get("active_asset_groups").is_none());
 		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");

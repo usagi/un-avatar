@@ -25,8 +25,8 @@ UNDynamics の中核概念:
 - `UnaDynamicsCollider`: sphere / capsule / inside bounds など source-neutral collider。
 - `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は metadata と diagnostics から始め、solver 反映は別 commit に分ける。
 - `UnaDynamicsInteraction`: grabbing / posing など interaction capability metadata。v2 初期は runtime action / diagnostics のために保持する。
-- `UnaDynamicsContact`: VRC Contacts を source-neutral event / proximity metadata として保持する将来枠。
-- `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する将来枠。
+- `UnaDynamicsContact`: VRC Contacts を source-neutral event / proximity metadata として保持する。
+- `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する。
 
 既存 v1 SpringBone solver / collider code は実装資産として再利用する。
 ただし v2 の設計上は、SpringBone solver に PhysBone feature を直接追加するのではなく、UNDynamics solver がまず SpringBone-like Verlet/PBD primitive を内包している、と扱う。
@@ -60,7 +60,7 @@ Lowering:
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Pending: PhysBone colliders: sphere / capsule / inside bounds の solver 反映を個別 test 付きで追加する。
 7. Pending: PhysBone limits: angle / stretch limit を solver へ反映する。SpringBone 互換挙動と分けて、UNDynamics limit constraint として実装する。
-8. In progress: Interactions / Contacts / Constraints: grabbing / posing は group metadata、contacts / constraints は source-neutral metadata と runtime counts から始める。runtime action hooks と solver 反映は source evidence と test model が揃ってから行う。
+8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
 9. In progress: Runtime integration: wardrobe hot switch / action / animation state が dynamics enabled state、reset、blend を同じ runtime boundary で扱うようにする。
 10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。
 
