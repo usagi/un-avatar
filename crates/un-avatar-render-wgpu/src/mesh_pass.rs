@@ -1198,6 +1198,12 @@ struct SceneTextureViews {
 	cubes: Vec<Option<wgpu::TextureView>>,
 }
 
+struct MeshMaterialBindingSource<'a> {
+	material: &'a UnaMaterialPbr,
+	draw_transform: &'a wgpu::Buffer,
+	draw_material: &'a wgpu::Buffer,
+}
+
 impl MeshDraw {
 	fn active(&self) -> bool {
 		self.visible && self.asset_resident
@@ -2208,9 +2214,9 @@ fn create_mesh_material_bind_groups(
 	samplers: &[wgpu::Sampler],
 	image_sampler_indices: &[usize],
 	reflection_cube_sampler: &wgpu::Sampler,
-	draw: &MeshDraw,
+	source: MeshMaterialBindingSource<'_>,
 ) -> (wgpu::BindGroup, wgpu::BindGroup) {
-	let mat = &draw.material;
+	let mat = source.material;
 	let default_mtoon = UnaMtoonMaterial::default();
 	let mtoon = mat.mtoon_like_runtime().unwrap_or(&default_mtoon);
 	let liltoon_like = mat.liltoon_like_runtime();
@@ -2382,11 +2388,11 @@ fn create_mesh_material_bind_groups(
 	let mut bind_material_entries = vec![
 		wgpu::BindGroupEntry {
 			binding: 0,
-			resource: draw.draw_transform.as_entire_binding(),
+			resource: source.draw_transform.as_entire_binding(),
 		},
 		wgpu::BindGroupEntry {
 			binding: 10,
-			resource: draw.draw_material.as_entire_binding(),
+			resource: source.draw_material.as_entire_binding(),
 		},
 		wgpu::BindGroupEntry {
 			binding: 1,
@@ -2700,7 +2706,7 @@ fn create_mesh_material_bind_groups(
 		entries: &[
 			wgpu::BindGroupEntry {
 				binding: 0,
-				resource: draw.draw_transform.as_entire_binding(),
+				resource: source.draw_transform.as_entire_binding(),
 			},
 			wgpu::BindGroupEntry {
 				binding: 1,
@@ -2720,7 +2726,7 @@ fn create_mesh_material_bind_groups(
 			},
 			wgpu::BindGroupEntry {
 				binding: 10,
-				resource: draw.draw_material.as_entire_binding(),
+				resource: source.draw_material.as_entire_binding(),
 			},
 			wgpu::BindGroupEntry {
 				binding: 19,
@@ -6862,170 +6868,8 @@ impl SceneMeshes {
 					}),
 				};
 
-				let mtoon = mat.mtoon_like_runtime().unwrap_or(&default_mtoon);
 				let liltoon_like = mat.liltoon_like_runtime();
-				let tex_view = texture_view_or(&texture_views.images, mat.base_color_texture_index, &texture_views.white);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
-				let shade_texture_index = liltoon_like
-					.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
-					.or(mtoon.shade_multiply_texture_index);
-				let shade_fallback_view = if liltoon_like.is_some() {
-					&texture_views.transparent_black
-				} else {
-					&texture_views.white
-				};
-				let shade_view = texture_view_or(&texture_views.images, shade_texture_index, shade_fallback_view);
-				let shade_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shade_texture_index, 0);
-				let shadow2_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.second_color_texture_index);
-				let shadow2_color_view = texture_view_or(&texture_views.images, shadow2_color_texture_index, &texture_views.transparent_black);
-				let shadow3_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
-				let shadow3_color_view = texture_view_or(&texture_views.images, shadow3_color_texture_index, &texture_views.transparent_black);
-				let liltoon_strength_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
-				let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
-				let shift_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
-				let shift_view = texture_view_or(&texture_views.images, shading_shift_texture_index, shift_fallback_view);
-				let shift_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shading_shift_texture_index, 0);
-				let shadow_border_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.border_mask_texture_index);
-				let shadow_border_mask_view = texture_view_or(&texture_views.images, shadow_border_mask_texture_index, &texture_views.white);
-				let shadow_border_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_border_mask_texture_index, 0);
-				let shadow_blur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
-				let shadow_blur_mask_view = texture_view_or(&texture_views.images, shadow_blur_mask_texture_index, &texture_views.white);
-				let shadow_blur_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, shadow_blur_mask_texture_index, 0);
-				let matcap_texture_index = liltoon_like
-					.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
-					.or(mtoon.matcap_texture_index);
-				let matcap_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
-				let matcap_view = texture_view_or(&texture_views.images, matcap_texture_index, matcap_fallback_view);
-				let matcap_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_texture_index, 0);
-				let matcap_blend_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.blend_mask_texture_index);
-				let matcap_blend_mask_view = texture_view_or(&texture_views.images, matcap_blend_mask_texture_index, &texture_views.white);
-				let matcap_blend_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, matcap_blend_mask_texture_index, 0);
-				let matcap_bump_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.bump_texture_index);
-				let matcap_bump_view = texture_view_or(&texture_views.images, matcap_bump_texture_index, &texture_views.neutral_normal);
-				let matcap2_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_texture_index);
-				let matcap2_view = texture_view_or(&texture_views.images, matcap2_texture_index, &texture_views.white);
-				let matcap2_blend_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_blend_mask_texture_index);
-				let matcap2_blend_mask_view = texture_view_or(&texture_views.images, matcap2_blend_mask_texture_index, &texture_views.white);
-				let matcap2_bump_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.second_bump_texture_index);
-				let matcap2_bump_view = texture_view_or(&texture_views.images, matcap2_bump_texture_index, &texture_views.neutral_normal);
-				let main2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_texture_index);
-				let main2nd_view = texture_view_or(&texture_views.images, main2nd_texture_index, &texture_views.white);
-				let main2nd_blend_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_blend_mask_texture_index);
-				let main2nd_blend_mask_view = texture_view_or(&texture_views.images, main2nd_blend_mask_texture_index, &texture_views.white);
-				let main2nd_dissolve_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.mask_texture_index);
-				let main2nd_dissolve_mask_view = texture_view_or(&texture_views.images, main2nd_dissolve_mask_texture_index, &texture_views.white);
-				let main2nd_dissolve_noise_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.second_dissolve.noise_mask_texture_index);
-				let main2nd_dissolve_noise_mask_view =
-					texture_view_or(&texture_views.images, main2nd_dissolve_noise_mask_texture_index, &texture_views.white);
-				let main3rd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_texture_index);
-				let main3rd_view = texture_view_or(&texture_views.images, main3rd_texture_index, &texture_views.white);
-				let main3rd_blend_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_blend_mask_texture_index);
-				let main3rd_blend_mask_view = texture_view_or(&texture_views.images, main3rd_blend_mask_texture_index, &texture_views.white);
-				let main3rd_dissolve_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.mask_texture_index);
-				let main3rd_dissolve_mask_view = texture_view_or(&texture_views.images, main3rd_dissolve_mask_texture_index, &texture_views.white);
-				let main3rd_dissolve_noise_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.third_dissolve.noise_mask_texture_index);
-				let main3rd_dissolve_noise_mask_view =
-					texture_view_or(&texture_views.images, main3rd_dissolve_noise_mask_texture_index, &texture_views.white);
-				let main_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.gradation_texture_index);
-				let main_gradation_view = texture_view_or(&texture_views.images, main_gradation_texture_index, &texture_views.white);
-				let main_color_adjust_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.main_color_adjust_mask_texture_index);
-				let main_color_adjust_mask_view = texture_view_or(&texture_views.images, main_color_adjust_mask_texture_index, &texture_views.white);
-				let alpha_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
-				let alpha_mask_view = texture_view_or(&texture_views.images, alpha_mask_texture_index, &texture_views.white);
-				let alpha_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, alpha_mask_texture_index, 0);
-				let rim_texture_index = liltoon_like
-					.and_then(|liltoon_like| liltoon_like.rim.texture_index)
-					.or(mtoon.rim_multiply_texture_index);
-				let rim_view = texture_view_or(&texture_views.images, rim_texture_index, &texture_views.white);
-				let rim_sampler = texture_sampler_or(&samplers, &image_sampler_indices, rim_texture_index, 0);
-				let rim_shade_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
-				let rim_shade_mask_view = texture_view_or(&texture_views.images, rim_shade_mask_texture_index, &texture_views.white);
-				let backlight_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.backlight.texture_index);
-				let glitter_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.glitter.color_texture_index);
-				let glitter_shape_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.glitter.shape_texture_index);
-				let dissolve_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.dissolve.mask_texture_index);
-				let dissolve_noise_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.dissolve.noise_mask_texture_index);
-				let parallax_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.parallax.texture_index);
-				let backlight_color_view = texture_view_or(&texture_views.images, backlight_color_texture_index, &texture_views.white);
-				let glitter_color_view = texture_view_or(&texture_views.images, glitter_color_texture_index, &texture_views.white);
-				let glitter_shape_view = texture_view_or(&texture_views.images, glitter_shape_texture_index, &texture_views.white);
-				let dissolve_mask_view = texture_view_or(&texture_views.images, dissolve_mask_texture_index, &texture_views.white);
-				let dissolve_noise_mask_view = texture_view_or(&texture_views.images, dissolve_noise_mask_texture_index, &texture_views.white);
-				let parallax_view = texture_view_or(&texture_views.images, parallax_texture_index, &texture_views.white);
-				let reflection_texture_index = if let Some(liltoon_like) = liltoon_like {
-					liltoon_reflection_texture_index(liltoon_like)
-				} else {
-					mtoon.reflection_cube_texture_index
-				};
-				let reflection_view = reflection_texture_index
-					.and_then(|index| texture_views.cubes.get(index).and_then(Option::as_ref))
-					.unwrap_or(&texture_views.black_cube);
-				let reflection_sampler = &reflection_cube_sampler;
-				let reflection_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.color_texture_index);
-				let reflection_color_view = texture_view_or(&texture_views.images, reflection_color_texture_index, &texture_views.white);
-				let reflection_color_sampler = texture_sampler_or(&samplers, &image_sampler_indices, reflection_color_texture_index, 0);
-				let smoothness_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.smoothness_texture_index);
-				let smoothness_view = texture_view_or(&texture_views.images, smoothness_texture_index, &texture_views.white);
-				let smoothness_sampler = texture_sampler_or(&samplers, &image_sampler_indices, smoothness_texture_index, 0);
-				let metallic_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.metallic_texture_index);
-				let metallic_view = texture_view_or(&texture_views.images, metallic_texture_index, &texture_views.white);
-				let metallic_sampler = texture_sampler_or(&samplers, &image_sampler_indices, metallic_texture_index, 0);
-				let emissive_texture_index = liltoon_like
-					.and_then(|liltoon_like| liltoon_like.emission.texture_index)
-					.or(mat.emissive_texture_index);
-				let emissive_fallback_view = if liltoon_like.is_some() { &texture_views.white } else { &texture_views.black };
-				let emissive_view = texture_view_or(&texture_views.images, emissive_texture_index, emissive_fallback_view);
-				let emissive_sampler = texture_sampler_or(&samplers, &image_sampler_indices, emissive_texture_index, 0);
-				let emission_blend_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.blend_mask_texture_index);
-				let emission_blend_mask_view = texture_view_or(&texture_views.images, emission_blend_mask_texture_index, &texture_views.white);
-				let emission_gradation_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.gradation_texture_index);
-				let emission_gradation_view = texture_view_or(&texture_views.images, emission_gradation_texture_index, &texture_views.white);
-				let emission2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_texture_index);
-				let emission2nd_view = texture_view_or(&texture_views.images, emission2nd_texture_index, &texture_views.white);
-				let emission2nd_blend_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_blend_mask_texture_index);
-				let emission2nd_blend_mask_view = texture_view_or(&texture_views.images, emission2nd_blend_mask_texture_index, &texture_views.white);
-				let emission2nd_gradation_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.emission.second_gradation_texture_index);
-				let emission2nd_gradation_view = texture_view_or(&texture_views.images, emission2nd_gradation_texture_index, &texture_views.white);
-				let occlusion_view = texture_view_or(&texture_views.images, mat.occlusion_texture_index, &texture_views.white);
-				let occlusion_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.occlusion_texture_index, 0);
-				let outline_width_mask_texture_index = liltoon_like
-					.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index)
-					.or(mtoon.outline_width_multiply_texture_index);
-				let outline_view = texture_view_or(&texture_views.images, outline_width_mask_texture_index, &texture_views.white);
-				let outline_sampler = texture_sampler_or(&samplers, &image_sampler_indices, outline_width_mask_texture_index, 0);
-				let outline_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.texture_index);
-				let outline_color_view = texture_view_or(&texture_views.images, outline_texture_index, &texture_views.white);
-				let uv_mask_view = texture_view_or(&texture_views.images, mtoon.uv_animation_mask_texture_index, &texture_views.white);
-				let uv_mask_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
-				let normal_view = texture_view_or(&texture_views.images, mat.normal_texture_index, &texture_views.neutral_normal);
-				let normal_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.normal_texture_index, 0);
-				let normal2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
-				let normal2nd_view = texture_view_or(&texture_views.images, normal2nd_texture_index, &texture_views.neutral_normal);
-				let normal2nd_scale_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_scale_mask_texture_index);
-				let normal2nd_scale_mask_view = texture_view_or(&texture_views.images, normal2nd_scale_mask_texture_index, &texture_views.white);
-				let anisotropy_tangent_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_tangent_texture_index);
-				let anisotropy_tangent_view = texture_view_or(&texture_views.images, anisotropy_tangent_texture_index, &texture_views.neutral_normal);
-				let anisotropy_scale_mask_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_scale_mask_texture_index);
-				let anisotropy_scale_mask_view = texture_view_or(&texture_views.images, anisotropy_scale_mask_texture_index, &texture_views.white);
-				let anisotropy_shift_noise_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index);
-				let anisotropy_shift_noise_view = texture_view_or(&texture_views.images, anisotropy_shift_noise_texture_index, &texture_views.white);
 				let fur_vector_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
 				let fur_vector_view = texture_view_or(&texture_views.images, fur_vector_texture_index, &texture_views.neutral_vector);
 				let fur_length_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.length_mask_texture_index);
@@ -7034,11 +6878,6 @@ impl SceneMeshes {
 				let fur_noise_mask_view = texture_view_or(&texture_views.images, fur_noise_mask_texture_index, &texture_views.white);
 				let fur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.mask_texture_index);
 				let fur_mask_view = texture_view_or(&texture_views.images, fur_mask_texture_index, &texture_views.white);
-				let audio_link_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.audio_link.mask_texture_index);
-				let audio_link_mask_view = texture_view_or(&texture_views.images, audio_link_mask_texture_index, &texture_views.blue);
-				let audio_link_local_map_texture_index =
-					liltoon_like.and_then(|liltoon_like| liltoon_like.audio_link.local_map_texture_index);
-				let audio_link_local_map_view = texture_view_or(&texture_views.images, audio_link_local_map_texture_index, &texture_views.black);
 				let compute_fur_cards_cpu_fur_maps = ComputeFurCardsCpuFurMaps {
 					length_mask: fur_length_mask_texture_index.and_then(|index| scene.images.get(index)),
 					fur_mask: fur_mask_texture_index.and_then(|index| scene.images.get(index)),
@@ -7057,379 +6896,21 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 				});
 
-				let mut bind_material_entries = vec![
-					wgpu::BindGroupEntry {
-						binding: 0,
-						resource: draw_transform.as_entire_binding(),
+				let (bind_material, bind_outline_material) = create_mesh_material_bind_groups(
+					device,
+					&material_layout,
+					&outline_material_layout,
+					shader_variant_tier,
+					&texture_views,
+					&samplers,
+					&image_sampler_indices,
+					&reflection_cube_sampler,
+					MeshMaterialBindingSource {
+						material: mat,
+						draw_transform: &draw_transform,
+						draw_material: &draw_material_buffer,
 					},
-					wgpu::BindGroupEntry {
-						binding: 10,
-						resource: draw_material_buffer.as_entire_binding(),
-					},
-					wgpu::BindGroupEntry {
-						binding: 1,
-						resource: wgpu::BindingResource::TextureView(tex_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 2,
-						resource: wgpu::BindingResource::Sampler(tex_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 3,
-						resource: wgpu::BindingResource::TextureView(shade_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 4,
-						resource: wgpu::BindingResource::TextureView(shift_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 5,
-						resource: wgpu::BindingResource::TextureView(matcap_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 6,
-						resource: wgpu::BindingResource::TextureView(rim_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 7,
-						resource: wgpu::BindingResource::TextureView(emissive_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 9,
-						resource: wgpu::BindingResource::TextureView(uv_mask_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 11,
-						resource: wgpu::BindingResource::TextureView(normal_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 12,
-						resource: wgpu::BindingResource::TextureView(occlusion_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 13,
-						resource: wgpu::BindingResource::TextureView(reflection_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 14,
-						resource: wgpu::BindingResource::Sampler(shade_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 15,
-						resource: wgpu::BindingResource::Sampler(shift_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 16,
-						resource: wgpu::BindingResource::Sampler(matcap_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 17,
-						resource: wgpu::BindingResource::Sampler(rim_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 18,
-						resource: wgpu::BindingResource::Sampler(emissive_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 20,
-						resource: wgpu::BindingResource::Sampler(normal_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 21,
-						resource: wgpu::BindingResource::Sampler(occlusion_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 22,
-						resource: wgpu::BindingResource::Sampler(reflection_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 23,
-						resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 28,
-						resource: wgpu::BindingResource::TextureView(reflection_color_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 29,
-						resource: wgpu::BindingResource::TextureView(smoothness_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 30,
-						resource: wgpu::BindingResource::TextureView(metallic_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 31,
-						resource: wgpu::BindingResource::Sampler(reflection_color_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 32,
-						resource: wgpu::BindingResource::Sampler(smoothness_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 33,
-						resource: wgpu::BindingResource::Sampler(metallic_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 34,
-						resource: wgpu::BindingResource::TextureView(matcap_blend_mask_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 35,
-						resource: wgpu::BindingResource::Sampler(matcap_blend_mask_sampler),
-					},
-					wgpu::BindGroupEntry {
-						binding: 36,
-						resource: wgpu::BindingResource::TextureView(alpha_mask_view),
-					},
-					wgpu::BindGroupEntry {
-						binding: 37,
-						resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
-					},
-				];
-				if shader_variant_tier.is_high_capability() {
-					bind_material_entries.extend([
-						wgpu::BindGroupEntry {
-							binding: 19,
-							resource: wgpu::BindingResource::Sampler(outline_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 24,
-							resource: wgpu::BindingResource::TextureView(shadow_border_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 25,
-							resource: wgpu::BindingResource::TextureView(shadow_blur_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 26,
-							resource: wgpu::BindingResource::Sampler(shadow_border_mask_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 27,
-							resource: wgpu::BindingResource::Sampler(shadow_blur_mask_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 38,
-							resource: wgpu::BindingResource::TextureView(matcap2_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 39,
-							resource: wgpu::BindingResource::TextureView(matcap2_blend_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 41,
-							resource: wgpu::BindingResource::TextureView(main2nd_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 42,
-							resource: wgpu::BindingResource::TextureView(main3rd_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 43,
-							resource: wgpu::BindingResource::TextureView(main2nd_blend_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 44,
-							resource: wgpu::BindingResource::TextureView(main3rd_blend_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 45,
-							resource: wgpu::BindingResource::TextureView(normal2nd_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 46,
-							resource: wgpu::BindingResource::TextureView(emission_gradation_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 47,
-							resource: wgpu::BindingResource::TextureView(main_gradation_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 48,
-							resource: wgpu::BindingResource::TextureView(emission2nd_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 49,
-							resource: wgpu::BindingResource::TextureView(emission2nd_blend_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 50,
-							resource: wgpu::BindingResource::TextureView(emission2nd_gradation_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 51,
-							resource: wgpu::BindingResource::TextureView(anisotropy_tangent_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 52,
-							resource: wgpu::BindingResource::TextureView(anisotropy_scale_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 53,
-							resource: wgpu::BindingResource::TextureView(anisotropy_shift_noise_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 54,
-							resource: wgpu::BindingResource::TextureView(emission_blend_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 55,
-							resource: wgpu::BindingResource::TextureView(rim_shade_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 56,
-							resource: wgpu::BindingResource::TextureView(backlight_color_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 57,
-							resource: wgpu::BindingResource::TextureView(shadow2_color_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 58,
-							resource: wgpu::BindingResource::TextureView(shadow3_color_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 59,
-							resource: wgpu::BindingResource::TextureView(fur_vector_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 60,
-							resource: wgpu::BindingResource::TextureView(fur_length_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 61,
-							resource: wgpu::BindingResource::TextureView(fur_noise_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 62,
-							resource: wgpu::BindingResource::TextureView(fur_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 63,
-							resource: wgpu::BindingResource::TextureView(glitter_color_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 64,
-							resource: wgpu::BindingResource::TextureView(glitter_shape_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 65,
-							resource: wgpu::BindingResource::TextureView(dissolve_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 66,
-							resource: wgpu::BindingResource::TextureView(dissolve_noise_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 67,
-							resource: wgpu::BindingResource::TextureView(parallax_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 68,
-							resource: wgpu::BindingResource::TextureView(main2nd_dissolve_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 69,
-							resource: wgpu::BindingResource::TextureView(main2nd_dissolve_noise_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 70,
-							resource: wgpu::BindingResource::TextureView(main3rd_dissolve_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 71,
-							resource: wgpu::BindingResource::TextureView(main3rd_dissolve_noise_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 72,
-							resource: wgpu::BindingResource::TextureView(normal2nd_scale_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 73,
-							resource: wgpu::BindingResource::TextureView(matcap_bump_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 74,
-							resource: wgpu::BindingResource::TextureView(matcap2_bump_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 75,
-							resource: wgpu::BindingResource::TextureView(main_color_adjust_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 76,
-							resource: wgpu::BindingResource::TextureView(audio_link_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 77,
-							resource: wgpu::BindingResource::TextureView(audio_link_local_map_view),
-						},
-					]);
-				}
-				let bind_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("mesh_mat"),
-					layout: &material_layout,
-					entries: &bind_material_entries,
-				});
-				let bind_outline_material = device.create_bind_group(&wgpu::BindGroupDescriptor {
-					label: Some("mesh_outline_mat"),
-					layout: &outline_material_layout,
-					entries: &[
-						wgpu::BindGroupEntry {
-							binding: 0,
-							resource: draw_transform.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 1,
-							resource: wgpu::BindingResource::TextureView(tex_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 2,
-							resource: wgpu::BindingResource::Sampler(tex_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 8,
-							resource: wgpu::BindingResource::TextureView(outline_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 9,
-							resource: wgpu::BindingResource::TextureView(uv_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 10,
-							resource: draw_material_buffer.as_entire_binding(),
-						},
-						wgpu::BindGroupEntry {
-							binding: 19,
-							resource: wgpu::BindingResource::Sampler(outline_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 23,
-							resource: wgpu::BindingResource::Sampler(uv_mask_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 36,
-							resource: wgpu::BindingResource::TextureView(alpha_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 37,
-							resource: wgpu::BindingResource::Sampler(alpha_mask_sampler),
-						},
-						wgpu::BindGroupEntry {
-							binding: 40,
-							resource: wgpu::BindingResource::TextureView(outline_color_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 76,
-							resource: wgpu::BindingResource::TextureView(audio_link_mask_view),
-						},
-						wgpu::BindGroupEntry {
-							binding: 77,
-							resource: wgpu::BindingResource::TextureView(audio_link_local_map_view),
-						},
-					],
-				});
+				);
 
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
@@ -7927,7 +7408,11 @@ impl SceneMeshes {
 				&self._samplers,
 				&self.image_sampler_indices,
 				&self.reflection_cube_sampler,
-				&self.draws[draw_index],
+				MeshMaterialBindingSource {
+					material: &self.draws[draw_index].material,
+					draw_transform: &self.draws[draw_index].draw_transform,
+					draw_material: &self.draws[draw_index].draw_material,
+				},
 			);
 			let draw = &mut self.draws[draw_index];
 			draw.bind_material = bind_material;
