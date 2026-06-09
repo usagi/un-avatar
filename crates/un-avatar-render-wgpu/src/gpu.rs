@@ -109,6 +109,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) scoped_draw_supported: bool,
 	pub(crate) scoped_upload_supported: bool,
 	pub(crate) all_resident: bool,
+	pub(crate) residency_gap_index_status_limit: usize,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) reason: String,
 }
@@ -227,6 +228,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		scoped_draw_supported: false,
 		scoped_upload_supported: false,
 		all_resident: true,
+		residency_gap_index_status_limit: 0,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
 			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; GPU resources remain all-resident"
 				.to_string()
@@ -248,6 +250,7 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	let Some(draw_counts) = draw_counts else {
 		return plan;
 	};
+	plan.residency_gap_index_status_limit = WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT;
 	plan.total_draw_mesh_primitive_count = draw_counts.total_draw_mesh_primitive_count;
 	plan.resident_draw_mesh_primitive_count = draw_counts.resident_draw_mesh_primitive_count;
 	plan.inactive_draw_mesh_primitive_count = draw_counts.inactive_draw_mesh_primitive_count;
@@ -4933,6 +4936,7 @@ mod tests {
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
+		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
 
 	#[test]
@@ -4971,6 +4975,7 @@ mod tests {
 			Some(&(100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
 		);
 		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
+		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

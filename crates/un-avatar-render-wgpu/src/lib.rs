@@ -4419,6 +4419,7 @@ mod tests {
 				inactive_material_slots_used_by_active_draw: vec![4],
 				scoped_draw_supported: true,
 				all_resident: true,
+				residency_gap_index_status_limit: 64,
 				..Default::default()
 			};
 		}
@@ -4495,6 +4496,10 @@ mod tests {
 		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(
+			upload.get("residency_gap_index_status_limit").and_then(|value| value.as_u64()),
+			Some(64)
+		);
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
 		assert!(snapshot
