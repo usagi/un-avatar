@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
+use un_avatar_core::{UnaDynamicsGroup, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
 
@@ -382,13 +382,13 @@ fn normalize_match_text(value: &str) -> String {
 	out
 }
 
-fn classify_group(scene: &UnaSceneSnapshot, group: &UnaSpringBoneGroup, categories: &[SpringBoneCategoryDefinition]) -> String {
-	let explicit = normalize_category_id(&group.category);
+fn classify_group(scene: &UnaSceneSnapshot, group: UnaDynamicsGroup<'_>, categories: &[SpringBoneCategoryDefinition]) -> String {
+	let explicit = normalize_category_id(group.category);
 	if !explicit.is_empty() {
 		return explicit;
 	}
-	let mut haystack = normalize_match_text(&group.comment);
-	for &node_index in &group.bone_node_indices {
+	let mut haystack = normalize_match_text(group.comment);
+	for &node_index in group.chain.bone_node_indices {
 		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
 			haystack.push(' ');
 			haystack.push_str(&normalize_match_text(name));
@@ -404,12 +404,12 @@ fn classify_group(scene: &UnaSceneSnapshot, group: &UnaSpringBoneGroup, categori
 	"other".to_string()
 }
 
-fn convert_univrm_60fps_params(group: &UnaSpringBoneGroup, solver: SpringBoneSolver) -> ConvertedSpringBonePhysicsParams {
+fn convert_univrm_60fps_params(group: UnaDynamicsGroup<'_>, solver: SpringBoneSolver) -> ConvertedSpringBonePhysicsParams {
 	ConvertedSpringBonePhysicsParams {
 		// 既存 Verlet 式は `stiffness * dt` を復元 pull として使う。
 		// v1 の frequency UI はここから始め、詳細調整時だけユーザー値で上書きする。
-		stiffness_hz: group.stiffness.max(0.0),
-		xpbd_compliance: convert_univrm_stiffness_to_xpbd_compliance(group.stiffness),
+		stiffness_hz: group.parameters.stiffness.max(0.0),
+		xpbd_compliance: convert_univrm_stiffness_to_xpbd_compliance(group.parameters.stiffness),
 		gravity_scale: 1.0,
 		drag_scale: 1.0,
 		constraint_iterations: if matches!(solver, SpringBoneSolver::Xpbd) { 4 } else { 1 },
@@ -427,7 +427,7 @@ fn convert_univrm_stiffness_to_xpbd_compliance(stiffness: f32) -> f32 {
 
 fn resolve_group_params(
 	category_id: &str,
-	group: &UnaSpringBoneGroup,
+	group: UnaDynamicsGroup<'_>,
 	override_params_by_category: &BTreeMap<String, SpringBonePhysicsParams>,
 ) -> ResolvedSpringBonePhysicsParams {
 	let params = override_params_by_category.get(category_id).copied().unwrap_or_default();
@@ -487,7 +487,7 @@ impl SpringBoneSimulator {
 		bone_colliders: Vec<BoneColliderPrimitive>,
 		physics: SpringBonePhysicsConfig,
 	) -> Option<Self> {
-		let groups = dynamics.groups();
+		let groups = dynamics.dynamics_groups().collect::<Vec<_>>();
 		if groups.is_empty() {
 			return None;
 		}
@@ -496,12 +496,12 @@ impl SpringBoneSimulator {
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
-		for g in groups {
-			if !dynamics.group_enabled(g) {
+		for g in groups.iter().copied() {
+			if !g.effective_enabled {
 				runtimes.push(None);
 				continue;
 			}
-			let chain = &g.bone_node_indices;
+			let chain = g.chain.bone_node_indices;
 			if chain.len() < 2 {
 				runtimes.push(None);
 				continue;
@@ -621,10 +621,10 @@ impl SpringBoneSimulator {
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
 			for &runtime_index in &self.active_runtime_indices {
-				let (Some(g), Some(Some(rt))) = (dynamics.group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
+				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
-				if !dynamics.group_enabled(g) {
+				if !g.effective_enabled {
 					continue;
 				}
 				for _ in 0..substeps {
@@ -661,7 +661,7 @@ fn merge_category_override_params(overrides: &[SpringBoneCategoryOverride]) -> B
 
 fn step_group(
 	scene: &mut UnaSceneSnapshot,
-	group: &UnaSpringBoneGroup,
+	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
 	bone_colliders: &[BoneColliderPrimitive],
 	dt: f32,
@@ -670,14 +670,19 @@ fn step_group(
 		SpringBoneSolver::Verlet | SpringBoneSolver::Xpbd => {
 			let drag = match rt.params.damping_half_life_ms {
 				Some(half_life_ms) if half_life_ms > 0.0 => 1.0 - (-std::f32::consts::LN_2 * dt / (half_life_ms / 1000.0)).exp(),
-				_ => group.drag_force,
+				_ => group.parameters.drag_force,
 			};
 			(drag * rt.params.drag_scale).clamp(0.0, 1.0)
 		}
 	};
-	let stiffness = rt.params.stiffness_hz.unwrap_or(group.stiffness).max(0.0);
-	let gravity = Vec3::new(group.gravity_dir[0], group.gravity_dir[1], group.gravity_dir[2]).normalize_or_zero()
-		* group.gravity_power
+	let stiffness = rt.params.stiffness_hz.unwrap_or(group.parameters.stiffness).max(0.0);
+	let gravity = Vec3::new(
+		group.parameters.gravity_dir[0],
+		group.parameters.gravity_dir[1],
+		group.parameters.gravity_dir[2],
+	)
+	.normalize_or_zero()
+		* group.parameters.gravity_power
 		* rt.params.gravity_scale;
 	let is_xpbd = matches!(rt.params.solver, SpringBoneSolver::Xpbd);
 	write_world_from_snapshot(scene, &mut rt.world_scratch);
@@ -724,7 +729,7 @@ fn step_group(
 					joint.length,
 					&rt.world_scratch,
 					bone_colliders,
-					group.hit_radius,
+					group.parameters.hit_radius,
 				);
 			}
 		} else {
@@ -737,7 +742,7 @@ fn step_group(
 				joint.length,
 				&rt.world_scratch,
 				bone_colliders,
-				group.hit_radius,
+				group.parameters.hit_radius,
 			);
 		}
 

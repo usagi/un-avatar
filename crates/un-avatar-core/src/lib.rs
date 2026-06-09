@@ -943,6 +943,11 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.groups().get(index)
 	}
 
+	pub fn dynamics_group(self, index: usize) -> Option<UnaDynamicsGroup<'a>> {
+		self.group(index)
+			.map(|group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
+	}
+
 	pub fn dynamics_groups(self) -> impl Iterator<Item = UnaDynamicsGroup<'a>> + 'a {
 		self.groups()
 			.iter()
