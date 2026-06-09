@@ -43,7 +43,7 @@
   - resolved wardrobe state
   - pose、morph、material、expression、action state、dynamics state
   - GPU resources / cache
-- active asset groups は runtime state、asset group ownership は scene source data に属する。両者の合成は core の scoped asset selection query に集約し、renderer / diagnose / future physics が同じ解釈を使う。
+- active asset groups は runtime state、asset group ownership は scene source data に属する。両者の合成は core の document-level scoped asset selection query に集約し、scene が無い場合も active groups を missing として扱う。renderer / diagnose / wardrobe apply report / future physics は同じ解釈を使う。
 - wardrobe visibility と morph change を renderer control、VRC menu action、shortcut、将来の animation evaluation から再利用できる形にする。
 - render thread の work は bounded / nonblocking に保つ。AudioLink で固定した方針を skinning、animation、physics にも適用する。
 - 生成 fallback resources、bind groups、optional material textures 周辺の brittle な indexing assumption は、実害が見える箇所から減らす。
