@@ -281,7 +281,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		active_residency_gaps_detected: false,
 		residency_gap_index_status_limit: 0,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
-			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; image texture and cubemap resources are scoped while mesh buffers remain resident"
+			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; mesh buffers, image textures, and cubemap resources are scoped"
 				.to_string()
 		} else if has_declared_groups && has_ownership {
 			"wardrobe asset ownership metadata is present, but no active asset groups are selected; GPU resources remain all-resident"
@@ -5173,7 +5173,7 @@ mod tests {
 		assert!(plan.scoped_upload_supported);
 		assert!(!plan.all_resident);
 		assert_eq!(plan.mode, "draw-scoped-texture-scoped");
-		assert!(plan.reason.contains("image texture and cubemap resources are scoped"));
+		assert!(plan.reason.contains("mesh buffers, image textures, and cubemap resources are scoped"));
 	}
 
 	#[test]
