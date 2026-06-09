@@ -4426,6 +4426,8 @@ mod tests {
 				inactive_material_slots_used_by_active_draw: vec![4],
 				pending_image_texture_upload_count: 1,
 				pending_material_slot_upload_count: 1,
+				last_mesh_buffer_scoped_load_count: 1,
+				last_mesh_buffer_scoped_unload_count: 2,
 				scoped_draw_supported: true,
 				scoped_upload_supported: true,
 				all_resident: false,
@@ -4545,6 +4547,14 @@ mod tests {
 		assert_eq!(
 			upload.get("pending_material_slot_upload_count").and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		assert_eq!(
+			upload.get("last_mesh_buffer_scoped_load_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("last_mesh_buffer_scoped_unload_count").and_then(|value| value.as_u64()),
+			Some(2)
 		);
 		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(upload.get("scoped_upload_supported").and_then(|value| value.as_bool()), Some(true));

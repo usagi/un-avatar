@@ -1154,11 +1154,61 @@ struct SkinPalette {
 	uploaded_changed: bool,
 }
 
+struct SceneMeshBufferUpload {
+	vertices: Vec<Vertex>,
+	indices: Vec<u32>,
+}
+
+impl SceneMeshBufferUpload {
+	fn vertex_buffer_bytes(&self) -> u64 {
+		(self.vertices.len() * std::mem::size_of::<Vertex>()) as u64
+	}
+
+	fn index_buffer_bytes(&self, index_format: wgpu::IndexFormat) -> u64 {
+		match index_format {
+			wgpu::IndexFormat::Uint16 => (self.indices.len() * std::mem::size_of::<u16>()) as u64,
+			wgpu::IndexFormat::Uint32 => (self.indices.len() * std::mem::size_of::<u32>()) as u64,
+		}
+	}
+
+	fn create_buffers(
+		&self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		index_format: wgpu::IndexFormat,
+	) -> (wgpu::Buffer, wgpu::Buffer) {
+		let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("mesh_v"),
+			size: self.vertex_buffer_bytes(),
+			usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+		let index_buffer = match index_format {
+			wgpu::IndexFormat::Uint16 => {
+				let indices16: Vec<u16> = self.indices.iter().map(|&index| index as u16).collect();
+				device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+					label: Some("mesh_i_u16"),
+					contents: bytemuck::cast_slice(&indices16),
+					usage: wgpu::BufferUsages::INDEX,
+				})
+			}
+			wgpu::IndexFormat::Uint32 => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("mesh_i_u32"),
+				contents: bytemuck::cast_slice(&self.indices),
+				usage: wgpu::BufferUsages::INDEX,
+			}),
+		};
+		(vertex_buffer, index_buffer)
+	}
+}
+
 struct MeshDraw {
-	vertex_buffer: wgpu::Buffer,
-	index_buffer: wgpu::Buffer,
+	vertex_buffer: Option<wgpu::Buffer>,
+	index_buffer: Option<wgpu::Buffer>,
 	vertex_buffer_bytes: u64,
 	index_buffer_bytes: u64,
+	buffer_upload: SceneMeshBufferUpload,
 	index_format: wgpu::IndexFormat,
 	index_count: u32,
 	draw_transform: wgpu::Buffer,
@@ -1215,6 +1265,25 @@ struct MeshMaterialBindingSource<'a> {
 impl MeshDraw {
 	fn active(&self) -> bool {
 		self.visible && self.asset_resident
+	}
+
+	fn mesh_buffers_resident(&self) -> bool {
+		self.vertex_buffer.is_some() && self.index_buffer.is_some()
+	}
+
+	fn ensure_mesh_buffers(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
+		if self.mesh_buffers_resident() {
+			return false;
+		}
+		let (vertex_buffer, index_buffer) = self.buffer_upload.create_buffers(device, queue, self.index_format);
+		self.vertex_buffer = Some(vertex_buffer);
+		self.index_buffer = Some(index_buffer);
+		true
+	}
+
+	fn drop_mesh_buffers(&mut self) -> bool {
+		let had_buffers = self.vertex_buffer.take().is_some() || self.index_buffer.take().is_some();
+		had_buffers
 	}
 }
 
@@ -1303,6 +1372,8 @@ pub(crate) struct SceneMeshActiveResidencyGaps {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneMeshAssetResidencyRefresh {
 	pub(crate) active_draw_state_changed_count: usize,
+	pub(crate) mesh_buffer_load_indices: Vec<usize>,
+	pub(crate) mesh_buffer_unload_indices: Vec<usize>,
 	pub(crate) image_texture_load_indices: Vec<usize>,
 	pub(crate) image_texture_unload_indices: Vec<usize>,
 	pub(crate) material_slot_load_indices: Vec<usize>,
@@ -1311,7 +1382,9 @@ pub(crate) struct SceneMeshAssetResidencyRefresh {
 
 impl SceneMeshAssetResidencyRefresh {
 	pub(crate) fn has_scoped_resource_changes(&self) -> bool {
-		!self.image_texture_load_indices.is_empty()
+		!self.mesh_buffer_load_indices.is_empty()
+			|| !self.mesh_buffer_unload_indices.is_empty()
+			|| !self.image_texture_load_indices.is_empty()
 			|| !self.image_texture_unload_indices.is_empty()
 			|| !self.material_slot_load_indices.is_empty()
 			|| !self.material_slot_unload_indices.is_empty()
@@ -7096,34 +7169,17 @@ impl SceneMeshes {
 					skin_palette_key,
 					skin,
 				);
-				let vertex_buffer_bytes = (verts.len() * std::mem::size_of::<Vertex>()) as u64;
-				let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
-					label: Some("mesh_v"),
-					size: vertex_buffer_bytes,
-					usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-					mapped_at_creation: false,
-				});
-				queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
-
 				let index_format = compact_index_format(&indices);
-				let index_buffer_bytes = match index_format {
-					wgpu::IndexFormat::Uint16 => (indices.len() * std::mem::size_of::<u16>()) as u64,
-					wgpu::IndexFormat::Uint32 => (indices.len() * std::mem::size_of::<u32>()) as u64,
-				};
-				let ibuf = match index_format {
-					wgpu::IndexFormat::Uint16 => {
-						let indices16: Vec<u16> = indices.iter().map(|&index| index as u16).collect();
-						device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-							label: Some("mesh_i_u16"),
-							contents: bytemuck::cast_slice(&indices16),
-							usage: wgpu::BufferUsages::INDEX,
-						})
-					}
-					wgpu::IndexFormat::Uint32 => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-						label: Some("mesh_i_u32"),
-						contents: bytemuck::cast_slice(&indices),
-						usage: wgpu::BufferUsages::INDEX,
-					}),
+				let buffer_upload = SceneMeshBufferUpload { vertices: verts, indices };
+				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
+				let index_buffer_bytes = buffer_upload.index_buffer_bytes(index_format);
+				let index_count = buffer_upload.indices.len() as u32;
+				let asset_resident = asset_residency.mesh_primitive_resident(mesh_i, prim_i);
+				let (vertex_buffer, index_buffer) = if asset_resident {
+					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue, index_format);
+					(Some(vertex_buffer), Some(index_buffer))
+				} else {
+					(None, None)
 				};
 
 				let liltoon_like = mat.liltoon_like_runtime();
@@ -7173,13 +7229,13 @@ impl SceneMeshes {
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
 				let morph_resources = if has_morph_targets {
-					let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), verts.len());
+					let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
 					create_morph_resources(
 						device,
 						queue,
 						&morph_bind_group_layout,
 						morph_target_count as u32,
-						verts.len() as u32,
+						buffer_upload.vertices.len() as u32,
 						&morph_deltas,
 					)
 				} else {
@@ -7197,8 +7253,8 @@ impl SceneMeshes {
 						device,
 						&compute_fur_cards_bind_group_layout,
 						mat,
-						&verts,
-						&indices,
+						&buffer_upload.vertices,
+						&buffer_upload.indices,
 						compute_fur_cards_cpu_fur_maps,
 						fur_vector_view,
 						fur_length_mask_view,
@@ -7210,12 +7266,13 @@ impl SceneMeshes {
 					None
 				};
 				draws.push(MeshDraw {
-					vertex_buffer: vbuf,
-					index_buffer: ibuf,
+					vertex_buffer,
+					index_buffer,
 					vertex_buffer_bytes,
 					index_buffer_bytes,
+					buffer_upload,
 					index_format,
-					index_count: indices.len() as u32,
+					index_count,
 					draw_transform,
 					draw_transform_uploaded: None,
 					draw_material: draw_material_buffer,
@@ -7230,7 +7287,7 @@ impl SceneMeshes {
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
 					visible: active,
-					asset_resident: asset_residency.mesh_primitive_resident(mesh_i, prim_i),
+					asset_resident,
 					shading: mat.shading,
 					morph_pos,
 					morph_source_indices,
@@ -7472,9 +7529,12 @@ impl SceneMeshes {
 			pass.set_bind_group(2, &palette.bind_group, &[]);
 			state.skin_palette_index = Some(d.skin_palette_index);
 		}
+		let (Some(vertex_buffer), Some(index_buffer)) = (&d.vertex_buffer, &d.index_buffer) else {
+			return;
+		};
 		pass.set_bind_group(3, &d.morph_bind_group, &[]);
-		pass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
-		pass.set_index_buffer(d.index_buffer.slice(..), d.index_format);
+		pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+		pass.set_index_buffer(index_buffer.slice(..), d.index_format);
 		pass.draw_indexed(0..d.index_count, 0, 0..instance_count);
 	}
 
@@ -8006,10 +8066,15 @@ impl SceneMeshes {
 	) -> SceneMeshAssetResidencyRefresh {
 		let mut refresh = SceneMeshAssetResidencyRefresh::default();
 		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
-		for draw in &mut self.draws {
+		for (draw_index, draw) in self.draws.iter_mut().enumerate() {
 			let next = asset_residency.mesh_primitive_resident(draw.mesh_index, draw.primitive_index);
 			let was_active = draw.active();
 			if draw.asset_resident != next {
+				if next {
+					refresh.mesh_buffer_load_indices.push(draw_index);
+				} else {
+					refresh.mesh_buffer_unload_indices.push(draw_index);
+				}
 				draw.asset_resident = next;
 			}
 			if draw.active() != was_active {
@@ -8064,6 +8129,34 @@ impl SceneMeshes {
 			self.rebuild_draw_order();
 		}
 		refresh
+	}
+
+	pub(crate) fn apply_mesh_buffer_residency(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		load_indices: &[usize],
+		unload_indices: &[usize],
+	) -> (usize, usize) {
+		let mut load_count = 0;
+		for draw_index in load_indices.iter().copied() {
+			let Some(draw) = self.draws.get_mut(draw_index) else {
+				continue;
+			};
+			if draw.ensure_mesh_buffers(device, queue) {
+				load_count += 1;
+			}
+		}
+		let mut unload_count = 0;
+		for draw_index in unload_indices.iter().copied() {
+			let Some(draw) = self.draws.get_mut(draw_index) else {
+				continue;
+			};
+			if !draw.asset_resident && draw.drop_mesh_buffers() {
+				unload_count += 1;
+			}
+		}
+		(load_count, unload_count)
 	}
 
 	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
@@ -8415,6 +8508,7 @@ mod tests {
 	#[test]
 	fn asset_residency_refresh_reports_scoped_resource_changes() {
 		let refresh = SceneMeshAssetResidencyRefresh {
+			mesh_buffer_load_indices: vec![1],
 			image_texture_load_indices: vec![2],
 			material_slot_unload_indices: vec![4],
 			..Default::default()

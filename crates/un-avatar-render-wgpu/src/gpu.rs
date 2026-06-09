@@ -129,6 +129,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_residency_refresh_image_unload_count: usize,
 	pub(crate) last_residency_refresh_material_load_count: usize,
 	pub(crate) last_residency_refresh_material_unload_count: usize,
+	pub(crate) last_mesh_buffer_scoped_load_count: usize,
+	pub(crate) last_mesh_buffer_scoped_unload_count: usize,
 	pub(crate) last_image_texture_scoped_load_count: usize,
 	pub(crate) last_image_texture_scoped_unload_count: usize,
 	pub(crate) last_cubemap_scoped_load_count: usize,
@@ -264,6 +266,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_residency_refresh_image_unload_count: 0,
 		last_residency_refresh_material_load_count: 0,
 		last_residency_refresh_material_unload_count: 0,
+		last_mesh_buffer_scoped_load_count: 0,
+		last_mesh_buffer_scoped_unload_count: 0,
 		last_image_texture_scoped_load_count: 0,
 		last_image_texture_scoped_unload_count: 0,
 		last_cubemap_scoped_load_count: 0,
@@ -1626,6 +1630,8 @@ pub(crate) struct GpuState {
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
 	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
+	last_mesh_buffer_scoped_load_count: usize,
+	last_mesh_buffer_scoped_unload_count: usize,
 	last_image_texture_scoped_load_count: usize,
 	last_image_texture_scoped_unload_count: usize,
 	last_cubemap_scoped_load_count: usize,
@@ -1986,6 +1992,8 @@ impl GpuState {
 			contact_shadow,
 			texture_summary,
 			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
+			last_mesh_buffer_scoped_load_count: 0,
+			last_mesh_buffer_scoped_unload_count: 0,
 			last_image_texture_scoped_load_count: 0,
 			last_image_texture_scoped_unload_count: 0,
 			last_cubemap_scoped_load_count: 0,
@@ -2151,11 +2159,33 @@ impl GpuState {
 				self.debug_log.line(
 					"wardrobe",
 					format!(
-						"asset residency refresh image_load={:?} image_unload={:?} material_load={:?} material_unload={:?}",
+						"asset residency refresh mesh_load={:?} mesh_unload={:?} image_load={:?} image_unload={:?} material_load={:?} material_unload={:?}",
+						residency_refresh.mesh_buffer_load_indices,
+						residency_refresh.mesh_buffer_unload_indices,
 						residency_refresh.image_texture_load_indices,
 						residency_refresh.image_texture_unload_indices,
 						residency_refresh.material_slot_load_indices,
 						residency_refresh.material_slot_unload_indices
+					),
+				);
+			}
+			let (mesh_buffer_load_count, mesh_buffer_unload_count) = sm.apply_mesh_buffer_residency(
+				&self.device,
+				&self.queue,
+				&residency_refresh.mesh_buffer_load_indices,
+				&residency_refresh.mesh_buffer_unload_indices,
+			);
+			self.last_mesh_buffer_scoped_load_count = mesh_buffer_load_count;
+			self.last_mesh_buffer_scoped_unload_count = mesh_buffer_unload_count;
+			if (mesh_buffer_load_count > 0 || mesh_buffer_unload_count > 0) && self.debug_log.is_enabled() {
+				self.debug_log.line(
+					"wardrobe",
+					format!(
+						"mesh buffer scoped load_count={} unload_count={} load={:?} unload={:?}",
+						mesh_buffer_load_count,
+						mesh_buffer_unload_count,
+						residency_refresh.mesh_buffer_load_indices,
+						residency_refresh.mesh_buffer_unload_indices
 					),
 				);
 			}
@@ -3131,6 +3161,8 @@ impl GpuState {
 		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
 		plan.last_residency_refresh_material_unload_count =
 			self.last_asset_residency_refresh.material_slot_unload_indices.len();
+		plan.last_mesh_buffer_scoped_load_count = self.last_mesh_buffer_scoped_load_count;
+		plan.last_mesh_buffer_scoped_unload_count = self.last_mesh_buffer_scoped_unload_count;
 		plan.last_image_texture_scoped_load_count = self.last_image_texture_scoped_load_count;
 		plan.last_image_texture_scoped_unload_count = self.last_image_texture_scoped_unload_count;
 		plan.last_cubemap_scoped_load_count = self.last_cubemap_scoped_load_count;
