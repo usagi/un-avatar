@@ -109,6 +109,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) scoped_draw_supported: bool,
 	pub(crate) scoped_upload_supported: bool,
 	pub(crate) all_resident: bool,
+	pub(crate) active_residency_gaps_detected: bool,
 	pub(crate) residency_gap_index_status_limit: usize,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) reason: String,
@@ -233,6 +234,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		scoped_draw_supported: false,
 		scoped_upload_supported: false,
 		all_resident: true,
+		active_residency_gaps_detected: false,
 		residency_gap_index_status_limit: 0,
 		reason: if has_declared_groups && has_ownership && has_active_asset_groups {
 			"wardrobe asset ownership metadata scopes renderer draw/material/texture residency for active asset groups; GPU resources remain all-resident"
@@ -279,6 +281,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw.indices;
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
+	plan.active_residency_gaps_detected = draw_counts.active_draws_using_inactive_image_texture_count > 0
+		|| draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
 }
 
@@ -4941,6 +4945,7 @@ mod tests {
 		assert!(plan.scoped_draw_supported);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
+		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
 
@@ -4955,8 +4960,10 @@ mod tests {
 				..Default::default()
 			},
 			Some(SceneMeshAssetResidencyCounts {
+				active_draws_using_inactive_image_texture_count: 1,
 				inactive_image_textures_used_by_active_draw_count: image_indices.len(),
 				inactive_image_textures_used_by_active_draw: image_indices,
+				active_draws_using_inactive_material_slot_count: 1,
 				inactive_material_slots_used_by_active_draw_count: material_indices.len(),
 				inactive_material_slots_used_by_active_draw: material_indices,
 				..Default::default()
@@ -4980,6 +4987,7 @@ mod tests {
 			Some(&(100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
 		);
 		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
+		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
 
