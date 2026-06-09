@@ -1537,6 +1537,7 @@ impl AvatarApp {
 			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
 			status.runtime_requires_fur = runtime_requirements.fur;
 			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
+			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3077,6 +3078,8 @@ struct RendererRuntimeSnapshot {
 	last_action_id: Option<String>,
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	runtime_parameter_values: BTreeMap<String, f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	wardrobe_actions: Vec<gpu::RuntimeWardrobeActionStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3218,6 +3221,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		resolver_cache_key: None,
 		last_action_id: None,
 		runtime_parameter_values: BTreeMap::new(),
+		wardrobe_actions: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4425,6 +4429,15 @@ mod tests {
 				residency_gap_index_status_limit: 64,
 				..Default::default()
 			};
+			status.wardrobe_actions = vec![crate::gpu::RuntimeWardrobeActionStatus {
+				action_id: "wardrobe:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				set_id: "field_drape".to_string(),
+				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+				supervisor_command: Some("field_drape".to_string()),
+				parameter_name: Some("Outfit".to_string()),
+				parameter_value: Some(1.0),
+			}];
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -4443,10 +4456,22 @@ mod tests {
 		);
 		assert!(snapshot.get("active_asset_groups").is_none());
 		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
-		assert_eq!(upload.get("mode").and_then(|value| value.as_str()), Some("draw-scoped-all-resident"));
-		assert_eq!(upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(3));
-		assert_eq!(upload.get("resident_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(2));
-		assert_eq!(upload.get("inactive_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(
+			upload.get("mode").and_then(|value| value.as_str()),
+			Some("draw-scoped-all-resident")
+		);
+		assert_eq!(
+			upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			upload.get("resident_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			upload.get("inactive_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
 		assert_eq!(upload.get("total_image_texture_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("resident_image_texture_count").and_then(|value| value.as_u64()), Some(3));
 		assert_eq!(upload.get("inactive_image_texture_count").and_then(|value| value.as_u64()), Some(1));
@@ -4514,6 +4539,35 @@ mod tests {
 		assert_eq!(
 			upload.get("residency_gap_index_status_limit").and_then(|value| value.as_u64()),
 			Some(64)
+		);
+		let wardrobe_actions = snapshot
+			.get("wardrobe_actions")
+			.and_then(|value| value.as_array())
+			.expect("wardrobe actions");
+		assert_eq!(wardrobe_actions.len(), 1);
+		assert_eq!(
+			wardrobe_actions[0].get("action_id").and_then(|value| value.as_str()),
+			Some("wardrobe:field_drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("label").and_then(|value| value.as_str()),
+			Some("Field Drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("expression_menu_path").and_then(|value| value.as_str()),
+			Some("Wardrobe/Field Drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("parameter_name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("parameter_value").and_then(|value| value.as_f64()),
+			Some(1.0)
 		);
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));

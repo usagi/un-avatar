@@ -14,8 +14,8 @@ use std::{
 
 use glam::{Mat4, Vec3, Vec4};
 use un_avatar_core::{
-	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey,
-	UnaSceneNode,
+	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts,
+	UnaRuntimeResolverCacheKey, UnaSceneNode,
 };
 use un_avatar_skeleton::{
 	build_runtime_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -64,6 +64,21 @@ pub(crate) struct RuntimeActionActivation {
 	pub(crate) action_id: String,
 	pub(crate) active_wardrobe_set: Option<String>,
 	pub(crate) parameter_values: BTreeMap<String, f32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeWardrobeActionStatus {
+	pub(crate) action_id: String,
+	pub(crate) label: String,
+	pub(crate) set_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) expression_menu_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) supervisor_command: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) parameter_name: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) parameter_value: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -281,8 +296,8 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
 	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
-	plan.active_residency_gaps_detected = draw_counts.active_draws_using_inactive_image_texture_count > 0
-		|| draw_counts.active_draws_using_inactive_material_slot_count > 0;
+	plan.active_residency_gaps_detected =
+		draw_counts.active_draws_using_inactive_image_texture_count > 0 || draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
 }
 
@@ -314,6 +329,42 @@ fn runtime_action_id_for_parameter(
 			})
 		})
 		.map(|action| action.id.clone())
+}
+
+fn wardrobe_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeWardrobeActionStatus> {
+	let mut statuses = Vec::new();
+	for action in &actions.actions {
+		let Some(set_id) = action.effects.iter().find_map(|effect| match effect {
+			UnaRuntimeActionEffect::WardrobeSet { set_id } => Some(set_id.clone()),
+			_ => None,
+		}) else {
+			continue;
+		};
+		let mut status = RuntimeWardrobeActionStatus {
+			action_id: action.id.clone(),
+			label: action.label.clone(),
+			set_id,
+			..Default::default()
+		};
+		for trigger in &action.triggers {
+			match trigger {
+				UnaRuntimeActionTrigger::ExpressionMenu { path } if status.expression_menu_path.is_none() => {
+					status.expression_menu_path = Some(path.clone());
+				}
+				UnaRuntimeActionTrigger::SupervisorCommand { command } if status.supervisor_command.is_none() => {
+					status.supervisor_command = Some(command.clone());
+				}
+				UnaRuntimeActionTrigger::ParameterValue { name, value } if status.parameter_name.is_none() => {
+					status.parameter_name = Some(name.clone());
+					status.parameter_value = Some(*value);
+				}
+				_ => {}
+			}
+		}
+		statuses.push(status);
+	}
+	statuses.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.action_id.cmp(&b.action_id)));
+	statuses
 }
 
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
@@ -2988,6 +3039,19 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	pub(crate) fn wardrobe_actions(&self) -> Vec<RuntimeWardrobeActionStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model()
+			.runtime_actions()
+			.map(wardrobe_action_statuses)
+			.unwrap_or_default()
+	}
+
 	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -4711,9 +4775,9 @@ fn create_startup_splash_pipeline(
 mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
-		BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
@@ -4764,6 +4828,54 @@ mod tests {
 			runtime_action_id_for_parameter(&actions, None, "Hat", 0.0).as_deref(),
 			Some("hat:off")
 		);
+	}
+
+	#[test]
+	fn wardrobe_action_statuses_summarize_ui_triggers() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![
+				un_avatar_core::UnaRuntimeAction {
+					id: "wardrobe:field".to_string(),
+					label: "Field Drape".to_string(),
+					triggers: vec![
+						un_avatar_core::UnaRuntimeActionTrigger::ExpressionMenu {
+							path: "Wardrobe/Field Drape".to_string(),
+						},
+						un_avatar_core::UnaRuntimeActionTrigger::SupervisorCommand {
+							command: "field_drape".to_string(),
+						},
+						un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+							name: "Outfit".to_string(),
+							value: 2.0,
+						},
+					],
+					effects: vec![un_avatar_core::UnaRuntimeActionEffect::WardrobeSet {
+						set_id: "field_drape".to_string(),
+					}],
+					..Default::default()
+				},
+				un_avatar_core::UnaRuntimeAction {
+					id: "expression:smile".to_string(),
+					label: "Smile".to_string(),
+					effects: vec![un_avatar_core::UnaRuntimeActionEffect::ExpressionWeight {
+						name: "Smile".to_string(),
+						weight: 1.0,
+					}],
+					..Default::default()
+				},
+			],
+		};
+
+		let statuses = wardrobe_action_statuses(&actions);
+
+		assert_eq!(statuses.len(), 1);
+		assert_eq!(statuses[0].action_id, "wardrobe:field");
+		assert_eq!(statuses[0].label, "Field Drape");
+		assert_eq!(statuses[0].set_id, "field_drape");
+		assert_eq!(statuses[0].expression_menu_path.as_deref(), Some("Wardrobe/Field Drape"));
+		assert_eq!(statuses[0].supervisor_command.as_deref(), Some("field_drape"));
+		assert_eq!(statuses[0].parameter_name.as_deref(), Some("Outfit"));
+		assert_eq!(statuses[0].parameter_value, Some(2.0));
 	}
 
 	#[test]
@@ -5039,14 +5151,23 @@ mod tests {
 			}),
 		);
 
-		assert_eq!(plan.inactive_image_textures_used_by_active_draw_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2);
+		assert_eq!(
+			plan.inactive_image_textures_used_by_active_draw_count,
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2
+		);
 		assert_eq!(
 			plan.inactive_image_textures_used_by_active_draw.len(),
 			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT
 		);
-		assert_eq!(plan.inactive_image_textures_used_by_active_draw.last(), Some(&(WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1)));
+		assert_eq!(
+			plan.inactive_image_textures_used_by_active_draw.last(),
+			Some(&(WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
+		);
 		assert!(plan.inactive_image_textures_used_by_active_draw_truncated);
-		assert_eq!(plan.inactive_material_slots_used_by_active_draw_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3);
+		assert_eq!(
+			plan.inactive_material_slots_used_by_active_draw_count,
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3
+		);
 		assert_eq!(
 			plan.inactive_material_slots_used_by_active_draw.len(),
 			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT
@@ -5056,8 +5177,14 @@ mod tests {
 			Some(&(100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT - 1))
 		);
 		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
-		assert_eq!(plan.pending_image_texture_upload_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2);
-		assert_eq!(plan.pending_material_slot_upload_count, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3);
+		assert_eq!(
+			plan.pending_image_texture_upload_count,
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2
+		);
+		assert_eq!(
+			plan.pending_material_slot_upload_count,
+			WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3
+		);
 		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
 	}
