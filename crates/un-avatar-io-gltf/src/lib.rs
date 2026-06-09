@@ -8605,6 +8605,22 @@ mod tests {
 		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of("MAMoveIndependently");
 	}
 
+	#[test]
+	fn import_marks_other_unimplemented_modular_avatar_components_as_unsupported() {
+		for short_type in [
+			"ModularAvatarConvertConstraints",
+			"ModularAvatarFloorAdjuster",
+			"ModularAvatarGlobalCollider",
+			"ModularAvatarPBBlocker",
+			"ModularAvatarPlatformFilter",
+			"ModularAvatarRenameVRChatCollisionTags",
+			"ModularAvatarVRChatSettings",
+			"ModularAvatarScaleAdjuster",
+		] {
+			import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(short_type);
+		}
+	}
+
 	fn import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(short_type: &str) {
 		let bin = triangle_bin_bytes();
 		let json = format!(
@@ -12033,6 +12049,14 @@ mod tests {
 			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarSyncParameterSequence", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarVisibleHeadAccessory", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarConvertConstraints", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarFloorAdjuster", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarGlobalCollider", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarPBBlocker", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarPlatformFilter", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarRenameVRChatCollisionTags", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarVRChatSettings", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarScaleAdjuster", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarWorldScaleObject", "enabled": true}),
 			serde_json::json!({"shortType": "MAMoveIndependently", "enabled": true}),
@@ -12046,12 +12070,20 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("total=10"));
+		assert!(message.contains("total=18"));
 		assert!(message.contains("resolver_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
 		assert!(message.contains("metadata_supported=3"));
-		assert!(message.contains("unsupported=4"));
+		assert!(message.contains("unsupported=12"));
 		assert!(message.contains("disabled=1"));
+		assert!(message.contains("ModularAvatarConvertConstraints:1"));
+		assert!(message.contains("ModularAvatarFloorAdjuster:1"));
+		assert!(message.contains("ModularAvatarGlobalCollider:1"));
+		assert!(message.contains("ModularAvatarPBBlocker:1"));
+		assert!(message.contains("ModularAvatarPlatformFilter:1"));
+		assert!(message.contains("ModularAvatarRenameVRChatCollisionTags:1"));
+		assert!(message.contains("ModularAvatarScaleAdjuster:1"));
+		assert!(message.contains("ModularAvatarVRChatSettings:1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
 		assert!(message.contains("ModularAvatarWorldScaleObject:1"));
 		assert!(message.contains("MAMoveIndependently:1"));
@@ -12063,9 +12095,27 @@ mod tests {
 			.collect::<Vec<_>>();
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarConvertConstraints"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarGlobalCollider"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarFloorAdjuster"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPBBlocker"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPlatformFilter"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarRenameVRChatCollisionTags"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarScaleAdjuster"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarVRChatSettings"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
+		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.MAMoveIndependently"));
-		assert_eq!(report.lost_features.len(), 3);
+		assert_eq!(report.lost_features.len(), 11);
 		for unsupported_type in [
+			"ModularAvatarConvertConstraints",
+			"ModularAvatarFloorAdjuster",
+			"ModularAvatarGlobalCollider",
+			"ModularAvatarPBBlocker",
+			"ModularAvatarPlatformFilter",
+			"ModularAvatarRenameVRChatCollisionTags",
+			"ModularAvatarScaleAdjuster",
+			"ModularAvatarVRChatSettings",
 			"ModularAvatarWorldFixedObject",
 			"ModularAvatarWorldScaleObject",
 			"MAMoveIndependently",
