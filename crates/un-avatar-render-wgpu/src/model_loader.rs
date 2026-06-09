@@ -15,14 +15,20 @@ pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String
 
 fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 	eprintln!(
-		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} active_asset_groups={:?}",
+		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} active_asset_groups={:?} scoped_active_groups={} scoped_missing_groups={:?} scoped_resident=mesh:{} material:{} image:{} dynamics:{}",
 		report.visibility_applied,
 		report.visibility_missing,
 		report.blendshape_applied,
 		report.blendshape_missing,
 		report.dynamics_applied,
 		report.dynamics_missing,
-		report.active_asset_groups
+		report.active_asset_groups,
+		report.scoped_active_asset_group_count,
+		report.scoped_missing_active_asset_groups,
+		report.scoped_resident_mesh_primitive_count,
+		report.scoped_resident_material_count,
+		report.scoped_resident_image_count,
+		report.scoped_resident_dynamics_count
 	);
 	if !report.missing_visibility_paths.is_empty() {
 		eprintln!(

@@ -3864,7 +3864,7 @@ fn run_diagnose(
 		let applied = apply_unavatar_wardrobe_set(&mut imported.document, set_id)?;
 		wardrobe_apply_ms = started.elapsed().as_millis();
 		imported.report.push_info(format!(
-			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_applied={}, material_missing={}, material_slot_applied={}, material_slot_missing={}, active_asset_groups={:?}",
+			".unavatar wardrobe set `{set_id}`: visibility_applied={}, visibility_missing={}, blendshape_applied={}, blendshape_missing={}, dynamics_applied={}, dynamics_missing={}, material_applied={}, material_missing={}, material_slot_applied={}, material_slot_missing={}, active_asset_groups={:?}, scoped_active_groups={}, scoped_missing_groups={:?}, scoped_resident=mesh:{} material:{} image:{} dynamics:{}",
 			applied.visibility_applied,
 			applied.visibility_missing,
 			applied.blendshape_applied,
@@ -3875,7 +3875,13 @@ fn run_diagnose(
 			applied.material_missing,
 			applied.material_slot_applied,
 			applied.material_slot_missing,
-			applied.active_asset_groups
+			applied.active_asset_groups,
+			applied.scoped_active_asset_group_count,
+			applied.scoped_missing_active_asset_groups,
+			applied.scoped_resident_mesh_primitive_count,
+			applied.scoped_resident_material_count,
+			applied.scoped_resident_image_count,
+			applied.scoped_resident_dynamics_count
 		));
 	}
 	let wardrobe_probe_started = Instant::now();

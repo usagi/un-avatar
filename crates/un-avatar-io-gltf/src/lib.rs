@@ -1884,6 +1884,12 @@ fn expression_catalog_from_morph_target_names(scene: &UnaSceneSnapshot) -> Optio
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WardrobeApplyReport {
 	pub active_asset_groups: Vec<String>,
+	pub scoped_active_asset_group_count: usize,
+	pub scoped_missing_active_asset_groups: Vec<String>,
+	pub scoped_resident_mesh_primitive_count: usize,
+	pub scoped_resident_material_count: usize,
+	pub scoped_resident_image_count: usize,
+	pub scoped_resident_dynamics_count: usize,
 	pub visibility_applied: usize,
 	pub visibility_missing: usize,
 	pub blendshape_applied: usize,
@@ -1899,6 +1905,19 @@ pub struct WardrobeApplyReport {
 	pub missing_dynamics_ids: Vec<String>,
 	pub missing_materials: Vec<String>,
 	pub missing_material_slots: Vec<String>,
+}
+
+fn refresh_wardrobe_apply_report_scoped_assets(document: &UnaDocument, report: &mut WardrobeApplyReport) {
+	let Some(scene) = document.scene.as_ref() else {
+		return;
+	};
+	let selection = scene.scoped_asset_selection(&report.active_asset_groups);
+	report.scoped_active_asset_group_count = selection.owned_active_groups.len();
+	report.scoped_missing_active_asset_groups = selection.missing_active_asset_groups;
+	report.scoped_resident_mesh_primitive_count = selection.mesh_primitives.len();
+	report.scoped_resident_material_count = selection.materials.len();
+	report.scoped_resident_image_count = selection.images.len();
+	report.scoped_resident_dynamics_count = selection.dynamics_source_ids.len();
 }
 
 fn apply_unavatar_wardrobe_operations(
@@ -4891,10 +4910,12 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 			drop(runtime);
 			document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 			document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
-			return Ok(WardrobeApplyReport {
+			let mut report = WardrobeApplyReport {
 				active_asset_groups: document.runtime_model().active_asset_groups().to_vec(),
 				..Default::default()
-			});
+			};
+			refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
+			return Ok(report);
 		};
 		reset_scene_visibility(runtime.scene);
 		let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
@@ -4903,6 +4924,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 		drop(runtime);
 		document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 		document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
+		refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
 		return Ok(report);
 	}
 	if base_id.as_deref() != Some(set_id) {
@@ -4917,6 +4939,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	drop(runtime);
 	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 	document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
+	refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
 	Ok(report)
 }
 
@@ -12560,7 +12583,29 @@ mod tests {
 	#[test]
 	fn wardrobe_dynamics_enable_updates_runtime_group() {
 		let mut doc = UnaDocument {
-			scene: Some(UnaSceneSnapshot::default()),
+			scene: Some(UnaSceneSnapshot {
+				asset_group_ownership: vec![
+					UnaSceneAssetGroupOwnership {
+						group_id: "avatar:base".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 0,
+							primitive_index: 0,
+						}],
+						..Default::default()
+					},
+					UnaSceneAssetGroupOwnership {
+						group_id: "outfit:hair".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 1,
+							primitive_index: 0,
+						}],
+						materials: vec![2],
+						images: vec![3],
+						dynamics_source_ids: vec!["physbone:hair".to_string()],
+					},
+				],
+				..Default::default()
+			}),
 			unavatar: Some(UnaUnavatarExtension {
 				spec_version: "0.1-preview".to_string(),
 				source: serde_json::json!({
@@ -12599,6 +12644,15 @@ mod tests {
 			applied.active_asset_groups,
 			vec!["outfit:hair".to_string(), "physics:hair".to_string()]
 		);
+		assert_eq!(applied.scoped_active_asset_group_count, 1);
+		assert_eq!(
+			applied.scoped_missing_active_asset_groups,
+			vec!["physics:hair".to_string()]
+		);
+		assert_eq!(applied.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(applied.scoped_resident_material_count, 1);
+		assert_eq!(applied.scoped_resident_image_count, 1);
+		assert_eq!(applied.scoped_resident_dynamics_count, 1);
 		assert_eq!(applied.dynamics_applied, 1);
 		assert_eq!(applied.dynamics_missing, 1);
 		assert_eq!(applied.missing_dynamics_ids, vec!["physbone:missing"]);
@@ -12613,6 +12667,12 @@ mod tests {
 
 		let applied = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
 		assert_eq!(applied.active_asset_groups, vec!["avatar:base".to_string()]);
+		assert_eq!(applied.scoped_active_asset_group_count, 1);
+		assert!(applied.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(applied.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(applied.scoped_resident_material_count, 0);
+		assert_eq!(applied.scoped_resident_image_count, 0);
+		assert_eq!(applied.scoped_resident_dynamics_count, 0);
 		assert_eq!(applied.dynamics_applied, 0);
 		assert_eq!(applied.dynamics_missing, 0);
 		let dynamics = doc.runtime_model().dynamics();
