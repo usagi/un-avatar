@@ -124,6 +124,32 @@ struct WardrobeResidencyGapIndexStatus {
 	truncated: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WardrobeScopedUploadWork {
+	image_texture_indices: Vec<usize>,
+	material_slot_indices: Vec<usize>,
+	active_draws_using_inactive_image_texture_count: usize,
+	active_draws_using_inactive_material_slot_count: usize,
+}
+
+impl WardrobeScopedUploadWork {
+	fn has_pending_uploads(&self) -> bool {
+		!self.image_texture_indices.is_empty() || !self.material_slot_indices.is_empty()
+	}
+}
+
+fn wardrobe_scoped_upload_work_for_active_gaps(active_gaps: Option<SceneMeshActiveResidencyGaps>) -> WardrobeScopedUploadWork {
+	let Some(active_gaps) = active_gaps else {
+		return WardrobeScopedUploadWork::default();
+	};
+	WardrobeScopedUploadWork {
+		image_texture_indices: active_gaps.inactive_image_texture_indices,
+		material_slot_indices: active_gaps.inactive_material_slot_indices,
+		active_draws_using_inactive_image_texture_count: active_gaps.active_draws_using_inactive_image_texture_count,
+		active_draws_using_inactive_material_slot_count: active_gaps.active_draws_using_inactive_material_slot_count,
+	}
+}
+
 fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAssetUploadPlan {
 	let mut declared_asset_groups = document
 		.unavatar
@@ -2956,12 +2982,10 @@ impl GpuState {
 			return WardrobeAssetUploadPlan::default();
 		};
 		let active_gaps = self.active_wardrobe_residency_gaps();
+		let scoped_upload_work = wardrobe_scoped_upload_work_for_active_gaps(active_gaps.clone());
 		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
 		let mut plan = wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts);
-		if let Some(active_gaps) = active_gaps {
-			plan.active_residency_gaps_detected |= !active_gaps.inactive_image_texture_indices.is_empty()
-				|| !active_gaps.inactive_material_slot_indices.is_empty();
-		}
+		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
 		plan
 	}
 
@@ -4711,11 +4735,11 @@ mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
 		transparent_alpha_mode, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
-	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshAssetResidencyCounts};
+	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
@@ -4999,6 +5023,24 @@ mod tests {
 		assert!(plan.inactive_material_slots_used_by_active_draw_truncated);
 		assert!(plan.active_residency_gaps_detected);
 		assert_eq!(plan.residency_gap_index_status_limit, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
+	}
+
+	#[test]
+	fn wardrobe_scoped_upload_work_keeps_full_active_gap_lists() {
+		let image_indices = (0..WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2).collect::<Vec<_>>();
+		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
+		let work = wardrobe_scoped_upload_work_for_active_gaps(Some(SceneMeshActiveResidencyGaps {
+			inactive_image_texture_indices: image_indices.clone(),
+			inactive_material_slot_indices: material_indices.clone(),
+			active_draws_using_inactive_image_texture_count: 4,
+			active_draws_using_inactive_material_slot_count: 5,
+		}));
+
+		assert!(work.has_pending_uploads());
+		assert_eq!(work.image_texture_indices, image_indices);
+		assert_eq!(work.material_slot_indices, material_indices);
+		assert_eq!(work.active_draws_using_inactive_image_texture_count, 4);
+		assert_eq!(work.active_draws_using_inactive_material_slot_count, 5);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
