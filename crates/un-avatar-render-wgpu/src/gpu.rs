@@ -118,6 +118,11 @@ pub(crate) fn wardrobe_asset_upload_plan_is_default(plan: &WardrobeAssetUploadPl
 	plan == &WardrobeAssetUploadPlan::default()
 }
 
+struct WardrobeResidencyGapIndexStatus {
+	indices: Vec<usize>,
+	truncated: bool,
+}
+
 fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAssetUploadPlan {
 	let mut declared_asset_groups = document
 		.unavatar
@@ -260,27 +265,27 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.draws_using_inactive_image_texture_count = draw_counts.draws_using_inactive_image_texture_count;
 	plan.active_draws_using_inactive_image_texture_count = draw_counts.active_draws_using_inactive_image_texture_count;
 	plan.inactive_image_textures_used_by_active_draw_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
-	let (inactive_image_textures_used_by_active_draw, inactive_image_textures_used_by_active_draw_truncated) =
+	let inactive_image_textures_used_by_active_draw =
 		wardrobe_residency_gap_index_status_list(draw_counts.inactive_image_textures_used_by_active_draw);
-	plan.inactive_image_textures_used_by_active_draw = inactive_image_textures_used_by_active_draw;
-	plan.inactive_image_textures_used_by_active_draw_truncated = inactive_image_textures_used_by_active_draw_truncated;
+	plan.inactive_image_textures_used_by_active_draw = inactive_image_textures_used_by_active_draw.indices;
+	plan.inactive_image_textures_used_by_active_draw_truncated = inactive_image_textures_used_by_active_draw.truncated;
 	plan.total_material_slot_count = draw_counts.total_material_slot_count;
 	plan.resident_material_slot_count = draw_counts.resident_material_slot_count;
 	plan.inactive_material_slot_count = draw_counts.inactive_material_slot_count;
 	plan.active_draws_using_inactive_material_slot_count = draw_counts.active_draws_using_inactive_material_slot_count;
 	plan.inactive_material_slots_used_by_active_draw_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
-	let (inactive_material_slots_used_by_active_draw, inactive_material_slots_used_by_active_draw_truncated) =
+	let inactive_material_slots_used_by_active_draw =
 		wardrobe_residency_gap_index_status_list(draw_counts.inactive_material_slots_used_by_active_draw);
-	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw;
-	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw_truncated;
+	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw.indices;
+	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.scoped_draw_supported = draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == "draw-scoped-all-resident";
 	plan
 }
 
-fn wardrobe_residency_gap_index_status_list(mut indices: Vec<usize>) -> (Vec<usize>, bool) {
+fn wardrobe_residency_gap_index_status_list(mut indices: Vec<usize>) -> WardrobeResidencyGapIndexStatus {
 	let truncated = indices.len() > WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT;
 	indices.truncate(WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT);
-	(indices, truncated)
+	WardrobeResidencyGapIndexStatus { indices, truncated }
 }
 
 fn runtime_action_id_for_parameter(
