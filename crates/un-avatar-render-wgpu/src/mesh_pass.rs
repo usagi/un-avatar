@@ -1186,6 +1186,19 @@ struct MeshDraw {
 	world_origin: Vec3,
 }
 
+#[allow(dead_code)]
+struct SceneTextureViews {
+	white: wgpu::TextureView,
+	black: wgpu::TextureView,
+	neutral_normal: wgpu::TextureView,
+	transparent_black: wgpu::TextureView,
+	blue: wgpu::TextureView,
+	neutral_vector: wgpu::TextureView,
+	black_cube: wgpu::TextureView,
+	images: Vec<wgpu::TextureView>,
+	cubes: Vec<Option<wgpu::TextureView>>,
+}
+
 impl MeshDraw {
 	fn active(&self) -> bool {
 		self.visible && self.asset_resident
@@ -1550,12 +1563,18 @@ pub(crate) struct SceneMeshes {
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_layout: wgpu::BindGroupLayout,
 	frame_bind_group: wgpu::BindGroup,
+	#[allow(dead_code)]
+	material_layout: wgpu::BindGroupLayout,
+	#[allow(dead_code)]
+	outline_material_layout: wgpu::BindGroupLayout,
 	screen_grab_sampler: wgpu::Sampler,
 	_screen_grab_fallback_texture: wgpu::Texture,
 	_audio_link_texture: wgpu::Texture,
 	audio_link_view: wgpu::TextureView,
 	audio_link_uploaded_sequence: u64,
 	audio_link_frame_params: [f32; 4],
+	#[allow(dead_code)]
+	texture_views: SceneTextureViews,
 	#[allow(dead_code)]
 	_samplers: Vec<wgpu::Sampler>,
 	#[allow(dead_code)]
@@ -6195,6 +6214,17 @@ impl SceneMeshes {
 			.last()
 			.expect("neutral vector texture was just pushed")
 			.create_view(&wgpu::TextureViewDescriptor::default());
+		let texture_views = SceneTextureViews {
+			white: white_view.clone(),
+			black: black_view.clone(),
+			neutral_normal: neutral_normal_view.clone(),
+			transparent_black: transparent_black_view.clone(),
+			blue: blue_view.clone(),
+			neutral_vector: neutral_vector_view.clone(),
+			black_cube: black_cube_view.clone(),
+			images: image_views.clone(),
+			cubes: cube_image_views.clone(),
+		};
 
 		let scene_has_morph_targets = scene_has_morph_targets(scene);
 		let expression_names = if scene_has_morph_targets {
@@ -6948,12 +6978,15 @@ impl SceneMeshes {
 			frame_uploaded: None,
 			frame_layout,
 			frame_bind_group,
+			material_layout,
+			outline_material_layout,
 			screen_grab_sampler,
 			_screen_grab_fallback_texture: screen_grab_fallback_texture,
 			_audio_link_texture: audio_link_texture,
 			audio_link_view,
 			audio_link_uploaded_sequence: 0,
 			audio_link_frame_params: [0.0; 4],
+			texture_views,
 			_samplers: samplers,
 			_textures: textures,
 			_cube_textures: cube_textures,
