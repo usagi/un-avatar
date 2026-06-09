@@ -57,6 +57,7 @@ mod tests {
 	fn node(transform: Mat4, children: Vec<usize>) -> UnaSceneNode {
 		UnaSceneNode {
 			source_node_id: None,
+			resolved_node_id: None,
 			name: None,
 			visible: true,
 			transform: transform.to_cols_array(),

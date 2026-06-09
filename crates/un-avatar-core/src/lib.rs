@@ -178,6 +178,19 @@ impl UnaRuntimeAction {
 			})
 			.collect()
 	}
+
+	pub fn parameter_condition_state(&self, name: &str, value: f32) -> Option<bool> {
+		let mut saw_parameter_condition = false;
+		for condition in &self.conditions {
+			if let Some(active) = condition.parameter_condition_matches(name, value) {
+				saw_parameter_condition = true;
+				if !active {
+					return Some(false);
+				}
+			}
+		}
+		saw_parameter_condition.then_some(true)
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -4496,6 +4509,34 @@ mod tests {
 		assert_eq!(inverted.parameter_condition_matches("Hat", 1.004), Some(false));
 		assert_eq!(inverted.parameter_condition_matches("Hat", 1.006), Some(true));
 		assert_eq!(UnaRuntimeActionCondition::default().parameter_condition_matches("Hat", 1.0), None);
+	}
+
+	#[test]
+	fn runtime_action_reports_parameter_condition_state() {
+		let action = UnaRuntimeAction {
+			conditions: vec![UnaRuntimeActionCondition {
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		assert_eq!(action.parameter_condition_state("Hat", 1.0), Some(true));
+		assert_eq!(action.parameter_condition_state("Hat", 0.0), Some(false));
+		assert_eq!(action.parameter_condition_state("Other", 1.0), Some(false));
+
+		let inverted = UnaRuntimeAction {
+			conditions: vec![UnaRuntimeActionCondition {
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
+				inverted: true,
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		assert_eq!(inverted.parameter_condition_state("Hat", 1.0), Some(false));
+		assert_eq!(inverted.parameter_condition_state("Hat", 0.0), Some(true));
+		assert_eq!(UnaRuntimeAction::default().parameter_condition_state("Hat", 1.0), None);
 	}
 
 	#[test]

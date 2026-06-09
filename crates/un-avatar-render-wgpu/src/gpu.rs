@@ -65,6 +65,29 @@ pub(crate) struct RuntimeActionActivation {
 	pub(crate) parameter_values: BTreeMap<String, f32>,
 }
 
+fn runtime_action_id_for_parameter(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	name: &str,
+	value: f32,
+) -> Option<String> {
+	let condition_match = actions
+		.actions
+		.iter()
+		.find(|action| action.parameter_condition_state(name, value) == Some(true));
+	condition_match
+		.or_else(|| {
+			actions.actions.iter().find(|action| {
+				action.parameter_condition_state(name, value).is_none()
+					&& action.matches_query(UnaRuntimeActionQuery {
+						parameter_name: Some(name),
+						parameter_value: Some(value),
+						..Default::default()
+					})
+			})
+		})
+		.map(|action| action.id.clone())
+}
+
 pub(crate) fn mesh_shader_variant_tier_for_limits(adapter_limits: &wgpu::Limits) -> MeshShaderVariantTier {
 	if adapter_limits.max_sampled_textures_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE
 		&& adapter_limits.max_samplers_per_shader_stage >= HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
@@ -1073,6 +1096,7 @@ mod motion_buffer_tests {
 		UnaSceneNode {
 			name: None,
 			source_node_id: None,
+			resolved_node_id: None,
 			visible: true,
 			transform,
 			children: Vec::new(),
@@ -2718,24 +2742,15 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model_mut().set_runtime_parameter_value(name.to_string(), value);
 		}
-		let has_matching_action = {
+		let matching_action_id = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model()
 				.runtime_actions()
-				.is_some_and(|actions| {
-					actions
-						.find_action(UnaRuntimeActionQuery {
-							parameter_name: Some(name),
-							parameter_value: Some(value),
-							..Default::default()
-						})
-						.is_some()
-				})
+				.and_then(|actions| runtime_action_id_for_parameter(actions, name, value))
 		};
-		if !has_matching_action {
-			return Ok(None);
-		}
-		self.activate_runtime_action(None, None, None, Some(name), Some(value)).map(Some)
+		matching_action_id
+			.map(|action_id| self.activate_runtime_action(Some(&action_id), None, None, None, None))
+			.transpose()
 	}
 
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
@@ -4437,12 +4452,52 @@ fn create_startup_splash_pipeline(
 #[cfg(test)]
 mod tests {
 	use super::{
-		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, transparent_alpha_mode,
+		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter, transparent_alpha_mode,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 	};
 	use crate::mesh_pass::MeshShaderVariantTier;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+
+	#[test]
+	fn runtime_action_parameter_selection_respects_inverted_conditions() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					effects: Vec::new(),
+					..Default::default()
+				},
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:off".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						inverted: true,
+						..Default::default()
+					}],
+					effects: Vec::new(),
+					..Default::default()
+				},
+			],
+		};
+
+		assert_eq!(runtime_action_id_for_parameter(&actions, "Hat", 1.0).as_deref(), Some("hat:on"));
+		assert_eq!(runtime_action_id_for_parameter(&actions, "Hat", 0.0).as_deref(), Some("hat:off"));
+	}
 
 	#[test]
 	fn high_capability_liltoon_texture_budget_covers_highest_mesh_binding() {

@@ -8355,6 +8355,7 @@ mod tests {
 			nodes: vec![
 				UnaSceneNode {
 					source_node_id: None,
+					resolved_node_id: None,
 					name: Some("root".to_string()),
 					visible: false,
 					transform: identity,
@@ -8366,6 +8367,7 @@ mod tests {
 				},
 				UnaSceneNode {
 					source_node_id: None,
+					resolved_node_id: None,
 					name: Some("child".to_string()),
 					visible: true,
 					transform: identity,
@@ -8390,6 +8392,7 @@ mod tests {
 			nodes: vec![
 				UnaSceneNode {
 					source_node_id: None,
+					resolved_node_id: None,
 					name: Some("root".to_string()),
 					visible: true,
 					transform: identity,
@@ -8401,6 +8404,7 @@ mod tests {
 				},
 				UnaSceneNode {
 					source_node_id: None,
+					resolved_node_id: None,
 					name: Some("child".to_string()),
 					visible: true,
 					transform: identity,
@@ -8412,6 +8416,7 @@ mod tests {
 				},
 				UnaSceneNode {
 					source_node_id: None,
+					resolved_node_id: None,
 					name: Some("hidden_parentless".to_string()),
 					visible: false,
 					transform: identity,
