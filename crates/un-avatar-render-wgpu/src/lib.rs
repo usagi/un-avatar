@@ -226,6 +226,8 @@ enum RendererControlEvent {
 		action_id: Option<String>,
 		supervisor_command: Option<String>,
 		expression_menu_path: Option<String>,
+		menu_path: Option<String>,
+		wardrobe_set_id: Option<String>,
 		parameter_name: Option<String>,
 		parameter_value: Option<f32>,
 		result: CommandResultSlot,
@@ -426,6 +428,10 @@ enum RendererControlCommand {
 		supervisor_command: Option<String>,
 		#[serde(default, alias = "expressionMenuPath")]
 		expression_menu_path: Option<String>,
+		#[serde(default, alias = "menuPath")]
+		menu_path: Option<String>,
+		#[serde(default, alias = "wardrobeSetId")]
+		wardrobe_set_id: Option<String>,
 		#[serde(default, alias = "parameterName")]
 		parameter_name: Option<String>,
 		#[serde(default, alias = "parameterValue")]
@@ -1635,6 +1641,32 @@ impl AvatarApp {
 		}
 	}
 
+	fn resolve_action_id_by_menu_path(
+		&self,
+		action_id: Option<&str>,
+		menu_path: Option<&str>,
+		wardrobe_set_id: Option<&str>,
+	) -> Result<Option<String>, String> {
+		if let Some(action_id) = action_id {
+			return Ok(Some(action_id.to_string()));
+		}
+		let Some(menu_path) = menu_path else {
+			return Ok(None);
+		};
+		let candidates = self
+			.gpu
+			.as_ref()
+			.ok_or_else(|| "renderer is not initialized".to_string())?
+			.menu_wardrobe_candidates();
+		let resolved_action_id = resolve_activate_action_from_menu_path(menu_path, wardrobe_set_id, &candidates).map_err(|error| {
+			format!(
+				"{error}{}",
+				wardrobe_set_id.map_or(String::new(), |set_id| format!(" wardrobe_set_id={set_id}"))
+			)
+		})?;
+		Ok(Some(resolved_action_id))
+	}
+
 	fn update_runtime_texture_summary(&self, texture_summary: Option<mesh_pass::TextureUploadSummary>) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -2509,15 +2541,27 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				action_id,
 				supervisor_command,
 				expression_menu_path,
+				menu_path,
+				wardrobe_set_id,
 				parameter_name,
 				parameter_value,
 				result,
 			} => {
+				let resolved_action_id =
+					match self.resolve_action_id_by_menu_path(action_id.as_deref(), menu_path.as_deref(), wardrobe_set_id.as_deref()) {
+						Ok(action_id) => action_id,
+						Err(e) => {
+							if let Ok(mut guard) = result.lock() {
+								*guard = Some(Err(e));
+							}
+							return;
+						}
+					};
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.activate_runtime_action(
-						action_id.as_deref(),
+						resolved_action_id.as_deref(),
 						supervisor_command.as_deref(),
-						expression_menu_path.as_deref(),
+						menu_path.or(expression_menu_path).as_deref(),
 						parameter_name.as_deref(),
 						parameter_value,
 					),
@@ -3534,6 +3578,8 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
 			parameter_name,
 			parameter_value,
 		}) => dispatch_activate_action_command(
@@ -3541,6 +3587,8 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
 			parameter_name,
 			parameter_value,
 		),
@@ -3591,6 +3639,8 @@ fn dispatch_activate_action_command(
 	action_id: Option<String>,
 	supervisor_command: Option<String>,
 	expression_menu_path: Option<String>,
+	menu_path: Option<String>,
+	wardrobe_set_id: Option<String>,
 	parameter_name: Option<String>,
 	parameter_value: Option<f32>,
 ) -> String {
@@ -3599,6 +3649,10 @@ fn dispatch_activate_action_command(
 		.map(|value| value.trim().to_string())
 		.filter(|value| !value.is_empty());
 	let expression_menu_path = expression_menu_path
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	let menu_path = menu_path.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let wardrobe_set_id = wardrobe_set_id
 		.map(|value| value.trim().to_string())
 		.filter(|value| !value.is_empty());
 	let parameter_name = parameter_name
@@ -3610,14 +3664,25 @@ fn dispatch_activate_action_command(
 	if parameter_name.is_some() && parameter_value.is_none() {
 		return "err parameter_value required when parameter_name is provided".to_string();
 	}
-	if action_id.is_none() && supervisor_command.is_none() && expression_menu_path.is_none() && parameter_name.is_none() {
-		return "err action_id, supervisor_command, expression_menu_path, or parameter_name required".to_string();
+	if action_id.is_none()
+		&& supervisor_command.is_none()
+		&& expression_menu_path.is_none()
+		&& menu_path.is_none()
+		&& parameter_name.is_none()
+	{
+		return "err action_id, menu_path, supervisor_command, expression_menu_path, wardrobe_set_id, or parameter_name required"
+			.to_string();
+	}
+	if menu_path.is_none() && wardrobe_set_id.is_some() {
+		return "err menu_path is required when wardrobe_set_id is provided".to_string();
 	}
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::ActivateAction {
 		action_id,
 		supervisor_command,
 		expression_menu_path,
+		menu_path,
+		wardrobe_set_id,
 		parameter_name,
 		parameter_value,
 		result: Arc::clone(&result),
@@ -3690,6 +3755,62 @@ fn parse_renderer_control_command(command: &str) -> Result<RendererControlComman
 		command if command.starts_with('{') => serde_json::from_str(command).map_err(|e| format!("invalid-json-command: {e}")),
 		_ => Err("unsupported-command".to_string()),
 	}
+}
+
+fn normalize_menu_path(path: &str) -> Vec<String> {
+	path.trim()
+		.trim_matches('/')
+		.split('/')
+		.map(str::trim)
+		.filter(|part| !part.is_empty())
+		.map(str::to_string)
+		.collect::<Vec<_>>()
+}
+
+fn resolve_activate_action_from_menu_path(
+	menu_path: &str,
+	wardrobe_set_id: Option<&str>,
+	candidates: &[gpu::RuntimeMenuWardrobeCandidateStatus],
+) -> Result<String, String> {
+	let normalized_menu_path = normalize_menu_path(menu_path);
+	if normalized_menu_path.is_empty() {
+		return Err("menu_path is required".to_string());
+	}
+	let mut matching_action_ids = Vec::<String>::new();
+	for candidate in candidates {
+		let candidate_menu_path = candidate
+			.menu_path
+			.iter()
+			.map(|part| part.trim())
+			.filter(|part| !part.is_empty())
+			.map(str::to_string)
+			.collect::<Vec<_>>();
+		let menu_path_matches = if normalized_menu_path.len() == candidate_menu_path.len() {
+			normalized_menu_path == candidate_menu_path
+		} else if normalized_menu_path.len() == candidate_menu_path.len() + 1 {
+			normalized_menu_path.starts_with(&candidate_menu_path)
+		} else {
+			false
+		};
+		if menu_path_matches && wardrobe_set_id.is_none_or(|set_id| set_id == candidate.wardrobe_set_id.as_str()) {
+			if !matching_action_ids.iter().any(|action_id| action_id == &candidate.action_id) {
+				matching_action_ids.push(candidate.action_id.clone());
+			}
+		}
+	}
+	let resolved_action_id = matching_action_ids
+		.first()
+		.cloned()
+		.ok_or_else(|| format!("no menu wardrobe candidate found for menu_path={menu_path}"))?;
+	if matching_action_ids.len() > 1 {
+		return Err(format!(
+			"menu path {} is ambiguous across {} action(s): {}",
+			menu_path,
+			matching_action_ids.len(),
+			matching_action_ids.join(", ")
+		));
+	}
+	Ok(resolved_action_id)
 }
 
 /// イベントループをブロックしてウィンドウを表示する。
@@ -4368,9 +4489,9 @@ mod tests {
 	};
 
 	use super::{
-		compact_window_title_status, parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions,
-		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH,
-		WINDOW_TITLE_STATUS_MAX_CHARS,
+		compact_window_title_status, parse_renderer_control_command, resolve_activate_action_from_menu_path, start_runtime_status_server,
+		AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan,
+		SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -4783,6 +4904,8 @@ mod tests {
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
 			parameter_name,
 			parameter_value,
 		} = command
@@ -4792,6 +4915,8 @@ mod tests {
 		assert_eq!(action_id.as_deref(), Some("wardrobe:field_drape"));
 		assert_eq!(supervisor_command, None);
 		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
 		assert_eq!(parameter_name, None);
 		assert_eq!(parameter_value, None);
 	}
@@ -4804,6 +4929,8 @@ mod tests {
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
 			parameter_name,
 			parameter_value,
 		} = command
@@ -4813,6 +4940,8 @@ mod tests {
 		assert_eq!(action_id, None);
 		assert_eq!(supervisor_command, None);
 		assert_eq!(expression_menu_path.as_deref(), Some("Wardrobe/Field Drape"));
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
 		assert_eq!(parameter_name, None);
 		assert_eq!(parameter_value, None);
 	}
@@ -4825,6 +4954,8 @@ mod tests {
 			action_id,
 			supervisor_command,
 			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
 			parameter_name,
 			parameter_value,
 		} = command
@@ -4834,8 +4965,69 @@ mod tests {
 		assert_eq!(action_id, None);
 		assert_eq!(supervisor_command, None);
 		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
 		assert_eq!(parameter_name.as_deref(), Some("JacketColor"));
 		assert_eq!(parameter_value, Some(1.0));
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_menu_path() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","menuPath":"Wardrobe","wardrobeSetId":"field_drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path.as_deref(), Some("Wardrobe"));
+		assert_eq!(wardrobe_set_id.as_deref(), Some("field_drape"));
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
+	}
+
+	#[test]
+	fn resolves_activate_action_from_menu_path() {
+		let candidates = vec![
+			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 1,
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_label: Some("Wardrobe".to_string()),
+				action_id: "wardrobe:field_drape".to_string(),
+				wardrobe_set_id: "field_drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			},
+			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 2,
+				menu_path: vec!["Helmet".to_string()],
+				menu_label: Some("Helmet".to_string()),
+				action_id: "wardrobe:helmet".to_string(),
+				wardrobe_set_id: "helmet".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			},
+		];
+		assert_eq!(
+			resolve_activate_action_from_menu_path("Wardrobe/Field Drape", Some("field_drape"), &candidates).as_deref(),
+			Ok("wardrobe:field_drape")
+		);
+		assert_eq!(
+			resolve_activate_action_from_menu_path("Wardrobe", None, &candidates).as_deref(),
+			Ok("wardrobe:field_drape")
+		);
+		assert!(resolve_activate_action_from_menu_path("Wardrobe", Some("field_drape"), &candidates).is_ok());
+		assert!(resolve_activate_action_from_menu_path("Wardrobe", Some("missing"), &candidates).is_err());
 	}
 
 	#[test]
