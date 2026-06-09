@@ -1323,6 +1323,20 @@ fn residency_transition_indices(
 	indices
 }
 
+fn promote_residency_indices(residency: &mut [bool], indices: &[usize]) -> usize {
+	let mut changed = 0;
+	for index in indices {
+		let Some(resident) = residency.get_mut(*index) else {
+			continue;
+		};
+		if !*resident {
+			*resident = true;
+			changed += 1;
+		}
+	}
+	changed
+}
+
 #[inline]
 fn effective_mesh_shading(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> UnaShadingModel {
 	if opts.force_simple_basecolor {
@@ -7941,6 +7955,10 @@ impl SceneMeshes {
 		}
 	}
 
+	pub(crate) fn promote_material_slot_residency(&mut self, material_slot_indices: &[usize]) -> usize {
+		promote_residency_indices(&mut self.material_slot_residency, material_slot_indices)
+	}
+
 	pub fn is_empty(&self) -> bool {
 		self.active_draw_indices.is_empty()
 	}
@@ -8126,6 +8144,16 @@ mod tests {
 		);
 		assert_eq!(residency_load_indices([], [true, false, true]), vec![0, 2]);
 		assert_eq!(residency_unload_indices([true, false, true], []), vec![0, 2]);
+	}
+
+	#[test]
+	fn promote_residency_indices_counts_newly_resident_slots() {
+		let mut residency = vec![true, false, false, true];
+
+		assert_eq!(promote_residency_indices(&mut residency, &[1, 3, 4, 1]), 1);
+		assert_eq!(residency, vec![true, true, false, true]);
+		assert_eq!(promote_residency_indices(&mut residency, &[2]), 1);
+		assert_eq!(residency, vec![true, true, true, true]);
 	}
 
 	#[test]

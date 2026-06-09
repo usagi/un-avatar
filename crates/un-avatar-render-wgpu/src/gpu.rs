@@ -126,6 +126,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_residency_refresh_image_unload_count: usize,
 	pub(crate) last_residency_refresh_material_load_count: usize,
 	pub(crate) last_residency_refresh_material_unload_count: usize,
+	pub(crate) last_material_slot_scoped_upload_count: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -253,6 +254,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_residency_refresh_image_unload_count: 0,
 		last_residency_refresh_material_load_count: 0,
 		last_residency_refresh_material_unload_count: 0,
+		last_material_slot_scoped_upload_count: 0,
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -1607,6 +1609,7 @@ pub(crate) struct GpuState {
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
 	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
+	last_material_slot_scoped_upload_count: usize,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	spring_sim: Option<SpringBoneSimulator>,
@@ -1962,6 +1965,7 @@ impl GpuState {
 			contact_shadow,
 			texture_summary,
 			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
+			last_material_slot_scoped_upload_count: 0,
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
 			spring_sim,
@@ -2131,6 +2135,18 @@ impl GpuState {
 				);
 			}
 			self.last_asset_residency_refresh = residency_refresh;
+			let active_gaps = sm.active_residency_gaps();
+			let material_slot_upload_count = sm.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
+			self.last_material_slot_scoped_upload_count = material_slot_upload_count;
+			if material_slot_upload_count > 0 && self.debug_log.is_enabled() {
+				self.debug_log.line(
+					"wardrobe",
+					format!(
+						"material slot scoped upload count={} slots={:?}",
+						material_slot_upload_count, active_gaps.inactive_material_slot_indices
+					),
+				);
+			}
 			sm.rebuild_material_bind_groups(&self.device);
 		}
 		sm.update_draw_transforms(
@@ -3047,6 +3063,7 @@ impl GpuState {
 		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
 		plan.last_residency_refresh_material_unload_count =
 			self.last_asset_residency_refresh.material_slot_unload_indices.len();
+		plan.last_material_slot_scoped_upload_count = self.last_material_slot_scoped_upload_count;
 		plan
 	}
 
