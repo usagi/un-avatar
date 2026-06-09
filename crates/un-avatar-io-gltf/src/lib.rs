@@ -1511,6 +1511,37 @@ fn unavatar_dynamics_colliders(
 	let Some(colliders) = colliders else {
 		return Vec::new();
 	};
+	unavatar_dynamics_collider_array(colliders, source_kind, node_ids, registry_paths, paths, normalized_paths)
+}
+
+fn unavatar_dynamics_global_colliders(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsCollider> {
+	let Some(colliders) = unavatar.source.get("colliders").and_then(Value::as_array) else {
+		return Vec::new();
+	};
+	unavatar_dynamics_collider_array(
+		colliders,
+		UnaDynamicsSourceKind::Unknown,
+		node_ids,
+		registry_paths,
+		paths,
+		normalized_paths,
+	)
+}
+
+fn unavatar_dynamics_collider_array(
+	colliders: &[Value],
+	source_kind: UnaDynamicsSourceKind,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsCollider> {
 	colliders
 		.iter()
 		.filter_map(|collider| {
@@ -1534,7 +1565,9 @@ fn unavatar_dynamics_colliders(
 				shape: unavatar_dynamics_collider_shape(collider),
 				radius,
 				height: json_f32(collider.get("height")).unwrap_or(0.0).max(0.0),
-				position: unity_vec3_to_unavatar_runtime(json_vec3(collider.get("position")).unwrap_or([0.0; 3])),
+				position: unity_vec3_to_unavatar_runtime(
+					json_vec3(collider.get("position").or_else(|| collider.get("offset"))).unwrap_or([0.0; 3]),
+				),
 				rotation: unity_quat_to_unavatar_runtime(json_vec4(collider.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
 				inside_bounds,
 			})
@@ -1864,7 +1897,7 @@ fn unavatar_dynamics_settings(
 	let mut ignored_transform_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
-	let mut colliders = Vec::new();
+	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let contacts = unavatar_dynamics_contacts(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let constraint_refs = unavatar_dynamics_constraint_refs(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 
@@ -8644,6 +8677,13 @@ mod tests {
 					{"nodeId": "node_root", "path": "Root"},
 					{"nodeId": "node_tip", "path": "Root/Tip"}
 				],
+				"colliders": [{
+					"id": "global_head",
+					"node": {"nodeId": "node_root", "path": "Root"},
+					"shape": "sphere",
+					"offset": [0.0, 0.25, 0.0],
+					"radius": 0.12
+				}],
 				"contacts": [{
 					"id": "contact_hand",
 					"source": "vrc_contact_receiver",
@@ -8734,16 +8774,21 @@ mod tests {
 		let interaction = settings.groups[0].interaction.as_ref().expect("interaction");
 		assert_eq!(interaction.allow_grabbing, Some(true));
 		assert_eq!(interaction.allow_posing, Some(false));
-		assert_eq!(settings.colliders.len(), 2);
-		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.colliders.len(), 3);
+		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::Unknown);
 		assert_eq!(settings.colliders[0].node, 0);
 		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Sphere);
-		assert_eq!(settings.colliders[0].radius, 0.08);
-		assert_eq!(settings.colliders[0].position, [-0.1, 0.2, 0.3]);
-		assert_eq!(settings.colliders[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
-		assert!(!settings.colliders[0].inside_bounds);
-		assert_eq!(settings.colliders[1].radius, 0.2);
-		assert!(settings.colliders[1].inside_bounds);
+		assert_eq!(settings.colliders[0].radius, 0.12);
+		assert_eq!(settings.colliders[0].position, [-0.0, 0.25, 0.0]);
+		assert_eq!(settings.colliders[1].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.colliders[1].node, 0);
+		assert_eq!(settings.colliders[1].shape, UnaDynamicsColliderShape::Sphere);
+		assert_eq!(settings.colliders[1].radius, 0.08);
+		assert_eq!(settings.colliders[1].position, [-0.1, 0.2, 0.3]);
+		assert_eq!(settings.colliders[1].rotation, [0.0, -0.5, -0.0, 0.8660254]);
+		assert!(!settings.colliders[1].inside_bounds);
+		assert_eq!(settings.colliders[2].radius, 0.2);
+		assert!(settings.colliders[2].inside_bounds);
 		assert_eq!(settings.contacts.len(), 1);
 		assert_eq!(settings.contacts[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.contacts[0].kind, UnaDynamicsContactKind::Receiver);
