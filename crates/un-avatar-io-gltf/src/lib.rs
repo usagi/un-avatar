@@ -4398,10 +4398,39 @@ fn modular_avatar_blendshape_sync_binding_shape(binding: &Value, names: &[&str])
 		.map(str::to_string)
 }
 
-fn modular_avatar_curve_key_time_value(key: &Value) -> Option<(f32, f32)> {
-	let time = key.get("time").and_then(json_number_f32)?;
-	let value = key.get("value").and_then(json_number_f32)?;
-	Some((time, value))
+#[derive(Clone, Copy, Debug)]
+struct ModularAvatarCurveKey {
+	time: f32,
+	value: f32,
+	in_tangent: Option<f32>,
+	out_tangent: Option<f32>,
+}
+
+fn modular_avatar_curve_key(key: &Value) -> Option<ModularAvatarCurveKey> {
+	Some(ModularAvatarCurveKey {
+		time: key.get("time").and_then(json_number_f32)?,
+		value: key.get("value").and_then(json_number_f32)?,
+		in_tangent: key.get("inTangent").or_else(|| key.get("in_tangent")).and_then(json_number_f32),
+		out_tangent: key.get("outTangent").or_else(|| key.get("out_tangent")).and_then(json_number_f32),
+	})
+}
+
+fn modular_avatar_curve_segment_evaluate(a: ModularAvatarCurveKey, b: ModularAvatarCurveKey, input: f32) -> f32 {
+	let span = b.time - a.time;
+	if span.abs() <= f32::EPSILON {
+		return b.value;
+	}
+	let u = ((input - a.time) / span).clamp(0.0, 1.0);
+	let linear_slope = (b.value - a.value) / span;
+	let m0 = a.out_tangent.filter(|value| value.is_finite()).unwrap_or(linear_slope) * span;
+	let m1 = b.in_tangent.filter(|value| value.is_finite()).unwrap_or(linear_slope) * span;
+	let u2 = u * u;
+	let u3 = u2 * u;
+	let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+	let h10 = u3 - 2.0 * u2 + u;
+	let h01 = -2.0 * u3 + 3.0 * u2;
+	let h11 = u3 - u2;
+	h00 * a.value + h10 * m0 + h01 * b.value + h11 * m1
 }
 
 fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32 {
@@ -4416,29 +4445,24 @@ fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32
 	}
 	let mut keys = keys
 		.iter()
-		.filter_map(modular_avatar_curve_key_time_value)
-		.filter(|(time, value)| time.is_finite() && value.is_finite())
+		.filter_map(modular_avatar_curve_key)
+		.filter(|key| key.time.is_finite() && key.value.is_finite())
 		.collect::<Vec<_>>();
 	if keys.len() < 2 {
 		return input;
 	}
-	keys.sort_by(|a, b| a.0.total_cmp(&b.0));
-	if input <= keys[0].0 {
-		return keys[0].1;
+	keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+	if input <= keys[0].time {
+		return keys[0].value;
 	}
 	for pair in keys.windows(2) {
-		let (t0, v0) = pair[0];
-		let (t1, v1) = pair[1];
-		if input <= t1 {
-			let span = t1 - t0;
-			if span.abs() <= f32::EPSILON {
-				return v1;
-			}
-			let f = ((input - t0) / span).clamp(0.0, 1.0);
-			return v0 + (v1 - v0) * f;
+		let a = pair[0];
+		let b = pair[1];
+		if input <= b.time {
+			return modular_avatar_curve_segment_evaluate(a, b, input);
 		}
 	}
-	keys.last().map(|(_, value)| *value).unwrap_or(input)
+	keys.last().map(|key| key.value).unwrap_or(input)
 }
 
 fn apply_unavatar_blendshape_syncs(
@@ -11846,6 +11870,21 @@ mod tests {
 		assert_eq!(scene.nodes[3].mesh, Some(1));
 		assert_eq!(scene.meshes[2][0].default_morph_weights, vec![0.125]);
 		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.0]);
+	}
+
+	#[test]
+	fn modular_avatar_blendshape_sync_remap_curve_uses_key_tangents() {
+		let curve = serde_json::json!({
+			"keyCount": 2,
+			"keys": [
+				{"time": 0.0, "value": 0.0, "outTangent": 0.0},
+				{"time": 1.0, "value": 1.0, "inTangent": 0.0}
+			]
+		});
+
+		let value = modular_avatar_remap_curve_evaluate(Some(&curve), 0.25);
+
+		assert!((value - 0.15625).abs() < 0.00001, "value={value}");
 	}
 
 	#[test]
