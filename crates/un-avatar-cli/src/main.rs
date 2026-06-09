@@ -454,6 +454,8 @@ struct DiagnoseMenuActionCandidate {
 	inverted: bool,
 	effect_count: usize,
 	effect_kinds: BTreeMap<String, usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	wardrobe_set_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -3680,6 +3682,14 @@ fn diagnose_menu_action_candidates(
 			let Some((match_kind, inverted)) = matched else {
 				continue;
 			};
+			let wardrobe_set_ids = action
+				.effects
+				.iter()
+				.filter_map(|effect| match effect {
+					UnaRuntimeActionEffect::WardrobeSet { set_id } => Some(set_id.clone()),
+					_ => None,
+				})
+				.collect::<Vec<_>>();
 			candidates.push(DiagnoseMenuActionCandidate {
 				menu_component_index: menu.component_index,
 				menu_label: menu.label.clone(),
@@ -3691,6 +3701,7 @@ fn diagnose_menu_action_candidates(
 				inverted,
 				effect_count: action.effects.len(),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+				wardrobe_set_ids,
 			});
 		}
 	}
@@ -3920,7 +3931,7 @@ fn run_diagnose(
 	}
 	for candidate in report.menu_action_candidates.iter().take(16) {
 		println!(
-			"menu_action_candidate[#{} -> {}]: label={:?} parameter={}:{} match={} inverted={} effects={} {:?}",
+			"menu_action_candidate[#{} -> {}]: label={:?} parameter={}:{} match={} inverted={} effects={} {:?} wardrobe_sets={:?}",
 			candidate.menu_component_index,
 			candidate.action_id,
 			candidate.menu_label,
@@ -3929,7 +3940,8 @@ fn run_diagnose(
 			candidate.match_kind,
 			candidate.inverted,
 			candidate.effect_count,
-			candidate.effect_kinds
+			candidate.effect_kinds,
+			candidate.wardrobe_set_ids
 		);
 	}
 	if let Some(vrm) = &report.vrm {
@@ -4637,13 +4649,16 @@ mod tests {
 						parameter_value: Some(1.0),
 						..Default::default()
 					}],
-					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
-						target: un_avatar_core::UnaRuntimeNodeTarget {
-							path: Some("Root/Hat".to_string()),
-							..Default::default()
+					effects: vec![
+						UnaRuntimeActionEffect::NodeVisibility {
+							target: un_avatar_core::UnaRuntimeNodeTarget {
+								path: Some("Root/Hat".to_string()),
+								..Default::default()
+							},
+							visible: true,
 						},
-						visible: true,
-					}],
+						UnaRuntimeActionEffect::WardrobeSet { set_id: "hat".to_string() },
+					],
 				}],
 			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
@@ -4900,6 +4915,8 @@ mod tests {
 		assert_eq!(menu_action.match_kind, "condition");
 		assert!(!menu_action.inverted);
 		assert_eq!(menu_action.effect_kinds.get("node_visibility"), Some(&1));
+		assert_eq!(menu_action.effect_kinds.get("wardrobe_set"), Some(&1));
+		assert_eq!(menu_action.wardrobe_set_ids, vec!["hat".to_string()]);
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
