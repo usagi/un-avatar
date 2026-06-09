@@ -581,6 +581,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_menu_install_edges: Vec<DiagnoseModularAvatarMenuInstallEdge>,
 	modular_avatar_parameter_count: usize,
 	modular_avatar_parameters: Vec<DiagnoseModularAvatarParameterSummary>,
+	modular_avatar_blendshape_sync_count: usize,
+	modular_avatar_blendshape_syncs: Vec<DiagnoseModularAvatarBlendshapeSyncSummary>,
 	modular_avatar_vertex_filter_group_count: usize,
 	modular_avatar_vertex_filter_groups: Vec<DiagnoseModularAvatarVertexFilterGroupSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -721,6 +723,26 @@ struct DiagnoseModularAvatarParameterSummary {
 	saved: bool,
 	has_explicit_default_value: bool,
 	override_animator_defaults: bool,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarBlendshapeSyncSummary {
+	component_index: usize,
+	enabled: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	target_path: Option<String>,
+	binding_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	bindings: Vec<DiagnoseModularAvatarBlendshapeSyncBindingSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarBlendshapeSyncBindingSummary {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	reference_path: Option<String>,
+	blendshape: String,
+	local_blendshape: String,
+	remap_key_count: usize,
 }
 
 #[derive(Serialize)]
@@ -2329,6 +2351,62 @@ fn modular_avatar_sub_parameter_names(value: &serde_json::Value) -> Vec<String> 
 		.unwrap_or_default()
 }
 
+fn modular_avatar_blendshape_sync_summary(
+	component: &serde_json::Value,
+	component_index: usize,
+) -> DiagnoseModularAvatarBlendshapeSyncSummary {
+	let bindings = modular_avatar_component_ref(component, &["Bindings", "bindings"])
+		.and_then(|value| value.as_array())
+		.map(|bindings| {
+			bindings
+				.iter()
+				.filter_map(modular_avatar_blendshape_sync_binding_summary)
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
+	DiagnoseModularAvatarBlendshapeSyncSummary {
+		component_index,
+		enabled: component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true),
+		target_path: modular_avatar_ref_path(component.get("target")),
+		binding_count: bindings.len(),
+		bindings,
+	}
+}
+
+fn modular_avatar_blendshape_sync_binding_summary(
+	binding: &serde_json::Value,
+) -> Option<DiagnoseModularAvatarBlendshapeSyncBindingSummary> {
+	if !binding.is_object() {
+		return None;
+	}
+	let blendshape = binding
+		.get("blendshape")
+		.or_else(|| binding.get("Blendshape"))
+		.and_then(|value| value.as_str())
+		.filter(|value| !value.is_empty())?
+		.to_string();
+	let local_blendshape = binding
+		.get("localBlendshape")
+		.or_else(|| binding.get("LocalBlendshape"))
+		.and_then(|value| value.as_str())
+		.filter(|value| !value.is_empty())
+		.unwrap_or(&blendshape)
+		.to_string();
+	let remap_key_count = binding
+		.get("remapCurve")
+		.or_else(|| binding.get("RemapCurve"))
+		.and_then(|curve| curve.get("keyCount").or_else(|| curve.get("key_count")))
+		.and_then(|value| value.as_u64())
+		.and_then(|value| usize::try_from(value).ok())
+		.unwrap_or(0);
+	Some(DiagnoseModularAvatarBlendshapeSyncBindingSummary {
+		reference_path: modular_avatar_ref_path(binding.get("referenceMesh").or_else(|| binding.get("ReferenceMesh"))),
+		blendshape,
+		local_blendshape,
+		remap_key_count,
+	})
+}
+
 fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> {
 	let value = value?;
 	value
@@ -2838,6 +2916,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
 	let mut modular_avatar_menu_components = Vec::new();
 	let mut modular_avatar_parameters = Vec::new();
+	let mut modular_avatar_blendshape_syncs = Vec::new();
 	let mut modular_avatar_vertex_filter_groups = Vec::new();
 	if let Some(components) = modular_avatar_components {
 		for (component_index, component) in components.iter().enumerate() {
@@ -2860,6 +2939,9 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			}
 			if short_type == "ModularAvatarParameters" {
 				modular_avatar_parameters.extend(modular_avatar_parameter_summaries(component, component_index));
+			}
+			if short_type == "ModularAvatarBlendshapeSync" {
+				modular_avatar_blendshape_syncs.push(modular_avatar_blendshape_sync_summary(component, component_index));
 			}
 			if modular_avatar_is_vertex_filter_metadata_type(short_type) {
 				if let Some(summary) = modular_avatar_vertex_filter_group_summary(component, short_type) {
@@ -2962,6 +3044,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_menu_install_edges,
 		modular_avatar_parameter_count: modular_avatar_parameters.len(),
 		modular_avatar_parameters,
+		modular_avatar_blendshape_sync_count: modular_avatar_blendshape_syncs.len(),
+		modular_avatar_blendshape_syncs,
 		modular_avatar_vertex_filter_group_count: modular_avatar_vertex_filter_groups.len(),
 		modular_avatar_vertex_filter_groups,
 		base_set,
@@ -4132,7 +4216,7 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={} vertex_filter_groups={}",
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={} blendshape_syncs={} vertex_filter_groups={}",
 			unavatar.spec_version,
 			unavatar.generator,
 			unavatar.manifest_name,
@@ -4143,6 +4227,7 @@ fn run_diagnose(
 			unavatar.modular_avatar_type_counts,
 			unavatar.modular_avatar_disabled_type_counts,
 			unavatar.modular_avatar_menu_component_count,
+			unavatar.modular_avatar_blendshape_sync_count,
 			unavatar.modular_avatar_vertex_filter_group_count
 		);
 		for menu in unavatar.modular_avatar_menu_components.iter().take(16) {
@@ -4224,6 +4309,18 @@ fn run_diagnose(
 				parameter.saved,
 				parameter.override_animator_defaults
 			);
+		}
+		for sync in unavatar.modular_avatar_blendshape_syncs.iter().take(16) {
+			println!(
+				"unavatar.ma_blendshape_sync[#{}]: enabled={} target={:?} bindings={}",
+				sync.component_index, sync.enabled, sync.target_path, sync.binding_count
+			);
+			for binding in sync.bindings.iter().take(8) {
+				println!(
+					"  binding reference={:?} blendshape={} local={} remap_keys={}",
+					binding.reference_path, binding.blendshape, binding.local_blendshape, binding.remap_key_count
+				);
+			}
 		}
 		for group in unavatar.modular_avatar_vertex_filter_groups.iter().take(16) {
 			println!(
@@ -4915,6 +5012,18 @@ mod tests {
 							"siblingIndex": 3,
 							"installer": {"path": "Root/MenuInstaller"}
 						}, {
+							"shortType": "ModularAvatarBlendshapeSync",
+							"enabled": true,
+							"target": {"path": "Root/Jacket"},
+							"fields": {
+								"Bindings": [{
+									"referenceMesh": {"resolvedTarget": {"path": "Root/Body"}},
+									"blendshape": "Breast_Big",
+									"localBlendshape": "Jacket_Breast_Big",
+									"remapCurve": {"keyCount": 2}
+								}]
+							}
+						}, {
 							"shortType": "ModularAvatarMeshCutter",
 							"enabled": false,
 							"id": "cut-sleeve",
@@ -4995,11 +5104,11 @@ mod tests {
 		assert_eq!(report.scene.scoped_resident_image_count, 1);
 		assert_eq!(report.scene.scoped_resident_dynamics_count, 1);
 		assert_eq!(unavatar.asset_group_count, 3);
-		assert_eq!(unavatar.modular_avatar_component_count, 9);
+		assert_eq!(unavatar.modular_avatar_component_count, 10);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&6));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
+		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&2));
@@ -5136,6 +5245,14 @@ mod tests {
 		assert_eq!(unavatar.modular_avatar_parameters[1].sync_type, "NotSynced");
 		assert!(unavatar.modular_avatar_parameters[1].local_only);
 		assert!(unavatar.modular_avatar_parameters[1].override_animator_defaults);
+		assert_eq!(unavatar.modular_avatar_blendshape_sync_count, 1);
+		let sync = &unavatar.modular_avatar_blendshape_syncs[0];
+		assert_eq!(sync.target_path.as_deref(), Some("Root/Jacket"));
+		assert_eq!(sync.binding_count, 1);
+		assert_eq!(sync.bindings[0].reference_path.as_deref(), Some("Root/Body"));
+		assert_eq!(sync.bindings[0].blendshape, "Breast_Big");
+		assert_eq!(sync.bindings[0].local_blendshape, "Jacket_Breast_Big");
+		assert_eq!(sync.bindings[0].remap_key_count, 2);
 		assert_eq!(
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
