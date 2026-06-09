@@ -4353,7 +4353,7 @@ mod tests {
 
 	use super::{
 		compact_window_title_status, parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions,
-		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, SCENE_STATE_SPLASH,
+		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH,
 		WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
@@ -4396,7 +4396,19 @@ mod tests {
 			wardrobe_set: Some(" field_drape ".to_string()),
 			..Default::default()
 		};
-		let _status = start_runtime_status_server(address, &opts);
+		let status = start_runtime_status_server(address, &opts);
+		{
+			let mut status = status.lock().unwrap();
+			status.wardrobe_asset_upload = WardrobeAssetUploadPlan {
+				mode: "draw-scoped-all-resident".to_string(),
+				total_draw_mesh_primitive_count: 3,
+				resident_draw_mesh_primitive_count: 2,
+				inactive_draw_mesh_primitive_count: 1,
+				scoped_draw_supported: true,
+				all_resident: true,
+				..Default::default()
+			};
+		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
 		stream.read_to_string(&mut text).unwrap();
@@ -4413,6 +4425,13 @@ mod tests {
 			Some("field_drape")
 		);
 		assert!(snapshot.get("active_asset_groups").is_none());
+		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
+		assert_eq!(upload.get("mode").and_then(|value| value.as_str()), Some("draw-scoped-all-resident"));
+		assert_eq!(upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(3));
+		assert_eq!(upload.get("resident_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(2));
+		assert_eq!(upload.get("inactive_draw_mesh_primitive_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(true));
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
 		assert!(snapshot
