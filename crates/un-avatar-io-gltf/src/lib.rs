@@ -18,9 +18,8 @@ use un_avatar_core::{
 	UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr,
 	UnaMeshBuffers, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction,
 	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
-	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel,
-	UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
-	UnaUnavatarExtension,
+	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
+	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2514,7 +2513,13 @@ fn unavatar_material_setter_runtime_action(
 ) -> Option<UnaRuntimeAction> {
 	let objects = unavatar_modular_avatar_component_array(
 		component,
-		&["Objects", "objects", "m_objects", "materialSwitchObjects", "material_switch_objects"],
+		&[
+			"Objects",
+			"objects",
+			"m_objects",
+			"materialSwitchObjects",
+			"material_switch_objects",
+		],
 	)?;
 	let mut effects = Vec::new();
 	for object in objects {
@@ -7462,7 +7467,7 @@ mod tests {
 						"modularAvatar": {{
 							"schemaVersion": "0.1-preview",
 							"components": [{{
-								"shortType": "ModularAvatarMeshCutter",
+								"shortType": "ModularAvatarWorldFixedObject",
 								"enabled": true
 							}}]
 						}}
@@ -7487,9 +7492,9 @@ mod tests {
 
 		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
 		assert_eq!(got.report.lost_features.len(), 1);
-		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
+		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarWorldFixedObject");
 		assert!(got.report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarMeshCutter")
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarWorldFixedObject")
 		}));
 	}
 
@@ -7919,7 +7924,7 @@ mod tests {
 				"modularAvatar": {
 					"schemaVersion": "0.1-preview",
 					"components": [{
-						"shortType": "ModularAvatarMeshCutter",
+						"shortType": "ModularAvatarWorldFixedObject",
 						"enabled": true
 					}]
 				}
@@ -7937,7 +7942,7 @@ mod tests {
 
 		assert!(got.document.unavatar.is_some());
 		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
-		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
+		assert_eq!(got.report.lost_features[0].feature, "ModularAvatar.ModularAvatarWorldFixedObject");
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
@@ -10802,7 +10807,8 @@ mod tests {
 			serde_json::json!({"shortType": "ModularAvatarMaterialSwap", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMenuItem", "enabled": true}),
 			serde_json::json!({"shortType": "ModularAvatarMeshCutter", "enabled": true}),
-			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": false}),
+			serde_json::json!({"shortType": "ModularAvatarWorldFixedObject", "enabled": true}),
+			serde_json::json!({"shortType": "ModularAvatarUnknownDisabled", "enabled": false}),
 		];
 		let mut report = ImportReport::default();
 		report_unavatar_modular_avatar_component_catalog(&components, &mut report);
@@ -10812,18 +10818,18 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("total=5"));
+		assert!(message.contains("total=6"));
 		assert!(message.contains("resolver_supported=1"));
 		assert!(message.contains("runtime_action_supported=1"));
-		assert!(message.contains("metadata_supported=1"));
+		assert!(message.contains("metadata_supported=2"));
 		assert!(message.contains("unsupported=2"));
 		assert!(message.contains("disabled=1"));
-		assert!(message.contains("ModularAvatarMeshCutter:1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
+		assert!(message.contains("ModularAvatarUnknownDisabled:1"));
 		assert_eq!(report.lost_features.len(), 1);
-		assert_eq!(report.lost_features[0].feature, "ModularAvatar.ModularAvatarMeshCutter");
+		assert_eq!(report.lost_features[0].feature, "ModularAvatar.ModularAvatarWorldFixedObject");
 		assert!(report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarMeshCutter")
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("ModularAvatarWorldFixedObject")
 		}));
 	}
 
@@ -10846,10 +10852,7 @@ mod tests {
 		assert!(message.contains("inverted_ignored=1"));
 		assert_eq!(report.lost_features.len(), 0);
 		assert_eq!(report.approximations.len(), 1);
-		assert_eq!(
-			report.approximations[0].feature,
-			"ModularAvatar.ModularAvatarObjectToggle.Inverted"
-		);
+		assert_eq!(report.approximations[0].feature, "ModularAvatar.ModularAvatarObjectToggle.Inverted");
 	}
 
 	#[test]

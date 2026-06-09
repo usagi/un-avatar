@@ -241,6 +241,74 @@ impl UnaRuntimeActionCondition {
 	}
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaModularAvatarVertexFilterGroup {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub source_component_id: Option<String>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_component_type: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub target: Option<UnaRuntimeNodeTarget>,
+	pub combine: UnaVertexFilterCombineMode,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub filters: Vec<UnaVertexFilter>,
+}
+
+impl Default for UnaModularAvatarVertexFilterGroup {
+	fn default() -> Self {
+		Self {
+			source_component_id: None,
+			source_component_type: String::new(),
+			target: None,
+			combine: UnaVertexFilterCombineMode::Single,
+			filters: Vec::new(),
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnaVertexFilterCombineMode {
+	#[default]
+	Single,
+	Union,
+	Intersection,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UnaVertexFilter {
+	BlendShape {
+		#[serde(default, skip_serializing_if = "Vec::is_empty")]
+		shapes: Vec<String>,
+		threshold: f32,
+	},
+	Bone {
+		bone: UnaRuntimeNodeTarget,
+		threshold: f32,
+	},
+	Axis {
+		center: [f32; 3],
+		axis: [f32; 3],
+	},
+	Mask {
+		material_index: usize,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		texture: Option<String>,
+		mode: UnaVertexFilterMaskMode,
+	},
+	Unknown {
+		#[serde(default, skip_serializing_if = "String::is_empty")]
+		source_component_type: String,
+	},
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnaVertexFilterMaskMode {
+	#[default]
+	DeleteBlack,
+	DeleteWhite,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeState {
 	/// Currently resolved wardrobe set. Source package wardrobe metadata remains in `UnaUnavatarExtension`;
@@ -271,7 +339,16 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarRemoveVertexColor"
 		| "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
-		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget" => "metadata",
+		"ModularAvatarMenuItem"
+		| "ModularAvatarMenuGroup"
+		| "ModularAvatarMenuInstaller"
+		| "ModularAvatarMenuInstallTarget"
+		| "ModularAvatarMeshCutter"
+		| "ModularAvatarShapeChanger"
+		| "VertexFilterByAxisComponent"
+		| "VertexFilterByBoneComponent"
+		| "VertexFilterByMaskComponent"
+		| "VertexFilterByShapeComponent" => "metadata",
 		_ => "unsupported",
 	}
 }
@@ -4785,7 +4862,30 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMenuItem"), "metadata");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "metadata");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "metadata");
+		assert_eq!(modular_avatar_component_support_kind("VertexFilterByShapeComponent"), "metadata");
+		assert_eq!(modular_avatar_component_support_kind("SomethingElse"), "unsupported");
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_group_serializes_common_filter_representation() {
+		let group = UnaModularAvatarVertexFilterGroup {
+			source_component_id: Some("mesh-cutter".to_string()),
+			source_component_type: "ModularAvatarMeshCutter".to_string(),
+			combine: UnaVertexFilterCombineMode::Intersection,
+			filters: vec![UnaVertexFilter::BlendShape {
+				shapes: vec!["Sleeve".to_string()],
+				threshold: 0.001,
+			}],
+			..Default::default()
+		};
+		let value = serde_json::to_value(&group).unwrap();
+		assert_eq!(value["source_component_id"], "mesh-cutter");
+		assert_eq!(value["source_component_type"], "ModularAvatarMeshCutter");
+		assert_eq!(value["combine"], "Intersection");
+		assert_eq!(value["filters"][0]["kind"], "blend_shape");
+		assert_eq!(value["filters"][0]["shapes"][0], "Sleeve");
 	}
 
 	#[test]

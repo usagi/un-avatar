@@ -109,15 +109,18 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA Mesh Settings
   - done: Exporter serializes `Bounds` as structured center/extents/size. Runtime applies RootBone override to skin skeleton metadata, stores ProbeAnchor / Bounds on target renderer nodes, and exposes them in renderer debug metadata.
   - remaining: exact renderer culling behavior, inverted root bone behavior, and unskinned mesh conversion.
-- `[ ]` MA Mesh Cutter
-  - required: mesh vertex / primitive filtering, generated mesh cache key.
-- `[ ]` MA Shape Changer
-  - required: blendshape-driven mesh filtering or morph defaults.
+- `[~]` MA Mesh Cutter
+  - done: Mesh Cutter / VertexFilter component payloads are classified as metadata and diagnose exposes a common vertex filter group representation with target, combine mode, and blendshape / mask / bone / axis filter summaries when the source payload carries them.
+  - remaining: mesh vertex / primitive filtering, generated mesh cache key.
+- `[~]` MA Shape Changer
+  - done: Shape Changer delete-shape payloads are represented as blendshape vertex filters with threshold metadata in diagnose.
+  - remaining: blendshape-driven mesh filtering or morph defaults.
 - `[~]` MA Remove Vertex Color
   - done: Runtime resolver applies `Mode=Remove` to renderer meshes under the nearest Remove Vertex Color component, honors nested `DontRemove`, strips `colors_0`, clones shared mesh buffers before mutation so subtree-external renderers keep their vertex colors, and reports removed node / primitive counts.
   - remaining: exporter schema parity for every serialized mode spelling and fixture coverage through full `.unavatar` import/export.
-- `[ ]` vertex filters: by blendshape, mask, bone, axis
-  - required: common filter representation before Mesh Cutter / Shape Changer.
+- `[~]` vertex filters: by blendshape, mask, bone, axis
+  - done: common filter representation exists in core and diagnose metadata for blendshape, mask, bone, and axis filters.
+  - remaining: resolver-side vertex selection and mesh mutation.
 
 ### Materials / Reactive Objects
 
@@ -193,5 +196,5 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 1. Preserve MA Menu Item / Menu Group / Menu Installer hierarchy metadata and diagnostics.
 2. Implement ReactiveComponent `Inverted` / parent active condition runtime action evaluation.
-3. Introduce Mesh Cutter / Shape Changer vertex filter representation.
+3. Implement Mesh Cutter / Shape Changer resolver-side vertex filtering from the new filter representation.
 4. Add Wardrobe asset group lazy GPU upload / unload.

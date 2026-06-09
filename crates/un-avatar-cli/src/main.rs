@@ -515,6 +515,8 @@ struct DiagnoseUnavatarSummary {
 	modular_avatar_disabled_type_counts: BTreeMap<String, usize>,
 	modular_avatar_menu_component_count: usize,
 	modular_avatar_menu_components: Vec<DiagnoseModularAvatarMenuComponentSummary>,
+	modular_avatar_vertex_filter_group_count: usize,
+	modular_avatar_vertex_filter_groups: Vec<DiagnoseModularAvatarVertexFilterGroupSummary>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	base_set: Option<String>,
 	wardrobe_set_count: usize,
@@ -561,6 +563,41 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	menu_source_target_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	install_target_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarVertexFilterGroupSummary {
+	short_type: String,
+	enabled: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	target_path: Option<String>,
+	combine: String,
+	filter_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	filters: Vec<DiagnoseModularAvatarVertexFilterSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseModularAvatarVertexFilterSummary {
+	kind: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	shapes: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	threshold: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	bone_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	center: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	axis: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	material_index: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	texture: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2104,9 +2141,11 @@ fn modular_avatar_component_string(component: &serde_json::Value, names: &[&str]
 }
 
 fn modular_avatar_component_ref<'a>(component: &'a serde_json::Value, names: &[&str]) -> Option<&'a serde_json::Value> {
-	names
-		.iter()
-		.find_map(|name| modular_avatar_component_fields(component).and_then(|fields| fields.get(*name)).or_else(|| component.get(*name)))
+	names.iter().find_map(|name| {
+		modular_avatar_component_fields(component)
+			.and_then(|fields| fields.get(*name))
+			.or_else(|| component.get(*name))
+	})
 }
 
 fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> {
@@ -2127,10 +2166,7 @@ fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> 
 		})
 }
 
-fn modular_avatar_menu_component_summary(
-	component: &serde_json::Value,
-	short_type: &str,
-) -> DiagnoseModularAvatarMenuComponentSummary {
+fn modular_avatar_menu_component_summary(component: &serde_json::Value, short_type: &str) -> DiagnoseModularAvatarMenuComponentSummary {
 	let menu_item = modular_avatar_component_ref(component, &["menuItem", "menu_item"]).unwrap_or(component);
 	let control = menu_item
 		.get("Control")
@@ -2167,13 +2203,217 @@ fn modular_avatar_menu_component_summary(
 		menu_source: modular_avatar_component_string(component, &["MenuSource", "menuSource", "menu_source"]),
 		menu_source_target_path: modular_avatar_ref_path(modular_avatar_component_ref(
 			component,
-			&["menuSource_otherObjectChildren", "menuSourceOtherObjectChildren", "targetObject", "target_object"],
+			&[
+				"menuSource_otherObjectChildren",
+				"menuSourceOtherObjectChildren",
+				"targetObject",
+				"target_object",
+			],
 		)),
 		install_target_path: modular_avatar_ref_path(modular_avatar_component_ref(
 			component,
-			&["installTargetMenu", "install_target_menu", "menuToAppend", "menu_to_append", "installer"],
+			&[
+				"installTargetMenu",
+				"install_target_menu",
+				"menuToAppend",
+				"menu_to_append",
+				"installer",
+			],
 		)),
 	}
+}
+
+fn modular_avatar_is_menu_metadata_type(short_type: &str) -> bool {
+	matches!(
+		short_type,
+		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget"
+	)
+}
+
+fn modular_avatar_is_vertex_filter_metadata_type(short_type: &str) -> bool {
+	matches!(
+		short_type,
+		"ModularAvatarMeshCutter"
+			| "ModularAvatarShapeChanger"
+			| "VertexFilterByAxisComponent"
+			| "VertexFilterByBoneComponent"
+			| "VertexFilterByMaskComponent"
+			| "VertexFilterByShapeComponent"
+	)
+}
+
+fn modular_avatar_component_number(component: &serde_json::Value, names: &[&str]) -> Option<f32> {
+	names
+		.iter()
+		.find_map(|name| {
+			modular_avatar_component_fields(component)
+				.and_then(|fields| fields.get(*name))
+				.or_else(|| component.get(*name))
+				.and_then(json_number_f64)
+		})
+		.map(|value| value as f32)
+}
+
+fn modular_avatar_component_usize(component: &serde_json::Value, names: &[&str]) -> Option<usize> {
+	names
+		.iter()
+		.find_map(|name| {
+			modular_avatar_component_fields(component)
+				.and_then(|fields| fields.get(*name))
+				.or_else(|| component.get(*name))
+				.and_then(|value| value.as_u64())
+		})
+		.and_then(|value| usize::try_from(value).ok())
+}
+
+fn json_vec3(value: Option<&serde_json::Value>) -> Option<[f32; 3]> {
+	let value = value?;
+	if let Some(array) = value.as_array() {
+		let x = array.first().and_then(json_number_f64)? as f32;
+		let y = array.get(1).and_then(json_number_f64)? as f32;
+		let z = array.get(2).and_then(json_number_f64)? as f32;
+		return Some([x, y, z]);
+	}
+	let x = value.get("x").or_else(|| value.get("X")).and_then(json_number_f64)? as f32;
+	let y = value.get("y").or_else(|| value.get("Y")).and_then(json_number_f64)? as f32;
+	let z = value.get("z").or_else(|| value.get("Z")).and_then(json_number_f64)? as f32;
+	Some([x, y, z])
+}
+
+fn modular_avatar_vertex_filter_summary(
+	component: &serde_json::Value,
+	short_type: &str,
+) -> Option<DiagnoseModularAvatarVertexFilterSummary> {
+	match short_type {
+		"VertexFilterByShapeComponent" => Some(DiagnoseModularAvatarVertexFilterSummary {
+			kind: "blend_shape".to_string(),
+			shapes: modular_avatar_component_ref(component, &["Shapes", "shapes", "m_shapes"])
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_str().map(str::to_owned)).collect())
+				.unwrap_or_default(),
+			threshold: modular_avatar_component_number(component, &["Threshold", "threshold", "m_threshold"]),
+			bone_path: None,
+			center: None,
+			axis: None,
+			material_index: None,
+			texture: None,
+			mode: None,
+		}),
+		"VertexFilterByBoneComponent" => Some(DiagnoseModularAvatarVertexFilterSummary {
+			kind: "bone".to_string(),
+			shapes: Vec::new(),
+			threshold: modular_avatar_component_number(component, &["Threshold", "threshold", "m_threshold"]),
+			bone_path: modular_avatar_ref_path(modular_avatar_component_ref(component, &["Bone", "bone", "m_bone"])),
+			center: None,
+			axis: None,
+			material_index: None,
+			texture: None,
+			mode: None,
+		}),
+		"VertexFilterByAxisComponent" => Some(DiagnoseModularAvatarVertexFilterSummary {
+			kind: "axis".to_string(),
+			shapes: Vec::new(),
+			threshold: None,
+			bone_path: None,
+			center: json_vec3(modular_avatar_component_ref(component, &["Center", "center", "m_center"])),
+			axis: json_vec3(modular_avatar_component_ref(component, &["Axis", "axis", "m_axis"])),
+			material_index: None,
+			texture: None,
+			mode: None,
+		}),
+		"VertexFilterByMaskComponent" => Some(DiagnoseModularAvatarVertexFilterSummary {
+			kind: "mask".to_string(),
+			shapes: Vec::new(),
+			threshold: None,
+			bone_path: None,
+			center: None,
+			axis: None,
+			material_index: modular_avatar_component_usize(
+				component,
+				&["MaterialIndex", "materialIndex", "material_index", "m_materialIndex"],
+			),
+			texture: modular_avatar_component_string(component, &["MaskTexture", "maskTexture", "mask_texture", "m_maskTexture"]),
+			mode: modular_avatar_component_string(component, &["DeleteMode", "deleteMode", "delete_mode", "m_deleteMode"]),
+		}),
+		_ => None,
+	}
+}
+
+fn modular_avatar_vertex_filter_group_summary(
+	component: &serde_json::Value,
+	short_type: &str,
+) -> Option<DiagnoseModularAvatarVertexFilterGroupSummary> {
+	let mut filters = Vec::new();
+	if short_type == "ModularAvatarShapeChanger" {
+		let threshold = modular_avatar_component_number(component, &["Threshold", "threshold", "m_threshold"]).unwrap_or(0.01);
+		if let Some(shapes) = modular_avatar_component_ref(component, &["Shapes", "shapes", "m_shapes"]).and_then(|value| value.as_array())
+		{
+			for shape in shapes {
+				let change_type = shape
+					.get("ChangeType")
+					.or_else(|| shape.get("changeType"))
+					.or_else(|| shape.get("change_type"))
+					.and_then(|value| value.as_str())
+					.unwrap_or("Delete");
+				if change_type != "Delete" {
+					continue;
+				}
+				if let Some(shape_name) = shape
+					.get("ShapeName")
+					.or_else(|| shape.get("shapeName"))
+					.or_else(|| shape.get("shape_name"))
+					.and_then(|value| value.as_str())
+					.filter(|value| !value.is_empty())
+				{
+					filters.push(DiagnoseModularAvatarVertexFilterSummary {
+						kind: "blend_shape".to_string(),
+						shapes: vec![shape_name.to_string()],
+						threshold: Some(threshold),
+						bone_path: None,
+						center: None,
+						axis: None,
+						material_index: None,
+						texture: None,
+						mode: None,
+					});
+				}
+			}
+		}
+	} else if short_type == "ModularAvatarMeshCutter" {
+		if let Some(filter_values) = modular_avatar_component_ref(component, &["filters", "Filters", "vertexFilters", "vertex_filters"])
+			.and_then(|value| value.as_array())
+		{
+			for filter in filter_values {
+				let filter_type = filter.get("shortType").and_then(|value| value.as_str()).unwrap_or("");
+				if let Some(summary) = modular_avatar_vertex_filter_summary(filter, filter_type) {
+					filters.push(summary);
+				}
+			}
+		}
+	} else if let Some(filter) = modular_avatar_vertex_filter_summary(component, short_type) {
+		filters.push(filter);
+	}
+	if filters.is_empty() && short_type != "ModularAvatarMeshCutter" {
+		return None;
+	}
+	let combine = if short_type == "ModularAvatarMeshCutter" {
+		modular_avatar_component_string(component, &["MultiMode", "multiMode", "multi_mode", "m_multiMode"])
+			.unwrap_or_else(|| "VertexIntersection".to_string())
+	} else {
+		"Single".to_string()
+	};
+	Some(DiagnoseModularAvatarVertexFilterGroupSummary {
+		short_type: short_type.to_string(),
+		enabled: component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true),
+		id: modular_avatar_component_string(component, &["id", "componentId", "component_id"]),
+		target_path: modular_avatar_ref_path(modular_avatar_component_ref(
+			component,
+			&["Object", "object", "m_object", "target", "resolvedTarget"],
+		)),
+		combine,
+		filter_count: filters.len(),
+		filters,
+	})
 }
 
 fn diagnose_texture_shape_is_cube(shape: Option<&str>) -> bool {
@@ -2192,6 +2432,7 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let mut modular_avatar_type_counts = BTreeMap::new();
 	let mut modular_avatar_disabled_type_counts = BTreeMap::new();
 	let mut modular_avatar_menu_components = Vec::new();
+	let mut modular_avatar_vertex_filter_groups = Vec::new();
 	if let Some(components) = modular_avatar_components {
 		for component in components {
 			let short_type = component
@@ -2208,8 +2449,13 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 				bump_count(&mut modular_avatar_support_counts, "disabled");
 				bump_count(&mut modular_avatar_disabled_type_counts, short_type);
 			}
-			if modular_avatar_component_support_kind(short_type) == "metadata" {
+			if modular_avatar_is_menu_metadata_type(short_type) {
 				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, short_type));
+			}
+			if modular_avatar_is_vertex_filter_metadata_type(short_type) {
+				if let Some(summary) = modular_avatar_vertex_filter_group_summary(component, short_type) {
+					modular_avatar_vertex_filter_groups.push(summary);
+				}
 			}
 		}
 	}
@@ -2296,6 +2542,8 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 		modular_avatar_disabled_type_counts,
 		modular_avatar_menu_component_count: modular_avatar_menu_components.len(),
 		modular_avatar_menu_components,
+		modular_avatar_vertex_filter_group_count: modular_avatar_vertex_filter_groups.len(),
+		modular_avatar_vertex_filter_groups,
 		base_set,
 		wardrobe_set_count: sets.map(Vec::len).unwrap_or(0),
 		wardrobe_set_ids,
@@ -3090,7 +3338,13 @@ fn run_diagnose(
 		for action in actions.actions.iter().take(16) {
 			println!(
 				"action[{}]: label={:?} triggers={} conditions={} effects={} trigger_kinds={:?} effect_kinds={:?}",
-				action.id, action.label, action.trigger_count, action.condition_count, action.effect_count, action.trigger_kinds, action.effect_kinds
+				action.id,
+				action.label,
+				action.trigger_count,
+				action.condition_count,
+				action.effect_count,
+				action.trigger_kinds,
+				action.effect_kinds
 			);
 			if !action.parameter_triggers.is_empty() {
 				let triggers = action
@@ -3232,7 +3486,7 @@ fn run_diagnose(
 	}
 	if let Some(unavatar) = &report.unavatar {
 		println!(
-			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={}",
+			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={} vertex_filter_groups={}",
 			unavatar.spec_version,
 			unavatar.generator,
 			unavatar.manifest_name,
@@ -3242,7 +3496,8 @@ fn run_diagnose(
 			unavatar.modular_avatar_support_counts,
 			unavatar.modular_avatar_type_counts,
 			unavatar.modular_avatar_disabled_type_counts,
-			unavatar.modular_avatar_menu_component_count
+			unavatar.modular_avatar_menu_component_count,
+			unavatar.modular_avatar_vertex_filter_group_count
 		);
 		for menu in unavatar.modular_avatar_menu_components.iter().take(16) {
 			println!(
@@ -3258,6 +3513,26 @@ fn run_diagnose(
 				menu.menu_source_target_path,
 				menu.install_target_path
 			);
+		}
+		for group in unavatar.modular_avatar_vertex_filter_groups.iter().take(16) {
+			println!(
+				"unavatar.ma_vertex_filter[{}]: enabled={} target={:?} combine={} filters={}",
+				group.short_type, group.enabled, group.target_path, group.combine, group.filter_count
+			);
+			for filter in group.filters.iter().take(8) {
+				println!(
+					"  filter kind={} shapes={:?} threshold={:?} bone={:?} center={:?} axis={:?} material={:?} texture={:?} mode={:?}",
+					filter.kind,
+					filter.shapes,
+					filter.threshold,
+					filter.bone_path,
+					filter.center,
+					filter.axis,
+					filter.material_index,
+					filter.texture,
+					filter.mode
+				);
+			}
 		}
 		println!(
 			"wardrobe: base={:?} sets={} {:?} asset_groups={} {:?} base_ops={} {:?} extension_nodes={} variants={}",
@@ -3781,7 +4056,19 @@ mod tests {
 							}
 						}, {
 							"shortType": "ModularAvatarMeshCutter",
-							"enabled": false
+							"enabled": false,
+							"id": "cut-sleeve",
+							"fields": {
+								"m_object": {"path": "Root/Body"},
+								"m_multiMode": "VertexIntersection",
+								"filters": [{
+									"shortType": "VertexFilterByShapeComponent",
+									"fields": {
+										"m_shapes": ["Sleeve"],
+										"m_threshold": 0.001
+									}
+								}]
+							}
 						}]
 					},
 					"wardrobe": {
@@ -3823,8 +4110,8 @@ mod tests {
 		assert_eq!(unavatar.modular_avatar_component_count, 4);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&1));
-		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&2));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("unsupported"), None);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarMenuItem"), Some(&1));
@@ -3834,6 +4121,7 @@ mod tests {
 			Some(&1)
 		);
 		assert_eq!(unavatar.modular_avatar_menu_component_count, 1);
+		assert_eq!(unavatar.modular_avatar_vertex_filter_group_count, 1);
 		let menu = &unavatar.modular_avatar_menu_components[0];
 		assert_eq!(menu.short_type, "ModularAvatarMenuItem");
 		assert_eq!(menu.id.as_deref(), Some("menu-hat"));
@@ -3848,6 +4136,16 @@ mod tests {
 			unavatar.asset_group_ids,
 			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
 		);
+		let vertex_filter = &unavatar.modular_avatar_vertex_filter_groups[0];
+		assert_eq!(vertex_filter.short_type, "ModularAvatarMeshCutter");
+		assert!(!vertex_filter.enabled);
+		assert_eq!(vertex_filter.id.as_deref(), Some("cut-sleeve"));
+		assert_eq!(vertex_filter.target_path.as_deref(), Some("Root/Body"));
+		assert_eq!(vertex_filter.combine, "VertexIntersection");
+		assert_eq!(vertex_filter.filter_count, 1);
+		assert_eq!(vertex_filter.filters[0].kind, "blend_shape");
+		assert_eq!(vertex_filter.filters[0].shapes, vec!["Sleeve".to_string()]);
+		assert_eq!(vertex_filter.filters[0].threshold, Some(0.001));
 		assert!(report
 			.warnings
 			.iter()
@@ -3890,10 +4188,9 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarObjectToggle.Inverted")));
+		assert!(report.warnings.iter().any(
+			|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarObjectToggle.Inverted")
+		));
 	}
 
 	#[test]
