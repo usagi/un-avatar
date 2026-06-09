@@ -13159,6 +13159,91 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_merge_armature_reports_cyclic_mapping_warning() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)).to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("SourceBoneA".to_string()),
+					source_node_id: Some("node_source_a".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("SourceBoneB".to_string()),
+					source_node_id: Some("node_source_b".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0)).to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1],
+				inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+				skeleton_node: Some(2),
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source_a", "path": "SourceBoneA"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source_a", "path": "SourceBoneA"},
+							"targetBone": {"nodeId": "node_source_b", "path": "SourceBoneB"}
+						}]
+					}, {
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source_b", "path": "SourceBoneB"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source_b", "path": "SourceBoneB"},
+							"targetBone": {"nodeId": "node_source_a", "path": "SourceBoneA"}
+						}]
+					}]
+				}
+			}),
+		};
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		assert!(report
+			.messages
+			.iter()
+			.any(|m| m.contains("merge_armature_cycles=2") && m.contains("merge_armature_component_cycles=0")));
+		assert!(report.diagnostics.iter().any(|diagnostic| {
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("merge_armature_cycles=2")
+		}));
+	}
+
+	#[test]
 	fn same_name_humanoid_armature_fallback_retargets_skin_bindposes() {
 		let main_hips_world = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0));
 		let outfit_hips_world = Mat4::from_translation(Vec3::new(3.0, 1.0, 0.0));
