@@ -2316,14 +2316,11 @@ fn unavatar_asset_group_ownership_ambiguity_items(unavatar: &UnaUnavatarExtensio
 			.source
 			.get("assetGroupOwnershipAmbiguities")
 			.or_else(|| unavatar.source.get("asset_group_ownership_ambiguities")),
-		unavatar
-			.source
-			.get("wardrobe")
-			.and_then(|wardrobe| {
-				wardrobe
-					.get("assetGroupOwnershipAmbiguities")
-					.or_else(|| wardrobe.get("asset_group_ownership_ambiguities"))
-			}),
+		unavatar.source.get("wardrobe").and_then(|wardrobe| {
+			wardrobe
+				.get("assetGroupOwnershipAmbiguities")
+				.or_else(|| wardrobe.get("asset_group_ownership_ambiguities"))
+		}),
 	];
 	for source in sources.into_iter().flatten() {
 		if let Some(items) = source.get("items").and_then(Value::as_array) {
@@ -3965,14 +3962,20 @@ struct BoneProxyResolverInfo {
 	match_scale: bool,
 }
 
+#[derive(Clone, Debug)]
+struct MergeArmatureComponentMapping {
+	target_node: usize,
+	mappings: Vec<(usize, usize)>,
+}
+
 fn collect_merge_armature_bone_mappings(
 	components: &[Value],
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
-) -> (BTreeMap<usize, usize>, usize, usize) {
-	let mut mappings = BTreeMap::new();
+) -> (Vec<MergeArmatureComponentMapping>, usize, usize) {
+	let mut merge_components = Vec::new();
 	let mut missing = 0usize;
 	let mut skipped = 0usize;
 	for component in components {
@@ -3983,10 +3986,19 @@ fn collect_merge_armature_bone_mappings(
 			skipped += 1;
 			continue;
 		}
+		let Some(target_ref) = component.get("target") else {
+			missing += 1;
+			continue;
+		};
+		let Some(target_node) = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
 		let Some(bone_mappings) = component.get("boneMappings").and_then(|v| v.as_array()) else {
 			missing += 1;
 			continue;
 		};
+		let mut mappings = Vec::new();
 		for mapping in bone_mappings {
 			let Some(source_ref) = mapping.get("sourceBone") else {
 				missing += 1;
@@ -4005,23 +4017,130 @@ fn collect_merge_armature_bone_mappings(
 				continue;
 			};
 			if source != target {
-				mappings.insert(source, target);
+				mappings.push((source, target));
+			}
+		}
+		if !mappings.is_empty() {
+			merge_components.push(MergeArmatureComponentMapping { target_node, mappings });
+		}
+	}
+	(merge_components, missing, skipped)
+}
+
+fn order_merge_armature_components(components: &[MergeArmatureComponentMapping], parents: &[Option<usize>]) -> (Vec<usize>, usize) {
+	let total = components.len();
+	if total == 0 {
+		return (Vec::new(), 0);
+	}
+	let mut predecessors = vec![Vec::new(); total];
+	for i in 0..total {
+		for j in 0..total {
+			if i == j {
+				continue;
+			}
+			if scene_is_descendant_of(parents, components[j].target_node, components[i].target_node) {
+				if !predecessors[j].contains(&i) {
+					predecessors[j].push(i);
+				}
 			}
 		}
 	}
-	(mappings, missing, skipped)
+	let mut ordered = Vec::with_capacity(total);
+	let mut used = vec![false; total];
+	loop {
+		let mut progressed = false;
+		for index in 0..total {
+			if used[index] {
+				continue;
+			}
+			if predecessors[index].iter().all(|dependency| used[*dependency]) {
+				used[index] = true;
+				ordered.push(index);
+				progressed = true;
+			}
+		}
+		if !progressed {
+			break;
+		}
+		if ordered.len() == total {
+			break;
+		}
+	}
+	let cycle_count = if ordered.len() == total {
+		0
+	} else {
+		let mut count = 0usize;
+		for (index, used) in used.iter().enumerate() {
+			if !*used {
+				ordered.push(index);
+				count += 1;
+			}
+		}
+		count
+	};
+	(ordered, cycle_count)
 }
 
-fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &BTreeMap<usize, usize>) -> usize {
+fn count_merge_armature_cycle_nodes(mappings: &[(usize, usize)]) -> usize {
+	if mappings.len() < 2 {
+		return 0;
+	}
+	let mut outgoing: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+	let mut indegree: BTreeMap<usize, usize> = BTreeMap::new();
+	for &(source, target) in mappings {
+		if source == target {
+			continue;
+		}
+		outgoing.entry(source).or_default().insert(target);
+		indegree.entry(source).or_insert(0);
+		indegree.entry(target).or_insert(0);
+	}
+	for (_source, targets) in &outgoing {
+		for &target in targets {
+			if let Some(entry) = indegree.get_mut(&target) {
+				*entry = entry.saturating_add(1);
+			}
+		}
+	}
+	let mut ready = Vec::new();
+	for (&node, &degree) in &indegree {
+		if degree == 0 {
+			ready.push(node);
+		}
+	}
+	let mut processed = BTreeSet::new();
+	while let Some(node) = ready.pop() {
+		processed.insert(node);
+		if let Some(targets) = outgoing.get(&node) {
+			for &target in targets {
+				if let Some(entry) = indegree.get_mut(&target) {
+					*entry = entry.saturating_sub(1);
+					if *entry == 0 {
+						ready.push(target);
+					}
+				}
+			}
+		}
+	}
+	indegree.len().saturating_sub(processed.len())
+}
+
+fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &[(usize, usize)]) -> usize {
 	if mappings.is_empty() {
 		return 0;
 	}
 	let world = scene_world_matrices(scene);
+	let mut resolved = BTreeMap::new();
+	for &(source_node, target_node) in mappings {
+		if source_node != target_node {
+			resolved.insert(source_node, target_node);
+		}
+	}
 	let mut retargeted = 0usize;
 	for skin in &mut scene.skins {
 		for joint_idx in 0..skin.joint_nodes.len() {
 			let source_node = skin.joint_nodes[joint_idx];
-			let Some(&target_node) = mappings.get(&source_node) else {
+			let Some(&target_node) = resolved.get(&source_node) else {
 				continue;
 			};
 			let Some(source_world) = world.get(source_node).copied() else {
@@ -4044,7 +4163,7 @@ fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &BTreeM
 			retargeted += 1;
 		}
 		if let Some(skeleton_node) = skin.skeleton_node {
-			if let Some(&target_node) = mappings.get(&skeleton_node) {
+			if let Some(&target_node) = resolved.get(&skeleton_node) {
 				skin.skeleton_node = Some(target_node);
 			}
 		}
@@ -4101,8 +4220,8 @@ fn collect_same_name_humanoid_armature_mappings(scene: &UnaSceneSnapshot, humano
 	mappings
 }
 
-fn subtree_contains_mapped_node(scene: &UnaSceneSnapshot, node: usize, mappings: &BTreeMap<usize, usize>) -> bool {
-	if mappings.contains_key(&node) {
+fn subtree_contains_mapped_node(scene: &UnaSceneSnapshot, node: usize, mappings: &[(usize, usize)]) -> bool {
+	if mappings.iter().any(|(source, _)| *source == node) {
 		return true;
 	}
 	let Some(scene_node) = scene.nodes.get(node) else {
@@ -4114,13 +4233,13 @@ fn subtree_contains_mapped_node(scene: &UnaSceneSnapshot, node: usize, mappings:
 		.any(|&child| child < scene.nodes.len() && subtree_contains_mapped_node(scene, child, mappings))
 }
 
-fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mappings: &BTreeMap<usize, usize>) -> usize {
+fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mappings: &[(usize, usize)]) -> usize {
 	if mappings.is_empty() {
 		return 0;
 	}
 	let initial_world = scene_world_matrices(scene);
 	let mut reparent_ops = Vec::new();
-	for (&source_node, &target_node) in mappings {
+	for &(source_node, target_node) in mappings {
 		let Some(source) = scene.nodes.get(source_node) else {
 			continue;
 		};
@@ -4146,8 +4265,9 @@ fn reparent_merge_armature_auxiliary_bones(scene: &mut UnaSceneSnapshot, mapping
 
 fn retarget_same_name_humanoid_armature_skins(scene: &mut UnaSceneSnapshot, humanoid: &HumanoidProfile) -> (usize, usize, usize) {
 	let mappings = collect_same_name_humanoid_armature_mappings(scene, humanoid);
-	let auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &mappings);
-	let retargeted = retarget_merge_armature_skins(scene, &mappings);
+	let mapping_pairs = mappings.iter().map(|(&source, &target)| (source, target)).collect::<Vec<_>>();
+	let auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &mapping_pairs);
+	let retargeted = retarget_merge_armature_skins(scene, &mapping_pairs);
 	(mappings.len(), retargeted, auxiliary_reparented)
 }
 
@@ -5265,16 +5385,42 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	let normalized_paths = scene_node_normalized_paths(scene);
 	let (merge_mappings, merge_missing, merge_skipped) =
 		collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
-	let merge_auxiliary_reparented = reparent_merge_armature_auxiliary_bones(scene, &merge_mappings);
-	let merge_retargeted = retarget_merge_armature_skins(scene, &merge_mappings);
+	let merge_mapping_pairs = merge_mappings
+		.iter()
+		.flat_map(|component| component.mappings.iter().copied())
+		.collect::<Vec<_>>();
+	let merge_cycle_nodes = count_merge_armature_cycle_nodes(&merge_mapping_pairs);
+	let parents = scene_parent_indices(scene);
+	let (ordered_merge_indices, merge_component_cycles) = order_merge_armature_components(&merge_mappings, &parents);
+	let mut merge_auxiliary_reparented = 0usize;
+	let mut merge_retargeted = 0usize;
+	for merge_index in ordered_merge_indices {
+		let component_mappings = &merge_mappings[merge_index].mappings;
+		merge_auxiliary_reparented += reparent_merge_armature_auxiliary_bones(scene, component_mappings);
+		merge_retargeted += retarget_merge_armature_skins(scene, component_mappings);
+	}
 	if merge_retargeted > 0 || merge_auxiliary_reparented > 0 || merge_missing > 0 || merge_skipped > 0 {
 		report.push_info(format!(
-			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_auxiliary_bones={}, merge_armature_missing={}, merge_armature_skipped={}",
-			merge_mappings.len(),
+			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_auxiliary_bones={}, merge_armature_missing={}, merge_armature_skipped={}, merge_armature_cycles={}, merge_armature_component_cycles={}",
+			merge_mapping_pairs.len(),
 			merge_retargeted,
 			merge_auxiliary_reparented,
 			merge_missing,
-			merge_skipped
+			merge_skipped,
+			merge_cycle_nodes,
+			merge_component_cycles
+		));
+	}
+	if merge_cycle_nodes > 0 {
+		report.push_warning(format!(
+			".unavatar Modular Avatar: merge_armature_cycles={} (cyclic bone mapping detected; resolver may approximate)",
+			merge_cycle_nodes
+		));
+	}
+	if merge_component_cycles > 0 {
+		report.push_warning(format!(
+			".unavatar Modular Avatar: merge_armature_component_cycles={} (nested MergeArmature target hierarchy cycle)",
+			merge_component_cycles
 		));
 	}
 
@@ -8444,18 +8590,14 @@ mod tests {
 		out
 	}
 
-#[test]
+	#[test]
 	fn import_marks_enabled_unsupported_modular_avatar_component_partial_success() {
-		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(
-			"ModularAvatarWorldFixedObject",
-		);
+		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of("ModularAvatarWorldFixedObject");
 	}
 
 	#[test]
 	fn import_marks_world_scale_object_as_unsupported_modular_avatar_component() {
-		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(
-			"ModularAvatarWorldScaleObject",
-		);
+		import_marks_enabled_unsupported_modular_avatar_component_partial_success_of("ModularAvatarWorldScaleObject");
 	}
 
 	#[test]
@@ -8520,9 +8662,11 @@ mod tests {
 		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
 		assert_eq!(got.report.lost_features.len(), 1);
 		assert_eq!(got.report.lost_features[0].feature, format!("ModularAvatar.{short_type}"));
-		assert!(got.report.diagnostics.iter().any(|diagnostic| {
-			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(short_type)
-		}));
+		assert!(got
+			.report
+			.diagnostics
+			.iter()
+			.any(|diagnostic| { diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(short_type) }));
 	}
 
 	#[test]
@@ -12982,6 +13126,36 @@ mod tests {
 				&& m.contains("mesh_retargeter_joints=0")
 				&& m.contains("merge_armature_auxiliary_bones=1")
 		}));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_orders_nested_components_by_target_hierarchy() {
+		let parents = vec![None, Some(0), Some(1), None];
+		let components = vec![
+			MergeArmatureComponentMapping {
+				target_node: 1,
+				mappings: Vec::new(),
+			},
+			MergeArmatureComponentMapping {
+				target_node: 2,
+				mappings: Vec::new(),
+			},
+			MergeArmatureComponentMapping {
+				target_node: 0,
+				mappings: Vec::new(),
+			},
+		];
+		let (ordered, cycles) = order_merge_armature_components(&components, &parents);
+		assert_eq!(cycles, 0);
+		assert_eq!(ordered, vec![2, 0, 1]);
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_counts_cycle_nodes() {
+		assert_eq!(count_merge_armature_cycle_nodes(&[(0usize, 1usize), (1, 2), (2, 0)]), 3);
+		assert_eq!(count_merge_armature_cycle_nodes(&[(0usize, 1), (1, 0), (2usize, 3usize)]), 2);
+		assert_eq!(count_merge_armature_cycle_nodes(&[(0usize, 1), (2, 3)]), 0);
+		assert_eq!(count_merge_armature_cycle_nodes(&[(0usize, 0)]), 0);
 	}
 
 	#[test]
