@@ -45,6 +45,8 @@ pub enum SpringBoneSolver {
 	Xpbd,
 }
 
+pub type DynamicsSolver = SpringBoneSolver;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpringBoneTimeMode {
@@ -52,6 +54,8 @@ pub enum SpringBoneTimeMode {
 	#[default]
 	TimeBased,
 }
+
+pub type DynamicsTimeMode = SpringBoneTimeMode;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -118,6 +122,8 @@ impl SpringBonePhysicsConfig {
 	}
 }
 
+pub type DynamicsPhysicsConfig = SpringBonePhysicsConfig;
+
 fn default_spring_bone_simulation_hz() -> f32 {
 	60.0
 }
@@ -144,6 +150,8 @@ impl Default for SpringBoneCategoryDefinition {
 	}
 }
 
+pub type DynamicsCategoryDefinition = SpringBoneCategoryDefinition;
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SpringBoneCategoryOverride {
@@ -151,6 +159,8 @@ pub struct SpringBoneCategoryOverride {
 	#[serde(flatten)]
 	pub params: SpringBonePhysicsParams,
 }
+
+pub type DynamicsCategoryOverride = SpringBoneCategoryOverride;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -163,6 +173,8 @@ pub struct SpringBonePhysicsParams {
 	pub drag_scale: Option<f32>,
 	pub constraint_iterations: Option<u32>,
 }
+
+pub type DynamicsPhysicsParams = SpringBonePhysicsParams;
 
 impl SpringBonePhysicsParams {
 	fn normalized(mut self) -> Self {
