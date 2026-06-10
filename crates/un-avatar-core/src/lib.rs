@@ -986,6 +986,11 @@ pub struct UnaRuntimeDynamicsCounts {
 	pub vrm_spring_bone_groups: usize,
 	pub vrc_physbone_groups: usize,
 	pub unknown_groups: usize,
+	pub limit_groups: usize,
+	pub angle_limit_groups: usize,
+	pub stretch_limit_groups: usize,
+	pub grabbing_enabled_groups: usize,
+	pub posing_enabled_groups: usize,
 	pub colliders: usize,
 	pub vrm_spring_bone_colliders: usize,
 	pub vrc_physbone_colliders: usize,
@@ -1095,6 +1100,21 @@ impl<'a> UnaRuntimeDynamics<'a> {
 			}
 			if self.group_enabled(group) {
 				counts.enabled_groups += 1;
+			}
+			if let Some(limit) = group.limit.as_ref() {
+				counts.limit_groups += 1;
+				if !limit.limit_type.is_empty() || limit.max_angle_x.abs() > 0.0 || limit.max_angle_z.abs() > 0.0 {
+					counts.angle_limit_groups += 1;
+				}
+				if limit.max_stretch.abs() > 0.0 {
+					counts.stretch_limit_groups += 1;
+				}
+			}
+			if group.interaction.as_ref().and_then(|interaction| interaction.allow_grabbing) == Some(true) {
+				counts.grabbing_enabled_groups += 1;
+			}
+			if group.interaction.as_ref().and_then(|interaction| interaction.allow_posing) == Some(true) {
+				counts.posing_enabled_groups += 1;
 			}
 			match group.source_kind {
 				UnaDynamicsSourceKind::VrmSpringBone => counts.vrm_spring_bone_groups += 1,
@@ -5024,6 +5044,12 @@ mod tests {
 		assert_eq!(group.chain.bone_node_indices, &[1, 2, 3]);
 		assert_eq!(group.limit.unwrap().limit_type, "angle");
 		assert_eq!(group.interaction.unwrap().allow_grabbing, Some(true));
+		let counts = dynamics.counts();
+		assert_eq!(counts.limit_groups, 1);
+		assert_eq!(counts.angle_limit_groups, 1);
+		assert_eq!(counts.stretch_limit_groups, 1);
+		assert_eq!(counts.grabbing_enabled_groups, 1);
+		assert_eq!(counts.posing_enabled_groups, 0);
 	}
 
 	#[test]

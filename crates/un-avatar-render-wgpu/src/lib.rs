@@ -1578,6 +1578,11 @@ impl AvatarApp {
 				status.dynamics_vrm_spring_bone_group_count = dynamics.vrm_spring_bone_groups;
 				status.dynamics_vrc_physbone_group_count = dynamics.vrc_physbone_groups;
 				status.dynamics_unknown_group_count = dynamics.unknown_groups;
+				status.dynamics_limit_group_count = dynamics.limit_groups;
+				status.dynamics_angle_limit_group_count = dynamics.angle_limit_groups;
+				status.dynamics_stretch_limit_group_count = dynamics.stretch_limit_groups;
+				status.dynamics_grabbing_enabled_group_count = dynamics.grabbing_enabled_groups;
+				status.dynamics_posing_enabled_group_count = dynamics.posing_enabled_groups;
 				status.dynamics_collider_count = dynamics.colliders;
 				status.dynamics_vrm_spring_bone_collider_count = dynamics.vrm_spring_bone_colliders;
 				status.dynamics_vrc_physbone_collider_count = dynamics.vrc_physbone_colliders;
@@ -3224,6 +3229,16 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_unknown_group_count: u32,
 	#[serde(default)]
+	dynamics_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_angle_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_grabbing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_posing_enabled_group_count: u32,
+	#[serde(default)]
 	dynamics_collider_count: u32,
 	#[serde(default)]
 	dynamics_vrm_spring_bone_collider_count: u32,
@@ -3347,6 +3362,11 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrm_spring_bone_group_count: 0,
 		dynamics_vrc_physbone_group_count: 0,
 		dynamics_unknown_group_count: 0,
+		dynamics_limit_group_count: 0,
+		dynamics_angle_limit_group_count: 0,
+		dynamics_stretch_limit_group_count: 0,
+		dynamics_grabbing_enabled_group_count: 0,
+		dynamics_posing_enabled_group_count: 0,
 		dynamics_collider_count: 0,
 		dynamics_vrm_spring_bone_collider_count: 0,
 		dynamics_vrc_physbone_collider_count: 0,
@@ -4663,6 +4683,11 @@ mod tests {
 			status.dynamics_vrc_contact_receiver_count = 1;
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
+			status.dynamics_limit_group_count = 4;
+			status.dynamics_angle_limit_group_count = 3;
+			status.dynamics_stretch_limit_group_count = 1;
+			status.dynamics_grabbing_enabled_group_count = 2;
+			status.dynamics_posing_enabled_group_count = 1;
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -4695,6 +4720,25 @@ mod tests {
 		assert_eq!(
 			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
 			Some(2)
+		);
+		assert_eq!(snapshot.get("dynamics_limit_group_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(
+			snapshot.get("dynamics_angle_limit_group_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_stretch_limit_group_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_grabbing_enabled_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_posing_enabled_group_count").and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert!(snapshot.get("active_asset_groups").is_none());
 		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
