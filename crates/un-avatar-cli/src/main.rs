@@ -508,6 +508,8 @@ struct DiagnoseDynamicsSummary {
 	source_grabbing_enabled_count: usize,
 	source_posing_enabled_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	contacts: Vec<DiagnoseDynamicsContactSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
 }
 
@@ -558,6 +560,26 @@ struct DiagnoseDynamicsGroupSummary {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	allow_posing: Option<bool>,
 	hit_radius: f32,
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsContactSummary {
+	index: usize,
+	source_kind: UnaDynamicsSourceKind,
+	kind: un_avatar_core::UnaDynamicsContactKind,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	node_path: Option<String>,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	parameter: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	collision_tags: Vec<String>,
+	shape: un_avatar_core::UnaDynamicsColliderShape,
+	radius: f32,
+	height: f32,
+	position: [f32; 3],
 }
 
 #[derive(Serialize)]
@@ -1860,6 +1882,33 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				allow_posing: group.interaction.as_ref().and_then(|interaction| interaction.allow_posing),
 				hit_radius: group.hit_radius,
 			}
+		})
+		.collect()
+}
+
+fn dynamics_contact_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsContactSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	runtime
+		.dynamics
+		.contacts()
+		.enumerate()
+		.map(|(index, contact)| DiagnoseDynamicsContactSummary {
+			index,
+			source_kind: contact.source_kind,
+			kind: contact.kind.clone(),
+			source_id: contact.source_id.clone(),
+			node: contact.node,
+			node_path: node_paths_by_index.get(contact.node).cloned().flatten(),
+			parameter: contact.parameter.clone(),
+			collision_tags: contact.collision_tags.clone(),
+			shape: contact.shape.clone(),
+			radius: contact.radius,
+			height: contact.height,
+			position: contact.position,
 		})
 		.collect()
 }
@@ -3524,6 +3573,7 @@ fn build_diagnose_report(
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
+	let dynamics_contacts = dynamics_contact_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
 			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
@@ -3558,6 +3608,7 @@ fn build_diagnose_report(
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
+		contacts: dynamics_contacts,
 		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
@@ -4254,6 +4305,22 @@ fn run_diagnose(
 			limit,
 			interaction,
 			group.comment
+		);
+	}
+	for contact in report.dynamics.contacts.iter().take(16) {
+		println!(
+			"  dynamics_contact[{}]: source={:?} kind={:?} id={:?} node={:?} parameter={:?} tags={:?} shape={:?} radius={} height={} position={:?}",
+			contact.index,
+			contact.source_kind,
+			contact.kind,
+			contact.source_id,
+			contact.node_path.as_deref().unwrap_or("#"),
+			contact.parameter,
+			contact.collision_tags,
+			contact.shape,
+			contact.radius,
+			contact.height,
+			contact.position
 		);
 	}
 	if let Some(unavatar) = &report.unavatar {
@@ -5685,6 +5752,8 @@ mod tests {
 					node: 1,
 					kind: un_avatar_core::UnaDynamicsContactKind::Receiver,
 					parameter: "ContactHand".into(),
+					collision_tags: vec!["Hand".into(), "Interact".into()],
+					radius: 0.05,
 					..Default::default()
 				}],
 				constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
@@ -5727,6 +5796,11 @@ mod tests {
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
 		assert_eq!(report.dynamics.contact_count, 1);
 		assert_eq!(report.dynamics.vrc_contact_receiver_count, 1);
+		assert_eq!(report.dynamics.contacts.len(), 1);
+		assert_eq!(report.dynamics.contacts[0].kind, un_avatar_core::UnaDynamicsContactKind::Receiver);
+		assert_eq!(report.dynamics.contacts[0].parameter, "ContactHand");
+		assert_eq!(report.dynamics.contacts[0].collision_tags, vec!["Hand", "Interact"]);
+		assert_eq!(report.dynamics.contacts[0].radius, 0.05);
 		assert_eq!(report.dynamics.constraint_ref_count, 1);
 		assert_eq!(report.dynamics.vrc_constraint_ref_count, 1);
 	}
