@@ -17,6 +17,7 @@ namespace UNAvatar.UnityExporter
                 return payload;
             }
 
+            var sourceIdCounts = new Dictionary<string, int>();
             var components = root.GetComponentsInChildren<Component>(true);
             foreach (var component in components)
             {
@@ -28,7 +29,8 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                payload.Add(BuildVrcPhysBonePayload(root.transform, component));
+                var sourceId = BuildVrcPhysBoneSourceId(root.transform, component, sourceIdCounts);
+                payload.Add(BuildVrcPhysBonePayload(root.transform, component, sourceId));
             }
             return payload;
         }
@@ -191,6 +193,18 @@ namespace UNAvatar.UnityExporter
                 string.Equals(type.FullName, "VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver", StringComparison.Ordinal);
         }
 
+        private static string BuildVrcPhysBoneSourceId(Transform root, Component component, Dictionary<string, int> sourceIdCounts)
+        {
+            var baseId = "physbone:" + VariantExtractor.TransformPath(root, component.transform);
+            if (!sourceIdCounts.TryGetValue(baseId, out var count))
+            {
+                count = 0;
+            }
+            count++;
+            sourceIdCounts[baseId] = count;
+            return count == 1 ? baseId : baseId + ":" + count.ToString(CultureInfo.InvariantCulture);
+        }
+
         private static string BuildVrcContactSourceId(Transform root, Component component, Dictionary<string, int> sourceIdCounts)
         {
             var type = component.GetType();
@@ -232,7 +246,7 @@ namespace UNAvatar.UnityExporter
             };
         }
 
-        private Dictionary<string, object> BuildVrcPhysBonePayload(Transform root, Component component)
+        private Dictionary<string, object> BuildVrcPhysBonePayload(Transform root, Component component, string sourceId)
         {
             var type = component.GetType();
             var rootTransform = ReadMember(type, component, "rootTransform") as Transform;
@@ -250,7 +264,7 @@ namespace UNAvatar.UnityExporter
 
             return new Dictionary<string, object>
             {
-                ["id"] = "physbone:" + VariantExtractor.TransformPath(root, component.transform),
+                ["id"] = sourceId,
                 ["name"] = component.name ?? "",
                 ["source"] = "vrc_physbone",
                 ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled,

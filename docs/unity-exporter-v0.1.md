@@ -205,7 +205,7 @@ Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone`
 - endpoint position
 - collision / grabbing / posing / limit source hints
 
-現段階では `drag` は runtime default 相当、limits / grabbing / posing は source metadata として保存し、Runtime importer が runtime dynamics group の `limit` / `interaction` metadata へ正規化する。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。`endpointPosition` は leaf root に synthetic endpoint child を作って通常 chain へ正規化する。PhysBone collider は `sourceParams.colliders` に保存し、Sphere / Capsule は runtime solver collider と debug draw へ接続する。`insideBounds` collider は tail を collider 内側へ留める制約として近似する。limits の solver 挙動、grabbing、posing の挙動再現はまだ非対応。`allowCollision=false` は source collider を solver へ渡さない。
+現段階では `drag` は runtime default 相当、limits / grabbing / posing は source metadata として保存し、Runtime importer が runtime dynamics group の `limit` / `interaction` metadata へ正規化する。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。`endpointPosition` は leaf root に synthetic endpoint child を作って通常 chain へ正規化する。PhysBone source id は原則 `physbone:<transform path>` とし、同一 Transform 上に複数 component がある場合だけ `:2` 以降の ordinal を付ける。Contact source id は `contact:<transform path>:<sender|receiver>` を基本にし、同一種別の重複だけ ordinal を付ける。PhysBone collider は `sourceParams.colliders` に保存し、Sphere / Capsule は runtime solver collider と debug draw へ接続する。`insideBounds` collider は tail を collider 内側へ留める制約として近似する。limits の solver 挙動、grabbing、posing の挙動再現はまだ非対応。`allowCollision=false` は source collider を solver へ渡さない。
 
 Contacts / interactions / limits の完全再現は非目標。
 
