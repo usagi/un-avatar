@@ -493,6 +493,11 @@ struct DiagnoseDynamicsSummary {
 	vrm_spring_bone_group_count: usize,
 	vrc_physbone_group_count: usize,
 	unknown_group_count: usize,
+	limit_group_count: usize,
+	angle_limit_group_count: usize,
+	stretch_limit_group_count: usize,
+	grabbing_enabled_group_count: usize,
+	posing_enabled_group_count: usize,
 	collider_count: usize,
 	vrm_spring_bone_collider_count: usize,
 	vrc_physbone_collider_count: usize,
@@ -3688,6 +3693,11 @@ fn build_diagnose_report(
 		vrm_spring_bone_group_count: dynamics_counts.vrm_spring_bone_groups,
 		vrc_physbone_group_count: dynamics_counts.vrc_physbone_groups,
 		unknown_group_count: dynamics_counts.unknown_groups,
+		limit_group_count: dynamics_counts.limit_groups,
+		angle_limit_group_count: dynamics_counts.angle_limit_groups,
+		stretch_limit_group_count: dynamics_counts.stretch_limit_groups,
+		grabbing_enabled_group_count: dynamics_counts.grabbing_enabled_groups,
+		posing_enabled_group_count: dynamics_counts.posing_enabled_groups,
 		collider_count: dynamics_counts.colliders,
 		vrm_spring_bone_collider_count: dynamics_counts.vrm_spring_bone_colliders,
 		vrc_physbone_collider_count: dynamics_counts.vrc_physbone_colliders,
@@ -4350,11 +4360,16 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
 		report.dynamics.unknown_group_count,
+		report.dynamics.limit_group_count,
+		report.dynamics.angle_limit_group_count,
+		report.dynamics.stretch_limit_group_count,
+		report.dynamics.grabbing_enabled_group_count,
+		report.dynamics.posing_enabled_group_count,
 		report.dynamics.collider_count,
 		report.dynamics.vrm_spring_bone_collider_count,
 		report.dynamics.vrc_physbone_collider_count,
@@ -5857,6 +5872,16 @@ mod tests {
 						enabled: true,
 						source_id: "physbone:hair".into(),
 						bone_node_indices: vec![0, 1],
+						limit: Some(un_avatar_core::UnaDynamicsLimit {
+							limit_type: "angle".into(),
+							max_angle_x: 45.0,
+							max_angle_z: 20.0,
+							max_stretch: 0.1,
+						}),
+						interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+							allow_grabbing: Some(true),
+							allow_posing: Some(false),
+						}),
 						..Default::default()
 					},
 					un_avatar_core::UnaSpringBoneGroup {
@@ -5864,6 +5889,10 @@ mod tests {
 						enabled: true,
 						source_id: "physbone:hair".into(),
 						bone_node_indices: vec![2, 3],
+						interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+							allow_grabbing: Some(false),
+							allow_posing: Some(true),
+						}),
 						..Default::default()
 					},
 				],
@@ -5948,6 +5977,11 @@ mod tests {
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
+		assert_eq!(report.dynamics.limit_group_count, 1);
+		assert_eq!(report.dynamics.angle_limit_group_count, 1);
+		assert_eq!(report.dynamics.stretch_limit_group_count, 1);
+		assert_eq!(report.dynamics.grabbing_enabled_group_count, 1);
+		assert_eq!(report.dynamics.posing_enabled_group_count, 1);
 		assert_eq!(report.dynamics.contact_count, 2);
 		assert_eq!(report.dynamics.vrc_contact_receiver_count, 1);
 		assert_eq!(report.dynamics.vrc_contact_sender_count, 1);
