@@ -2063,21 +2063,6 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 	counts
 }
 
-fn unavatar_dynamics_source_ids(doc: &UnaDocument) -> BTreeSet<String> {
-	let Some(unavatar) = doc.unavatar.as_ref() else {
-		return BTreeSet::new();
-	};
-	let Some(dynamics) = unavatar.source.get("dynamics").and_then(|value| value.as_array()) else {
-		return BTreeSet::new();
-	};
-	dynamics
-		.iter()
-		.filter_map(|item| item.get("id").and_then(|value| value.as_str()))
-		.filter(|id| !id.is_empty())
-		.map(str::to_string)
-		.collect()
-}
-
 fn wardrobe_dynamics_enable_targets(doc: &UnaDocument) -> Vec<String> {
 	let Some(unavatar) = doc.unavatar.as_ref() else {
 		return Vec::new();
@@ -3678,11 +3663,14 @@ fn build_diagnose_report(
 			"dynamics constraint_ref source_id {source_id:?} lowers to {count} runtime constraint refs; constraint diagnostics may merge distinct constraint sources"
 		));
 	}
-	let dynamics_source_ids = unavatar_dynamics_source_ids(&doc);
+	let dynamics_source_ids = dynamics_groups
+		.iter()
+		.filter_map(|group| (!group.source_id.is_empty()).then(|| group.source_id.clone()))
+		.collect::<BTreeSet<_>>();
 	for target_id in wardrobe_dynamics_enable_targets(&doc) {
 		if !dynamics_source_ids.contains(&target_id) {
 			warnings.push(format!(
-				"wardrobe dynamicsEnable target {target_id:?} does not match any .unavatar dynamics id"
+				"wardrobe dynamicsEnable target {target_id:?} does not match any runtime dynamics group source_id"
 			));
 		}
 	}
@@ -6004,17 +5992,29 @@ mod tests {
 	fn diagnose_report_warns_on_missing_wardrobe_dynamics_target() {
 		let doc = UnaDocument {
 			scene: Some(un_avatar_core::UnaSceneSnapshot::default()),
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: false,
+					source_id: "physbone:hair".into(),
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
 			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
 				spec_version: "0.1".into(),
 				source: serde_json::json!({
 					"dynamics": [
-						{"id": "physbone:hair", "source": "vrc_physbone", "roots": [0]}
+						{"id": "physbone:hair", "source": "vrc_physbone", "roots": [0]},
+						{"id": "physbone:raw-only", "source": "vrc_physbone", "roots": [0], "enabled": false}
 					],
 					"wardrobe": {
 						"sets": [{
 							"id": "base",
 							"operations": [
 								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:hair"}, "enabled": true},
+								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:raw-only"}, "enabled": true},
 								{"type": "dynamicsEnable", "target": {"dynamicsId": "physbone:missing"}, "enabled": false}
 							]
 						}]
@@ -6043,6 +6043,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:missing\"")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:raw-only\"")));
 		assert!(!report
 			.warnings
 			.iter()
