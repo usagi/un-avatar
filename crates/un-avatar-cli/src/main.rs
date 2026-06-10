@@ -1986,6 +1986,17 @@ fn duplicate_dynamics_contact_source_ids(contacts: &[DiagnoseDynamicsContactSumm
 	counts.into_iter().filter(|(_, count)| *count > 1).collect()
 }
 
+fn duplicate_dynamics_constraint_ref_source_ids(constraint_refs: &[DiagnoseDynamicsConstraintRefSummary]) -> Vec<(String, usize)> {
+	let mut counts = BTreeMap::<String, usize>::new();
+	for constraint_ref in constraint_refs {
+		if constraint_ref.source_id.is_empty() {
+			continue;
+		}
+		*counts.entry(constraint_ref.source_id.clone()).or_default() += 1;
+	}
+	counts.into_iter().filter(|(_, count)| *count > 1).collect()
+}
+
 fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCounts {
 	let Some(unavatar) = doc.unavatar.as_ref() else {
 		return DynamicsSourceFeatureCounts::default();
@@ -3645,6 +3656,11 @@ fn build_diagnose_report(
 	for (source_id, count) in duplicate_dynamics_contact_source_ids(&dynamics_contacts) {
 		warnings.push(format!(
 			"dynamics contact source_id {source_id:?} lowers to {count} runtime contacts; contact diagnostics may merge distinct VRC Contact components"
+		));
+	}
+	for (source_id, count) in duplicate_dynamics_constraint_ref_source_ids(&dynamics_constraint_refs) {
+		warnings.push(format!(
+			"dynamics constraint_ref source_id {source_id:?} lowers to {count} runtime constraint refs; constraint diagnostics may merge distinct constraint sources"
 		));
 	}
 	let dynamics_source_ids = unavatar_dynamics_source_ids(&doc);
@@ -5857,15 +5873,26 @@ mod tests {
 						..Default::default()
 					},
 				],
-				constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
-					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
-					source_id: "constraint:parent".into(),
-					target_node: 1,
-					source_nodes: vec![0],
-					constraint_type: "parent".into(),
-					weight: 0.75,
-					..Default::default()
-				}],
+				constraint_refs: vec![
+					un_avatar_core::UnaDynamicsConstraintRef {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "constraint:parent".into(),
+						target_node: 1,
+						source_nodes: vec![0],
+						constraint_type: "parent".into(),
+						weight: 0.75,
+						..Default::default()
+					},
+					un_avatar_core::UnaDynamicsConstraintRef {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "constraint:parent".into(),
+						target_node: 2,
+						source_nodes: vec![1],
+						constraint_type: "rotation".into(),
+						weight: 0.25,
+						..Default::default()
+					},
+				],
 				..Default::default()
 			}),
 			runtime_state: un_avatar_core::UnaRuntimeState {
@@ -5898,6 +5925,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics contact source_id \"contact:hand\" lowers to 2 runtime contacts")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics constraint_ref source_id \"constraint:parent\" lowers to 2 runtime constraint refs")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
@@ -5909,9 +5940,9 @@ mod tests {
 		assert_eq!(report.dynamics.contacts[0].parameter, "ContactHand");
 		assert_eq!(report.dynamics.contacts[0].collision_tags, vec!["Hand", "Interact"]);
 		assert_eq!(report.dynamics.contacts[0].radius, 0.05);
-		assert_eq!(report.dynamics.constraint_ref_count, 1);
-		assert_eq!(report.dynamics.vrc_constraint_ref_count, 1);
-		assert_eq!(report.dynamics.constraint_refs.len(), 1);
+		assert_eq!(report.dynamics.constraint_ref_count, 2);
+		assert_eq!(report.dynamics.vrc_constraint_ref_count, 2);
+		assert_eq!(report.dynamics.constraint_refs.len(), 2);
 		assert_eq!(report.dynamics.constraint_refs[0].source_id, "constraint:parent");
 		assert_eq!(report.dynamics.constraint_refs[0].target_node, 1);
 		assert_eq!(report.dynamics.constraint_refs[0].source_nodes, vec![0]);
