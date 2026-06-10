@@ -62,7 +62,7 @@ Lowering:
 7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。CLI diagnose は raw source limit count と normalized runtime group limit count の両方を angle / stretch に分けて観測できる。
 8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。VRC Contact source id は sender / receiver 種別と同一 Transform 上の重複 ordinal で一意化する。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
 9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動と blend は未実装。
-10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。
+10. Done for current metadata: Diagnostics: CLI diagnose は raw source counts と normalized runtime group counts を分け、renderer runtime status と Supervisor diagnostics pass-through は effective enabled count、source authored enabled count、runtime override count、runtime limit / interaction / contact / constraint metadata count を公開する。今後新しい solver behavior を足す場合も、source metadata count と runtime effective count を混ぜない。
 
 ## Non Goals For v2 Initial Release
 
