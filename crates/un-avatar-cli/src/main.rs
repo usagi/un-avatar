@@ -1924,6 +1924,17 @@ fn duplicate_dynamics_source_ids(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec
 	counts.into_iter().filter(|(_, count)| *count > 1).collect()
 }
 
+fn duplicate_dynamics_contact_source_ids(contacts: &[DiagnoseDynamicsContactSummary]) -> Vec<(String, usize)> {
+	let mut counts = BTreeMap::<String, usize>::new();
+	for contact in contacts {
+		if contact.source_id.is_empty() {
+			continue;
+		}
+		*counts.entry(contact.source_id.clone()).or_default() += 1;
+	}
+	counts.into_iter().filter(|(_, count)| *count > 1).collect()
+}
+
 fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCounts {
 	let Some(unavatar) = doc.unavatar.as_ref() else {
 		return DynamicsSourceFeatureCounts::default();
@@ -3577,6 +3588,11 @@ fn build_diagnose_report(
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
 			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
+		));
+	}
+	for (source_id, count) in duplicate_dynamics_contact_source_ids(&dynamics_contacts) {
+		warnings.push(format!(
+			"dynamics contact source_id {source_id:?} lowers to {count} runtime contacts; contact diagnostics may merge distinct VRC Contact components"
 		));
 	}
 	let dynamics_source_ids = unavatar_dynamics_source_ids(&doc);
@@ -5747,15 +5763,27 @@ mod tests {
 					},
 				],
 				colliders: Vec::new(),
-				contacts: vec![un_avatar_core::UnaDynamicsContact {
-					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
-					node: 1,
-					kind: un_avatar_core::UnaDynamicsContactKind::Receiver,
-					parameter: "ContactHand".into(),
-					collision_tags: vec!["Hand".into(), "Interact".into()],
-					radius: 0.05,
-					..Default::default()
-				}],
+				contacts: vec![
+					un_avatar_core::UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:hand".into(),
+						node: 1,
+						kind: un_avatar_core::UnaDynamicsContactKind::Receiver,
+						parameter: "ContactHand".into(),
+						collision_tags: vec!["Hand".into(), "Interact".into()],
+						radius: 0.05,
+						..Default::default()
+					},
+					un_avatar_core::UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:hand".into(),
+						node: 2,
+						kind: un_avatar_core::UnaDynamicsContactKind::Sender,
+						collision_tags: vec!["Hand".into()],
+						radius: 0.04,
+						..Default::default()
+					},
+				],
 				constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
 					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
 					target_node: 1,
@@ -5791,12 +5819,17 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics contact source_id \"contact:hand\" lowers to 2 runtime contacts")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
-		assert_eq!(report.dynamics.contact_count, 1);
+		assert_eq!(report.dynamics.contact_count, 2);
 		assert_eq!(report.dynamics.vrc_contact_receiver_count, 1);
-		assert_eq!(report.dynamics.contacts.len(), 1);
+		assert_eq!(report.dynamics.vrc_contact_sender_count, 1);
+		assert_eq!(report.dynamics.contacts.len(), 2);
 		assert_eq!(report.dynamics.contacts[0].kind, un_avatar_core::UnaDynamicsContactKind::Receiver);
 		assert_eq!(report.dynamics.contacts[0].parameter, "ContactHand");
 		assert_eq!(report.dynamics.contacts[0].collision_tags, vec!["Hand", "Interact"]);

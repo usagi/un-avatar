@@ -41,6 +41,7 @@ namespace UNAvatar.UnityExporter
                 return payload;
             }
 
+            var sourceIdCounts = new Dictionary<string, int>();
             var components = root.GetComponentsInChildren<Component>(true);
             foreach (var component in components)
             {
@@ -52,7 +53,8 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                payload.Add(BuildVrcContactPayload(root.transform, component));
+                var sourceId = BuildVrcContactSourceId(root.transform, component, sourceIdCounts);
+                payload.Add(BuildVrcContactPayload(root.transform, component, sourceId));
             }
             return payload;
         }
@@ -189,7 +191,21 @@ namespace UNAvatar.UnityExporter
                 string.Equals(type.FullName, "VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver", StringComparison.Ordinal);
         }
 
-        private Dictionary<string, object> BuildVrcContactPayload(Transform root, Component component)
+        private static string BuildVrcContactSourceId(Transform root, Component component, Dictionary<string, int> sourceIdCounts)
+        {
+            var type = component.GetType();
+            var kind = IsVrcContactReceiverComponent(type) ? "receiver" : "sender";
+            var baseId = "contact:" + VariantExtractor.TransformPath(root, component.transform) + ":" + kind;
+            if (!sourceIdCounts.TryGetValue(baseId, out var count))
+            {
+                count = 0;
+            }
+            count++;
+            sourceIdCounts[baseId] = count;
+            return count == 1 ? baseId : baseId + ":" + count.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private Dictionary<string, object> BuildVrcContactPayload(Transform root, Component component, string sourceId)
         {
             var type = component.GetType();
             var rootTransform = ReadMember(type, component, "rootTransform") as Transform;
@@ -201,7 +217,7 @@ namespace UNAvatar.UnityExporter
             var kind = isReceiver ? "receiver" : "sender";
             return new Dictionary<string, object>
             {
-                ["id"] = "contact:" + VariantExtractor.TransformPath(root, component.transform),
+                ["id"] = sourceId,
                 ["source"] = isReceiver ? "vrc_contact_receiver" : "vrc_contact_sender",
                 ["component"] = TransformTargetJson(root, component.transform),
                 ["node"] = TransformTargetJson(root, rootTransform),
