@@ -2116,6 +2116,23 @@ fn wardrobe_dynamics_target_id(op: &serde_json::Value) -> Option<&str> {
 		.filter(|id| !id.is_empty())
 }
 
+fn runtime_action_dynamics_enable_targets(actions: Option<&un_avatar_core::UnaRuntimeActionSet>) -> Vec<(String, String)> {
+	let Some(actions) = actions else {
+		return Vec::new();
+	};
+	let mut targets = Vec::new();
+	for action in &actions.actions {
+		for effect in &action.effects {
+			if let UnaRuntimeActionEffect::DynamicsEnabled { source_id, .. } = effect {
+				if !source_id.is_empty() {
+					targets.push((action.id.clone(), source_id.clone()));
+				}
+			}
+		}
+	}
+	targets
+}
+
 fn dynamics_source_params(value: &serde_json::Value) -> Option<&serde_json::Value> {
 	value.get("sourceParams").or_else(|| value.get("source_params"))
 }
@@ -3671,6 +3688,13 @@ fn build_diagnose_report(
 		if !dynamics_source_ids.contains(&target_id) {
 			warnings.push(format!(
 				"wardrobe dynamicsEnable target {target_id:?} does not match any runtime dynamics group source_id"
+			));
+		}
+	}
+	for (action_id, target_id) in runtime_action_dynamics_enable_targets(runtime_model.runtime_actions()) {
+		if !dynamics_source_ids.contains(&target_id) {
+			warnings.push(format!(
+				"runtime action {action_id:?} DynamicsEnabled target {target_id:?} does not match any runtime dynamics group source_id"
 			));
 		}
 	}
@@ -6021,6 +6045,24 @@ mod tests {
 					}
 				}),
 			}),
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "action:dynamics".into(),
+					label: "Dynamics".into(),
+					triggers: Vec::new(),
+					conditions: Vec::new(),
+					effects: vec![
+						UnaRuntimeActionEffect::DynamicsEnabled {
+							source_id: "physbone:hair".into(),
+							enabled: true,
+						},
+						UnaRuntimeActionEffect::DynamicsEnabled {
+							source_id: "physbone:action-missing".into(),
+							enabled: false,
+						},
+					],
+				}],
+			}),
 			..Default::default()
 		};
 
@@ -6047,10 +6089,18 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:raw-only\"")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:action-missing\"") }));
 		assert!(!report
 			.warnings
 			.iter()
 			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:hair\"")));
+		assert!(!report
+			.warnings
+			.iter()
+			.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:hair\"") }));
 	}
 
 	#[test]
