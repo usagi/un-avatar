@@ -510,6 +510,8 @@ struct DiagnoseDynamicsSummary {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contacts: Vec<DiagnoseDynamicsContactSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	constraint_refs: Vec<DiagnoseDynamicsConstraintRefSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
 }
 
@@ -580,6 +582,24 @@ struct DiagnoseDynamicsContactSummary {
 	radius: f32,
 	height: f32,
 	position: [f32; 3],
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsConstraintRefSummary {
+	index: usize,
+	source_kind: UnaDynamicsSourceKind,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	target_node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	target_path: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	source_nodes: Vec<usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	source_paths: Vec<String>,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	constraint_type: String,
+	weight: f32,
 }
 
 #[derive(Serialize)]
@@ -1909,6 +1929,37 @@ fn dynamics_contact_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsContactS
 			radius: contact.radius,
 			height: contact.height,
 			position: contact.position,
+		})
+		.collect()
+}
+
+fn dynamics_constraint_ref_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsConstraintRefSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	runtime
+		.dynamics
+		.constraint_refs()
+		.enumerate()
+		.map(|(index, constraint_ref)| {
+			let source_paths = constraint_ref
+				.source_nodes
+				.iter()
+				.filter_map(|node| node_paths_by_index.get(*node).cloned().flatten())
+				.collect();
+			DiagnoseDynamicsConstraintRefSummary {
+				index,
+				source_kind: constraint_ref.source_kind,
+				source_id: constraint_ref.source_id.clone(),
+				target_node: constraint_ref.target_node,
+				target_path: node_paths_by_index.get(constraint_ref.target_node).cloned().flatten(),
+				source_nodes: constraint_ref.source_nodes.clone(),
+				source_paths,
+				constraint_type: constraint_ref.constraint_type.clone(),
+				weight: constraint_ref.weight,
+			}
 		})
 		.collect()
 }
@@ -3585,6 +3636,7 @@ fn build_diagnose_report(
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
+	let dynamics_constraint_refs = dynamics_constraint_ref_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
 			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
@@ -3625,6 +3677,7 @@ fn build_diagnose_report(
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
 		contacts: dynamics_contacts,
+		constraint_refs: dynamics_constraint_refs,
 		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
@@ -4337,6 +4390,26 @@ fn run_diagnose(
 			contact.radius,
 			contact.height,
 			contact.position
+		);
+	}
+	for constraint_ref in report.dynamics.constraint_refs.iter().take(16) {
+		println!(
+			"  dynamics_constraint_ref[{}]: source={:?} id={:?} type={:?} target={:?} sources={:?} weight={}",
+			constraint_ref.index,
+			constraint_ref.source_kind,
+			constraint_ref.source_id,
+			constraint_ref.constraint_type,
+			constraint_ref.target_path.as_deref().unwrap_or("#"),
+			if constraint_ref.source_paths.is_empty() {
+				constraint_ref
+					.source_nodes
+					.iter()
+					.map(|node| format!("#{node}"))
+					.collect::<Vec<_>>()
+			} else {
+				constraint_ref.source_paths.clone()
+			},
+			constraint_ref.weight
 		);
 	}
 	if let Some(unavatar) = &report.unavatar {
@@ -5786,9 +5859,11 @@ mod tests {
 				],
 				constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
 					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "constraint:parent".into(),
 					target_node: 1,
 					source_nodes: vec![0],
 					constraint_type: "parent".into(),
+					weight: 0.75,
 					..Default::default()
 				}],
 				..Default::default()
@@ -5836,6 +5911,12 @@ mod tests {
 		assert_eq!(report.dynamics.contacts[0].radius, 0.05);
 		assert_eq!(report.dynamics.constraint_ref_count, 1);
 		assert_eq!(report.dynamics.vrc_constraint_ref_count, 1);
+		assert_eq!(report.dynamics.constraint_refs.len(), 1);
+		assert_eq!(report.dynamics.constraint_refs[0].source_id, "constraint:parent");
+		assert_eq!(report.dynamics.constraint_refs[0].target_node, 1);
+		assert_eq!(report.dynamics.constraint_refs[0].source_nodes, vec![0]);
+		assert_eq!(report.dynamics.constraint_refs[0].constraint_type, "parent");
+		assert_eq!(report.dynamics.constraint_refs[0].weight, 0.75);
 	}
 
 	#[test]
