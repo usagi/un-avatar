@@ -567,4 +567,92 @@ mod tests {
 		let pushed = push_out_of_colliders(Vec3::new(0.5, 0.0, 0.0), &world, &colliders, 0.05);
 		assert!((pushed.x - 0.15).abs() < 1e-5, "pushed={pushed:?}");
 	}
+
+	#[test]
+	fn capsule_source_collider_pushes_points_from_segment() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Root", Vec3::ZERO, Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 0,
+				shape: UnaDynamicsColliderShape::Capsule,
+				radius: 0.1,
+				height: 0.6,
+				rotation: Quat::IDENTITY.to_array(),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let colliders = build_dynamics_bone_colliders(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		assert_eq!(colliders.len(), 1);
+		let BoneColliderPrimitive::LocalCapsule {
+			node,
+			center,
+			axis,
+			half_length,
+			radius,
+			inside_bounds,
+		} = colliders[0]
+		else {
+			panic!("unexpected collider={:?}", colliders[0]);
+		};
+		assert_eq!(node, 0);
+		assert_eq!(center, [0.0, 0.0, 0.0]);
+		assert_eq!(axis, [0.0, 1.0, 0.0]);
+		assert!((half_length - 0.2).abs() < 1e-5, "half_length={half_length}");
+		assert!((radius - 0.1).abs() < 1e-5, "radius={radius}");
+		assert!(!inside_bounds);
+
+		let world = scene_world(&scene);
+		let pushed = push_out_of_colliders(Vec3::new(0.03, 0.0, 0.0), &world, &colliders, 0.0);
+		assert!((pushed.x - 0.1).abs() < 1e-5, "pushed={pushed:?}");
+	}
+
+	#[test]
+	fn inside_bounds_capsule_source_collider_keeps_points_inside() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Root", Vec3::ZERO, Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 0,
+				shape: UnaDynamicsColliderShape::Capsule,
+				radius: 0.1,
+				height: 0.6,
+				rotation: Quat::IDENTITY.to_array(),
+				inside_bounds: true,
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let colliders = build_dynamics_bone_colliders(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		let world = scene_world(&scene);
+		let pushed = push_out_of_colliders(Vec3::new(0.5, 0.0, 0.0), &world, &colliders, 0.02);
+		assert!((pushed.x - 0.08).abs() < 1e-5, "pushed={pushed:?}");
+	}
 }
