@@ -59,7 +59,7 @@ Lowering:
 4. Done: Solver naming bridge: `SpringBoneSimulator` を互換名として残しつつ、`DynamicsSimulator` alias と neutral renderer runtime names から呼べる形へ寄せる。
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Done for initial solver: PhysBone colliders: sphere / capsule / inside bounds は UNDynamics collider として solver / debug draw へ接続済み。VRChat PhysBone との詳細挙動差、半径曲線、endpoint / scale edge case は detailed behavior task として残す。
-7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。
+7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。CLI diagnose は source limit count を angle / stretch に分けて観測できる。
 8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。VRC Contact source id は sender / receiver 種別と同一 Transform 上の重複 ordinal で一意化する。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
 9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動と blend は未実装。
 10. In progress: Diagnostics: CLI / renderer status は source counts と effective runtime counts を分けて出し続ける。

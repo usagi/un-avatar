@@ -503,6 +503,8 @@ struct DiagnoseDynamicsSummary {
 	constraint_ref_count: usize,
 	vrc_constraint_ref_count: usize,
 	source_limit_count: usize,
+	source_angle_limit_count: usize,
+	source_stretch_limit_count: usize,
 	source_collision_disabled_count: usize,
 	source_inside_bounds_collider_count: usize,
 	source_grabbing_enabled_count: usize,
@@ -518,6 +520,8 @@ struct DiagnoseDynamicsSummary {
 #[derive(Default)]
 struct DynamicsSourceFeatureCounts {
 	limit_count: usize,
+	angle_limit_count: usize,
+	stretch_limit_count: usize,
 	collision_disabled_count: usize,
 	inside_bounds_collider_count: usize,
 	grabbing_enabled_count: usize,
@@ -2021,6 +2025,12 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 			.unwrap_or(0.0);
 		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 || max_stretch.abs() > 0.0 {
 			counts.limit_count += 1;
+		}
+		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 {
+			counts.angle_limit_count += 1;
+		}
+		if max_stretch.abs() > 0.0 {
+			counts.stretch_limit_count += 1;
 		}
 		if dynamics_source_value(item, source_params, "allowCollision", "allow_collision").and_then(|value| value.as_bool()) == Some(false)
 		{
@@ -3688,6 +3698,8 @@ fn build_diagnose_report(
 		constraint_ref_count: dynamics_counts.constraint_refs,
 		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,
+		source_angle_limit_count: dynamics_source_features.angle_limit_count,
+		source_stretch_limit_count: dynamics_source_features.stretch_limit_count,
 		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
@@ -4338,7 +4350,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4353,6 +4365,8 @@ fn run_diagnose(
 		report.dynamics.constraint_ref_count,
 		report.dynamics.vrc_constraint_ref_count,
 		report.dynamics.source_limit_count,
+		report.dynamics.source_angle_limit_count,
+		report.dynamics.source_stretch_limit_count,
 		report.dynamics.source_collision_disabled_count,
 		report.dynamics.source_inside_bounds_collider_count,
 		report.dynamics.source_grabbing_enabled_count,
@@ -5820,6 +5834,8 @@ mod tests {
 		assert_eq!(report.unavatar.as_ref().unwrap().dynamics_entry_count, 1);
 		assert_eq!(report.dynamics.group_count, 0);
 		assert_eq!(report.dynamics.source_limit_count, 1);
+		assert_eq!(report.dynamics.source_angle_limit_count, 0);
+		assert_eq!(report.dynamics.source_stretch_limit_count, 1);
 		assert_eq!(report.dynamics.source_collision_disabled_count, 1);
 		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
 		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
