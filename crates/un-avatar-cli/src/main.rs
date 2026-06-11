@@ -579,6 +579,7 @@ struct DiagnoseDynamicsSummary {
 	source_inside_bounds_collider_count: usize,
 	source_grabbing_enabled_count: usize,
 	source_posing_enabled_count: usize,
+	source_interaction_parameter_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contacts: Vec<DiagnoseDynamicsContactSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -606,6 +607,7 @@ struct DynamicsSourceFeatureCounts {
 	inside_bounds_collider_count: usize,
 	grabbing_enabled_count: usize,
 	posing_enabled_count: usize,
+	interaction_parameter_count: usize,
 }
 
 #[derive(Serialize)]
@@ -2310,6 +2312,12 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 		if dynamics_source_value(item, source_params, "allowPosing", "allow_posing").and_then(|value| value.as_bool()) == Some(true) {
 			counts.posing_enabled_count += 1;
+		}
+		if dynamics_source_value(item, source_params, "parameter", "parameter")
+			.and_then(|value| value.as_str())
+			.is_some_and(|parameter| !parameter.is_empty())
+		{
+			counts.interaction_parameter_count += 1;
 		}
 		if let Some(colliders) = dynamics_source_value(item, source_params, "colliders", "colliders").and_then(|value| value.as_array()) {
 			counts.inside_bounds_collider_count += colliders
@@ -4153,6 +4161,7 @@ fn build_diagnose_report(
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
+		source_interaction_parameter_count: dynamics_source_features.interaction_parameter_count,
 		contacts: dynamics_contacts,
 		contact_parameter_declarations: dynamics_contact_parameter_declarations,
 		contact_probes: dynamics_contact_probes,
@@ -5021,7 +5030,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={} source_interaction_parameters={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -5057,7 +5066,8 @@ fn run_diagnose(
 		report.dynamics.source_collision_disabled_count,
 		report.dynamics.source_inside_bounds_collider_count,
 		report.dynamics.source_grabbing_enabled_count,
-		report.dynamics.source_posing_enabled_count
+		report.dynamics.source_posing_enabled_count,
+		report.dynamics.source_interaction_parameter_count
 	);
 	for group in report.dynamics.groups.iter().take(16) {
 		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {
@@ -6874,6 +6884,7 @@ mod tests {
 							"allowPosing": true,
 							"allowCollision": false,
 							"sourceParams": {
+								"parameter": "HairPB",
 								"maxStretch": 0.25,
 								"radiusCurve": {"keyCount": 2, "keys": []},
 								"maxAngleXCurve": {"keys": [{"time": 0.0, "value": 1.0}]},
@@ -6917,6 +6928,7 @@ mod tests {
 		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
 		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
 		assert_eq!(report.dynamics.source_posing_enabled_count, 1);
+		assert_eq!(report.dynamics.source_interaction_parameter_count, 1);
 		assert!(report
 			.warnings
 			.iter()
@@ -7049,6 +7061,7 @@ mod tests {
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
+		assert_eq!(report.dynamics.groups[0].interaction_parameter, "HairPB");
 		assert_eq!(report.dynamics.limit_group_count, 1);
 		assert_eq!(report.dynamics.angle_limit_group_count, 1);
 		assert_eq!(report.dynamics.stretch_limit_group_count, 1);
