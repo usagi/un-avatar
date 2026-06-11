@@ -622,6 +622,8 @@ struct DiagnoseDynamicsGroupSummary {
 	source_kind: UnaDynamicsSourceKind,
 	enabled: bool,
 	source_enabled: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	runtime_enabled_override: Option<bool>,
 	#[serde(skip_serializing_if = "String::is_empty")]
 	source_id: String,
 	#[serde(skip_serializing_if = "String::is_empty")]
@@ -2073,6 +2075,7 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				source_kind: group.source_kind,
 				enabled: runtime.dynamics.group_enabled(group),
 				source_enabled: group.enabled,
+				runtime_enabled_override: runtime.dynamics.group_enabled_override(group),
 				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
 				category: group.category.clone(),
@@ -5290,11 +5293,12 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} runtime_override={:?} id={:?} bones={} root={:?} tip={:?} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.enabled,
 			group.source_enabled,
+			group.runtime_enabled_override,
 			group.source_id,
 			group.bone_count,
 			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
@@ -7396,6 +7400,11 @@ mod tests {
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
+		assert!(report
+			.dynamics
+			.groups
+			.iter()
+			.all(|group| group.runtime_enabled_override == Some(false)));
 		assert_eq!(report.dynamics.groups[0].interaction_parameter, "HairPB");
 		assert_eq!(report.dynamics.interaction_hooks.len(), 2);
 		assert_eq!(report.dynamics.interaction_hooks[0].group_index, 0);
