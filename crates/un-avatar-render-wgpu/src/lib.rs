@@ -2190,13 +2190,31 @@ impl AvatarApp {
 			win.request_redraw();
 			return;
 		};
-		match gpu.apply_contact_parameter_emissions() {
-			Ok(parameter_updates) => {
-				if !parameter_updates.is_empty() {
-					self.update_runtime_parameters(parameter_updates);
+		let (parameter_updates, runtime_parameter_activations) = {
+			let parameter_updates = match gpu.apply_contact_parameter_emissions() {
+				Ok(parameter_updates) => parameter_updates,
+				Err(err) => {
+					eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
+					BTreeMap::new()
 				}
-			}
-			Err(err) => eprintln!("un-avatar-renderer: contact parameter emission failed: {err}"),
+			};
+			let activations = match gpu.evaluate_runtime_parameter_actions() {
+				Ok(activations) => activations,
+				Err(err) => {
+					eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
+					Vec::new()
+				}
+			};
+			(parameter_updates, activations)
+		};
+		if !parameter_updates.is_empty() {
+			self.update_runtime_parameters(parameter_updates);
+		}
+		for activation in &runtime_parameter_activations {
+			self.apply_runtime_activation_status(activation);
+		}
+		if !runtime_parameter_activations.is_empty() {
+			self.request_redraw();
 		}
 		let inst_fps = if timings.wall_since_last_ms > 0.05 {
 			1000.0 / timings.wall_since_last_ms
@@ -3005,6 +3023,17 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					.and_then(|gpu| gpu.attach_prepared_document(prepared, options));
 				match attach_result {
 					Ok(()) => {
+						let startup_activations = match self.gpu.as_mut() {
+							Some(gpu) => match gpu.evaluate_runtime_parameter_actions() {
+								Ok(activations) => activations,
+								Err(e) => {
+									self.set_startup_failed(e.clone());
+									eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {e}");
+									return;
+								}
+							},
+							None => Vec::new(),
+						};
 						let actual_texture_summary = self
 							.gpu
 							.as_ref()
@@ -3021,6 +3050,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
 						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
 						self.update_runtime_parameters(self.gpu.as_ref().map(|gpu| gpu.runtime_parameter_values()).unwrap_or_default());
+						for activation in &startup_activations {
+							self.apply_runtime_activation_status(activation);
+						}
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();

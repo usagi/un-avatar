@@ -651,6 +651,23 @@ fn runtime_action_ids_for_parameter(
 		.collect()
 }
 
+fn runtime_action_ids_for_parameter_values(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
+	parameter_values: &BTreeMap<String, f32>,
+) -> Vec<String> {
+	let mut seen = BTreeSet::new();
+	let mut ids = Vec::new();
+	for (name, value) in parameter_values {
+		for id in runtime_action_ids_for_parameter(actions, scene, name, *value) {
+			if seen.insert(id.clone()) {
+				ids.push(id);
+			}
+		}
+	}
+	ids
+}
+
 fn wardrobe_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeWardrobeActionStatus> {
 	let mut statuses = Vec::new();
 	for action in &actions.actions {
@@ -2659,6 +2676,7 @@ pub(crate) struct GpuState {
 	document: Option<Arc<RwLock<UnaDocument>>>,
 	document_revision: Arc<AtomicU64>,
 	applied_document_revision: u64,
+	last_runtime_parameter_action_values: BTreeMap<String, f32>,
 	/// VMC 受信スレッドが起動済みか。受信データは描画直前に pending buffer から適用する。
 	vmc_live: bool,
 	scene_meshes: Option<SceneMeshes>,
@@ -3025,6 +3043,7 @@ impl GpuState {
 			document: None,
 			document_revision,
 			applied_document_revision: 0,
+			last_runtime_parameter_action_values: BTreeMap::new(),
 			vmc_live,
 			scene_meshes,
 			shader_variant_tier,
@@ -4524,7 +4543,46 @@ impl GpuState {
 				self.invalidate_applied_document_state();
 			}
 		}
+		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
 		Ok(last_activation)
+	}
+
+	pub(crate) fn evaluate_runtime_parameter_actions(&mut self) -> Result<Vec<RuntimeActionActivation>, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Ok(Vec::new());
+		};
+		let doc_arc = Arc::clone(doc_arc);
+		let (parameter_values, action_ids, actions_snapshot) = {
+			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			let parameter_values = doc.runtime_model().runtime_parameter_values().clone();
+			if parameter_values == self.last_runtime_parameter_action_values {
+				return Ok(Vec::new());
+			}
+			let Some(actions) = doc.runtime_model().runtime_actions() else {
+				self.last_runtime_parameter_action_values = parameter_values;
+				return Ok(Vec::new());
+			};
+			(
+				parameter_values.clone(),
+				runtime_action_ids_for_parameter_values(actions, doc.runtime_model().scene(), &parameter_values),
+				actions.clone(),
+			)
+		};
+		self.last_runtime_parameter_action_values = parameter_values;
+		if action_ids.is_empty() {
+			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
+			drop(doc);
+			if !restored.is_empty() {
+				self.invalidate_applied_document_state();
+			}
+			return Ok(Vec::new());
+		}
+		let mut activations = Vec::new();
+		for action_id in action_ids {
+			activations.push(self.activate_runtime_action(Some(&action_id), None, None, None, None)?);
+		}
+		Ok(activations)
 	}
 
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
@@ -4690,6 +4748,7 @@ impl GpuState {
 		if !restored.is_empty() {
 			self.invalidate_applied_document_state();
 		}
+		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
 		Ok(RuntimeActionActivation {
 			action_id: resolved_action_id,
 			active_wardrobe_set,
@@ -6253,13 +6312,15 @@ fn create_startup_splash_pipeline(
 
 #[cfg(test)]
 mod tests {
+	use std::collections::BTreeMap;
+
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		runtime_action_ids_for_parameter, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
-		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode,
+		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
+		wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
@@ -6321,6 +6382,47 @@ mod tests {
 		assert_eq!(
 			runtime_action_id_for_parameter(&actions, None, "Hat", 0.0).as_deref(),
 			Some("hat:off")
+		);
+	}
+
+	#[test]
+	fn runtime_action_parameter_selection_evaluates_parameter_snapshot_once_per_action() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					..Default::default()
+				},
+				un_avatar_core::UnaRuntimeAction {
+					id: "shared:glow".to_string(),
+					triggers: vec![
+						un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+							name: "Glow".to_string(),
+							value: 1.0,
+						},
+						un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+							name: "Hat".to_string(),
+							value: 1.0,
+						},
+					],
+					..Default::default()
+				},
+			],
+		};
+		let parameter_values = BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0)]);
+
+		assert_eq!(
+			runtime_action_ids_for_parameter_values(&actions, None, &parameter_values),
+			vec!["shared:glow".to_string(), "hat:on".to_string()]
 		);
 	}
 
