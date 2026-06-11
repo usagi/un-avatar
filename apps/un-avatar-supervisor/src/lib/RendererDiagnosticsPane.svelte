@@ -8,6 +8,7 @@
 	export let runtimeStatus: RendererRuntimeDiagnosticsData | null;
 	export let busy = false;
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
+	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 
 	const sampleLimit = 4;
 	const dynamicsGroupLimit = 24;
@@ -116,6 +117,10 @@
 		if (!group.source_id) return;
 		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
 	}
+
+	function setAllDynamicsGroups(enabled: boolean): void {
+		void onSetAllDynamicsEnabled(renderer.id, enabled);
+	}
 </script>
 
 <div class="renderer-pane-scroll">
@@ -175,6 +180,29 @@
 						</small>
 					{/if}
 				</dt>
+				<dd class="diagnostics-action-list compact">
+					<div class="diagnostics-action-row">
+						<code>{$_("renderers.details.dynamics_all_runtime_overrides")}</code>
+						<span>
+							<button
+								type="button"
+								disabled={busy || !rendererRunning || !runtimeStatus.dynamics_group_count}
+								onclick={() => setAllDynamicsGroups(true)}
+							>
+								<Power size={13} />
+								<span>{$_("renderers.details.dynamics_enable_all")}</span>
+							</button>
+							<button
+								type="button"
+								disabled={busy || !rendererRunning || !runtimeStatus.dynamics_group_count}
+								onclick={() => setAllDynamicsGroups(false)}
+							>
+								<Power size={13} />
+								<span>{$_("renderers.details.dynamics_disable_all")}</span>
+							</button>
+						</span>
+					</div>
+				</dd>
 				<dd class="diagnostics-action-list">
 					{#each visibleDynamicsGroups as group}
 						<div class="diagnostics-action-row">

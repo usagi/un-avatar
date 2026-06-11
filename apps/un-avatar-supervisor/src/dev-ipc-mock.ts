@@ -524,6 +524,7 @@ export function installDevIpcMock(): void {
 			case "set_renderer_motion_receivers":
 			case "set_renderer_spring_bones":
 			case "set_renderer_dynamics_enabled":
+			case "set_renderer_all_dynamics_enabled":
 			case "reveal_profiles_dir":
 			case "stop_all_renderers":
 				return null;

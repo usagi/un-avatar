@@ -20,4 +20,5 @@ export type RendererPaneActions = {
 	onSetExpressionOverride: (rendererId: number, preset: string, weight: number) => void;
 	onActivateWardrobeMenuCandidate: (rendererId: number, actionId: string, wardrobeSetId: string) => void | Promise<void>;
 	onSetDynamicsEnabled: (rendererId: number, sourceId: string, enabled: boolean) => void | Promise<void>;
+	onSetAllDynamicsEnabled: (rendererId: number, enabled: boolean) => void | Promise<void>;
 };

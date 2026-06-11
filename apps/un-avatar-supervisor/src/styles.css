@@ -1934,6 +1934,11 @@ td small {
 	white-space: nowrap;
 }
 
+.diagnostics-action-row > span {
+	display: inline-flex;
+	gap: 6px;
+}
+
 .diagnostics-action-row button {
 	display: inline-flex;
 	align-items: center;

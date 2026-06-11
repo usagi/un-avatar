@@ -4896,6 +4896,25 @@ impl GpuState {
 		Ok(())
 	}
 
+	pub(crate) fn set_all_runtime_dynamics_enabled(&mut self, enabled: bool) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let Some(mut runtime) = doc.runtime_scene_and_dynamics_mut() else {
+			return Err("document has no runtime scene".to_string());
+		};
+		let count = runtime.dynamics.set_all_groups_enabled(enabled);
+		if count == 0 {
+			return Err("document has no runtime dynamics source ids".to_string());
+		}
+		drop(doc);
+		self.reset_dynamics_nodes_to_rest();
+		self.rebuild_runtime_dynamics();
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	fn set_runtime_node_visible(&mut self, target: &un_avatar_core::UnaRuntimeNodeTarget, visible: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());

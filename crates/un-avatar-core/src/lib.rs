@@ -1954,6 +1954,23 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 		}
 		matches
 	}
+
+	pub fn set_all_groups_enabled(&mut self, enabled: bool) -> usize {
+		let source_ids = self
+			.groups_mut()
+			.iter()
+			.filter_map(|group| (!group.source_id.is_empty()).then_some(group.source_id.clone()))
+			.collect::<BTreeSet<_>>();
+		let count = source_ids.len();
+		if count > 0 {
+			if let Some(runtime_state) = self.runtime_state.as_deref_mut() {
+				for source_id in source_ids {
+					runtime_state.dynamics_enabled_overrides.insert(source_id, enabled);
+				}
+			}
+		}
+		count
+	}
 }
 
 impl UnaSpringBoneSettings {
@@ -6809,6 +6826,63 @@ mod tests {
 		assert!(dynamics.group_enabled(&groups[1]));
 		assert_eq!(dynamics.counts().runtime_enabled_overrides, 0);
 		assert!(document.runtime_state.dynamics_enabled_overrides.is_empty());
+	}
+
+	#[test]
+	fn runtime_dynamics_mut_sets_all_runtime_enabled_overrides() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![
+					UnaSpringBoneGroup {
+						source_id: "physbone:hair".to_string(),
+						enabled: false,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: "physbone:hair".to_string(),
+						enabled: false,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: "physbone:tail".to_string(),
+						enabled: true,
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: String::new(),
+						enabled: true,
+						..Default::default()
+					},
+				],
+				colliders: Vec::new(),
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		{
+			let mut runtime = document.runtime_scene_and_dynamics_mut().unwrap();
+			assert_eq!(runtime.dynamics.set_all_groups_enabled(true), 2);
+			let readonly = runtime.dynamics.as_readonly();
+			let groups = readonly.groups();
+			assert!(readonly.group_enabled(&groups[0]));
+			assert!(readonly.group_enabled(&groups[1]));
+			assert!(readonly.group_enabled(&groups[2]));
+			assert!(readonly.group_enabled(&groups[3]));
+			assert_eq!(readonly.group_enabled_override(&groups[0]), Some(true));
+			assert_eq!(readonly.group_enabled_override(&groups[1]), Some(true));
+			assert_eq!(readonly.group_enabled_override(&groups[2]), Some(true));
+			assert_eq!(readonly.group_enabled_override(&groups[3]), None);
+			assert!(!groups[0].enabled);
+			assert!(!groups[1].enabled);
+			assert!(groups[2].enabled);
+			assert_eq!(readonly.counts().runtime_enabled_overrides, 2);
+		}
+		assert_eq!(
+			document.runtime_state.dynamics_enabled_overrides,
+			BTreeMap::from([("physbone:hair".to_string(), true), ("physbone:tail".to_string(), true),])
+		);
 	}
 
 	#[test]
