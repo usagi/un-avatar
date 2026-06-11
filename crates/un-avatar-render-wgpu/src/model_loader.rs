@@ -13,15 +13,19 @@ pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String
 	normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())
 }
 
-fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
-	eprintln!(
-		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} active_asset_groups={:?} scoped_active_groups={} scoped_missing_groups={:?} scoped_resident=mesh:{} material:{} image:{} dynamics:{}",
+fn wardrobe_apply_report_summary(set_id: &str, report: &WardrobeApplyReport) -> String {
+	format!(
+		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} material_applied={} material_missing={} material_slot_applied={} material_slot_missing={} active_asset_groups={:?} scoped_active_groups={} scoped_missing_groups={:?} scoped_resident=mesh:{} material:{} image:{} dynamics:{}",
 		report.visibility_applied,
 		report.visibility_missing,
 		report.blendshape_applied,
 		report.blendshape_missing,
 		report.dynamics_applied,
 		report.dynamics_missing,
+		report.material_applied,
+		report.material_missing,
+		report.material_slot_applied,
+		report.material_slot_missing,
 		report.active_asset_groups,
 		report.scoped_active_asset_group_count,
 		report.scoped_missing_active_asset_groups,
@@ -29,7 +33,11 @@ fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 		report.scoped_resident_material_count,
 		report.scoped_resident_image_count,
 		report.scoped_resident_dynamics_count
-	);
+	)
+}
+
+fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
+	eprintln!("{}", wardrobe_apply_report_summary(set_id, report));
 	if !report.missing_visibility_paths.is_empty() {
 		eprintln!(
 			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing visibility paths: {:?}",
@@ -46,6 +54,18 @@ fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 		eprintln!(
 			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing dynamics ids: {:?}",
 			report.missing_dynamics_ids
+		);
+	}
+	if !report.missing_materials.is_empty() {
+		eprintln!(
+			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing material targets: {:?}",
+			report.missing_materials
+		);
+	}
+	if !report.missing_material_slots.is_empty() {
+		eprintln!(
+			"un-avatar-renderer: .unavatar wardrobe set `{set_id}` missing material slot targets: {:?}",
+			report.missing_material_slots
 		);
 	}
 }
@@ -135,5 +155,35 @@ mod tests {
 		let mut document = UnaDocument::default();
 		assert!(apply_requested_wardrobe_set(&mut document, None).is_none());
 		assert!(apply_requested_wardrobe_set(&mut document, Some("")).is_none());
+	}
+
+	#[test]
+	fn wardrobe_apply_report_summary_includes_material_counts() {
+		let report = WardrobeApplyReport {
+			active_asset_groups: vec!["outfit:field".to_string()],
+			scoped_active_asset_group_count: 1,
+			scoped_missing_active_asset_groups: vec!["outfit:missing".to_string()],
+			scoped_resident_mesh_primitive_count: 2,
+			scoped_resident_material_count: 3,
+			scoped_resident_image_count: 4,
+			scoped_resident_dynamics_count: 5,
+			visibility_applied: 6,
+			visibility_missing: 7,
+			blendshape_applied: 8,
+			blendshape_missing: 9,
+			dynamics_applied: 10,
+			dynamics_missing: 11,
+			material_applied: 12,
+			material_missing: 13,
+			material_slot_applied: 14,
+			material_slot_missing: 15,
+			..Default::default()
+		};
+		let summary = wardrobe_apply_report_summary("field_drape", &report);
+		assert!(summary.contains("material_applied=12 material_missing=13"));
+		assert!(summary.contains("material_slot_applied=14 material_slot_missing=15"));
+		assert!(summary.contains("scoped_resident=mesh:2 material:3 image:4 dynamics:5"));
+		assert!(summary.contains("active_asset_groups=[\"outfit:field\"]"));
+		assert!(summary.contains("scoped_missing_groups=[\"outfit:missing\"]"));
 	}
 }
