@@ -103,6 +103,92 @@ export type RendererInstance = RendererStageView & {
   primary_motion_source: PrimaryMotionSource;
 };
 
+export type RendererRuntimeDynamicsGroupStatus = {
+  index: number;
+  source_kind: string;
+  authored_enabled: boolean;
+  effective_enabled: boolean;
+  source_id?: string;
+  comment?: string;
+  category?: string;
+  bone_count: number;
+  root_node?: number;
+  root_path?: string;
+  tip_node?: number;
+  tip_path?: string;
+  stiffness: number;
+  drag_force: number;
+  gravity_power: number;
+  gravity_dir: [number, number, number];
+  hit_radius: number;
+  center_node?: number;
+  center_path?: string;
+  limit_type?: string;
+  max_angle_x?: number;
+  max_angle_z?: number;
+  max_stretch?: number;
+  allow_grabbing?: boolean;
+  allow_posing?: boolean;
+};
+
+export type RendererRuntimeDynamicsColliderStatus = {
+  index: number;
+  source_kind: string;
+  node: number;
+  node_path?: string;
+  shape: string;
+  radius: number;
+  height: number;
+  position: [number, number, number];
+  rotation: [number, number, number, number];
+  inside_bounds: boolean;
+};
+
+export type RendererRuntimeContactParameterDeclarationStatus = {
+  owner_key: string;
+  source_id?: string;
+  node: number;
+  node_path?: string;
+  parameter: string;
+  collision_tags?: string[];
+};
+
+export type RendererRuntimeContactProbeStatus = {
+  index: number;
+  receiver_index: number;
+  sender_index: number;
+  receiver_source_id?: string;
+  sender_source_id?: string;
+  receiver_node: number;
+  receiver_node_path?: string;
+  sender_node: number;
+  sender_node_path?: string;
+  parameter: string;
+  matched_tags?: string[];
+  tag_match: boolean;
+  overlap: boolean;
+  would_emit: boolean;
+  distance: number;
+  threshold: number;
+  receiver_radius: number;
+  sender_radius: number;
+  receiver_shape: string;
+  sender_shape: string;
+  approximation: string;
+};
+
+export type RendererRuntimeDynamicsConstraintRefStatus = {
+  index: number;
+  source_kind: string;
+  source_id?: string;
+  target_node: number;
+  target_path?: string;
+  source_nodes?: number[];
+  source_paths?: string[];
+  constraint_type?: string;
+  weight: number;
+};
+
 export type RendererRuntimeStatus = {
   id: number;
   state: RendererState;
@@ -174,8 +260,16 @@ export type RendererRuntimeStatus = {
   dynamics_contact_count: number;
   dynamics_vrc_contact_sender_count: number;
   dynamics_vrc_contact_receiver_count: number;
+  dynamics_contact_parameter_declaration_count: number;
+  dynamics_contact_probe_count: number;
+  dynamics_contact_probe_would_emit_count: number;
   dynamics_constraint_ref_count: number;
   dynamics_vrc_constraint_ref_count: number;
+  contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
+  contact_probes: RendererRuntimeContactProbeStatus[];
+  dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
+  dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
+  dynamics_constraint_refs: RendererRuntimeDynamicsConstraintRefStatus[];
   camera_locked: boolean;
   window_focused: boolean;
   window_activation_seq: number;
