@@ -40,6 +40,7 @@
   export let onColorModeChange: RendererPaneActions["onColorModeChange"];
   export let onClearExpressionOverrides: RendererPaneActions["onClearExpressionOverrides"];
   export let onSetExpressionOverride: RendererPaneActions["onSetExpressionOverride"];
+  export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
   export let onOpenProfile: () => void;
   export let onRevealProfilesDir: () => void | Promise<void>;
 </script>
@@ -80,6 +81,7 @@
       {onColorModeChange}
       {onClearExpressionOverrides}
       {onSetExpressionOverride}
+      {onActivateWardrobeMenuCandidate}
     />
   {:else}
     <RendererReadyPanel

@@ -1829,6 +1829,10 @@ td small {
  order: 2;
 }
 
+.renderer-control-wardrobe-menu {
+ order: 2;
+}
+
 .renderer-control-window {
  order: 3;
 }
@@ -2702,6 +2706,17 @@ dd {
   color-mix(in srgb, var(--panel) 76%, transparent);
  color: var(--text);
  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent-cool) 76%, var(--accent));
+}
+
+.wardrobe-menu-grid {
+ grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.wardrobe-menu-grid button span {
+ min-width: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
 }
 
 .renderer-expression-pane {

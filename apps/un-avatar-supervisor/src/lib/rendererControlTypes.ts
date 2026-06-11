@@ -8,7 +8,7 @@ import type {
 
 export type RendererControlsData = OutputLabelData
   & WindowLabelData
-  & Pick<RendererInstance, "pid" | "window_width" | "window_height">;
+  & Pick<RendererInstance, "id" | "pid" | "window_width" | "window_height">;
 
 export type RendererControlsStatus = RuntimeOutputStatusData
   & Pick<
@@ -23,6 +23,8 @@ export type RendererControlsStatus = RuntimeOutputStatusData
     | "camera_locked"
     | "camera"
     | "clear_color"
+    | "menu_wardrobe_candidates"
+    | "active_wardrobe_set"
   >;
 
 export type RendererOutputData = OutputLabelData & {

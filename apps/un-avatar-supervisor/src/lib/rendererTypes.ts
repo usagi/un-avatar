@@ -262,6 +262,16 @@ export type RendererRuntimeActionRestoreApplyEntry = {
   reason: string;
 };
 
+export type RendererRuntimeMenuWardrobeCandidateStatus = {
+  menu_component_index?: number;
+  menu_path?: string[];
+  menu_label?: string;
+  action_id: string;
+  wardrobe_set_id: string;
+  match_kind: string;
+  inverted: boolean;
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -356,6 +366,7 @@ export type RendererRuntimeStatus = {
   audio_link_texture_needed: boolean;
   unmotion_zenoh_received_fps?: number;
   motion_applied_fps?: number;
+  active_wardrobe_set: string | null;
   primary_motion_source: PrimaryMotionSource;
   show_axes: boolean;
   show_bone_colliders: boolean;
@@ -394,6 +405,7 @@ export type RendererRuntimeStatus = {
   runtime_action_restore_baseline_candidates: RendererRuntimeActionRestoreBaselineCandidate[];
   runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
   runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
+  menu_wardrobe_candidates: RendererRuntimeMenuWardrobeCandidateStatus[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_parameter_emission_enabled: boolean;
   contact_parameter_emissions: RendererRuntimeContactParameterEmissionStatus[];
@@ -454,6 +466,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "runtime_action_restore_baseline_candidates"
   | "runtime_action_restore_baseline_capture_plan"
   | "runtime_action_restore_apply_plan"
+  | "menu_wardrobe_candidates"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

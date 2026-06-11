@@ -31,4 +31,9 @@ export type RendererPaneActions = {
     preset: string,
     weight: number,
   ) => void;
+  onActivateWardrobeMenuCandidate: (
+    rendererId: number,
+    menuPath: string[],
+    wardrobeSetId: string,
+  ) => void | Promise<void>;
 };

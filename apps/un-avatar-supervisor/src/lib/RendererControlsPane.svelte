@@ -3,6 +3,7 @@
   import RendererCameraControls from "./RendererCameraControls.svelte";
   import RendererDisplayControls from "./RendererDisplayControls.svelte";
   import RendererOutputControls from "./RendererOutputControls.svelte";
+  import RendererWardrobeMenuControls from "./RendererWardrobeMenuControls.svelte";
   import RendererWindowControls from "./RendererWindowControls.svelte";
   import type { RendererControlsData, RendererControlsStatus } from "./rendererControlTypes";
   import type { RendererPaneActions } from "./rendererPaneActions";
@@ -26,6 +27,7 @@
   export let onRestoreCamera: RendererPaneActions["onRestoreCamera"];
   export let onSetClearColor: RendererPaneActions["onSetClearColor"];
   export let onColorModeChange: RendererPaneActions["onColorModeChange"];
+  export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 </script>
 
 <div class="renderer-pane-scroll renderer-control-list">
@@ -52,6 +54,12 @@
     {onSetShowAxes}
     {onSetShowBoneColliders}
     {onSetCameraLock}
+  />
+  <RendererWardrobeMenuControls
+    {renderer}
+    {runtimeStatus}
+    {busy}
+    {onActivateWardrobeMenuCandidate}
   />
   <RendererCameraControls
     {renderer}

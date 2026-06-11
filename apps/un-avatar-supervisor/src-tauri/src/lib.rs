@@ -360,6 +360,10 @@ struct RendererRuntimeStatus {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_action_restore_apply_plan: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_action_candidates: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_wardrobe_candidates: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "is_false")]
 	contact_parameter_emission_enabled: bool,
@@ -663,6 +667,10 @@ struct RendererRuntimeTelemetry {
 	#[serde(default)]
 	runtime_action_restore_apply_plan: Vec<serde_json::Value>,
 	#[serde(default)]
+	menu_action_candidates: Vec<serde_json::Value>,
+	#[serde(default)]
+	menu_wardrobe_candidates: Vec<serde_json::Value>,
+	#[serde(default)]
 	contact_parameter_declarations: Vec<serde_json::Value>,
 	#[serde(default)]
 	contact_parameter_emission_enabled: bool,
@@ -865,6 +873,14 @@ enum RendererControlCommand {
 	SetExpressionOverride {
 		name: String,
 		weight: f32,
+	},
+	ActivateAction {
+		#[serde(skip_serializing_if = "Option::is_none")]
+		action_id: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		menu_path: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		wardrobe_set_id: Option<String>,
 	},
 	ClearExpressionOverrides,
 	SetLookAt {
@@ -1853,6 +1869,7 @@ pub fn run() {
 			reveal_supervisor_logs_dir,
 			capture_renderer_screenshot,
 			set_renderer_expression_override,
+			activate_renderer_runtime_action,
 			clear_renderer_expression_overrides,
 			set_renderer_look_at,
 			set_renderer_show_axes,
@@ -4823,6 +4840,33 @@ fn set_renderer_expression_override(id: u32, name: String, weight: f32, state: S
 }
 
 #[tauri::command]
+fn activate_renderer_runtime_action(
+	id: u32,
+	action_id: Option<String>,
+	menu_path: Option<String>,
+	wardrobe_set_id: Option<String>,
+	state: State<'_, Mutex<SupervisorState>>,
+) -> Result<(), String> {
+	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let menu_path = menu_path.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let wardrobe_set_id = wardrobe_set_id
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if action_id.is_none() && menu_path.is_none() {
+		return Err("action_id or menu_path is required".to_string());
+	}
+	send_renderer_command_by_id(
+		id,
+		state.inner(),
+		RendererControlCommand::ActivateAction {
+			action_id,
+			menu_path,
+			wardrobe_set_id,
+		},
+	)
+}
+
+#[tauri::command]
 fn clear_renderer_expression_overrides(id: u32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::ClearExpressionOverrides)
 }
@@ -5740,6 +5784,14 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		runtime_action_restore_apply_plan: telemetry
 			.as_ref()
 			.map(|telemetry| telemetry.runtime_action_restore_apply_plan.clone())
+			.unwrap_or_default(),
+		menu_action_candidates: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.menu_action_candidates.clone())
+			.unwrap_or_default(),
+		menu_wardrobe_candidates: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.menu_wardrobe_candidates.clone())
 			.unwrap_or_default(),
 		contact_parameter_declarations: telemetry
 			.as_ref()
@@ -8948,6 +9000,8 @@ mod tests {
 			runtime_action_restore_baseline_candidates: Vec::new(),
 			runtime_action_restore_baseline_capture_plan: Vec::new(),
 			runtime_action_restore_apply_plan: Vec::new(),
+			menu_action_candidates: Vec::new(),
+			menu_wardrobe_candidates: Vec::new(),
 			contact_parameter_declarations: Vec::new(),
 			contact_parameter_emission_enabled: false,
 			contact_parameter_emissions: Vec::new(),
@@ -9010,7 +9064,7 @@ mod tests {
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -9089,6 +9143,14 @@ mod tests {
 				.and_then(|value| value.get("ready"))
 				.and_then(serde_json::Value::as_bool),
 			Some(true)
+		);
+		assert_eq!(
+			telemetry
+				.menu_wardrobe_candidates
+				.first()
+				.and_then(|value| value.get("wardrobe_set_id"))
+				.and_then(serde_json::Value::as_str),
+			Some("field_drape")
 		);
 		assert_eq!(
 			telemetry
@@ -10235,6 +10297,33 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"set_environment_color","exposure":0.25,"contrast":1.2,"saturation":0.8,"look":"film","intensity":0.45,"temperature":0.2,"tint":-0.15}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_activate_action_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::ActivateAction {
+				action_id: None,
+				menu_path: Some("Wardrobe".to_string()),
+				wardrobe_set_id: Some("field_drape".to_string()),
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"activate_action","menu_path":"Wardrobe","wardrobe_set_id":"field_drape"}"#
 		);
 	}
 

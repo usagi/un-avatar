@@ -2583,6 +2583,24 @@
     }
   }
 
+  async function activateWardrobeMenuCandidate(
+    renderer: RendererInstance | null,
+    menuPath: string[],
+    wardrobeSetId: string,
+  ): Promise<void> {
+    if (!renderer || !hasTauriRuntime()) return;
+    try {
+      await invoke("activate_renderer_runtime_action", {
+        id: renderer.id,
+        menuPath: menuPath.join("/"),
+        wardrobeSetId,
+      });
+      message = `Activated wardrobe ${wardrobeSetId} for ${renderer.name}`;
+    } catch (error) {
+      message = String(error);
+    }
+  }
+
   async function setRendererClearColor(
     renderer: RendererInstance | null,
     color: { r: number; g: number; b: number; a: number },
@@ -3194,6 +3212,10 @@
             onSetExpressionOverride={(rendererId, preset, weight) => {
               const renderer = selectedRendererById(rendererId);
               setExpressionOverride(renderer, preset, weight);
+            }}
+            onActivateWardrobeMenuCandidate={(rendererId, menuPath, wardrobeSetId) => {
+              const renderer = selectedRendererById(rendererId);
+              return activateWardrobeMenuCandidate(renderer, menuPath, wardrobeSetId);
             }}
             onOpenProfile={() => {
               if (!launchTargetSetting) return;

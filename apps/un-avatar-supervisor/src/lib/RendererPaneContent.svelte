@@ -31,6 +31,7 @@
   export let onColorModeChange: RendererPaneActions["onColorModeChange"];
   export let onClearExpressionOverrides: RendererPaneActions["onClearExpressionOverrides"];
   export let onSetExpressionOverride: RendererPaneActions["onSetExpressionOverride"];
+  export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 </script>
 
 {#if rendererPaneTab === "overview"}
@@ -55,6 +56,7 @@
     {onRestoreCamera}
     {onSetClearColor}
     {onColorModeChange}
+    {onActivateWardrobeMenuCandidate}
   />
 {:else if rendererPaneTab === "expressions"}
   <RendererExpressionsPane
