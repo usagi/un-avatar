@@ -87,7 +87,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - Receiver が emit し得る parameter を UNEvaluation に宣言する。
    - 値はまだ書かない。
    - UI / diagnostics / action resolver が namespace を把握できる。
-   - core runtime view、renderer runtime status count、CLI diagnose の declared parameter count / sample は実装済み。
+   - core runtime view、renderer runtime status count / bounded list、CLI diagnose の declared parameter count / sample は実装済み。
 3. Phase C: Diagnostics-only contact probe
    - overlap 計算はするが parameter state へは書かない。
    - `would_emit parameter=X value=1` を diagnose / debug status に出す。

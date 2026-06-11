@@ -1561,6 +1561,7 @@ impl AvatarApp {
 			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
+			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3158,6 +3159,8 @@ struct RendererRuntimeSnapshot {
 	menu_action_candidates: Vec<gpu::RuntimeMenuActionCandidateStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_declarations: Vec<gpu::RuntimeContactParameterDeclarationStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3325,6 +3328,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		runtime_actions: Vec::new(),
 		menu_action_candidates: Vec::new(),
 		menu_wardrobe_candidates: Vec::new(),
+		contact_parameter_declarations: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4682,6 +4686,13 @@ mod tests {
 				match_kind: "trigger".to_string(),
 				inverted: false,
 			}];
+			status.contact_parameter_declarations = vec![crate::gpu::RuntimeContactParameterDeclarationStatus {
+				owner_key: "contact:hand".to_string(),
+				source_id: "contact:hand".to_string(),
+				node: 1,
+				parameter: "ContactHand".to_string(),
+				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
+			}];
 			status.dynamics_contact_count = 2;
 			status.dynamics_vrc_contact_sender_count = 1;
 			status.dynamics_vrc_contact_receiver_count = 1;
@@ -4723,6 +4734,19 @@ mod tests {
 				.get("dynamics_contact_parameter_declaration_count")
 				.and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		let declarations = snapshot
+			.get("contact_parameter_declarations")
+			.and_then(|value| value.as_array())
+			.expect("contact parameter declarations");
+		assert_eq!(declarations.len(), 1);
+		assert_eq!(
+			declarations[0].get("owner_key").and_then(|value| value.as_str()),
+			Some("contact:hand")
+		);
+		assert_eq!(
+			declarations[0].get("parameter").and_then(|value| value.as_str()),
+			Some("ContactHand")
 		);
 		assert_eq!(
 			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),

@@ -52,6 +52,7 @@ pub(crate) const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
+const CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT: usize = 64;
 const WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED: &str = "draw-scoped-resource-scoped";
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -133,6 +134,17 @@ pub(crate) struct RuntimeMenuWardrobeCandidateStatus {
 	pub(crate) wardrobe_set_id: String,
 	pub(crate) match_kind: String,
 	pub(crate) inverted: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct RuntimeContactParameterDeclarationStatus {
+	pub(crate) owner_key: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) node: usize,
+	pub(crate) parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) collision_tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -661,6 +673,22 @@ fn menu_wardrobe_candidates_from_runtime(
 		))
 	});
 	candidates
+}
+
+fn contact_parameter_declaration_statuses(doc: &UnaDocument) -> Vec<RuntimeContactParameterDeclarationStatus> {
+	doc.runtime_model()
+		.dynamics()
+		.contact_parameter_declarations()
+		.into_iter()
+		.take(CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT)
+		.map(|declaration| RuntimeContactParameterDeclarationStatus {
+			owner_key: declaration.owner_key,
+			source_id: declaration.source_id,
+			node: declaration.node,
+			parameter: declaration.parameter,
+			collision_tags: declaration.collision_tags,
+		})
+		.collect()
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {
@@ -3751,6 +3779,16 @@ impl GpuState {
 			None => return Vec::new(),
 		};
 		menu_wardrobe_candidates_from_runtime(doc.unavatar.as_ref(), &menu_action_candidates)
+	}
+
+	pub(crate) fn contact_parameter_declarations(&self) -> Vec<RuntimeContactParameterDeclarationStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		contact_parameter_declaration_statuses(&doc)
 	}
 
 	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {
