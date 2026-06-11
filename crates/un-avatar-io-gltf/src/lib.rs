@@ -4018,6 +4018,55 @@ fn bone_proxy_local_transform(mode: &str, match_scale: bool, target_world: Mat4,
 	}
 }
 
+fn scene_find_child_path(scene: &UnaSceneSnapshot, start: usize, sub_path: &str) -> Option<usize> {
+	let mut current = start;
+	for segment in sub_path.split('/').map(str::trim).filter(|segment| !segment.is_empty()) {
+		let node = scene.nodes.get(current)?;
+		current = node
+			.children
+			.iter()
+			.copied()
+			.find(|child| scene.nodes.get(*child).and_then(|node| node.name.as_deref()) == Some(segment))?;
+	}
+	Some(current)
+}
+
+fn modular_avatar_bone_proxy_target_index(
+	scene: &UnaSceneSnapshot,
+	component: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	humanoid_profile: Option<&HumanoidProfile>,
+) -> Option<usize> {
+	if let Some(resolved_ref) = component.get("resolvedTarget") {
+		if let Some(idx) = unavatar_node_ref_index(resolved_ref, node_ids, registry_paths, paths, normalized_paths) {
+			return Some(idx);
+		}
+	}
+
+	let bone_reference = modular_avatar_component_string(component, &["boneReference", "BoneReference", "m_boneReference"])?;
+	let sub_path = modular_avatar_component_string(component, &["subPath", "SubPath", "m_subPath"]).unwrap_or_default();
+	let sub_path = sub_path.trim();
+	let avatar_root = scene.roots.first().copied()?;
+	if sub_path == "$$AVATAR" {
+		return Some(avatar_root);
+	}
+	if bone_reference == "LastBone" {
+		return (!sub_path.is_empty())
+			.then(|| scene_find_child_path(scene, avatar_root, sub_path))
+			.flatten();
+	}
+	let humanoid = humanoid_profile?;
+	let bone = humanoid.bone_node_indices.get(&bone_reference.to_ascii_lowercase()).copied()?;
+	if sub_path.is_empty() {
+		Some(bone)
+	} else {
+		scene_find_child_path(scene, bone, sub_path)
+	}
+}
+
 fn inverse_finite_or_identity(m: Mat4) -> Mat4 {
 	let inverse = m.inverse();
 	if inverse.to_cols_array().iter().all(|v| v.is_finite()) {
@@ -6014,13 +6063,34 @@ fn unavatar_modular_avatar_component_inverted(component: &Value) -> bool {
 
 #[cfg(test)]
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
-	apply_unavatar_modular_avatar_with_texture_assets(scene, unavatar, &BTreeMap::new(), report);
+	apply_unavatar_modular_avatar_with_context(scene, unavatar, &BTreeMap::new(), None, report);
+}
+
+#[cfg(test)]
+fn apply_unavatar_modular_avatar_with_humanoid(
+	scene: &mut UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+	humanoid_profile: &HumanoidProfile,
+	report: &mut ImportReport,
+) {
+	apply_unavatar_modular_avatar_with_context(scene, unavatar, &BTreeMap::new(), Some(humanoid_profile), report);
 }
 
 fn apply_unavatar_modular_avatar_with_texture_assets(
 	scene: &mut UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
 	texture_asset_map: &BTreeMap<String, usize>,
+	humanoid_profile: Option<&HumanoidProfile>,
+	report: &mut ImportReport,
+) {
+	apply_unavatar_modular_avatar_with_context(scene, unavatar, texture_asset_map, humanoid_profile, report);
+}
+
+fn apply_unavatar_modular_avatar_with_context(
+	scene: &mut UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+	texture_asset_map: &BTreeMap<String, usize>,
+	humanoid_profile: Option<&HumanoidProfile>,
 	report: &mut ImportReport,
 ) {
 	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
@@ -6165,15 +6235,19 @@ fn apply_unavatar_modular_avatar_with_texture_assets(
 			bone_proxy_missing += 1;
 			continue;
 		};
-		let Some(resolved_ref) = component.get("resolvedTarget") else {
-			bone_proxy_missing += 1;
-			continue;
-		};
 		let Some(child) = unavatar_node_ref_index(target_ref, &node_ids, &registry_paths, &paths, &normalized_paths) else {
 			bone_proxy_missing += 1;
 			continue;
 		};
-		let Some(new_parent) = unavatar_node_ref_index(resolved_ref, &node_ids, &registry_paths, &paths, &normalized_paths) else {
+		let Some(new_parent) = modular_avatar_bone_proxy_target_index(
+			scene,
+			component,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+			humanoid_profile,
+		) else {
 			bone_proxy_missing += 1;
 			continue;
 		};
@@ -8952,7 +9026,13 @@ impl AvatarImporter for GltfImporter {
 		if let Some(unavatar) = &unavatar {
 			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
 			apply_unavatar_asset_group_ownership(&mut scene, unavatar, &mut report);
-			apply_unavatar_modular_avatar_with_texture_assets(&mut scene, unavatar, &texture_asset_map, &mut report);
+			apply_unavatar_modular_avatar_with_texture_assets(
+				&mut scene,
+				unavatar,
+				&texture_asset_map,
+				humanoid_profile.as_ref(),
+				&mut report,
+			);
 			if let Some(humanoid_profile) = &humanoid_profile {
 				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
 					retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
@@ -13939,6 +14019,71 @@ mod tests {
 
 		assert_eq!(scene.nodes[0].children, vec![1]);
 		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_missing=1")));
+	}
+
+	#[test]
+	fn modular_avatar_bone_proxy_resolves_humanoid_bone_sub_path() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 4],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Hips".to_string()),
+					source_node_id: Some("node_hips".to_string()),
+					children: vec![2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TailRoot".to_string()),
+					source_node_id: Some("node_tail_root".to_string()),
+					children: vec![3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TailTip".to_string()),
+					source_node_id: Some("node_tail_tip".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Proxy".to_string()),
+					source_node_id: Some("node_proxy".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let humanoid = HumanoidProfile {
+			bone_node_indices: BTreeMap::from([("hips".to_string(), 1)]),
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarBoneProxy",
+						"enabled": true,
+						"target": {"nodeId": "node_proxy", "path": "Proxy"},
+						"fields": {
+							"boneReference": "Hips",
+							"subPath": "TailRoot/TailTip",
+							"attachmentMode": "AsChildAtRoot",
+							"matchScale": false
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar_with_humanoid(&mut scene, &unavatar, &humanoid, &mut report);
+
+		assert_eq!(scene.nodes[3].children, vec![4]);
+		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_applied=1")));
 	}
 
 	#[test]
