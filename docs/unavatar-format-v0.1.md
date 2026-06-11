@@ -558,14 +558,14 @@ Unity Exporter は次の出力モードを持つ。
 ```
 
 v0.1 は完全な PhysBone 再現を狙わない。まず UNDynamics の SpringBone-like runtime primitive へ近似変換する。
-`roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry は runtime lower 時に無視する。
+`roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry も runtime group として lower し、authored default disabled として保持する。runtime override が無い場合は solver 対象外だが、wardrobe / action の `dynamicsEnable` で同じ stable id を有効化できる。
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
 `sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
 `sourceParams.colliders` は VRC PhysBone Collider の保存情報であり、Sphere / Capsule は UNDynamics collider として solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
 `sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、angle limit は SpringBone-like solver の cone constraint として近似反映する。`maxStretch` は v0.1 初期では metadata / diagnostics に留める。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
 `contacts[]` は VRC Contact Sender / Receiver を UNDynamics metadata として保持する。`kind` は `sender` / `receiver` / `unknown`、`parameter` は Receiver parameter、`collisionTags` は contact tag list、shape / radius / height / position / rotation は proximity volume の source-neutral view とする。v0.1 初期では contact evaluation は行わず、runtime counts / diagnostics / future action hooks の対象にする。Contacts の runtime parameter emission は [`unevaluation-v2.md`](unevaluation-v2.md) の Phase A-D に従い、v2 初期は metadata と parameter declaration までを標準とする。overlap probe は diagnostics-only、実 parameter emission は明示 opt-in とする。
 `constraintRefs[]` は VRC Constraints または Modular Avatar resolver が保持すべき constraint 参照を UNDynamics metadata として保存する。v0.1 初期では solver 入力ではなく、bone dynamics rebuild / reset / diagnostics の判断材料にする。
-`dynamics[].id` は lower された runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。`enabled:false` の source dynamics は import lower 時に無視するため、wardrobe / action の `dynamicsEnable` target は raw `dynamics[].id` ではなく lower 済み runtime dynamics group の `source_id` に一致しなければならない。
+`dynamics[].id` は lower された runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。wardrobe / action の `dynamicsEnable` target は lower 済み runtime dynamics group の `source_id` に一致しなければならない。CLI diagnose / renderer runtime status は source dynamics が存在しても effective enabled group が 0 の場合、現在の runtime state では solver 対象が無いことを warning として出す。
 
 ## 10. Provenance And License
 
