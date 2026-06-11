@@ -404,7 +404,13 @@ struct DiagnoseActionItemSummary {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	node_visibility_effects: Vec<DiagnoseActionNodeVisibilityEffect>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	material_property_effects: Vec<DiagnoseActionMaterialPropertyEffect>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	material_slot_effects: Vec<DiagnoseActionMaterialSlotEffect>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	expression_weight_effects: Vec<DiagnoseActionExpressionWeightEffect>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	dynamics_enabled_effects: Vec<DiagnoseActionDynamicsEnabledEffect>,
 }
 
 #[derive(Serialize)]
@@ -443,6 +449,18 @@ struct DiagnoseActionNodeVisibilityEffect {
 }
 
 #[derive(Serialize)]
+struct DiagnoseActionMaterialPropertyEffect {
+	property_kind: String,
+	material_index: Option<usize>,
+	material_name: Option<String>,
+	parameter: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	scalar_value: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	color_value: Option<[f32; 4]>,
+}
+
+#[derive(Serialize)]
 struct DiagnoseActionMaterialSlotEffect {
 	node_index: Option<usize>,
 	source_node_id: Option<String>,
@@ -451,6 +469,18 @@ struct DiagnoseActionMaterialSlotEffect {
 	primitive_index: Option<usize>,
 	material_index: Option<usize>,
 	material_name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionExpressionWeightEffect {
+	name: String,
+	weight: f32,
+}
+
+#[derive(Serialize)]
+struct DiagnoseActionDynamicsEnabledEffect {
+	source_id: String,
+	enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -3765,7 +3795,10 @@ fn build_diagnose_report(
 				conditions: runtime_action_conditions(action.conditions.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
+				material_property_effects: runtime_action_material_property_effects(action.effects.iter()),
 				material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
+				expression_weight_effects: runtime_action_expression_weight_effects(action.effects.iter()),
+				dynamics_enabled_effects: runtime_action_dynamics_enabled_effects(action.effects.iter()),
 			})
 			.collect(),
 	});
@@ -4066,6 +4099,33 @@ fn runtime_action_node_visibility_effects<'a>(
 		.collect()
 }
 
+fn runtime_action_material_property_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<DiagnoseActionMaterialPropertyEffect> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, color } => Some(DiagnoseActionMaterialPropertyEffect {
+				property_kind: "color".to_string(),
+				material_index: target.material_index,
+				material_name: target.name.clone(),
+				parameter: parameter.clone(),
+				scalar_value: None,
+				color_value: Some(*color),
+			}),
+			UnaRuntimeActionEffect::MaterialScalar { target, parameter, value } => Some(DiagnoseActionMaterialPropertyEffect {
+				property_kind: "scalar".to_string(),
+				material_index: target.material_index,
+				material_name: target.name.clone(),
+				parameter: parameter.clone(),
+				scalar_value: Some(*value),
+				color_value: None,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
 fn runtime_action_material_slot_effects<'a>(
 	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
 ) -> Vec<DiagnoseActionMaterialSlotEffect> {
@@ -4080,6 +4140,36 @@ fn runtime_action_material_slot_effects<'a>(
 				primitive_index: target.primitive_index,
 				material_index: material.as_ref().and_then(|material| material.material_index),
 				material_name: material.as_ref().and_then(|material| material.name.clone()),
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_expression_weight_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<DiagnoseActionExpressionWeightEffect> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::ExpressionWeight { name, weight } => Some(DiagnoseActionExpressionWeightEffect {
+				name: name.clone(),
+				weight: *weight,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_dynamics_enabled_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<DiagnoseActionDynamicsEnabledEffect> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::DynamicsEnabled { source_id, enabled } => Some(DiagnoseActionDynamicsEnabledEffect {
+				source_id: source_id.clone(),
+				enabled: *enabled,
 			}),
 			_ => None,
 		})
@@ -4434,6 +4524,28 @@ fn run_diagnose(
 					.join(", ");
 				println!("action[{}].node_visibility: {}", action.id, effects);
 			}
+			if !action.material_property_effects.is_empty() {
+				let effects = action
+					.material_property_effects
+					.iter()
+					.map(|effect| {
+						let material = effect
+							.material_name
+							.as_deref()
+							.map(str::to_string)
+							.or_else(|| effect.material_index.map(|index| format!("#{index}")))
+							.unwrap_or_else(|| "?".to_string());
+						let value = effect
+							.scalar_value
+							.map(|value| value.to_string())
+							.or_else(|| effect.color_value.map(|value| format!("{value:?}")))
+							.unwrap_or_else(|| "?".to_string());
+						format!("{}:{}[{}]={}", effect.property_kind, material, effect.parameter, value)
+					})
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].material_properties: {}", action.id, effects);
+			}
 			if !action.material_slot_effects.is_empty() {
 				let effects = action
 					.material_slot_effects
@@ -4458,6 +4570,24 @@ fn run_diagnose(
 					.collect::<Vec<_>>()
 					.join(", ");
 				println!("action[{}].material_slots: {}", action.id, effects);
+			}
+			if !action.expression_weight_effects.is_empty() {
+				let effects = action
+					.expression_weight_effects
+					.iter()
+					.map(|effect| format!("{}={}", effect.name, effect.weight))
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].expression_weights: {}", action.id, effects);
+			}
+			if !action.dynamics_enabled_effects.is_empty() {
+				let effects = action
+					.dynamics_enabled_effects
+					.iter()
+					.map(|effect| format!("{}={}", effect.source_id, effect.enabled))
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].dynamics_enabled: {}", action.id, effects);
 			}
 		}
 	} else {
@@ -5930,6 +6060,77 @@ mod tests {
 		assert_eq!(action.material_slot_effects[0].path.as_deref(), Some("Root/Jacket"));
 		assert_eq!(action.material_slot_effects[0].primitive_index, Some(1));
 		assert_eq!(action.material_slot_effects[0].material_name.as_deref(), Some("Jacket Red"));
+	}
+
+	#[test]
+	fn diagnose_report_summarizes_remaining_action_effect_targets() {
+		let doc = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "variant:coat".to_string(),
+					label: "Coat".to_string(),
+					triggers: Vec::new(),
+					conditions: Vec::new(),
+					effects: vec![
+						UnaRuntimeActionEffect::MaterialColor {
+							target: un_avatar_core::UnaRuntimeMaterialTarget {
+								material_index: Some(2),
+								name: Some("Coat".to_string()),
+							},
+							parameter: "_Color".to_string(),
+							color: [1.0, 0.5, 0.25, 1.0],
+						},
+						UnaRuntimeActionEffect::MaterialScalar {
+							target: un_avatar_core::UnaRuntimeMaterialTarget {
+								material_index: Some(2),
+								name: Some("Coat".to_string()),
+							},
+							parameter: "_Cutoff".to_string(),
+							value: 0.4,
+						},
+						UnaRuntimeActionEffect::ExpressionWeight {
+							name: "Smile".to_string(),
+							weight: 0.75,
+						},
+						UnaRuntimeActionEffect::DynamicsEnabled {
+							source_id: "physbone:hair".to_string(),
+							enabled: false,
+						},
+					],
+				}],
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let action = &report.actions.as_ref().unwrap().actions[0];
+		assert_eq!(action.material_property_effects.len(), 2);
+		assert_eq!(action.material_property_effects[0].property_kind, "color");
+		assert_eq!(action.material_property_effects[0].material_name.as_deref(), Some("Coat"));
+		assert_eq!(action.material_property_effects[0].parameter, "_Color");
+		assert_eq!(action.material_property_effects[0].color_value, Some([1.0, 0.5, 0.25, 1.0]));
+		assert_eq!(action.material_property_effects[1].property_kind, "scalar");
+		assert_eq!(action.material_property_effects[1].scalar_value, Some(0.4));
+		assert_eq!(action.expression_weight_effects.len(), 1);
+		assert_eq!(action.expression_weight_effects[0].name, "Smile");
+		assert_eq!(action.expression_weight_effects[0].weight, 0.75);
+		assert_eq!(action.dynamics_enabled_effects.len(), 1);
+		assert_eq!(action.dynamics_enabled_effects[0].source_id, "physbone:hair");
+		assert!(!action.dynamics_enabled_effects[0].enabled);
 	}
 
 	#[test]
