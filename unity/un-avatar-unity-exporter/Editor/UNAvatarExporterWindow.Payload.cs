@@ -595,7 +595,6 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarMMDLayerControl" or
                 "ModularAvatarMergeAnimator" or
                 "ModularAvatarMergeBlendTree" or
-                "ModularAvatarPBBlocker" or
                 "ModularAvatarPlatformFilter" or
                 "ModularAvatarRenameVRChatCollisionTags" or
                 "ModularAvatarVRChatSettings" or
@@ -607,6 +606,7 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarMenuInstaller" or
                 "ModularAvatarMenuInstallTarget" or
                 "ModularAvatarParameters" or
+                "ModularAvatarPBBlocker" or
                 "ModularAvatarSyncParameterSequence" or
                 "ModularAvatarVisibleHeadAccessory" or
                 "VertexFilterByAxisComponent" or

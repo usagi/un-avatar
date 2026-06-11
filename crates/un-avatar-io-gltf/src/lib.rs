@@ -1487,6 +1487,47 @@ fn unavatar_dynamics_node_index_set(
 	indices
 }
 
+fn unavatar_modular_avatar_components(unavatar: &UnaUnavatarExtension) -> &[Value] {
+	unavatar
+		.source
+		.get("modularAvatar")
+		.and_then(|value| value.get("components"))
+		.and_then(Value::as_array)
+		.map(Vec::as_slice)
+		.unwrap_or(&[])
+}
+
+fn modular_avatar_pb_blocker_ignores(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	parents: &[Option<usize>],
+) -> BTreeMap<usize, BTreeSet<usize>> {
+	let mut ignores_by_root = BTreeMap::<usize, BTreeSet<usize>>::new();
+	for component in unavatar_modular_avatar_components(unavatar) {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarPBBlocker") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			continue;
+		}
+		let Some(target_ref) = component.get("target").or_else(|| component.get("resolvedTarget")) else {
+			continue;
+		};
+		let Some(tip) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			continue;
+		};
+		let mut node = tip;
+		while let Some(parent) = parents.get(node).copied().flatten() {
+			ignores_by_root.entry(parent).or_default().insert(tip);
+			node = parent;
+		}
+	}
+	ignores_by_root
+}
+
 fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
 	let value = value
 		.get("multiChildType")
@@ -1918,10 +1959,13 @@ fn unavatar_dynamics_settings(
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
+	let parents = scene_parent_indices(scene);
+	let pb_blocker_ignores = modular_avatar_pb_blocker_ignores(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths, &parents);
 	let mut groups = Vec::new();
 	let mut missing_roots = 0usize;
 	let mut short_chains = 0usize;
 	let mut ignored_transform_count = 0usize;
+	let mut pb_blocker_ignore_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
 	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
@@ -1995,10 +2039,15 @@ fn unavatar_dynamics_settings(
 				missing_roots += 1;
 				continue;
 			};
-			if ensure_unavatar_dynamics_endpoint_child(scene, root_idx, item, &ignored_nodes) {
+			let mut root_ignored_nodes = ignored_nodes.clone();
+			if let Some(blocked_nodes) = pb_blocker_ignores.get(&root_idx) {
+				pb_blocker_ignore_count += blocked_nodes.len();
+				root_ignored_nodes.extend(blocked_nodes.iter().copied());
+			}
+			if ensure_unavatar_dynamics_endpoint_child(scene, root_idx, item, &root_ignored_nodes) {
 				endpoint_child_count += 1;
 			}
-			for chain in collect_scene_child_chains(scene, root_idx, &ignored_nodes, multi_child_ignore) {
+			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes, multi_child_ignore) {
 				if chain.len() < 2 {
 					short_chains += 1;
 					continue;
@@ -2034,6 +2083,11 @@ fn unavatar_dynamics_settings(
 	if ignored_transform_count > 0 || multi_child_ignore_count > 0 {
 		report.push_info(format!(
 			".unavatar dynamics: source_hints ignored_transforms={ignored_transform_count} multi_child_ignore={multi_child_ignore_count}"
+		));
+	}
+	if pb_blocker_ignore_count > 0 {
+		report.push_info(format!(
+			".unavatar dynamics: modular_avatar_pb_blocker_ignores={pb_blocker_ignore_count}"
 		));
 	}
 	if endpoint_child_count > 0 {
@@ -9563,6 +9617,52 @@ mod tests {
 	}
 
 	#[test]
+	fn unavatar_dynamics_applies_modular_avatar_pb_blockers_as_ignores() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 3]),
+				test_scene_node("node_blocked", vec![2]),
+				test_scene_node("node_blocked_tip", Vec::new()),
+				test_scene_node("node_kept_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_blocked", "path": "Root/Blocked"},
+					{"nodeId": "node_blocked_tip", "path": "Root/Blocked/Tip"},
+					{"nodeId": "node_kept_tip", "path": "Root/KeptTip"}
+				],
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarPBBlocker",
+						"enabled": true,
+						"target": {"nodeId": "node_blocked", "path": "Root/Blocked"}
+					}]
+				},
+				"dynamics": [{
+					"id": "blocked_branch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}]
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("modular_avatar_pb_blocker_ignores=1")));
+	}
+
+	#[test]
 	fn unavatar_dynamics_synthesizes_endpoint_child_for_leaf_root() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", Vec::new())],
@@ -9647,7 +9747,6 @@ mod tests {
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
 			"ModularAvatarGlobalCollider",
-			"ModularAvatarPBBlocker",
 			"ModularAvatarMMDLayerControl",
 			"ModularAvatarMergeAnimator",
 			"ModularAvatarMergeBlendTree",
@@ -13193,14 +13292,13 @@ mod tests {
 		assert!(message.contains("resolver_supported=1"));
 		assert!(message.contains("approximate_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
-		assert!(message.contains("metadata_supported=3"));
-		assert!(message.contains("unsupported=11"));
+		assert!(message.contains("metadata_supported=4"));
+		assert!(message.contains("unsupported=10"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("support_kind_mismatches=0"));
 		assert!(message.contains("ModularAvatarConvertConstraints:1"));
 		assert!(message.contains("ModularAvatarFloorAdjuster:1"));
 		assert!(message.contains("ModularAvatarGlobalCollider:1"));
-		assert!(message.contains("ModularAvatarPBBlocker:1"));
 		assert!(message.contains("ModularAvatarPlatformFilter:1"));
 		assert!(message.contains("ModularAvatarRenameVRChatCollisionTags:1"));
 		assert!(message.contains("ModularAvatarVRChatSettings:1"));
@@ -13218,19 +13316,17 @@ mod tests {
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarConvertConstraints"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarGlobalCollider"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarFloorAdjuster"));
-		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPBBlocker"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPlatformFilter"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarRenameVRChatCollisionTags"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarVRChatSettings"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.MAMoveIndependently"));
-		assert_eq!(report.lost_features.len(), 10);
+		assert_eq!(report.lost_features.len(), 9);
 		for unsupported_type in [
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
 			"ModularAvatarGlobalCollider",
-			"ModularAvatarPBBlocker",
 			"ModularAvatarPlatformFilter",
 			"ModularAvatarRenameVRChatCollisionTags",
 			"ModularAvatarVRChatSettings",

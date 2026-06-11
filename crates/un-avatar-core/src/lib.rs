@@ -578,7 +578,6 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMMDLayerControl"
 		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMergeBlendTree"
-		| "ModularAvatarPBBlocker"
 		| "ModularAvatarPlatformFilter"
 		| "ModularAvatarRenameVRChatCollisionTags"
 		| "ModularAvatarVRChatSettings"
@@ -590,6 +589,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMenuInstaller"
 		| "ModularAvatarMenuInstallTarget"
 		| "ModularAvatarParameters"
+		| "ModularAvatarPBBlocker"
 		| "ModularAvatarSyncParameterSequence"
 		| "ModularAvatarVisibleHeadAccessory"
 		| "VertexFilterByAxisComponent"
@@ -8196,7 +8196,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMMDLayerControl"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeBlendTree"), "unsupported");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPBBlocker"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPBBlocker"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPlatformFilter"), "unsupported");
 		assert_eq!(
 			modular_avatar_component_support_kind("ModularAvatarRenameVRChatCollisionTags"),

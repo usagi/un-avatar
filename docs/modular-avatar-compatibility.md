@@ -168,8 +168,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, and catalog reports include unsupported counts by type.
   - remaining: identify constraints that affect render transform and convert to runtime-supported node constraints where possible.
 - `[~]` MA Global Collider / PhysBone Blocker
-  - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
-  - remaining: capture blocker / collider intent and feed resolved state into the U.N. dynamics normalization layer.
+  - done: PhysBone Blocker is classified as metadata and fed into VRC PhysBone lowering by adding blocker target nodes to ancestor PhysBone root ignore sets, matching Modular Avatar's parent-root ignore injection rule. Importer still classifies Global Collider as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
+  - remaining: capture Global Collider intent and feed resolved state into the U.N. dynamics normalization layer.
   - note: PhysBone behavior is not owned by the Modular Avatar resolver. VRC PhysBone source is preserved, then lowered into UNDynamics runtime terms; SpringBone is not the v2 physics model baseline.
 - `[~]` MA Floor Adjuster
   - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, with catalog unsupported-by-type reporting.
