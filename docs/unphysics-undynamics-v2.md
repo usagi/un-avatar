@@ -7,6 +7,7 @@ v2 の実装対象は、その中の bone dynamics layer である UNDynamics �
 
 - `UNPhysics`: avatar physics 全体の umbrella。bone dynamics、contacts、constraints、将来の cloth / soft body などを含められる名前。
 - `UNDynamics`: v2 で実装する source-neutral runtime layer。VRM SpringBone と VRC PhysBone をここへ lower する。
+- `UNEvaluation`: wardrobe / action / animation / parameter / contact 由来の runtime state を評価する層。module 名は `runtime_eval`。詳細は [`unevaluation-v2.md`](unevaluation-v2.md)。
 - `SpringBone`: VRM / UniVRM 由来の source format または既存実装資産を指す名前に限定する。
 - `PhysBone`: VRC component 由来の source format を指す名前に限定する。
 
@@ -44,6 +45,7 @@ Runtime state:
 - active wardrobe set、active asset groups、runtime action parameter、dynamics enabled override は runtime state に属する。
 - `dynamicsEnable` は authored default を書き換えず、stable dynamics id に対する runtime override として扱う。
 - solver state は source scene を直接 mutate せず、resolved scene / pose buffer / runtime dynamics view から構築する。
+- runtime state の owner policy と continuous evaluator は UNEvaluation が扱う。UNDynamics solver は評価済み enabled state / parameters / colliders を読むだけで、wardrobe / action / contact の優先順位を決めない。
 
 Lowering:
 
@@ -60,8 +62,8 @@ Lowering:
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
 6. Done for initial solver: PhysBone colliders: sphere / capsule / inside bounds は UNDynamics collider として solver / debug draw へ接続済み。VRChat PhysBone との詳細挙動差、半径曲線、endpoint / scale edge case は detailed behavior task として残す。
 7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現solverが回転だけを書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。CLI diagnose は raw source limit count と normalized runtime group limit count の両方を angle / stretch に分けて観測できる。
-8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。VRC Contact source id は sender / receiver 種別と同一 Transform 上の重複 ordinal で一意化する。runtime action hooks と solver 反映は source evidence と test model が揃ってから別 task で行う。
-9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動と blend は未実装。
+8. Done for metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。VRC Contact source id は sender / receiver 種別と同一 Transform 上の重複 ordinal で一意化する。Contacts parameter emission は [`unevaluation-v2.md`](unevaluation-v2.md) の Phase A-D に従い、v2 初期は metadata + parameter declaration までを目標にする。
+9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動、continuous evaluator、blend は UNEvaluation の設計に従って実装する。
 10. Done for current metadata: Diagnostics: CLI diagnose は raw source counts と normalized runtime group counts を分け、renderer runtime status と Supervisor diagnostics pass-through は effective enabled count、source authored enabled count、runtime override count、runtime limit / interaction / contact / constraint metadata count を公開する。今後新しい solver behavior を足す場合も、source metadata count と runtime effective count を混ぜない。
 
 ## Non Goals For v2 Initial Release

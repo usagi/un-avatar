@@ -1,0 +1,125 @@
+# UNEvaluation v2 Design
+
+`UNEvaluation` は、source data と solver の間で runtime state を評価する層である。
+module 名は `runtime_eval` を使う。
+
+v1 の SpringBone / action 実装は参照資産として使ってよい。
+ただし v2 の正本は、source data を直接 mutate せず、評価済み runtime state を solver / renderer へ渡す設計とする。
+
+## Responsibility
+
+UNEvaluation が扱うもの:
+
+- active wardrobe set / active asset groups
+- latched runtime action state
+- runtime parameters
+- animation / expression / continuous parameter evaluation
+- contact-derived transient parameter declarations and future values
+- dynamics enabled override の評価結果
+
+UNEvaluation が扱わないもの:
+
+- bone dynamics solver integration
+- VRC / VRM / Modular Avatar source-specific component semantics の直接実行
+- mesh / material upload residency
+- VRChat client 完全互換
+
+UNDynamics、UNInteraction、UNConstraints は UNEvaluation の評価結果を読む側であり、source package を直接読んで優先順位を決めない。
+
+## State Layers
+
+runtime target の合成は単純な全体優先順位だけではなく、target owner ごとの ownership で扱う。
+基本層は以下の通り。
+
+1. source default
+2. base safe state
+3. active wardrobe
+4. latched action
+5. continuous evaluator
+
+ただし、衝突解決は target type ごとの policy を持つ。
+
+| Target | Policy |
+| --- | --- |
+| wardrobe set selection | wardrobe / explicit action only。contact は触らない。 |
+| node visibility / material slot / dynamics enable | explicit user action を continuous evaluator より優先する。 |
+| expression parameter / contact-derived transient parameter | continuous evaluator を latched action より優先する。 |
+| source default / base safe state | runtime layer がない target の fallback。 |
+
+この方針の理由:
+
+- Wardrobe は「今この衣装セットでいてほしい」というユーザーの明示 intent。
+- Latched action は「押した状態を保ってほしい」というユーザーの明示 intent。
+- Continuous evaluator は「現在の入力状態へ追従してほしい」という入力 intent。
+
+continuous evaluator を常に最上位にすると、ユーザーが押した visibility / material / dynamics toggle が即座に戻される可能性がある。
+一方、expression / contact parameter は入力状態そのものなので continuous を優先する。
+
+## Owner Keys
+
+評価結果は owner key を持つ。
+owner key は同じ target へ複数の runtime source が書く時の説明可能性と diagnostics に使う。
+
+推奨 owner key:
+
+- `source_default`
+- `base_safe_state`
+- `wardrobe:<set_id>`
+- `action:<action_id>`
+- `parameter:<name>`
+- `animation:<source_id>`
+- `contact:<source_id>`
+
+v2 初期では priority / lock は導入しない。
+必要になった場合は、target type ごとの policy に action policy を後から足す。
+
+## Contacts
+
+Contacts は v2 初期では interaction / parameter source として扱う。
+直接 PhysBone solver を動かさない。
+
+段階:
+
+1. Phase A: Contacts metadata + diagnostics
+   - source id、kind、tags、shape、parameter、counts、warning。
+   - 現状の v2 scope。
+2. Phase B: Contact parameter declaration
+   - Receiver が emit し得る parameter を UNEvaluation に宣言する。
+   - 値はまだ書かない。
+   - UI / diagnostics / action resolver が namespace を把握できる。
+3. Phase C: Diagnostics-only contact probe
+   - overlap 計算はするが parameter state へは書かない。
+   - `would_emit parameter=X value=1` を diagnose / debug status に出す。
+   - 座標系、tag match、shape overlap、誤爆を検証する。
+4. Phase D: Opt-in parameter emission
+   - profile flag または `.unavatar` capability で明示有効化する。
+   - contact 切断時は 0。
+   - 複数 Receiver が同じ parameter を書く場合は max / OR。
+   - owner key は `contact:<source_id>`。
+
+v2 初期リリース目標は Phase A + Phase B まで。
+Phase C は debug-only として追加してよい。
+Phase D は配信事故を避けるため、実サンプルと diagnostics-only probe で十分に検証してから入れる。
+
+## Constraints And Interactions
+
+VRC Constraints、VRM node constraints、Modular Avatar resolver 由来 constraint は `UNConstraints` へ寄せる。
+v2 初期では transform dependency metadata、reset / rebuild 対象、diagnostics の役割に留める。
+solver integration は transform evaluation layer が安定してから行う。
+
+grabbing / posing は `UNInteraction` の capability metadata とする。
+v2 初期では UI / diagnostics / future hook 用であり、物理的な操作挙動は持たせない。
+
+## Diagnostics
+
+runtime status / diagnose は少なくとも以下を分ける。
+
+- source-authored value
+- evaluated runtime value
+- solver-applied value
+
+Contacts については Phase B 以降、declared parameter count を出す。
+Phase C 以降、would-emit count / sample を出す。
+Phase D 以降、emitted parameter count / owner key / reset-to-zero count を出す。
+
+この分離を崩すと、source importer、runtime evaluation、solver のどこで壊れたか追跡できなくなる。
