@@ -470,6 +470,8 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "note"
 	| "dynamics_group_count"
 	| "dynamics_enabled_group_count"
+	| "dynamics_source_enabled_group_count"
+	| "dynamics_enabled_override_count"
 	| "dynamics_collider_count"
 	| "dynamics_contact_count"
 	| "dynamics_contact_parameter_declaration_count"

@@ -145,6 +145,8 @@
 					values: {
 						groups: runtimeStatus.dynamics_group_count,
 						enabled: runtimeStatus.dynamics_enabled_group_count,
+						sourceEnabled: runtimeStatus.dynamics_source_enabled_group_count,
+						overrides: runtimeStatus.dynamics_enabled_override_count,
 						colliders: runtimeStatus.dynamics_collider_count,
 						contacts: runtimeStatus.dynamics_contact_count,
 						probes: runtimeStatus.dynamics_contact_probe_count,
