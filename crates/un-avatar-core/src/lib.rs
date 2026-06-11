@@ -314,6 +314,20 @@ pub struct UnaEvaluationTargetWriteCollision {
 	pub writes: Vec<UnaEvaluationRuntimeActionTargetWrite>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaEvaluationRestoreReadiness {
+	pub owner_key: String,
+	pub action_id: String,
+	pub effect_kind: String,
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
+	pub restore_target: bool,
+	pub current_value_available: bool,
+	pub baseline_required: bool,
+	pub ready: bool,
+	pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeActionCondition {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1918,12 +1932,102 @@ impl<'a> UnaRuntimeModel<'a> {
 			.map(|group| group.effective_enabled)
 	}
 
+	pub fn runtime_action_restore_readiness(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreReadiness> {
+		action
+			.effects
+			.iter()
+			.map(|effect| self.runtime_action_effect_restore_readiness(&action.id, effect))
+			.collect()
+	}
+
+	pub fn runtime_action_set_restore_readiness(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreReadiness> {
+		actions
+			.actions
+			.iter()
+			.flat_map(|action| self.runtime_action_restore_readiness(action))
+			.collect()
+	}
+
 	fn resolve_material(self, target: &UnaRuntimeMaterialTarget) -> Option<&'a UnaMaterialPbr> {
 		let scene = self.document.scene.as_ref()?;
 		if let Some(index) = resolve_runtime_material_index(scene, target) {
 			return scene.materials.get(index);
 		}
 		None
+	}
+
+	fn runtime_action_effect_restore_readiness(self, action_id: &str, effect: &UnaRuntimeActionEffect) -> UnaEvaluationRestoreReadiness {
+		let write = effect.evaluation_target_write(action_id);
+		let (restore_target, current_value_available, baseline_required, reason) = match effect {
+			UnaRuntimeActionEffect::WardrobeSet { .. } => (false, false, false, "not_restore_target"),
+			UnaRuntimeActionEffect::ExpressionWeight { .. } => (false, false, false, "not_restore_target"),
+			UnaRuntimeActionEffect::NodeVisibility { target, .. } => (
+				true,
+				self.node_visible(target).is_some(),
+				true,
+				if self.node_visible(target).is_some() {
+					"baseline_not_captured"
+				} else {
+					"target_unresolved"
+				},
+			),
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, .. } => {
+				let available = self.material_color(target, parameter).is_some();
+				(
+					true,
+					available,
+					true,
+					if available {
+						"baseline_not_captured"
+					} else {
+						"target_unresolved_or_unsupported_parameter"
+					},
+				)
+			}
+			UnaRuntimeActionEffect::MaterialScalar { target, parameter, .. } => {
+				let available = self.material_scalar(target, parameter).is_some();
+				(
+					true,
+					available,
+					true,
+					if available {
+						"baseline_not_captured"
+					} else {
+						"target_unresolved_or_unsupported_parameter"
+					},
+				)
+			}
+			UnaRuntimeActionEffect::MaterialSlot { target, .. } => {
+				let available = self.material_slot(target).is_some();
+				(
+					true,
+					available,
+					true,
+					if available { "baseline_not_captured" } else { "target_unresolved" },
+				)
+			}
+			UnaRuntimeActionEffect::DynamicsEnabled { source_id, .. } => {
+				let available = self.dynamics_enabled(source_id).is_some();
+				(
+					true,
+					available,
+					true,
+					if available { "baseline_not_captured" } else { "target_unresolved" },
+				)
+			}
+		};
+		UnaEvaluationRestoreReadiness {
+			owner_key: write.owner_key,
+			action_id: write.action_id,
+			effect_kind: write.effect_kind,
+			target_kind: write.target_kind,
+			target_key: write.target_key,
+			restore_target,
+			current_value_available,
+			baseline_required,
+			ready: false,
+			reason: reason.to_string(),
+		}
 	}
 
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
@@ -5880,6 +5984,118 @@ mod tests {
 		assert_eq!(collisions[0].owner_keys, vec!["action:hat:off", "action:hat:on"]);
 		assert_eq!(collisions[0].action_ids, vec!["hat:off", "hat:on"]);
 		assert_eq!(collisions[0].writes.len(), 2);
+	}
+
+	#[test]
+	fn runtime_action_restore_readiness_reports_baseline_requirements() {
+		let primitive = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(0),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![UnaSceneNode {
+					name: Some("Renderer".to_string()),
+					source_node_id: Some("node_renderer".to_string()),
+					visible: true,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				}],
+				meshes: vec![vec![primitive]],
+				materials: vec![UnaMaterialPbr {
+					name: Some("Mat".to_string()),
+					..Default::default()
+				}],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup {
+					source_id: "physbone:hair".to_string(),
+					enabled: true,
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let action = UnaRuntimeAction {
+			id: "variant:coat".to_string(),
+			effects: vec![
+				UnaRuntimeActionEffect::NodeVisibility {
+					target: UnaRuntimeNodeTarget {
+						source_node_id: Some("node_renderer".to_string()),
+						..Default::default()
+					},
+					visible: false,
+				},
+				UnaRuntimeActionEffect::MaterialScalar {
+					target: UnaRuntimeMaterialTarget {
+						name: Some("Mat".to_string()),
+						..Default::default()
+					},
+					parameter: "_Smoothness".to_string(),
+					value: 0.5,
+				},
+				UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							source_node_id: Some("node_renderer".to_string()),
+							..Default::default()
+						},
+						primitive_index: None,
+					},
+					material: None,
+				},
+				UnaRuntimeActionEffect::DynamicsEnabled {
+					source_id: "physbone:hair".to_string(),
+					enabled: false,
+				},
+				UnaRuntimeActionEffect::NodeVisibility {
+					target: UnaRuntimeNodeTarget {
+						source_node_id: Some("missing".to_string()),
+						..Default::default()
+					},
+					visible: true,
+				},
+				UnaRuntimeActionEffect::ExpressionWeight {
+					name: "Smile".to_string(),
+					weight: 1.0,
+				},
+			],
+			..Default::default()
+		};
+
+		let readiness = document.runtime_model().runtime_action_restore_readiness(&action);
+
+		assert_eq!(readiness.len(), 6);
+		assert!(readiness[0].restore_target);
+		assert!(readiness[0].current_value_available);
+		assert!(readiness[0].baseline_required);
+		assert!(!readiness[0].ready);
+		assert_eq!(readiness[0].reason, "baseline_not_captured");
+		assert_eq!(readiness[1].reason, "baseline_not_captured");
+		assert_eq!(readiness[2].reason, "baseline_not_captured");
+		assert_eq!(readiness[3].reason, "baseline_not_captured");
+		assert!(readiness[4].restore_target);
+		assert!(!readiness[4].current_value_available);
+		assert_eq!(readiness[4].reason, "target_unresolved");
+		assert!(!readiness[5].restore_target);
+		assert_eq!(readiness[5].reason, "not_restore_target");
 	}
 
 	#[test]
