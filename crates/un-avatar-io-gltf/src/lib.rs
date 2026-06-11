@@ -5935,6 +5935,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	let mut metadata_supported = 0usize;
 	let mut unsupported = 0usize;
 	let mut disabled = 0usize;
+	let mut support_kind_mismatches = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
 	let mut unsupported_active_types = BTreeMap::<String, usize>::new();
 	for component in components {
@@ -5947,7 +5948,16 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			.and_then(Value::as_str)
 			.filter(|value| !value.is_empty())
 			.unwrap_or("unknown");
-		match modular_avatar_component_support_kind(short_type) {
+		let local_support_kind = modular_avatar_component_support_kind(short_type);
+		if component
+			.get("supportKind")
+			.and_then(Value::as_str)
+			.filter(|exported| !exported.is_empty() && *exported != local_support_kind)
+			.is_some()
+		{
+			support_kind_mismatches += 1;
+		}
+		match local_support_kind {
 			"resolver" => resolver_supported += 1,
 			"metadata" => metadata_supported += 1,
 			"runtime_action" => runtime_action_supported += 1,
@@ -5971,19 +5981,25 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			)),
 		});
 	}
+	if support_kind_mismatches > 0 {
+		report.push_warning(format!(
+			".unavatar Modular Avatar component supportKind mismatch: count={support_kind_mismatches}; importer classification was used"
+		));
+	}
 	let unsupported_types = unsupported_types
 		.into_iter()
 		.map(|(ty, count)| format!("{ty}:{count}"))
 		.collect::<Vec<_>>()
 		.join(",");
 	report.push_info(format!(
-		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, metadata_supported={}, unsupported={}, disabled={}, unsupported_types={}",
+		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, metadata_supported={}, unsupported={}, disabled={}, support_kind_mismatches={}, unsupported_types={}",
 		components.len(),
 		resolver_supported,
 		runtime_action_supported,
 		metadata_supported,
 		unsupported,
 		disabled,
+		support_kind_mismatches,
 		unsupported_types
 	));
 }
@@ -12930,6 +12946,7 @@ mod tests {
 		assert!(message.contains("metadata_supported=3"));
 		assert!(message.contains("unsupported=12"));
 		assert!(message.contains("disabled=1"));
+		assert!(message.contains("support_kind_mismatches=0"));
 		assert!(message.contains("ModularAvatarConvertConstraints:1"));
 		assert!(message.contains("ModularAvatarFloorAdjuster:1"));
 		assert!(message.contains("ModularAvatarGlobalCollider:1"));
@@ -12978,6 +12995,31 @@ mod tests {
 				diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(unsupported_type)
 			}));
 		}
+	}
+
+	#[test]
+	fn modular_avatar_component_catalog_warns_on_exported_support_kind_mismatch() {
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"supportKind": "unsupported",
+			"enabled": true
+		})];
+		let mut report = ImportReport::default();
+		report_unavatar_modular_avatar_component_catalog(&components, &mut report);
+
+		let message = report
+			.messages
+			.iter()
+			.find(|message| message.contains("Modular Avatar components"))
+			.unwrap();
+		assert!(message.contains("resolver_supported=1"));
+		assert!(message.contains("support_kind_mismatches=1"));
+		assert!(report.diagnostics.iter().any(|diagnostic| {
+			diagnostic.severity == un_avatar_core::ReportSeverity::Warning
+				&& diagnostic.text.contains("supportKind mismatch")
+				&& diagnostic.text.contains("count=1")
+		}));
+		assert!(report.lost_features.is_empty());
 	}
 
 	#[test]

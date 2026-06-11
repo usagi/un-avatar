@@ -67,6 +67,7 @@ namespace UNAvatar.UnityExporter
             {
                 ["type"] = type.FullName ?? type.Name,
                 ["shortType"] = type.Name,
+                ["supportKind"] = ModularAvatarComponentSupportKind(type.Name),
                 ["target"] = TransformTargetJson(root, component.transform),
                 ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled,
                 ["fields"] = BuildModularAvatarComponentFields(root, component, textureAssets)
