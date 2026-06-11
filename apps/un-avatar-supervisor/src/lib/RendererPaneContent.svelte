@@ -32,6 +32,7 @@
 	export let onClearExpressionOverrides: RendererPaneActions["onClearExpressionOverrides"];
 	export let onSetExpressionOverride: RendererPaneActions["onSetExpressionOverride"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
+	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
 </script>
 
 {#if rendererPaneTab === "overview"}
@@ -70,5 +71,5 @@
 		{onSetExpressionOverride}
 	/>
 {:else if rendererPaneTab === "diagnostics"}
-	<RendererDiagnosticsPane {renderer} {runtimeStatus} />
+	<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} />
 {/if}

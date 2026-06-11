@@ -462,7 +462,7 @@ export type RendererOverviewMotionStatus = Omit<
 	motion_applied_fps?: number | null;
 };
 
-export type RendererDiagnosticsData = Pick<RendererInstance, "last_stderr" | "stderr_tail" | "exit_code">;
+export type RendererDiagnosticsData = Pick<RendererInstance, "id" | "pid" | "last_stderr" | "stderr_tail" | "exit_code">;
 
 export type RendererRuntimeDiagnosticsData = Pick<
 	RendererRuntimeStatus,

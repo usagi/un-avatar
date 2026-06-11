@@ -2427,6 +2427,21 @@
 		}
 	}
 
+	async function setRendererDynamicsEnabled(renderer: RendererInstance | null, sourceId: string, enabled: boolean): Promise<void> {
+		if (!renderer) return;
+		if (!hasTauriRuntime()) return;
+		try {
+			await invoke("set_renderer_dynamics_enabled", {
+				id: renderer.id,
+				sourceId,
+				enabled,
+			});
+			await refreshRendererRuntimeView();
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
 	async function setRendererCameraLock(renderer: RendererInstance | null, locked: boolean): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) return;
@@ -2848,6 +2863,10 @@
 						onActivateWardrobeMenuCandidate={(rendererId, actionId, wardrobeSetId) => {
 							const renderer = selectedRendererById(rendererId);
 							return activateWardrobeMenuCandidate(renderer, actionId, wardrobeSetId);
+						}}
+						onSetDynamicsEnabled={(rendererId, sourceId, enabled) => {
+							const renderer = selectedRendererById(rendererId);
+							return setRendererDynamicsEnabled(renderer, sourceId, enabled);
 						}}
 						onOpenProfile={() => {
 							if (!launchTargetSetting) return;

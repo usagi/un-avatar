@@ -1,11 +1,17 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
+	import { Power } from "lucide-svelte";
+	import type { RendererPaneActions } from "./rendererPaneActions";
 	import type { RendererDiagnosticsData, RendererRuntimeDiagnosticsData } from "./rendererTypes";
 
 	export let renderer: RendererDiagnosticsData;
 	export let runtimeStatus: RendererRuntimeDiagnosticsData | null;
+	export let busy = false;
+	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
 
 	const sampleLimit = 4;
+
+	$: rendererRunning = renderer.pid != null;
 
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
@@ -100,6 +106,11 @@
 	function runtimeActionRestoreApplyLabel(entry: RendererRuntimeDiagnosticsData["runtime_action_restore_apply_plan"][number]): string {
 		return `${entry.owner_key} state=${entry.condition_state ?? "none"} ${entry.target_kind}:${entry.target_key} ready=${entry.ready} reason=${entry.reason} baseline=${JSON.stringify(entry.baseline_value)} current=${JSON.stringify(entry.current_value)}`;
 	}
+
+	function toggleDynamicsGroup(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): void {
+		if (!group.source_id) return;
+		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
+	}
 </script>
 
 <div class="renderer-pane-scroll">
@@ -144,7 +155,27 @@
 			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
-				<dd class="stderr-block">{runtimeStatus.dynamics_groups.slice(0, sampleLimit).map(groupLabel).join("\n")}</dd>
+				<dd class="diagnostics-action-list">
+					{#each runtimeStatus.dynamics_groups.slice(0, sampleLimit) as group}
+						<div class="diagnostics-action-row">
+							<code>{groupLabel(group)}</code>
+							<button
+								type="button"
+								class:active={group.effective_enabled}
+								disabled={busy || !rendererRunning || !group.source_id}
+								title={group.source_id ?? group.root_path ?? `#${group.index}`}
+								onclick={() => toggleDynamicsGroup(group)}
+							>
+								<Power size={13} />
+								<span>
+									{group.effective_enabled
+										? $_("renderers.details.dynamics_disable")
+										: $_("renderers.details.dynamics_enable")}
+								</span>
+							</button>
+						</div>
+					{/each}
+				</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_interaction_hooks.length}
 				<dt>{$_("renderers.details.diag_dynamics_interaction_hooks")}</dt>

@@ -41,6 +41,7 @@
 	export let onClearExpressionOverrides: RendererPaneActions["onClearExpressionOverrides"];
 	export let onSetExpressionOverride: RendererPaneActions["onSetExpressionOverride"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
+	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
 	export let onOpenProfile: () => void;
 	export let onRevealProfilesDir: () => void | Promise<void>;
 </script>
@@ -75,6 +76,7 @@
 			{onClearExpressionOverrides}
 			{onSetExpressionOverride}
 			{onActivateWardrobeMenuCandidate}
+			{onSetDynamicsEnabled}
 		/>
 	{:else}
 		<RendererReadyPanel
