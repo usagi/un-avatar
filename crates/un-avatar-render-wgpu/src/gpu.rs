@@ -4648,6 +4648,20 @@ impl GpuState {
 			.collect())
 	}
 
+	fn apply_restored_runtime_action_effects(&mut self, restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) {
+		if restored.is_empty() {
+			return;
+		}
+		if restored
+			.iter()
+			.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
+		{
+			self.reset_dynamics_nodes_to_rest();
+			self.rebuild_runtime_dynamics();
+		}
+		self.invalidate_applied_document_state();
+	}
+
 	pub(crate) fn dynamics_groups(&self) -> Vec<RuntimeDynamicsGroupStatus> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();
@@ -4706,9 +4720,7 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
-			if !restored.is_empty() {
-				self.invalidate_applied_document_state();
-			}
+			self.apply_restored_runtime_action_effects(&restored);
 		}
 		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
 		Ok(last_activation)
@@ -4740,16 +4752,7 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
-			if !restored.is_empty() {
-				if restored
-					.iter()
-					.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
-				{
-					self.reset_dynamics_nodes_to_rest();
-					self.rebuild_runtime_dynamics();
-				}
-				self.invalidate_applied_document_state();
-			}
+			self.apply_restored_runtime_action_effects(&restored);
 			return Ok(Vec::new());
 		}
 		let mut activations = Vec::new();
@@ -4924,16 +4927,7 @@ impl GpuState {
 		doc.runtime_model_mut().set_runtime_parameter_values(parameter_values.clone());
 		let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 		drop(doc);
-		if !restored.is_empty() {
-			if restored
-				.iter()
-				.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
-			{
-				self.reset_dynamics_nodes_to_rest();
-				self.rebuild_runtime_dynamics();
-			}
-			self.invalidate_applied_document_state();
-		}
+		self.apply_restored_runtime_action_effects(&restored);
 		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
 		Ok(RuntimeActionActivation {
 			action_id: resolved_action_id,
@@ -5568,6 +5562,11 @@ impl GpuState {
 				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
 					sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
 				}
+			}
+		}
+		if matches!(self.apply_contact_parameter_emissions(), Ok(changed) if !changed.is_empty()) {
+			if let Err(e) = self.evaluate_runtime_parameter_actions() {
+				eprintln!("un-avatar-renderer: contact parameter action evaluation failed: {e}");
 			}
 		}
 		let (gw, gh) = self.render_pixel_dims();
