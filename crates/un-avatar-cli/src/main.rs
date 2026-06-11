@@ -4151,6 +4151,12 @@ fn build_diagnose_report(
 			dynamics_source_features.stretch_limit_count, dynamics_counts.stretch_limit_groups
 		));
 	}
+	if dynamics_source_features.radius_curve_count > 0 {
+		warnings.push(format!(
+			"dynamics radius curves are metadata-only in the current solver; source_radius_curves={}",
+			dynamics_source_features.radius_curve_count
+		));
+	}
 	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
 	let contact_parameter_emission_enabled = doc.runtime_model().contact_parameter_emission_enabled();
 	if contact_probe_would_emit_count > 0 && !contact_parameter_emission_enabled {
@@ -6989,6 +6995,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver")));
 	}
 
 	#[test]
