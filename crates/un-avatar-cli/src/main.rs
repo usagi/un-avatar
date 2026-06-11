@@ -555,6 +555,9 @@ struct DiagnoseDynamicsSummary {
 	contact_parameter_emission_enabled: bool,
 	contact_probe_count: usize,
 	contact_probe_would_emit_count: usize,
+	contact_parameter_emission_count: usize,
+	contact_parameter_emitted_count: usize,
+	contact_parameter_reset_to_zero_count: usize,
 	constraint_ref_count: usize,
 	vrc_constraint_ref_count: usize,
 	source_limit_count: usize,
@@ -570,6 +573,8 @@ struct DiagnoseDynamicsSummary {
 	contact_parameter_declarations: Vec<DiagnoseContactParameterDeclarationSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<DiagnoseContactProbeSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_emissions: Vec<DiagnoseContactParameterEmissionSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	constraint_refs: Vec<DiagnoseDynamicsConstraintRefSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -689,6 +694,23 @@ struct DiagnoseContactProbeSummary {
 	receiver_shape: un_avatar_core::UnaDynamicsColliderShape,
 	sender_shape: un_avatar_core::UnaDynamicsColliderShape,
 	approximation: String,
+}
+
+#[derive(Serialize)]
+struct DiagnoseContactParameterEmissionSummary {
+	index: usize,
+	owner_key: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	receiver_index: usize,
+	receiver_node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	receiver_node_path: Option<String>,
+	parameter: String,
+	value: f32,
+	emitted: bool,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	sender_source_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -2095,6 +2117,31 @@ fn dynamics_contact_probe_summaries(doc: &UnaDocument) -> Vec<DiagnoseContactPro
 			receiver_shape: probe.receiver_shape,
 			sender_shape: probe.sender_shape,
 			approximation: probe.approximation,
+		})
+		.collect()
+}
+
+fn dynamics_contact_parameter_emission_summaries(doc: &UnaDocument) -> Vec<DiagnoseContactParameterEmissionSummary> {
+	if !doc.runtime_model().contact_parameter_emission_enabled() {
+		return Vec::new();
+	}
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
+		.contact_parameter_emissions()
+		.into_iter()
+		.enumerate()
+		.map(|(index, emission)| DiagnoseContactParameterEmissionSummary {
+			index,
+			owner_key: emission.owner_key,
+			source_id: emission.source_id,
+			receiver_index: emission.receiver_index,
+			receiver_node: emission.receiver_node,
+			receiver_node_path: node_paths_by_index.get(emission.receiver_node).cloned().flatten(),
+			parameter: emission.parameter,
+			value: emission.value,
+			emitted: emission.emitted,
+			sender_source_ids: emission.sender_source_ids,
 		})
 		.collect()
 }
@@ -3836,6 +3883,7 @@ fn build_diagnose_report(
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
 	let dynamics_contact_parameter_declarations = dynamics_contact_parameter_declaration_summaries(&doc);
 	let dynamics_contact_probes = dynamics_contact_probe_summaries(&doc);
+	let dynamics_contact_parameter_emissions = dynamics_contact_parameter_emission_summaries(&doc);
 	let dynamics_constraint_refs = dynamics_constraint_ref_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
@@ -3893,6 +3941,15 @@ fn build_diagnose_report(
 		contact_parameter_emission_enabled: doc.runtime_model().contact_parameter_emission_enabled(),
 		contact_probe_count: dynamics_contact_probes.len(),
 		contact_probe_would_emit_count: dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count(),
+		contact_parameter_emission_count: dynamics_contact_parameter_emissions.len(),
+		contact_parameter_emitted_count: dynamics_contact_parameter_emissions
+			.iter()
+			.filter(|emission| emission.emitted)
+			.count(),
+		contact_parameter_reset_to_zero_count: dynamics_contact_parameter_emissions
+			.iter()
+			.filter(|emission| !emission.emitted)
+			.count(),
 		constraint_ref_count: dynamics_counts.constraint_refs,
 		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,
@@ -3905,6 +3962,7 @@ fn build_diagnose_report(
 		contacts: dynamics_contacts,
 		contact_parameter_declarations: dynamics_contact_parameter_declarations,
 		contact_probes: dynamics_contact_probes,
+		contact_parameter_emissions: dynamics_contact_parameter_emissions,
 		constraint_refs: dynamics_constraint_refs,
 		groups: dynamics_groups,
 	};
@@ -4718,7 +4776,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4739,6 +4797,9 @@ fn run_diagnose(
 		report.dynamics.contact_parameter_emission_enabled,
 		report.dynamics.contact_probe_count,
 		report.dynamics.contact_probe_would_emit_count,
+		report.dynamics.contact_parameter_emission_count,
+		report.dynamics.contact_parameter_emitted_count,
+		report.dynamics.contact_parameter_reset_to_zero_count,
 		report.dynamics.constraint_ref_count,
 		report.dynamics.vrc_constraint_ref_count,
 		report.dynamics.source_limit_count,
@@ -4826,6 +4887,18 @@ fn run_diagnose(
 			probe.receiver_radius,
 			probe.sender_radius,
 			probe.approximation
+		);
+	}
+	for emission in report.dynamics.contact_parameter_emissions.iter().take(16) {
+		println!(
+			"  dynamics_contact_parameter_emission[{}]: owner={:?} receiver={} parameter={:?} value={} emitted={} senders={:?}",
+			emission.index,
+			emission.owner_key,
+			emission.receiver_node_path.as_deref().unwrap_or("#"),
+			emission.parameter,
+			emission.value,
+			emission.emitted,
+			emission.sender_source_ids
 		);
 	}
 	for constraint_ref in report.dynamics.constraint_refs.iter().take(16) {

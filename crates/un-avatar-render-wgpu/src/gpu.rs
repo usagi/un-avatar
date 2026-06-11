@@ -243,11 +243,35 @@ pub(crate) struct RuntimeContactProbeStatus {
 	pub(crate) approximation: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeContactParameterEmissionStatus {
+	pub(crate) owner_key: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) receiver_index: usize,
+	pub(crate) receiver_node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) receiver_node_path: Option<String>,
+	pub(crate) parameter: String,
+	pub(crate) value: f32,
+	pub(crate) emitted: bool,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sender_source_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RuntimeContactProbeStatusSummary {
 	pub(crate) count: u32,
 	pub(crate) would_emit_count: u32,
 	pub(crate) probes: Vec<RuntimeContactProbeStatus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RuntimeContactParameterEmissionStatusSummary {
+	pub(crate) count: u32,
+	pub(crate) emitted_count: u32,
+	pub(crate) reset_to_zero_count: u32,
+	pub(crate) emissions: Vec<RuntimeContactParameterEmissionStatus>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -1039,6 +1063,36 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 		count,
 		would_emit_count,
 		probes,
+	}
+}
+
+fn contact_parameter_emission_status_summary(doc: &UnaDocument) -> RuntimeContactParameterEmissionStatusSummary {
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	let emissions = runtime_model.contact_parameter_emissions();
+	let count = emissions.len() as u32;
+	let emitted_count = emissions.iter().filter(|emission| emission.emitted).count() as u32;
+	let reset_to_zero_count = emissions.iter().filter(|emission| !emission.emitted).count() as u32;
+	let emissions = emissions
+		.into_iter()
+		.take(CONTACT_PROBE_STATUS_LIMIT)
+		.map(|emission| RuntimeContactParameterEmissionStatus {
+			owner_key: emission.owner_key,
+			source_id: emission.source_id,
+			receiver_index: emission.receiver_index,
+			receiver_node: emission.receiver_node,
+			receiver_node_path: node_paths_by_index.get(emission.receiver_node).cloned().flatten(),
+			parameter: emission.parameter,
+			value: emission.value,
+			emitted: emission.emitted,
+			sender_source_ids: emission.sender_source_ids,
+		})
+		.collect();
+	RuntimeContactParameterEmissionStatusSummary {
+		count,
+		emitted_count,
+		reset_to_zero_count,
+		emissions,
 	}
 }
 
@@ -4350,6 +4404,42 @@ impl GpuState {
 			return RuntimeContactProbeStatusSummary::default();
 		};
 		contact_probe_status_summary(&doc)
+	}
+
+	pub(crate) fn contact_parameter_emission_status(&self) -> RuntimeContactParameterEmissionStatusSummary {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return RuntimeContactParameterEmissionStatusSummary::default();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return RuntimeContactParameterEmissionStatusSummary::default();
+		};
+		if !doc.runtime_model().contact_parameter_emission_enabled() {
+			return RuntimeContactParameterEmissionStatusSummary::default();
+		}
+		contact_parameter_emission_status_summary(&doc)
+	}
+
+	pub(crate) fn apply_contact_parameter_emissions(&mut self) -> Result<BTreeMap<String, f32>, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Ok(BTreeMap::new());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let before = doc.runtime_model().runtime_parameter_values().clone();
+		let emissions = doc.runtime_model_mut().apply_contact_parameter_emissions();
+		if emissions.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let after = doc.runtime_model().runtime_parameter_values();
+		Ok(emissions
+			.into_iter()
+			.filter_map(|emission| {
+				let value = after.get(&emission.parameter).copied()?;
+				if before.get(&emission.parameter).copied() == Some(value) {
+					return None;
+				}
+				Some((emission.parameter, value))
+			})
+			.collect())
 	}
 
 	pub(crate) fn dynamics_groups(&self) -> Vec<RuntimeDynamicsGroupStatus> {

@@ -153,6 +153,18 @@ export type RendererRuntimeContactParameterDeclarationStatus = {
   collision_tags?: string[];
 };
 
+export type RendererRuntimeContactParameterEmissionStatus = {
+  owner_key: string;
+  source_id?: string;
+  receiver_index: number;
+  receiver_node: number;
+  receiver_node_path?: string;
+  parameter: string;
+  value: number;
+  emitted: boolean;
+  sender_source_ids?: string[];
+};
+
 export type RendererRuntimeContactProbeStatus = {
   index: number;
   receiver_index: number;
@@ -371,6 +383,9 @@ export type RendererRuntimeStatus = {
   dynamics_contact_parameter_declaration_count: number;
   dynamics_contact_probe_count: number;
   dynamics_contact_probe_would_emit_count: number;
+  dynamics_contact_parameter_emission_count: number;
+  dynamics_contact_parameter_emitted_count: number;
+  dynamics_contact_parameter_reset_to_zero_count: number;
   dynamics_constraint_ref_count: number;
   dynamics_vrc_constraint_ref_count: number;
   runtime_actions: RendererRuntimeActionStatus[];
@@ -381,6 +396,7 @@ export type RendererRuntimeStatus = {
   runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_parameter_emission_enabled: boolean;
+  contact_parameter_emissions: RendererRuntimeContactParameterEmissionStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
   dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
@@ -428,6 +444,9 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_contact_parameter_declaration_count"
   | "dynamics_contact_probe_count"
   | "dynamics_contact_probe_would_emit_count"
+  | "dynamics_contact_parameter_emission_count"
+  | "dynamics_contact_parameter_emitted_count"
+  | "dynamics_contact_parameter_reset_to_zero_count"
   | "dynamics_constraint_ref_count"
   | "runtime_actions"
   | "runtime_action_target_write_collisions"
@@ -439,6 +458,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_colliders"
   | "contact_parameter_declarations"
   | "contact_parameter_emission_enabled"
+  | "contact_parameter_emissions"
   | "contact_probes"
   | "dynamics_constraint_refs"
 >;

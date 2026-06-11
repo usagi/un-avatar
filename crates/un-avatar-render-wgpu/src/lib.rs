@@ -1604,6 +1604,11 @@ impl AvatarApp {
 				status.contact_probes = contact_probe_status.probes;
 				status.dynamics_contact_probe_count = contact_probe_status.count;
 				status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
+				let contact_emission_status = gpu.map(|g| g.contact_parameter_emission_status()).unwrap_or_default();
+				status.contact_parameter_emissions = contact_emission_status.emissions;
+				status.dynamics_contact_parameter_emission_count = contact_emission_status.count;
+				status.dynamics_contact_parameter_emitted_count = contact_emission_status.emitted_count;
+				status.dynamics_contact_parameter_reset_to_zero_count = contact_emission_status.reset_to_zero_count;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
@@ -2183,6 +2188,14 @@ impl AvatarApp {
 			win.request_redraw();
 			return;
 		};
+		match gpu.apply_contact_parameter_emissions() {
+			Ok(parameter_updates) => {
+				if !parameter_updates.is_empty() {
+					self.update_runtime_parameters(parameter_updates);
+				}
+			}
+			Err(err) => eprintln!("un-avatar-renderer: contact parameter emission failed: {err}"),
+		}
 		let inst_fps = if timings.wall_since_last_ms > 0.05 {
 			1000.0 / timings.wall_since_last_ms
 		} else {
@@ -3193,6 +3206,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "is_false")]
 	contact_parameter_emission_enabled: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_emissions: Vec<gpu::RuntimeContactParameterEmissionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
@@ -3302,6 +3317,12 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_contact_probe_would_emit_count: u32,
 	#[serde(default)]
+	dynamics_contact_parameter_emission_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emitted_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_reset_to_zero_count: u32,
+	#[serde(default)]
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
@@ -3378,6 +3399,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
 		contact_parameter_emission_enabled: false,
+		contact_parameter_emissions: Vec::new(),
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
 		dynamics_colliders: Vec::new(),
@@ -3437,6 +3459,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_contact_parameter_declaration_count: 0,
 		dynamics_contact_probe_count: 0,
 		dynamics_contact_probe_would_emit_count: 0,
+		dynamics_contact_parameter_emission_count: 0,
+		dynamics_contact_parameter_emitted_count: 0,
+		dynamics_contact_parameter_reset_to_zero_count: 0,
 		dynamics_constraint_ref_count: 0,
 		dynamics_vrc_constraint_ref_count: 0,
 		camera_locked: opts.camera_locked,
@@ -4838,6 +4863,17 @@ mod tests {
 				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
 			}];
 			status.contact_parameter_emission_enabled = true;
+			status.contact_parameter_emissions = vec![crate::gpu::RuntimeContactParameterEmissionStatus {
+				owner_key: "contact:hand".to_string(),
+				source_id: "contact:hand".to_string(),
+				receiver_index: 0,
+				receiver_node: 1,
+				receiver_node_path: Some("root/receiver".to_string()),
+				parameter: "ContactHand".to_string(),
+				value: 1.0,
+				emitted: true,
+				sender_source_ids: vec!["contact:sender".to_string()],
+			}];
 			status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
 				index: 0,
 				receiver_index: 0,
@@ -4869,6 +4905,9 @@ mod tests {
 			status.dynamics_contact_parameter_declaration_count = 1;
 			status.dynamics_contact_probe_count = 1;
 			status.dynamics_contact_probe_would_emit_count = 1;
+			status.dynamics_contact_parameter_emission_count = 1;
+			status.dynamics_contact_parameter_emitted_count = 1;
+			status.dynamics_contact_parameter_reset_to_zero_count = 0;
 			status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
 				index: 0,
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
@@ -4978,6 +5017,26 @@ mod tests {
 			snapshot.get("contact_parameter_emission_enabled").and_then(|value| value.as_bool()),
 			Some(true)
 		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_emission_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_emitted_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let emissions = snapshot
+			.get("contact_parameter_emissions")
+			.and_then(|value| value.as_array())
+			.expect("contact parameter emissions");
+		assert_eq!(emissions.len(), 1);
+		assert_eq!(emissions[0].get("parameter").and_then(|value| value.as_str()), Some("ContactHand"));
+		assert_eq!(emissions[0].get("value").and_then(|value| value.as_f64()), Some(1.0));
+		assert_eq!(emissions[0].get("emitted").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(
 			snapshot.get("dynamics_contact_probe_count").and_then(|value| value.as_u64()),
 			Some(1)

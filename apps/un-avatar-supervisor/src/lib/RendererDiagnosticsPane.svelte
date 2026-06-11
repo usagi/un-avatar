@@ -34,6 +34,13 @@
     return `${probe.parameter}: ${receiver} <- ${sender} (${probe.would_emit ? "would emit" : "idle"})`;
   }
 
+  function contactEmissionLabel(
+    emission: RendererRuntimeDiagnosticsData["contact_parameter_emissions"][number],
+  ): string {
+    const receiver = emission.receiver_node_path ?? `#${emission.receiver_node}`;
+    return `${emission.parameter}: ${emission.value} @ ${receiver} (${emission.emitted ? "emitted" : "reset"})`;
+  }
+
   function constraintRefLabel(ref: RendererRuntimeDiagnosticsData["dynamics_constraint_refs"][number]): string {
     const target = ref.target_path ?? `#${ref.target_node}`;
     return `${ref.constraint_type ?? "constraint"} @ ${target} (${ref.source_kind})`;
@@ -117,6 +124,7 @@
             contacts: runtimeStatus.dynamics_contact_count,
             probes: runtimeStatus.dynamics_contact_probe_count,
             wouldEmit: runtimeStatus.dynamics_contact_probe_would_emit_count,
+            emitted: runtimeStatus.dynamics_contact_parameter_emitted_count,
             constraints: runtimeStatus.dynamics_constraint_ref_count,
           },
         })}
@@ -136,7 +144,17 @@
         </dd>
       {/if}
       <dt>{$_("renderers.details.diag_contact_parameter_emission")}</dt>
-      <dd>{runtimeStatus.contact_parameter_emission_enabled ? "enabled" : "disabled"}</dd>
+      <dd>
+        {runtimeStatus.contact_parameter_emission_enabled ? "enabled" : "disabled"}
+        ({runtimeStatus.dynamics_contact_parameter_emitted_count}/{runtimeStatus.dynamics_contact_parameter_emission_count},
+        reset={runtimeStatus.dynamics_contact_parameter_reset_to_zero_count})
+      </dd>
+      {#if runtimeStatus.contact_parameter_emissions.length}
+        <dt>{$_("renderers.details.diag_contact_parameter_emissions")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.contact_parameter_emissions.slice(0, sampleLimit).map(contactEmissionLabel).join("\n")}
+        </dd>
+      {/if}
       {#if runtimeStatus.contact_probes.length}
         <dt>{$_("renderers.details.diag_contact_probes")}</dt>
         <dd class="stderr-block">{runtimeStatus.contact_probes.slice(0, sampleLimit).map(contactProbeLabel).join("\n")}</dd>

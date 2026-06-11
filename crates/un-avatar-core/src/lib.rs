@@ -1268,6 +1268,22 @@ pub struct UnaEvaluationContactProbe {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaEvaluationContactParameterEmission {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub owner_key: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
+	pub receiver_index: usize,
+	pub receiver_node: usize,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub parameter: String,
+	pub value: f32,
+	pub emitted: bool,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub sender_source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaDynamicsConstraintRef {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1891,6 +1907,38 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 		}
 		probes
 	}
+
+	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
+		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
+		let probes = self.contact_probes();
+		contacts
+			.iter()
+			.enumerate()
+			.filter_map(|(receiver_index, receiver)| {
+				if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
+					return None;
+				}
+				let sender_source_ids = probes
+					.iter()
+					.filter(|probe| probe.receiver_index == receiver_index && probe.would_emit)
+					.map(|probe| probe.sender_source_id.clone())
+					.collect::<BTreeSet<_>>()
+					.into_iter()
+					.collect::<Vec<_>>();
+				let emitted = !sender_source_ids.is_empty();
+				Some(UnaEvaluationContactParameterEmission {
+					owner_key: contact_owner_key(&receiver.source_id, receiver_index),
+					source_id: receiver.source_id.clone(),
+					receiver_index,
+					receiver_node: receiver.node,
+					parameter: receiver.parameter.clone(),
+					value: if emitted { 1.0 } else { 0.0 },
+					emitted,
+					sender_source_ids,
+				})
+			})
+			.collect()
+	}
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1995,6 +2043,12 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn runtime_parameter_values(self) -> &'a BTreeMap<String, f32> {
 		&self.runtime_state().parameter_values
+	}
+
+	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
+		self.scene_profile_dynamics()
+			.map(UnaRuntimeSceneDynamics::contact_parameter_emissions)
+			.unwrap_or_default()
 	}
 
 	pub fn restore_baselines(self) -> &'a BTreeMap<String, Vec<UnaEvaluationRestoreBaselineEntry>> {
@@ -2317,6 +2371,20 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_runtime_parameter_values(&mut self, values: BTreeMap<String, f32>) {
 		self.runtime_state_mut().parameter_values.extend(values);
+	}
+
+	pub fn apply_contact_parameter_emissions(&mut self) -> Vec<UnaEvaluationContactParameterEmission> {
+		if !self.document.runtime_model().contact_parameter_emission_enabled() {
+			return Vec::new();
+		}
+		let emissions = self.document.runtime_model().contact_parameter_emissions();
+		let mut parameter_values = BTreeMap::<String, f32>::new();
+		for emission in &emissions {
+			let value = parameter_values.entry(emission.parameter.clone()).or_insert(0.0);
+			*value = value.max(emission.value);
+		}
+		self.set_runtime_parameter_values(parameter_values);
+		emissions
 	}
 
 	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
@@ -6951,6 +7019,83 @@ mod tests {
 			"contacts": {"parameterEmissionEnabled": true}
 		});
 		assert!(document.runtime_model().contact_parameter_emission_enabled());
+	}
+
+	#[test]
+	fn contact_parameter_emission_applies_only_when_opted_in() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_node(vec![1, 2, 3]),
+					test_translation_node(0.0, 0.0, 0.0),
+					test_translation_node(0.07, 0.0, 0.0),
+					test_translation_node(10.0, 0.0, 0.0),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({}),
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				contacts: vec![
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:hand".to_string(),
+						node: 1,
+						kind: UnaDynamicsContactKind::Receiver,
+						parameter: "ContactHand".to_string(),
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:near-sender".to_string(),
+						node: 2,
+						kind: UnaDynamicsContactKind::Sender,
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.04,
+						..Default::default()
+					},
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:far".to_string(),
+						node: 3,
+						kind: UnaDynamicsContactKind::Receiver,
+						parameter: "ContactFar".to_string(),
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let emissions = document.runtime_model().contact_parameter_emissions();
+		assert_eq!(emissions.len(), 2);
+		assert_eq!(emissions[0].owner_key, "contact:hand");
+		assert_eq!(emissions[0].value, 1.0);
+		assert!(emissions[0].emitted);
+		assert_eq!(emissions[1].owner_key, "contact:far");
+		assert_eq!(emissions[1].value, 0.0);
+		assert!(!emissions[1].emitted);
+		assert!(document.runtime_model_mut().apply_contact_parameter_emissions().is_empty());
+		assert!(document.runtime_model().runtime_parameter_values().is_empty());
+
+		document.unavatar.as_mut().unwrap().source = serde_json::json!({
+			"runtime": {"capabilities": ["contacts.parameter_emission"]}
+		});
+		let applied = document.runtime_model_mut().apply_contact_parameter_emissions();
+		assert_eq!(applied.len(), 2);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
 	}
 
 	#[test]
