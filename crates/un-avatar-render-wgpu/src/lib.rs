@@ -3182,6 +3182,12 @@ fn is_false(value: &bool) -> bool {
 
 fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let mut warnings = Vec::new();
+	if status.dynamics_group_count > 0 && status.dynamics_enabled_group_count == 0 {
+		warnings.push(format!(
+			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}",
+			status.dynamics_group_count, status.dynamics_source_enabled_group_count, status.dynamics_enabled_override_count
+		));
+	}
 	if status.dynamics_stretch_limit_group_count > 0 {
 		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
@@ -4769,6 +4775,10 @@ mod tests {
 	#[test]
 	fn runtime_dynamics_warnings_explain_metadata_only_and_disabled_emission() {
 		let mut status = initial_runtime_snapshot(&AvatarWindowOptions::default());
+		status.dynamics_group_count = 3;
+		status.dynamics_enabled_group_count = 0;
+		status.dynamics_source_enabled_group_count = 0;
+		status.dynamics_enabled_override_count = 0;
 		status.dynamics_stretch_limit_group_count = 2;
 		status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
 			index: 0,
@@ -4808,7 +4818,10 @@ mod tests {
 		status.contact_parameter_emission_enabled = false;
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 4);
+		assert_eq!(warnings.len(), 5);
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics groups are present but none are currently enabled")));
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
 				&& warning.contains("physbone:hair@root/hair")

@@ -4264,6 +4264,12 @@ fn build_diagnose_report(
 		));
 	}
 	let dynamics_counts = runtime_dynamics.counts();
+	if dynamics_counts.groups > 0 && dynamics_counts.enabled_groups == 0 {
+		warnings.push(format!(
+			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}",
+			dynamics_counts.groups, dynamics_counts.source_enabled_groups, dynamics_counts.runtime_enabled_overrides
+		));
+	}
 	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
 		let samples = dynamics_stretch_limit_samples(&dynamics_groups);
 		warnings.push(format!(
@@ -7367,6 +7373,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics constraint_ref source_id \"constraint:parent\" lowers to 2 runtime constraint refs")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics groups are present but none are currently enabled")));
 		assert!(report
 			.warnings
 			.iter()
