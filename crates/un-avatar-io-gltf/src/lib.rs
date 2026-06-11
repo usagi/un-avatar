@@ -5462,7 +5462,7 @@ fn modular_avatar_vertex_filter_by_shape(component: &Value) -> Option<ModularAva
 fn modular_avatar_vertex_filter_by_axis(component: &Value) -> Option<ModularAvatarVertexFilter> {
 	Some(ModularAvatarVertexFilter::Axis {
 		center: json_vec3(modular_avatar_component_value(component, &["Center", "center", "m_center"])).unwrap_or([0.0; 3]),
-		axis: json_vec3(modular_avatar_component_value(component, &["Axis", "axis", "m_axis"])).unwrap_or([0.0, 1.0, 0.0]),
+		axis: json_vec3(modular_avatar_component_value(component, &["Axis", "axis", "m_axis"])).unwrap_or([-1.0, 0.0, 0.0]),
 	})
 }
 
@@ -13335,6 +13335,23 @@ mod tests {
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 2, 0, 0, 0));
 		assert_eq!(scene.nodes[1].mesh, Some(0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[][..]));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_axis_default_matches_modular_avatar() {
+		let component = serde_json::json!({
+			"shortType": "VertexFilterByAxisComponent",
+			"fields": {
+				"m_center": [0.0, 0.0, 0.0]
+			}
+		});
+
+		let Some(ModularAvatarVertexFilter::Axis { center, axis }) = modular_avatar_vertex_filter_by_axis(&component) else {
+			panic!("expected axis filter");
+		};
+
+		assert_eq!(center, [0.0, 0.0, 0.0]);
+		assert_eq!(axis, [-1.0, 0.0, 0.0]);
 	}
 
 	#[test]
