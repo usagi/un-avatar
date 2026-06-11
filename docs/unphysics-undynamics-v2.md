@@ -51,6 +51,14 @@ Runtime state:
 - solver state は source scene を直接 mutate せず、resolved scene / pose buffer / runtime dynamics view から構築する。
 - runtime state の owner policy と continuous evaluator は UNEvaluation が扱う。UNDynamics solver は評価済み enabled state / parameters / colliders を読むだけで、wardrobe / action / contact の優先順位を決めない。
 
+Stretch / writeback policy:
+
+- Stretch は source-specific PhysBone feature ではなく、UNDynamics chain limit と solver writeback の能力として扱う。
+- 現 solver backend は tail position を解いた後、ボーン local transform へ主に rotation を書き戻す。`rest_local_translation` と `rest_local_scale` は保持されるため、tail 解に stretch を許しても実ボーン長へ反映できない。
+- v2 初期で stretch を実装する場合、まず solver output を `rotation_only` と `rotation_translation` のどちらで書き戻すかを group / joint 単位で明示する。実ボーンを伸縮させる対象は synthetic endpoint child、または skinned mesh を壊さない leaf / accessory chain に限定し、Humanoid / skinned deformation の基準ボーンには既定で translation stretch を書かない。
+- `max_stretch` は rest tail length に対する上限倍率として正規化する。値は solver constraint の許容長に使うが、writeback mode が `rotation_only` の group では diagnostics metadata に留める。
+- SpringBone 的な固定長拘束を単に緩めるだけの実装は不可とする。視覚上の伸縮、collider 判定、次 joint の parent pose、reset 時の rest pose 復帰が同じ policy で説明できる必要がある。
+
 Lowering:
 
 - VRM SpringBone source は UNDynamics group / chain / collider / parameter view へ lower する。
