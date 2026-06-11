@@ -109,6 +109,7 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	max_stretch?: number;
 	allow_grabbing?: boolean;
 	allow_posing?: boolean;
+	interaction_parameter?: string;
 };
 
 export type RendererRuntimeDynamicsColliderStatus = {

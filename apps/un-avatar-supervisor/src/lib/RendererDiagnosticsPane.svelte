@@ -10,7 +10,8 @@
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
 		const state = group.effective_enabled ? "on" : "off";
-		return `${path} (${group.source_kind}, ${state}, bones=${group.bone_count})`;
+		const parameter = group.interaction_parameter ? `, param=${group.interaction_parameter}` : "";
+		return `${path} (${group.source_kind}, ${state}, bones=${group.bone_count}${parameter})`;
 	}
 
 	function colliderLabel(collider: RendererRuntimeDiagnosticsData["dynamics_colliders"][number]): string {

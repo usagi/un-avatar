@@ -330,6 +330,7 @@ namespace UNAvatar.UnityExporter
                 ["allowCollision"] = ReadBoolMember(type, component, "allowCollision", false),
                 ["allowGrabbing"] = ReadBoolMember(type, component, "allowGrabbing", false),
                 ["allowPosing"] = ReadBoolMember(type, component, "allowPosing", false),
+                ["parameter"] = ReadStringMember(type, component, "parameter", ""),
                 ["colliders"] = BuildVrcPhysBoneColliderPayloads(root, ReadComponentListMember(type, component, "colliders"))
             };
         }
@@ -610,6 +611,12 @@ namespace UNAvatar.UnityExporter
                 return parsed;
             }
             return fallback;
+        }
+
+        private static string ReadStringMember(Type type, object instance, string name, string fallback)
+        {
+            var value = ReadMember(type, instance, name);
+            return value != null ? value.ToString() ?? fallback : fallback;
         }
     }
 }

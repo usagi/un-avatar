@@ -4993,6 +4993,7 @@ mod tests {
 				max_stretch: Some(0.0),
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
+				interaction_parameter: "HairPB".to_string(),
 			}];
 			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
 				index: 0,

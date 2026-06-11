@@ -1190,6 +1190,8 @@ pub struct UnaDynamicsInteraction {
 	pub allow_grabbing: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub allow_posing: Option<bool>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub parameter: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -6779,6 +6781,7 @@ mod tests {
 					interaction: Some(UnaDynamicsInteraction {
 						allow_grabbing: Some(true),
 						allow_posing: Some(false),
+						parameter: "HairPB".to_string(),
 					}),
 					bone_node_indices: vec![1, 2, 3],
 				}],
@@ -6810,6 +6813,7 @@ mod tests {
 		assert_eq!(group.chain.bone_node_indices, &[1, 2, 3]);
 		assert_eq!(group.limit.unwrap().limit_type, "angle");
 		assert_eq!(group.interaction.unwrap().allow_grabbing, Some(true));
+		assert_eq!(group.interaction.unwrap().parameter, "HairPB");
 		let counts = dynamics.counts();
 		assert_eq!(counts.limit_groups, 1);
 		assert_eq!(counts.angle_limit_groups, 1);

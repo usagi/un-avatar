@@ -320,6 +320,8 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) allow_grabbing: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) allow_posing: Option<bool>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) interaction_parameter: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -1186,6 +1188,10 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				max_stretch: group.limit.map(|limit| limit.max_stretch),
 				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
+				interaction_parameter: group
+					.interaction
+					.map(|interaction| interaction.parameter.clone())
+					.unwrap_or_default(),
 			}
 		})
 		.collect()

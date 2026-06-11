@@ -2013,12 +2013,17 @@ fn unavatar_dynamics_interaction(value: &Value) -> Option<UnaDynamicsInteraction
 	let source_params = unavatar_dynamics_source_params(value);
 	let allow_grabbing = unavatar_dynamics_source_value(value, source_params, "allowGrabbing", "allow_grabbing").and_then(Value::as_bool);
 	let allow_posing = unavatar_dynamics_source_value(value, source_params, "allowPosing", "allow_posing").and_then(Value::as_bool);
-	if allow_grabbing.is_none() && allow_posing.is_none() {
+	let parameter = unavatar_dynamics_source_value(value, source_params, "parameter", "parameter")
+		.and_then(Value::as_str)
+		.unwrap_or("")
+		.to_string();
+	if allow_grabbing.is_none() && allow_posing.is_none() && parameter.is_empty() {
 		None
 	} else {
 		Some(UnaDynamicsInteraction {
 			allow_grabbing,
 			allow_posing,
+			parameter,
 		})
 	}
 }
@@ -9533,6 +9538,7 @@ mod tests {
 						"allowCollision": true,
 						"allowGrabbing": true,
 						"allowPosing": false,
+						"parameter": "HairPB",
 						"limitType": "Angle",
 						"maxAngleX": 45.0,
 						"maxAngleZ": 30.0,
@@ -9591,6 +9597,7 @@ mod tests {
 		let interaction = settings.groups[0].interaction.as_ref().expect("interaction");
 		assert_eq!(interaction.allow_grabbing, Some(true));
 		assert_eq!(interaction.allow_posing, Some(false));
+		assert_eq!(interaction.parameter, "HairPB");
 		assert_eq!(settings.colliders.len(), 3);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::Unknown);
 		assert_eq!(settings.colliders[0].node, 0);

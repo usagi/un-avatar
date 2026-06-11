@@ -645,6 +645,8 @@ struct DiagnoseDynamicsGroupSummary {
 	allow_grabbing: Option<bool>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	allow_posing: Option<bool>,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	interaction_parameter: String,
 	hit_radius: f32,
 }
 
@@ -2058,6 +2060,11 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				max_stretch: group.limit.as_ref().map(|limit| limit.max_stretch),
 				allow_grabbing: group.interaction.as_ref().and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.as_ref().and_then(|interaction| interaction.allow_posing),
+				interaction_parameter: group
+					.interaction
+					.as_ref()
+					.map(|interaction| interaction.parameter.clone())
+					.unwrap_or_default(),
 				hit_radius: group.hit_radius,
 			}
 		})
@@ -6944,6 +6951,7 @@ mod tests {
 						interaction: Some(un_avatar_core::UnaDynamicsInteraction {
 							allow_grabbing: Some(true),
 							allow_posing: Some(false),
+							parameter: "HairPB".to_string(),
 						}),
 						..Default::default()
 					},
@@ -6955,6 +6963,7 @@ mod tests {
 						interaction: Some(un_avatar_core::UnaDynamicsInteraction {
 							allow_grabbing: Some(false),
 							allow_posing: Some(true),
+							parameter: String::new(),
 						}),
 						..Default::default()
 					},
