@@ -66,6 +66,12 @@
   ): string {
     return `${readiness.owner_key}:${readiness.effect_kind} ${readiness.target_kind}:${readiness.target_key} ready=${readiness.ready} reason=${readiness.reason}`;
   }
+
+  function runtimeActionRestoreBaselineLabel(
+    candidate: RendererRuntimeDiagnosticsData["runtime_action_restore_baseline_candidates"][number],
+  ): string {
+    return `${candidate.owner_key}:${candidate.effect_kind} ${candidate.target_kind}:${candidate.target_key} value=${JSON.stringify(candidate.baseline_value)}`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -141,6 +147,12 @@
         <dt>{$_("renderers.details.diag_runtime_action_restore")}</dt>
         <dd class="stderr-block">
           {runtimeStatus.runtime_action_restore_readiness.slice(0, sampleLimit).map(runtimeActionRestoreReadinessLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.runtime_action_restore_baseline_candidates.length}
+        <dt>{$_("renderers.details.diag_runtime_action_restore_baseline")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_action_restore_baseline_candidates.slice(0, sampleLimit).map(runtimeActionRestoreBaselineLabel).join("\n")}
         </dd>
       {/if}
     {/if}

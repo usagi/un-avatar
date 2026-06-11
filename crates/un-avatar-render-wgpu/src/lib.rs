@@ -1561,6 +1561,8 @@ impl AvatarApp {
 			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
 			status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
 			status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
+			status.runtime_action_restore_baseline_candidates =
+				gpu.map(|g| g.runtime_action_restore_baseline_candidates()).unwrap_or_default();
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
@@ -3169,6 +3171,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_action_restore_readiness: Vec<un_avatar_core::UnaEvaluationRestoreReadiness>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_baseline_candidates: Vec<un_avatar_core::UnaEvaluationRestoreBaselineCandidate>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	menu_action_candidates: Vec<gpu::RuntimeMenuActionCandidateStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
@@ -3353,6 +3357,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		runtime_actions: Vec::new(),
 		runtime_action_target_write_collisions: Vec::new(),
 		runtime_action_restore_readiness: Vec::new(),
+		runtime_action_restore_baseline_candidates: Vec::new(),
 		menu_action_candidates: Vec::new(),
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
@@ -4750,6 +4755,14 @@ mod tests {
 				ready: false,
 				reason: "baseline_not_captured".to_string(),
 			}];
+			status.runtime_action_restore_baseline_candidates = vec![un_avatar_core::UnaEvaluationRestoreBaselineCandidate {
+				owner_key: "action:wardrobe:field_drape".to_string(),
+				action_id: "wardrobe:field_drape".to_string(),
+				effect_kind: "node_visibility".to_string(),
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				baseline_value: serde_json::Value::from(true),
+			}];
 			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
 				menu_component_index: 2,
 				menu_label: Some("Wardrobe".to_string()),
@@ -5275,6 +5288,15 @@ mod tests {
 		assert_eq!(
 			restore_readiness[0].get("reason").and_then(|value| value.as_str()),
 			Some("baseline_not_captured")
+		);
+		let baseline_candidates = snapshot
+			.get("runtime_action_restore_baseline_candidates")
+			.and_then(|value| value.as_array())
+			.expect("runtime action restore baseline candidates");
+		assert_eq!(baseline_candidates.len(), 1);
+		assert_eq!(
+			baseline_candidates[0].get("baseline_value").and_then(|value| value.as_bool()),
+			Some(true)
 		);
 		let menu_action_candidates = snapshot
 			.get("menu_action_candidates")

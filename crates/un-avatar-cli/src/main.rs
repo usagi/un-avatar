@@ -385,6 +385,8 @@ struct DiagnoseActionSummary {
 	target_write_collisions: Vec<un_avatar_core::UnaEvaluationTargetWriteCollision>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	restore_readiness: Vec<un_avatar_core::UnaEvaluationRestoreReadiness>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	restore_baseline_candidates: Vec<un_avatar_core::UnaEvaluationRestoreBaselineCandidate>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
 
@@ -3785,6 +3787,7 @@ fn build_diagnose_report(
 		effect_kinds: runtime_action_effect_kind_counts(actions.actions.iter().flat_map(|action| action.effects.iter())),
 		target_write_collisions: actions.evaluation_target_write_collisions(),
 		restore_readiness: runtime_model.runtime_action_set_restore_readiness(actions),
+		restore_baseline_candidates: runtime_model.runtime_action_set_restore_baseline_candidates(actions),
 		actions: actions
 			.actions
 			.iter()
@@ -4464,12 +4467,13 @@ fn run_diagnose(
 	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} trigger_kinds={:?} effect_kinds={:?}",
+			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} restore_baseline_candidates={} trigger_kinds={:?} effect_kinds={:?}",
 			actions.action_count,
 			actions.trigger_count,
 			actions.effect_count,
 			actions.target_write_collisions.len(),
 			actions.restore_readiness.len(),
+			actions.restore_baseline_candidates.len(),
 			actions.trigger_kinds,
 			actions.effect_kinds
 		);
@@ -4491,6 +4495,12 @@ fn run_diagnose(
 				readiness.baseline_required,
 				readiness.ready,
 				readiness.reason
+			);
+		}
+		for candidate in actions.restore_baseline_candidates.iter().take(16) {
+			println!(
+				"action_restore_baseline_candidate: {}:{} target={:?}:{} value={}",
+				candidate.owner_key, candidate.effect_kind, candidate.target_kind, candidate.target_key, candidate.baseline_value
 			);
 		}
 		for action in actions.actions.iter().take(16) {
@@ -6165,6 +6175,7 @@ mod tests {
 		let action = &report.actions.as_ref().unwrap().actions[0];
 		let actions = report.actions.as_ref().unwrap();
 		assert_eq!(actions.restore_readiness.len(), 4);
+		assert!(actions.restore_baseline_candidates.is_empty());
 		assert_eq!(actions.restore_readiness[0].owner_key, "action:variant:coat");
 		assert_eq!(actions.restore_readiness[0].reason, "target_unresolved_or_unsupported_parameter");
 		assert_eq!(actions.restore_readiness[2].reason, "not_restore_target");

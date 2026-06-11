@@ -330,6 +330,16 @@ pub struct UnaEvaluationRestoreReadiness {
 	pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaEvaluationRestoreBaselineCandidate {
+	pub owner_key: String,
+	pub action_id: String,
+	pub effect_kind: String,
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
+	pub baseline_value: Value,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeActionCondition {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1947,6 +1957,29 @@ impl<'a> UnaRuntimeModel<'a> {
 			.actions
 			.iter()
 			.flat_map(|action| self.runtime_action_restore_readiness(action))
+			.collect()
+	}
+
+	pub fn runtime_action_set_restore_baseline_candidates(
+		self,
+		actions: &UnaRuntimeActionSet,
+	) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
+		self.runtime_action_set_restore_readiness(actions)
+			.into_iter()
+			.filter_map(|readiness| {
+				if !readiness.restore_target {
+					return None;
+				}
+				let baseline_value = readiness.current_value?;
+				Some(UnaEvaluationRestoreBaselineCandidate {
+					owner_key: readiness.owner_key,
+					action_id: readiness.action_id,
+					effect_kind: readiness.effect_kind,
+					target_kind: readiness.target_kind,
+					target_key: readiness.target_key,
+					baseline_value,
+				})
+			})
 			.collect()
 	}
 
@@ -6112,6 +6145,16 @@ mod tests {
 		assert_eq!(readiness[4].reason, "target_unresolved");
 		assert!(!readiness[5].restore_target);
 		assert_eq!(readiness[5].reason, "not_restore_target");
+
+		let candidates = document
+			.runtime_model()
+			.runtime_action_set_restore_baseline_candidates(&UnaRuntimeActionSet { actions: vec![action] });
+		assert_eq!(candidates.len(), 4);
+		assert_eq!(candidates[0].target_key, "node_renderer");
+		assert_eq!(candidates[0].baseline_value, Value::from(true));
+		assert_eq!(candidates[1].baseline_value, Value::from(0.0));
+		assert_eq!(candidates[2].baseline_value, Value::from(0_u64));
+		assert_eq!(candidates[3].baseline_value, Value::from(true));
 	}
 
 	#[test]

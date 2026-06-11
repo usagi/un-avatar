@@ -144,6 +144,7 @@ MVP control command:
 - core は runtime action effect から owner key / target kind / target key を派生する read-only evaluation target write view と、同一 target kind/key に複数 action owner が書く collision diagnostics を持ち、CLI diagnose / renderer runtime status / Supervisor diagnostics で観測できる。これは inactive-state default restore、continuous evaluator、衝突診断の前提であり、source data や runtime scene を直接 mutate しない。
 - core runtime model は node visibility、material property、material slot、dynamics enabled の現在値を read-only に取得できる。inactive-state default restore はまだ実行せず、baseline/source-default の保持方針を固めてからこの API を使う。
 - core は runtime action restore readiness diagnostics を持つ。v2 現段階では baseline/source-default を保持していないため、restore target は `baseline_not_captured` として観測するだけで、inactive-state default restore は実行しない。
+- restore readiness から read-only restore baseline candidates も診断できる。これは capture 候補値の確認用であり、runtime state に baseline を保存する段階ではない。
 
 次の段階:
 
