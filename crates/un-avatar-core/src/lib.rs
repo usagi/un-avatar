@@ -574,7 +574,6 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
 		"ModularAvatarConvertConstraints"
 		| "ModularAvatarFloorAdjuster"
-		| "ModularAvatarGlobalCollider"
 		| "ModularAvatarMMDLayerControl"
 		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMergeBlendTree"
@@ -589,6 +588,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMenuInstaller"
 		| "ModularAvatarMenuInstallTarget"
 		| "ModularAvatarParameters"
+		| "ModularAvatarGlobalCollider"
 		| "ModularAvatarPBBlocker"
 		| "ModularAvatarSyncParameterSequence"
 		| "ModularAvatarVisibleHeadAccessory"
@@ -8192,7 +8192,7 @@ mod tests {
 			"unsupported"
 		);
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarFloorAdjuster"), "unsupported");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarGlobalCollider"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarGlobalCollider"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMMDLayerControl"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeBlendTree"), "unsupported");

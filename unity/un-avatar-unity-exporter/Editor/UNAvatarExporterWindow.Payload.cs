@@ -591,7 +591,6 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarObjectToggle" => "runtime_action",
                 "ModularAvatarConvertConstraints" or
                 "ModularAvatarFloorAdjuster" or
-                "ModularAvatarGlobalCollider" or
                 "ModularAvatarMMDLayerControl" or
                 "ModularAvatarMergeAnimator" or
                 "ModularAvatarMergeBlendTree" or
@@ -606,6 +605,7 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarMenuInstaller" or
                 "ModularAvatarMenuInstallTarget" or
                 "ModularAvatarParameters" or
+                "ModularAvatarGlobalCollider" or
                 "ModularAvatarPBBlocker" or
                 "ModularAvatarSyncParameterSequence" or
                 "ModularAvatarVisibleHeadAccessory" or

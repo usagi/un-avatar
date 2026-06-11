@@ -1528,6 +1528,80 @@ fn modular_avatar_pb_blocker_ignores(
 	ignores_by_root
 }
 
+fn modular_avatar_global_colliders(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Vec<UnaDynamicsCollider> {
+	let mut colliders = Vec::new();
+	for component in unavatar_modular_avatar_components(unavatar) {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarGlobalCollider") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			continue;
+		}
+		let fields = component.get("fields").unwrap_or(component);
+		let root_ref = fields
+			.get("m_rootTransform")
+			.or_else(|| fields.get("rootTransform"))
+			.or_else(|| fields.get("RootTransform"))
+			.or_else(|| component.get("target"));
+		let Some(root_ref) = root_ref else {
+			continue;
+		};
+		let Some(node) = modular_avatar_reference_index(root_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			continue;
+		};
+		let radius = json_f32(
+			fields
+				.get("m_radius")
+				.or_else(|| fields.get("radius"))
+				.or_else(|| fields.get("Radius")),
+		)
+		.unwrap_or(0.0);
+		if !radius.is_finite() || radius <= 0.0 {
+			continue;
+		}
+		colliders.push(UnaDynamicsCollider {
+			source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+			node,
+			shape: UnaDynamicsColliderShape::Capsule,
+			radius,
+			height: json_f32(
+				fields
+					.get("m_height")
+					.or_else(|| fields.get("height"))
+					.or_else(|| fields.get("Height")),
+			)
+			.unwrap_or(0.0)
+			.max(0.0),
+			position: unity_vec3_to_unavatar_runtime(
+				json_vec3(
+					fields
+						.get("m_position")
+						.or_else(|| fields.get("position"))
+						.or_else(|| fields.get("Position")),
+				)
+				.unwrap_or([0.0; 3]),
+			),
+			rotation: unity_quat_to_unavatar_runtime(
+				json_vec4(
+					fields
+						.get("m_rotation")
+						.or_else(|| fields.get("rotation"))
+						.or_else(|| fields.get("Rotation")),
+				)
+				.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+			),
+			inside_bounds: false,
+		});
+	}
+	colliders
+}
+
 fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
 	let value = value
 		.get("multiChildType")
@@ -1954,7 +2028,12 @@ fn unavatar_dynamics_settings(
 	unavatar: &UnaUnavatarExtension,
 	report: &mut ImportReport,
 ) -> Option<UnaSpringBoneSettings> {
-	let dynamics = unavatar.source.get("dynamics").and_then(Value::as_array)?;
+	let dynamics = unavatar
+		.source
+		.get("dynamics")
+		.and_then(Value::as_array)
+		.map(Vec::as_slice)
+		.unwrap_or(&[]);
 	let node_ids = scene_node_ids(scene);
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
@@ -1969,6 +2048,9 @@ fn unavatar_dynamics_settings(
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
 	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
+	let ma_global_colliders = modular_avatar_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
+	let ma_global_collider_count = ma_global_colliders.len();
+	colliders.extend(ma_global_colliders);
 	let contacts = unavatar_dynamics_contacts(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let constraint_refs = unavatar_dynamics_constraint_refs(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 
@@ -2088,6 +2170,11 @@ fn unavatar_dynamics_settings(
 	if pb_blocker_ignore_count > 0 {
 		report.push_info(format!(
 			".unavatar dynamics: modular_avatar_pb_blocker_ignores={pb_blocker_ignore_count}"
+		));
+	}
+	if ma_global_collider_count > 0 {
+		report.push_info(format!(
+			".unavatar dynamics: modular_avatar_global_colliders={ma_global_collider_count}"
 		));
 	}
 	if endpoint_child_count > 0 {
@@ -9663,6 +9750,54 @@ mod tests {
 	}
 
 	#[test]
+	fn unavatar_dynamics_lowers_modular_avatar_global_colliders() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"}
+				],
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarGlobalCollider",
+						"enabled": true,
+						"target": {"nodeId": "node_root", "path": "Root"},
+						"fields": {
+							"m_rootTransform": {
+								"resolvedTarget": {"nodeId": "node_root", "path": "Root"}
+							},
+							"m_radius": 0.05,
+							"m_height": 0.2,
+							"m_position": [0.0, 0.1, 0.2],
+							"m_rotation": [0.0, 0.5, 0.0, 0.8660254]
+						}
+					}]
+				}
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.colliders.len(), 1);
+		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
+		assert_eq!(settings.colliders[0].node, 0);
+		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Capsule);
+		assert_eq!(settings.colliders[0].radius, 0.05);
+		assert_eq!(settings.colliders[0].height, 0.2);
+		assert_eq!(settings.colliders[0].position, [-0.0, 0.1, 0.2]);
+		assert_eq!(settings.colliders[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("modular_avatar_global_colliders=1")));
+	}
+
+	#[test]
 	fn unavatar_dynamics_synthesizes_endpoint_child_for_leaf_root() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", Vec::new())],
@@ -9746,7 +9881,6 @@ mod tests {
 		for short_type in [
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
-			"ModularAvatarGlobalCollider",
 			"ModularAvatarMMDLayerControl",
 			"ModularAvatarMergeAnimator",
 			"ModularAvatarMergeBlendTree",
@@ -13292,13 +13426,12 @@ mod tests {
 		assert!(message.contains("resolver_supported=1"));
 		assert!(message.contains("approximate_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
-		assert!(message.contains("metadata_supported=4"));
-		assert!(message.contains("unsupported=10"));
+		assert!(message.contains("metadata_supported=5"));
+		assert!(message.contains("unsupported=9"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("support_kind_mismatches=0"));
 		assert!(message.contains("ModularAvatarConvertConstraints:1"));
 		assert!(message.contains("ModularAvatarFloorAdjuster:1"));
-		assert!(message.contains("ModularAvatarGlobalCollider:1"));
 		assert!(message.contains("ModularAvatarPlatformFilter:1"));
 		assert!(message.contains("ModularAvatarRenameVRChatCollisionTags:1"));
 		assert!(message.contains("ModularAvatarVRChatSettings:1"));
@@ -13314,7 +13447,6 @@ mod tests {
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarConvertConstraints"));
-		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarGlobalCollider"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarFloorAdjuster"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPlatformFilter"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarRenameVRChatCollisionTags"));
@@ -13322,11 +13454,10 @@ mod tests {
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.MAMoveIndependently"));
-		assert_eq!(report.lost_features.len(), 9);
+		assert_eq!(report.lost_features.len(), 8);
 		for unsupported_type in [
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
-			"ModularAvatarGlobalCollider",
 			"ModularAvatarPlatformFilter",
 			"ModularAvatarRenameVRChatCollisionTags",
 			"ModularAvatarVRChatSettings",
