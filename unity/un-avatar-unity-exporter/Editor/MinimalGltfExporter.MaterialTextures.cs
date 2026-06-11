@@ -130,6 +130,14 @@ namespace UNAvatar.UnityExporter
                     GltfWrapMode(texture.wrapModeV));
             }
 
+            private static Dictionary<string, object> BuildTextureAssetSamplerJson(Texture texture)
+            {
+                var sampler = BuildSamplerJson(texture);
+                sampler["unityWrapModeU"] = texture.wrapModeU.ToString();
+                sampler["unityWrapModeV"] = texture.wrapModeV.ToString();
+                return sampler;
+            }
+
             private static Dictionary<string, object> BuildSamplerJson(int magFilter, int minFilter, int wrapS, int wrapT)
             {
                 return new Dictionary<string, object>

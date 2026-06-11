@@ -60,7 +60,7 @@ namespace UNAvatar.UnityExporter
                     SourceLayout = metadata.SourceLayout,
                     UnityGenerateCubemap = metadata.UnityGenerateCubemap,
                     SRgb = metadata.SRgb,
-                    Sampler = BuildSamplerJson(texture),
+                    Sampler = BuildTextureAssetSamplerJson(texture),
                     Width = metadata.Width,
                     Height = metadata.Height,
                     Bytes = bytes
@@ -122,7 +122,7 @@ namespace UNAvatar.UnityExporter
                     SourceLayout = string.IsNullOrEmpty(encoded.SourceLayoutOverride) ? metadata.SourceLayout : encoded.SourceLayoutOverride,
                     UnityGenerateCubemap = metadata.UnityGenerateCubemap,
                     SRgb = false,
-                    Sampler = BuildSamplerJson(cubemap),
+                    Sampler = BuildTextureAssetSamplerJson(cubemap),
                     Width = cubemap.width * 6,
                     Height = cubemap.width,
                     Bytes = encoded.Bytes

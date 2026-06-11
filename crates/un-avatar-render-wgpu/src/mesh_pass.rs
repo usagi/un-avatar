@@ -3330,7 +3330,7 @@ fn liltoon_reflection_cube_sampler_descriptor(label: &'static str) -> wgpu::Samp
 
 fn wgpu_address_mode(mode: UnaTextureWrapMode) -> wgpu::AddressMode {
 	match mode {
-		UnaTextureWrapMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+		UnaTextureWrapMode::ClampToEdge | UnaTextureWrapMode::MirrorOnce => wgpu::AddressMode::ClampToEdge,
 		UnaTextureWrapMode::MirroredRepeat => wgpu::AddressMode::MirrorRepeat,
 		UnaTextureWrapMode::Repeat => wgpu::AddressMode::Repeat,
 	}
@@ -8468,6 +8468,7 @@ mod tests {
 	#[test]
 	fn mesh_sampler_metadata_maps_to_wgpu_modes() {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::ClampToEdge), wgpu::AddressMode::ClampToEdge);
+		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::MirrorOnce), wgpu::AddressMode::ClampToEdge);
 		assert_eq!(
 			wgpu_address_mode(UnaTextureWrapMode::MirroredRepeat),
 			wgpu::AddressMode::MirrorRepeat

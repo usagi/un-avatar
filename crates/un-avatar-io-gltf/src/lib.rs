@@ -371,8 +371,8 @@ fn sampler_from_root_json(value: &Value) -> UnaTextureSampler {
 	UnaTextureSampler {
 		mag_filter: filter_from_gltf_constant(value.get("magFilter").and_then(Value::as_u64)),
 		min_filter: filter_from_gltf_constant(value.get("minFilter").and_then(Value::as_u64)),
-		wrap_s: wrap_from_gltf_constant(value.get("wrapS").and_then(Value::as_u64)),
-		wrap_t: wrap_from_gltf_constant(value.get("wrapT").and_then(Value::as_u64)),
+		wrap_s: wrap_from_sampler_json(value, "wrapS", "unityWrapModeU"),
+		wrap_t: wrap_from_sampler_json(value, "wrapT", "unityWrapModeV"),
 	}
 }
 
@@ -388,6 +388,16 @@ fn wrap_from_gltf_constant(value: Option<u64>) -> UnaTextureWrapMode {
 		Some(33071) => UnaTextureWrapMode::ClampToEdge,
 		Some(33648) => UnaTextureWrapMode::MirroredRepeat,
 		_ => UnaTextureWrapMode::Repeat,
+	}
+}
+
+fn wrap_from_sampler_json(value: &Value, gltf_key: &str, unity_key: &str) -> UnaTextureWrapMode {
+	match value.get(unity_key).and_then(Value::as_str) {
+		Some("MirrorOnce") | Some("mirror_once") => UnaTextureWrapMode::MirrorOnce,
+		Some("Mirror") | Some("mirror") => UnaTextureWrapMode::MirroredRepeat,
+		Some("Clamp") | Some("clamp") => UnaTextureWrapMode::ClampToEdge,
+		Some("Repeat") | Some("repeat") => UnaTextureWrapMode::Repeat,
+		_ => wrap_from_gltf_constant(value.get(gltf_key).and_then(Value::as_u64)),
 	}
 }
 
@@ -5639,6 +5649,10 @@ fn modular_avatar_wrap_uv(value: f32, mode: UnaTextureWrapMode) -> f32 {
 	match mode {
 		UnaTextureWrapMode::ClampToEdge => value.clamp(0.0, 1.0),
 		UnaTextureWrapMode::Repeat => value.rem_euclid(1.0),
+		UnaTextureWrapMode::MirrorOnce => {
+			let mirrored = if value < 0.0 { -value - f32::EPSILON } else { value };
+			mirrored.clamp(0.0, 1.0)
+		}
 		UnaTextureWrapMode::MirroredRepeat => {
 			let repeated = value.rem_euclid(2.0);
 			if repeated <= 1.0 {
@@ -9542,7 +9556,7 @@ mod tests {
 				{ "source": 1 }
 			],
 			"samplers": [
-				{ "magFilter": 9728, "minFilter": 9987, "wrapS": 33071, "wrapT": 33648 }
+				{ "magFilter": 9728, "minFilter": 9987, "wrapS": 33071, "wrapT": 33648, "unityWrapModeV": "MirrorOnce" }
 			]
 		});
 
@@ -9555,7 +9569,7 @@ mod tests {
 				mag_filter: UnaTextureFilterMode::Nearest,
 				min_filter: UnaTextureFilterMode::Linear,
 				wrap_s: UnaTextureWrapMode::ClampToEdge,
-				wrap_t: UnaTextureWrapMode::MirroredRepeat,
+				wrap_t: UnaTextureWrapMode::MirrorOnce,
 			})
 		);
 		assert_eq!(samplers[1], Some(UnaTextureSampler::default()));
@@ -9796,7 +9810,7 @@ mod tests {
 							"mimeType": "image/png",
 							"colorSpace": "sRGB",
 							"channels": "rgba",
-							"sampler": {{"magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 33648}},
+							"sampler": {{"magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 33648, "unityWrapModeV": "MirrorOnce"}},
 							"bufferView": 1
 						}}]
 					}}
@@ -9832,7 +9846,7 @@ mod tests {
 				mag_filter: UnaTextureFilterMode::Nearest,
 				min_filter: UnaTextureFilterMode::Nearest,
 				wrap_s: UnaTextureWrapMode::ClampToEdge,
-				wrap_t: UnaTextureWrapMode::MirroredRepeat,
+				wrap_t: UnaTextureWrapMode::MirrorOnce,
 			})
 		);
 	}
@@ -13338,6 +13352,13 @@ mod tests {
 
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[1, 3, 2][..]));
+	}
+
+	#[test]
+	fn modular_avatar_mask_wraps_mirror_once_coordinates() {
+		assert_eq!(modular_avatar_wrap_uv(-0.25, UnaTextureWrapMode::MirrorOnce), 0.25 - f32::EPSILON);
+		assert_eq!(modular_avatar_wrap_uv(1.25, UnaTextureWrapMode::MirrorOnce), 1.0);
+		assert_eq!(modular_avatar_wrap_uv(-1.25, UnaTextureWrapMode::MirrorOnce), 1.0);
 	}
 
 	#[test]

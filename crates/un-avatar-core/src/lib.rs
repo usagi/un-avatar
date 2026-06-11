@@ -3464,6 +3464,7 @@ pub struct UnaImageSourceMetadata {
 #[serde(rename_all = "snake_case")]
 pub enum UnaTextureWrapMode {
 	ClampToEdge,
+	MirrorOnce,
 	MirroredRepeat,
 	#[default]
 	Repeat,
