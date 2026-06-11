@@ -1599,6 +1599,7 @@ impl AvatarApp {
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 			}
 			status.camera_locked = self.camera_locked;
@@ -3172,6 +3173,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_colliders: Vec<gpu::RuntimeDynamicsColliderStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
@@ -3347,6 +3350,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		contact_parameter_declarations: Vec::new(),
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
+		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
@@ -4741,6 +4745,8 @@ mod tests {
 			status.dynamics_contact_count = 2;
 			status.dynamics_vrc_contact_sender_count = 1;
 			status.dynamics_vrc_contact_receiver_count = 1;
+			status.dynamics_collider_count = 1;
+			status.dynamics_vrc_physbone_collider_count = 1;
 			status.dynamics_contact_parameter_declaration_count = 1;
 			status.dynamics_contact_probe_count = 1;
 			status.dynamics_contact_probe_would_emit_count = 1;
@@ -4770,6 +4776,18 @@ mod tests {
 				max_stretch: Some(0.0),
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
+			}];
+			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				node: 5,
+				node_path: Some("root/collider".to_string()),
+				shape: un_avatar_core::UnaDynamicsColliderShape::Capsule,
+				radius: 0.08,
+				height: 0.24,
+				position: [0.0, 0.1, 0.0],
+				rotation: [0.0, 0.0, 0.0, 1.0],
+				inside_bounds: true,
 			}];
 			status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
 				index: 0,
@@ -4870,6 +4888,20 @@ mod tests {
 		);
 		assert_eq!(
 			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		let dynamics_colliders = snapshot
+			.get("dynamics_colliders")
+			.and_then(|value| value.as_array())
+			.expect("dynamics colliders");
+		assert_eq!(dynamics_colliders.len(), 1);
+		assert_eq!(
+			dynamics_colliders[0].get("node_path").and_then(|value| value.as_str()),
+			Some("root/collider")
+		);
+		assert_eq!(dynamics_colliders[0].get("shape").and_then(|value| value.as_str()), Some("capsule"));
+		assert_eq!(
+			dynamics_colliders[0].get("inside_bounds").and_then(|value| value.as_bool()),
 			Some(true)
 		);
 		let probes = snapshot

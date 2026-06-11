@@ -53,6 +53,7 @@ pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
 const DYNAMICS_GROUP_STATUS_LIMIT: usize = 64;
+const DYNAMICS_COLLIDER_STATUS_LIMIT: usize = 64;
 const CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT: usize = 64;
 const CONTACT_PROBE_STATUS_LIMIT: usize = 64;
 const DYNAMICS_CONSTRAINT_REF_STATUS_LIMIT: usize = 64;
@@ -231,6 +232,21 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) allow_grabbing: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) allow_posing: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderStatus {
+	pub(crate) index: usize,
+	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
+	pub(crate) node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) node_path: Option<String>,
+	pub(crate) shape: un_avatar_core::UnaDynamicsColliderShape,
+	pub(crate) radius: f32,
+	pub(crate) height: f32,
+	pub(crate) position: [f32; 3],
+	pub(crate) rotation: [f32; 4],
+	pub(crate) inside_bounds: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -883,6 +899,29 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
 			}
+		})
+		.collect()
+}
+
+fn dynamics_collider_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsColliderStatus> {
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
+		.dynamics()
+		.colliders()
+		.enumerate()
+		.take(DYNAMICS_COLLIDER_STATUS_LIMIT)
+		.map(|(index, collider)| RuntimeDynamicsColliderStatus {
+			index,
+			source_kind: collider.source_kind,
+			node: collider.node,
+			node_path: node_paths_by_index.get(collider.node).cloned().flatten(),
+			shape: collider.shape.clone(),
+			radius: collider.radius,
+			height: collider.height,
+			position: collider.position,
+			rotation: collider.rotation,
+			inside_bounds: collider.inside_bounds,
 		})
 		.collect()
 }
@@ -4057,6 +4096,16 @@ impl GpuState {
 			return Vec::new();
 		};
 		dynamics_group_statuses(&doc)
+	}
+
+	pub(crate) fn dynamics_colliders(&self) -> Vec<RuntimeDynamicsColliderStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		dynamics_collider_statuses(&doc)
 	}
 
 	pub(crate) fn dynamics_constraint_refs(&self) -> Vec<RuntimeDynamicsConstraintRefStatus> {
