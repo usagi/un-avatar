@@ -82,9 +82,10 @@ v2 初期では priority / lock は導入しない。
 - core は restore readiness から read-only の restore baseline candidate list も派生する。これは「今 capture するなら baseline として保存される値」の diagnostics であり、restore 実行はまだ行わない。
 - core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存できる。
 - renderer は runtime action activation の effect 適用前に、その action の restore baseline を capture する。既に保存済みの owner/target baseline は上書きせず、初回変更前の値を保つ。
-- 保存済み restore baseline がある action effect は `runtime_action_restore_readiness` で `ready=true` として観測できる。ただし現段階では runtime scene への inactive-state default restore 書き戻しはまだ行わない。
+- 保存済み restore baseline がある action effect は `runtime_action_restore_readiness` で `ready=true` として観測できる。
 - core は `runtime_action_restore_apply_plan` diagnostics で、現在の parameter state から inactive と判定された action の restore 書き戻し候補を read-only に列挙できる。active / missing / no-condition action は apply-ready にはしない。
-- この diagnostics / capture は source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
+- core は ready な inactive action restore apply entry を node visibility、material color/scalar、material slot、dynamics enabled に書き戻せる。renderer は runtime action activation 後に現在 parameter state で inactive になった action の restore を適用する。
+- この diagnostics / capture / restore は source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
 - `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
 
 ## Contacts

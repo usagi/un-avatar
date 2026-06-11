@@ -4478,7 +4478,7 @@ impl GpuState {
 			return Err("document is not attached".to_string());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (resolved_action_id, parameter_values, action) = {
+		let (resolved_action_id, parameter_values, action, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let Some(actions) = doc.runtime_model().runtime_actions() else {
 				return Err("document has no runtime actions".to_string());
@@ -4492,7 +4492,7 @@ impl GpuState {
 					parameter_value,
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
-			(action.id.clone(), action.parameter_assignments(), action.clone())
+			(action.id.clone(), action.parameter_assignments(), action.clone(), actions.clone())
 		};
 		{
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
@@ -4535,6 +4535,11 @@ impl GpuState {
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		doc.runtime_model_mut().set_last_action_id(Some(resolved_action_id.clone()));
 		doc.runtime_model_mut().set_runtime_parameter_values(parameter_values.clone());
+		let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
+		drop(doc);
+		if !restored.is_empty() {
+			self.invalidate_applied_document_state();
+		}
 		Ok(RuntimeActionActivation {
 			action_id: resolved_action_id,
 			active_wardrobe_set,

@@ -2338,6 +2338,39 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		plan
 	}
 
+	pub fn restore_inactive_runtime_action_effects(
+		&mut self,
+		actions: &UnaRuntimeActionSet,
+	) -> Result<Vec<UnaEvaluationRestoreApplyEntry>, String> {
+		let plan = self.document.runtime_model().runtime_action_set_restore_apply_plan(actions);
+		let ready_entries: BTreeMap<(String, UnaEvaluationTargetKind, String), UnaEvaluationRestoreApplyEntry> = plan
+			.into_iter()
+			.filter(|entry| entry.ready)
+			.map(|entry| {
+				(
+					(entry.owner_key.clone(), entry.target_kind.clone(), entry.target_key.clone()),
+					entry,
+				)
+			})
+			.collect();
+		let mut applied = Vec::new();
+		for action in &actions.actions {
+			for effect in &action.effects {
+				let write = effect.evaluation_target_write(&action.id);
+				let key = (write.owner_key, write.target_kind, write.target_key);
+				let Some(entry) = ready_entries.get(&key) else {
+					continue;
+				};
+				let Some(value) = entry.baseline_value.as_ref() else {
+					continue;
+				};
+				self.restore_runtime_action_effect_baseline(effect, value)?;
+				applied.push(entry.clone());
+			}
+		}
+		Ok(applied)
+	}
+
 	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
 		let Some(scene) = self.document.scene.as_mut() else {
 			return false;
@@ -2397,6 +2430,96 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		};
 		primitive.material_index = material_index;
 		Ok(())
+	}
+
+	fn set_material_slot_index(&mut self, target: &UnaRuntimeMaterialSlotTarget, material_index: Option<usize>) -> Result<(), String> {
+		let Some(scene) = self.document.scene.as_mut() else {
+			return Err("document has no scene".to_string());
+		};
+		if let Some(index) = material_index.filter(|index| *index >= scene.materials.len()) {
+			return Err(format!("runtime material slot restore material index out of range: {index}"));
+		}
+		let Some(node_index) = resolve_runtime_node_target(scene, &target.node) else {
+			return Err(format!("runtime node target not found: {:?}", target.node));
+		};
+		let Some(mesh_index) = scene.nodes.get(node_index).and_then(|node| node.mesh) else {
+			return Err(format!("runtime node target has no mesh: {:?}", target.node));
+		};
+		let primitive_index = target.primitive_index.unwrap_or(0);
+		let Some(primitive) = scene.meshes.get_mut(mesh_index).and_then(|mesh| mesh.get_mut(primitive_index)) else {
+			return Err(format!(
+				"runtime material slot target not found: node={:?}, primitive_index={primitive_index}",
+				target.node
+			));
+		};
+		primitive.material_index = material_index;
+		Ok(())
+	}
+
+	fn restore_runtime_action_effect_baseline(&mut self, effect: &UnaRuntimeActionEffect, value: &Value) -> Result<(), String> {
+		match effect {
+			UnaRuntimeActionEffect::WardrobeSet { .. } | UnaRuntimeActionEffect::ExpressionWeight { .. } => Ok(()),
+			UnaRuntimeActionEffect::NodeVisibility { target, .. } => {
+				let visible = value
+					.as_bool()
+					.ok_or_else(|| format!("restore baseline is not a bool for node visibility: {value}"))?;
+				if self.set_node_visible(target, visible) {
+					Ok(())
+				} else {
+					Err(format!("runtime node target not found: {target:?}"))
+				}
+			}
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, .. } => {
+				let values = value
+					.as_array()
+					.filter(|values| values.len() == 4)
+					.ok_or_else(|| format!("restore baseline is not a vec4 for material color: {value}"))?;
+				let mut color = [0.0_f32; 4];
+				for (index, component) in values.iter().enumerate() {
+					color[index] = component
+						.as_f64()
+						.ok_or_else(|| format!("restore baseline color component is not numeric: {value}"))? as f32;
+				}
+				self.set_material_color(target, parameter, color)
+			}
+			UnaRuntimeActionEffect::MaterialScalar { target, parameter, .. } => {
+				let scalar = value
+					.as_f64()
+					.ok_or_else(|| format!("restore baseline is not numeric for material scalar: {value}"))? as f32;
+				self.set_material_scalar(target, parameter, scalar)
+			}
+			UnaRuntimeActionEffect::MaterialSlot { target, .. } => {
+				let material_index = if value.is_null() {
+					None
+				} else {
+					Some(
+						value
+							.as_u64()
+							.ok_or_else(|| format!("restore baseline is not an index/null for material slot: {value}"))? as usize,
+					)
+				};
+				self.set_material_slot_index(target, material_index)
+			}
+			UnaRuntimeActionEffect::DynamicsEnabled { source_id, .. } => {
+				let enabled = value
+					.as_bool()
+					.ok_or_else(|| format!("restore baseline is not a bool for dynamics enabled: {value}"))?;
+				let matches = self
+					.document
+					.spring_bones
+					.as_ref()
+					.is_some_and(|settings| settings.groups.iter().any(|group| group.source_id == *source_id));
+				if matches {
+					self.document
+						.runtime_state
+						.dynamics_enabled_overrides
+						.insert(source_id.clone(), enabled);
+					Ok(())
+				} else {
+					Err(format!("runtime dynamics source not found: {source_id}"))
+				}
+			}
+		}
 	}
 
 	fn resolve_material_mut(&mut self, target: &UnaRuntimeMaterialTarget) -> Option<&mut UnaMaterialPbr> {
@@ -6402,6 +6525,70 @@ mod tests {
 		assert_eq!(apply_plan[0].reason, "ready");
 		assert_eq!(apply_plan[0].baseline_value, Some(Value::from(true)));
 		assert_eq!(apply_plan[0].current_value, Some(Value::from(false)));
+		document
+			.runtime_model_mut()
+			.set_material_scalar(
+				&UnaRuntimeMaterialTarget {
+					name: Some("Mat".to_string()),
+					..Default::default()
+				},
+				"_Smoothness",
+				0.5,
+			)
+			.unwrap();
+		document
+			.runtime_model_mut()
+			.set_material_slot(
+				&UnaRuntimeMaterialSlotTarget {
+					node: UnaRuntimeNodeTarget {
+						source_node_id: Some("node_renderer".to_string()),
+						..Default::default()
+					},
+					primitive_index: None,
+				},
+				None,
+			)
+			.unwrap();
+		assert!(document
+			.runtime_model_mut()
+			.scene_and_dynamics_mut()
+			.unwrap()
+			.dynamics
+			.set_group_enabled_by_source_id("physbone:hair", false));
+
+		let restored = document
+			.runtime_model_mut()
+			.restore_inactive_runtime_action_effects(&actions)
+			.unwrap();
+		assert_eq!(restored.len(), 4);
+		assert_eq!(
+			document.runtime_model().node_visible(&UnaRuntimeNodeTarget {
+				source_node_id: Some("node_renderer".to_string()),
+				..Default::default()
+			}),
+			Some(true)
+		);
+		assert_eq!(
+			document.runtime_model().material_scalar(
+				&UnaRuntimeMaterialTarget {
+					name: Some("Mat".to_string()),
+					..Default::default()
+				},
+				"_Smoothness"
+			),
+			Some(0.0)
+		);
+		assert_eq!(
+			document.runtime_model().material_slot(&UnaRuntimeMaterialSlotTarget {
+				node: UnaRuntimeNodeTarget {
+					source_node_id: Some("node_renderer".to_string()),
+					..Default::default()
+				},
+				primitive_index: None,
+			}),
+			Some(Some(0))
+		);
+		assert_eq!(document.runtime_model().dynamics_enabled("physbone:hair"), Some(true));
 	}
 
 	#[test]
