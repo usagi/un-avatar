@@ -5901,7 +5901,7 @@ fn create_startup_splash_pipeline(
 mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
 		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
@@ -6038,6 +6038,35 @@ mod tests {
 		);
 		scene.nodes[0].visible = false;
 		assert_eq!(runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0), None);
+	}
+
+	#[test]
+	fn runtime_action_statuses_report_current_condition_state() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "hat:on".to_string(),
+				label: "Hat On".to_string(),
+				conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+					parameter_name: Some("Hat".to_string()),
+					parameter_value: Some(1.0),
+					..Default::default()
+				}],
+				effects: Vec::new(),
+				..Default::default()
+			}],
+		};
+		let active_values = [("Hat".to_string(), 1.0)].into_iter().collect();
+		let inactive_values = [("Hat".to_string(), 0.0)].into_iter().collect();
+		let missing_values = Default::default();
+
+		let active = runtime_action_statuses(&actions, None, &active_values);
+		let inactive = runtime_action_statuses(&actions, None, &inactive_values);
+		let missing = runtime_action_statuses(&actions, None, &missing_values);
+
+		assert_eq!(active[0].condition_parameter_names, vec!["Hat"]);
+		assert_eq!(active[0].current_condition_state.as_deref(), Some("active"));
+		assert_eq!(inactive[0].current_condition_state.as_deref(), Some("inactive"));
+		assert_eq!(missing[0].current_condition_state.as_deref(), Some("missing_parameter"));
 	}
 
 	#[test]
