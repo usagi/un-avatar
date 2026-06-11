@@ -4759,6 +4759,8 @@ impl GpuState {
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		crate::model_loader::apply_required_wardrobe_set(&mut doc, set_id)?;
 		drop(doc);
+		self.reset_dynamics_nodes_to_rest();
+		self.rebuild_runtime_dynamics();
 		self.invalidate_applied_document_state();
 		Ok(())
 	}
