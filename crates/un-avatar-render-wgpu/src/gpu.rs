@@ -52,6 +52,7 @@ pub(crate) const BASELINE_FALLBACK_SAMPLERS_PER_STAGE: u32 = 16;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
+const DYNAMICS_GROUP_STATUS_LIMIT: usize = 64;
 const CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT: usize = 64;
 const CONTACT_PROBE_STATUS_LIMIT: usize = 64;
 const DYNAMICS_CONSTRAINT_REF_STATUS_LIMIT: usize = 64;
@@ -186,6 +187,50 @@ pub(crate) struct RuntimeContactProbeStatusSummary {
 	pub(crate) count: u32,
 	pub(crate) would_emit_count: u32,
 	pub(crate) probes: Vec<RuntimeContactProbeStatus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsGroupStatus {
+	pub(crate) index: usize,
+	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
+	pub(crate) authored_enabled: bool,
+	pub(crate) effective_enabled: bool,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) comment: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) category: String,
+	pub(crate) bone_count: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) root_node: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) root_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) tip_node: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) tip_path: Option<String>,
+	pub(crate) stiffness: f32,
+	pub(crate) drag_force: f32,
+	pub(crate) gravity_power: f32,
+	pub(crate) gravity_dir: [f32; 3],
+	pub(crate) hit_radius: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) center_node: Option<usize>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) center_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) limit_type: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) max_angle_x: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) max_angle_z: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) max_stretch: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) allow_grabbing: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) allow_posing: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -794,6 +839,52 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 		would_emit_count,
 		probes,
 	}
+}
+
+fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus> {
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
+		.dynamics()
+		.dynamics_groups()
+		.enumerate()
+		.take(DYNAMICS_GROUP_STATUS_LIMIT)
+		.map(|(index, group)| {
+			let root_node = group.chain.bone_node_indices.first().copied();
+			let tip_node = group.chain.bone_node_indices.last().copied();
+			let center_node = group.parameters.center_node;
+			let limit_type = group
+				.limit
+				.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone()));
+			RuntimeDynamicsGroupStatus {
+				index,
+				source_kind: group.source_kind,
+				authored_enabled: group.authored_enabled,
+				effective_enabled: group.effective_enabled,
+				source_id: group.source_id.to_string(),
+				comment: group.comment.to_string(),
+				category: group.category.to_string(),
+				bone_count: group.chain.bone_node_indices.len(),
+				root_node,
+				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				tip_node,
+				tip_path: tip_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				stiffness: group.parameters.stiffness,
+				drag_force: group.parameters.drag_force,
+				gravity_power: group.parameters.gravity_power,
+				gravity_dir: group.parameters.gravity_dir,
+				hit_radius: group.parameters.hit_radius,
+				center_node,
+				center_path: center_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				limit_type,
+				max_angle_x: group.limit.map(|limit| limit.max_angle_x),
+				max_angle_z: group.limit.map(|limit| limit.max_angle_z),
+				max_stretch: group.limit.map(|limit| limit.max_stretch),
+				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
+				allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
+			}
+		})
+		.collect()
 }
 
 fn dynamics_constraint_ref_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsConstraintRefStatus> {
@@ -3956,6 +4047,16 @@ impl GpuState {
 			return RuntimeContactProbeStatusSummary::default();
 		};
 		contact_probe_status_summary(&doc)
+	}
+
+	pub(crate) fn dynamics_groups(&self) -> Vec<RuntimeDynamicsGroupStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		dynamics_group_statuses(&doc)
 	}
 
 	pub(crate) fn dynamics_constraint_refs(&self) -> Vec<RuntimeDynamicsConstraintRefStatus> {

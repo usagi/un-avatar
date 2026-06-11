@@ -1598,6 +1598,7 @@ impl AvatarApp {
 				status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
+				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 			}
 			status.camera_locked = self.camera_locked;
@@ -3169,6 +3170,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
@@ -3343,6 +3346,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
 		contact_probes: Vec::new(),
+		dynamics_groups: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
@@ -4740,6 +4744,33 @@ mod tests {
 			status.dynamics_contact_parameter_declaration_count = 1;
 			status.dynamics_contact_probe_count = 1;
 			status.dynamics_contact_probe_would_emit_count = 1;
+			status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				authored_enabled: false,
+				effective_enabled: true,
+				source_id: "physbone:hair".to_string(),
+				comment: "Hair".to_string(),
+				category: "secondary".to_string(),
+				bone_count: 3,
+				root_node: Some(1),
+				root_path: Some("root/hair".to_string()),
+				tip_node: Some(3),
+				tip_path: Some("root/hair/tip".to_string()),
+				stiffness: 0.35,
+				drag_force: 0.2,
+				gravity_power: 0.1,
+				gravity_dir: [0.0, -1.0, 0.0],
+				hit_radius: 0.04,
+				center_node: Some(0),
+				center_path: Some("root".to_string()),
+				limit_type: Some("Angle".to_string()),
+				max_angle_x: Some(45.0),
+				max_angle_z: Some(30.0),
+				max_stretch: Some(0.0),
+				allow_grabbing: Some(true),
+				allow_posing: Some(false),
+			}];
 			status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
 				index: 0,
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
@@ -4815,6 +4846,31 @@ mod tests {
 				.get("dynamics_contact_probe_would_emit_count")
 				.and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		let dynamics_groups = snapshot
+			.get("dynamics_groups")
+			.and_then(|value| value.as_array())
+			.expect("dynamics groups");
+		assert_eq!(dynamics_groups.len(), 1);
+		assert_eq!(
+			dynamics_groups[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("root_path").and_then(|value| value.as_str()),
+			Some("root/hair")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("tip_path").and_then(|value| value.as_str()),
+			Some("root/hair/tip")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("effective_enabled").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
+			Some(true)
 		);
 		let probes = snapshot
 			.get("contact_probes")
