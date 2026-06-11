@@ -3187,6 +3187,12 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			status.dynamics_stretch_limit_group_count
 		));
 	}
+	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
+		warnings.push(format!(
+			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}",
+			status.dynamics_grabbing_enabled_group_count, status.dynamics_posing_enabled_group_count
+		));
+	}
 	if status.dynamics_contact_probe_would_emit_count > 0 && !status.contact_parameter_emission_enabled {
 		warnings.push(format!(
 			"dynamics contact probes would emit {} parameter value(s), but contact parameter emission is disabled",
@@ -4720,14 +4726,19 @@ mod tests {
 	fn runtime_dynamics_warnings_explain_metadata_only_and_disabled_emission() {
 		let mut status = initial_runtime_snapshot(&AvatarWindowOptions::default());
 		status.dynamics_stretch_limit_group_count = 2;
+		status.dynamics_grabbing_enabled_group_count = 1;
+		status.dynamics_posing_enabled_group_count = 2;
 		status.dynamics_contact_probe_would_emit_count = 3;
 		status.contact_parameter_emission_enabled = false;
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 2);
+		assert_eq!(warnings.len(), 3);
 		assert!(warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")));
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
 		assert!(warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")));
@@ -5238,10 +5249,13 @@ mod tests {
 			.get("dynamics_warnings")
 			.and_then(|value| value.as_array())
 			.expect("dynamics warnings");
-		assert_eq!(dynamics_warnings.len(), 1);
-		assert!(dynamics_warnings[0]
+		assert_eq!(dynamics_warnings.len(), 2);
+		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")));
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver"))));
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver"))));
 		assert_eq!(
 			snapshot
 				.get("dynamics_grabbing_enabled_group_count")

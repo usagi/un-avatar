@@ -4157,6 +4157,19 @@ fn build_diagnose_report(
 			dynamics_source_features.radius_curve_count
 		));
 	}
+	if dynamics_source_features.grabbing_enabled_count > 0
+		|| dynamics_source_features.posing_enabled_count > 0
+		|| dynamics_counts.grabbing_enabled_groups > 0
+		|| dynamics_counts.posing_enabled_groups > 0
+	{
+		warnings.push(format!(
+			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; source_grabbing={} source_posing={} runtime_grabbing_groups={} runtime_posing_groups={}",
+			dynamics_source_features.grabbing_enabled_count,
+			dynamics_source_features.posing_enabled_count,
+			dynamics_counts.grabbing_enabled_groups,
+			dynamics_counts.posing_enabled_groups
+		));
+	}
 	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
 	let contact_parameter_emission_enabled = doc.runtime_model().contact_parameter_emission_enabled();
 	if contact_probe_would_emit_count > 0 && !contact_parameter_emission_enabled {
@@ -6999,6 +7012,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
 	}
 
 	#[test]
@@ -7132,6 +7149,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
