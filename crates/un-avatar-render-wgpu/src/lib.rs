@@ -1566,6 +1566,7 @@ impl AvatarApp {
 			status.contact_probes = contact_probe_status.probes;
 			status.dynamics_contact_probe_count = contact_probe_status.count;
 			status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
+			status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3167,6 +3168,8 @@ struct RendererRuntimeSnapshot {
 	contact_parameter_declarations: Vec<gpu::RuntimeContactParameterDeclarationStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3340,6 +3343,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
 		contact_probes: Vec::new(),
+		dynamics_constraint_refs: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4733,6 +4737,15 @@ mod tests {
 			status.dynamics_contact_parameter_declaration_count = 1;
 			status.dynamics_contact_probe_count = 1;
 			status.dynamics_contact_probe_would_emit_count = 1;
+			status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "constraint:parent".to_string(),
+				target_node: 4,
+				source_nodes: vec![1, 2],
+				constraint_type: "parent".to_string(),
+				weight: 0.75,
+			}];
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
 			status.dynamics_limit_group_count = 4;
@@ -4804,6 +4817,19 @@ mod tests {
 		assert_eq!(
 			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),
 			Some(3)
+		);
+		let constraint_refs = snapshot
+			.get("dynamics_constraint_refs")
+			.and_then(|value| value.as_array())
+			.expect("dynamics constraint refs");
+		assert_eq!(constraint_refs.len(), 1);
+		assert_eq!(
+			constraint_refs[0].get("source_id").and_then(|value| value.as_str()),
+			Some("constraint:parent")
+		);
+		assert_eq!(
+			constraint_refs[0].get("constraint_type").and_then(|value| value.as_str()),
+			Some("parent")
 		);
 		assert_eq!(
 			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),

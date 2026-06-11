@@ -54,6 +54,7 @@ pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
 const CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT: usize = 64;
 const CONTACT_PROBE_STATUS_LIMIT: usize = 64;
+const DYNAMICS_CONSTRAINT_REF_STATUS_LIMIT: usize = 64;
 const WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED: &str = "draw-scoped-resource-scoped";
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -179,6 +180,20 @@ pub(crate) struct RuntimeContactProbeStatusSummary {
 	pub(crate) count: u32,
 	pub(crate) would_emit_count: u32,
 	pub(crate) probes: Vec<RuntimeContactProbeStatus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsConstraintRefStatus {
+	pub(crate) index: usize,
+	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) target_node: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) source_nodes: Vec<usize>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) constraint_type: String,
+	pub(crate) weight: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -763,6 +778,24 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 		would_emit_count,
 		probes,
 	}
+}
+
+fn dynamics_constraint_ref_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsConstraintRefStatus> {
+	doc.runtime_model()
+		.dynamics()
+		.constraint_refs()
+		.enumerate()
+		.take(DYNAMICS_CONSTRAINT_REF_STATUS_LIMIT)
+		.map(|(index, constraint_ref)| RuntimeDynamicsConstraintRefStatus {
+			index,
+			source_kind: constraint_ref.source_kind,
+			source_id: constraint_ref.source_id.clone(),
+			target_node: constraint_ref.target_node,
+			source_nodes: constraint_ref.source_nodes.clone(),
+			constraint_type: constraint_ref.constraint_type.clone(),
+			weight: constraint_ref.weight,
+		})
+		.collect()
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {
@@ -3873,6 +3906,16 @@ impl GpuState {
 			return RuntimeContactProbeStatusSummary::default();
 		};
 		contact_probe_status_summary(&doc)
+	}
+
+	pub(crate) fn dynamics_constraint_refs(&self) -> Vec<RuntimeDynamicsConstraintRefStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		dynamics_constraint_ref_statuses(&doc)
 	}
 
 	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {
