@@ -502,6 +502,7 @@ struct DiagnoseActionDynamicsEnabledEffect {
 #[derive(Serialize)]
 struct DiagnoseMenuActionCandidate {
 	menu_component_index: usize,
+	menu_key: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	menu_label: Option<String>,
 	parameter_name: String,
@@ -519,6 +520,7 @@ struct DiagnoseMenuActionCandidate {
 #[derive(Serialize)]
 struct DiagnoseMenuWardrobeCandidate {
 	menu_component_index: usize,
+	menu_key: String,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	menu_path: Vec<String>,
 	#[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -805,8 +807,11 @@ struct DiagnoseUnavatarWardrobeSetSummary {
 #[derive(Serialize)]
 struct DiagnoseModularAvatarMenuComponentSummary {
 	component_index: usize,
+	menu_key: String,
 	short_type: String,
 	enabled: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_component_index: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	id: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -839,11 +844,16 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	install_target_menu_control_count: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	installer_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	external_menu_asset_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	external_menu_control_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct DiagnoseModularAvatarMenuGraphCandidate {
 	component_index: usize,
+	menu_key: String,
 	short_type: String,
 	kind: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -868,6 +878,7 @@ struct DiagnoseModularAvatarMenuGraphCandidate {
 struct DiagnoseModularAvatarMenuGraphNode {
 	node_index: usize,
 	component_index: usize,
+	menu_key: String,
 	short_type: String,
 	kind: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -2821,8 +2832,10 @@ fn modular_avatar_menu_component_summary(
 		.or_else(|| modular_avatar_component_string(component, &["parameterName", "parameter_name"]));
 	DiagnoseModularAvatarMenuComponentSummary {
 		component_index,
+		menu_key: format!("component:{component_index}"),
 		short_type: short_type.to_string(),
 		enabled: component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true),
+		source_component_index: None,
 		id: modular_avatar_component_string(component, &["id", "componentId", "component_id"]),
 		hierarchy_path: modular_avatar_component_string(component, &["hierarchyPath", "hierarchy_path", "componentPath", "component_path"]),
 		sibling_index: modular_avatar_component_usize(component, &["siblingIndex", "sibling_index", "transformSiblingIndex", "order"]),
@@ -2875,7 +2888,78 @@ fn modular_avatar_menu_component_summary(
 			component,
 			&["installer", "Installer", "sourceInstaller", "source_installer"],
 		)),
+		external_menu_asset_path: None,
+		external_menu_control_index: None,
 	}
+}
+
+fn modular_avatar_external_menu_component_summaries(
+	component: &serde_json::Value,
+	component_index: usize,
+) -> Vec<DiagnoseModularAvatarMenuComponentSummary> {
+	let enabled = component.get("enabled").and_then(|value| value.as_bool()).unwrap_or(true);
+	let Some(menu_asset) = modular_avatar_component_ref(component, &["menuToAppend", "menu_to_append"]) else {
+		return Vec::new();
+	};
+	let asset_path = modular_avatar_ref_path(Some(menu_asset)).unwrap_or_else(|| format!("external-menu:{component_index}"));
+	let Some(controls) = menu_asset.get("controls").and_then(|value| value.as_array()) else {
+		return Vec::new();
+	};
+	controls
+		.iter()
+		.enumerate()
+		.map(|(control_index, control)| {
+			let label = modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"]);
+			let hierarchy_path = Some(format!(
+				"{}/{}",
+				asset_path.trim_matches('/'),
+				label.clone().unwrap_or_else(|| format!("control:{control_index}"))
+			));
+			DiagnoseModularAvatarMenuComponentSummary {
+				component_index,
+				menu_key: format!("external:{component_index}:{control_index}"),
+				short_type: "VRCExpressionsMenuControl".to_string(),
+				enabled,
+				source_component_index: Some(component_index),
+				id: None,
+				hierarchy_path,
+				sibling_index: Some(control_index),
+				target_path: None,
+				label,
+				control_type: modular_avatar_component_string(control, &["type", "Type", "controlType", "control_type"]),
+				parameter: modular_avatar_external_menu_control_parameter(control),
+				sub_parameters: modular_avatar_sub_parameter_names(control),
+				value: control
+					.get("value")
+					.or_else(|| control.get("Value"))
+					.and_then(json_number_f64)
+					.map(|value| value as f32),
+				menu_source: Some("VRCExpressionsMenuAsset".to_string()),
+				menu_source_target_path: Some(asset_path.clone()),
+				menu_to_append_path: None,
+				menu_to_append_control_count: None,
+				install_target_menu_path: None,
+				install_target_menu_control_count: None,
+				installer_path: None,
+				external_menu_asset_path: Some(asset_path.clone()),
+				external_menu_control_index: Some(control_index),
+			}
+		})
+		.collect()
+}
+
+fn modular_avatar_external_menu_control_parameter(control: &serde_json::Value) -> Option<String> {
+	control
+		.get("parameter")
+		.or_else(|| control.get("Parameter"))
+		.and_then(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(|value| value.as_str()))
+				.or_else(|| parameter.get("Name").and_then(|value| value.as_str()))
+		})
+		.filter(|value| !value.is_empty())
+		.map(str::to_owned)
 }
 
 fn modular_avatar_menu_asset_control_count(value: Option<&serde_json::Value>) -> Option<usize> {
@@ -2968,6 +3052,7 @@ fn modular_avatar_menu_graph_candidates(
 		.iter()
 		.map(|component| DiagnoseModularAvatarMenuGraphCandidate {
 			component_index: component.component_index,
+			menu_key: component.menu_key.clone(),
 			short_type: component.short_type.clone(),
 			kind: modular_avatar_menu_graph_candidate_kind(&component.short_type).to_string(),
 			label: component.label.clone(),
@@ -3012,6 +3097,7 @@ fn modular_avatar_menu_graph_nodes(candidates: &[DiagnoseModularAvatarMenuGraphC
 			DiagnoseModularAvatarMenuGraphNode {
 				node_index,
 				component_index: candidate.component_index,
+				menu_key: candidate.menu_key.clone(),
 				short_type: candidate.short_type.clone(),
 				kind: candidate.kind.clone(),
 				label: candidate.label.clone(),
@@ -3091,7 +3177,7 @@ fn modular_avatar_menu_install_edges(
 
 fn modular_avatar_menu_graph_candidate_kind(short_type: &str) -> &'static str {
 	match short_type {
-		"ModularAvatarMenuItem" => "control",
+		"ModularAvatarMenuItem" | "VRCExpressionsMenuControl" => "control",
 		"ModularAvatarMenuGroup" => "group",
 		"ModularAvatarMenuInstaller" => "installer",
 		"ModularAvatarMenuInstallTarget" => "install_target",
@@ -3340,6 +3426,9 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 			}
 			if modular_avatar_is_menu_metadata_type(short_type) {
 				modular_avatar_menu_components.push(modular_avatar_menu_component_summary(component, component_index, short_type));
+				if short_type == "ModularAvatarMenuInstaller" {
+					modular_avatar_menu_components.extend(modular_avatar_external_menu_component_summaries(component, component_index));
+				}
 			}
 			if short_type == "ModularAvatarParameters" {
 				modular_avatar_parameters.extend(modular_avatar_parameter_summaries(component, component_index));
@@ -4359,6 +4448,7 @@ fn diagnose_menu_action_candidates(
 				.collect::<Vec<_>>();
 			candidates.push(DiagnoseMenuActionCandidate {
 				menu_component_index: menu.component_index,
+				menu_key: menu.menu_key.clone(),
 				menu_label: menu.label.clone(),
 				parameter_name: parameter_name.clone(),
 				parameter_value,
@@ -4373,11 +4463,18 @@ fn diagnose_menu_action_candidates(
 		}
 	}
 	candidates.sort_by(|a, b| {
-		(a.menu_component_index, a.action_id.as_str(), a.match_kind.as_str()).cmp(&(
-			b.menu_component_index,
-			b.action_id.as_str(),
-			b.match_kind.as_str(),
-		))
+		(
+			a.menu_component_index,
+			a.menu_key.as_str(),
+			a.action_id.as_str(),
+			a.match_kind.as_str(),
+		)
+			.cmp(&(
+				b.menu_component_index,
+				b.menu_key.as_str(),
+				b.action_id.as_str(),
+				b.match_kind.as_str(),
+			))
 	});
 	candidates
 }
@@ -4428,19 +4525,19 @@ fn diagnose_menu_wardrobe_candidates(
 	let Some(unavatar) = unavatar else {
 		return Vec::new();
 	};
-	let node_by_component = unavatar
+	let node_by_menu_key = unavatar
 		.modular_avatar_menu_graph_nodes
 		.iter()
 		.enumerate()
-		.map(|(index, node)| (node.component_index, index))
+		.map(|(index, node)| (node.menu_key.as_str(), index))
 		.collect::<BTreeMap<_, _>>();
 	let mut candidates = Vec::new();
 	for action_candidate in menu_action_candidates {
 		if action_candidate.wardrobe_set_ids.is_empty() {
 			continue;
 		}
-		let menu_path = node_by_component
-			.get(&action_candidate.menu_component_index)
+		let menu_path = node_by_menu_key
+			.get(action_candidate.menu_key.as_str())
 			.map(|node_index| menu_graph_node_path(&unavatar.modular_avatar_menu_graph_nodes, *node_index))
 			.unwrap_or_else(|| MenuGraphNodePath {
 				labels: action_candidate.menu_label.iter().cloned().collect(),
@@ -4449,6 +4546,7 @@ fn diagnose_menu_wardrobe_candidates(
 		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
 			candidates.push(DiagnoseMenuWardrobeCandidate {
 				menu_component_index: action_candidate.menu_component_index,
+				menu_key: action_candidate.menu_key.clone(),
 				menu_path: menu_path.labels.clone(),
 				menu_path_truncated: menu_path.truncated,
 				menu_label: action_candidate.menu_label.clone(),
@@ -4460,11 +4558,18 @@ fn diagnose_menu_wardrobe_candidates(
 		}
 	}
 	candidates.sort_by(|a, b| {
-		(a.menu_component_index, a.wardrobe_set_id.as_str(), a.action_id.as_str()).cmp(&(
-			b.menu_component_index,
-			b.wardrobe_set_id.as_str(),
-			b.action_id.as_str(),
-		))
+		(
+			a.menu_component_index,
+			a.menu_key.as_str(),
+			a.wardrobe_set_id.as_str(),
+			a.action_id.as_str(),
+		)
+			.cmp(&(
+				b.menu_component_index,
+				b.menu_key.as_str(),
+				b.wardrobe_set_id.as_str(),
+				b.action_id.as_str(),
+			))
 	});
 	candidates
 }
@@ -5560,6 +5665,7 @@ mod tests {
 			DiagnoseModularAvatarMenuGraphNode {
 				node_index: 0,
 				component_index: 10,
+				menu_key: "component:10".to_string(),
 				short_type: "ModularAvatarMenuGroup".to_string(),
 				kind: "group".to_string(),
 				label: Some("A".to_string()),
@@ -5575,6 +5681,7 @@ mod tests {
 			DiagnoseModularAvatarMenuGraphNode {
 				node_index: 1,
 				component_index: 11,
+				menu_key: "component:11".to_string(),
 				short_type: "ModularAvatarMenuGroup".to_string(),
 				kind: "group".to_string(),
 				label: Some("B".to_string()),
@@ -6029,9 +6136,9 @@ mod tests {
 		);
 		assert_eq!(unavatar.modular_avatar_disabled_component_count, 1);
 		assert_eq!(unavatar.modular_avatar_disabled_component_count_alias, 1);
-		assert_eq!(unavatar.modular_avatar_menu_component_count, 5);
-		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 5);
-		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 5);
+		assert_eq!(unavatar.modular_avatar_menu_component_count, 6);
+		assert_eq!(unavatar.modular_avatar_menu_graph_candidate_count, 6);
+		assert_eq!(unavatar.modular_avatar_menu_graph_node_count, 6);
 		assert_eq!(unavatar.modular_avatar_menu_install_edge_count, 2);
 		assert_eq!(unavatar.modular_avatar_vertex_filter_group_count, 1);
 		let menu = &unavatar.modular_avatar_menu_components[0];
@@ -6048,7 +6155,11 @@ mod tests {
 		assert_eq!(menu.target_path.as_deref(), Some("Root/HatMenu"));
 		assert_eq!(menu.menu_source.as_deref(), Some("Children"));
 		assert_eq!(menu.menu_source_target_path.as_deref(), Some("Root/HatMenu/Children"));
-		let installer_candidate = &unavatar.modular_avatar_menu_graph_candidates[0];
+		let installer_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "component:6")
+			.unwrap();
 		assert_eq!(installer_candidate.component_index, 6);
 		assert_eq!(installer_candidate.kind, "installer");
 		assert_eq!(installer_candidate.parent_path.as_deref(), Some("Root"));
@@ -6066,35 +6177,81 @@ mod tests {
 			installer_candidate.install_target_menu_path.as_deref(),
 			Some("Assets/Menus/Avatar.asset")
 		);
-		let group_candidate = &unavatar.modular_avatar_menu_graph_candidates[1];
+		let external_control = &unavatar.modular_avatar_menu_components[4];
+		assert_eq!(external_control.short_type, "VRCExpressionsMenuControl");
+		assert_eq!(external_control.source_component_index, Some(6));
+		assert_eq!(external_control.menu_key, "external:6:0");
+		assert_eq!(external_control.label.as_deref(), Some("External Hat"));
+		assert_eq!(external_control.parameter.as_deref(), Some("Hat"));
+		assert_eq!(
+			external_control.external_menu_asset_path.as_deref(),
+			Some("Assets/Menus/Root.asset")
+		);
+		assert_eq!(external_control.external_menu_control_index, Some(0));
+		let external_control_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "external:6:0")
+			.unwrap();
+		assert_eq!(external_control_candidate.kind, "control");
+		assert_eq!(external_control_candidate.label.as_deref(), Some("External Hat"));
+		let group_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "component:4")
+			.unwrap();
 		assert_eq!(group_candidate.component_index, 4);
 		assert_eq!(group_candidate.kind, "group");
 		assert_eq!(group_candidate.hierarchy_path.as_deref(), Some("Root/Accessories"));
 		assert_eq!(group_candidate.sibling_index, Some(2));
 		assert_eq!(group_candidate.target_path.as_deref(), Some("Root/Accessories"));
-		let install_target_candidate = &unavatar.modular_avatar_menu_graph_candidates[2];
+		let install_target_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "component:7")
+			.unwrap();
 		assert_eq!(install_target_candidate.component_index, 7);
 		assert_eq!(install_target_candidate.kind, "install_target");
 		assert_eq!(install_target_candidate.sibling_index, Some(3));
 		assert_eq!(install_target_candidate.installer_path.as_deref(), Some("Root/MenuInstaller"));
-		let control_candidate = &unavatar.modular_avatar_menu_graph_candidates[3];
+		let control_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "component:2")
+			.unwrap();
 		assert_eq!(control_candidate.component_index, 2);
 		assert_eq!(control_candidate.kind, "control");
 		assert_eq!(control_candidate.label.as_deref(), Some("Hat"));
 		assert_eq!(control_candidate.sibling_index, Some(4));
-		let nested_control_candidate = &unavatar.modular_avatar_menu_graph_candidates[4];
+		let nested_control_candidate = unavatar
+			.modular_avatar_menu_graph_candidates
+			.iter()
+			.find(|candidate| candidate.menu_key == "component:5")
+			.unwrap();
 		assert_eq!(nested_control_candidate.component_index, 5);
 		assert_eq!(nested_control_candidate.kind, "control");
 		assert_eq!(nested_control_candidate.label.as_deref(), Some("Glasses"));
 		assert_eq!(nested_control_candidate.parent_path.as_deref(), Some("Root/Accessories"));
-		let group_node = &unavatar.modular_avatar_menu_graph_nodes[1];
+		let group_node = unavatar
+			.modular_avatar_menu_graph_nodes
+			.iter()
+			.find(|node| node.menu_key == "component:4")
+			.unwrap();
 		assert_eq!(group_node.component_index, 4);
 		assert_eq!(group_node.child_component_indices, vec![5]);
-		let nested_node = &unavatar.modular_avatar_menu_graph_nodes[4];
+		let nested_node = unavatar
+			.modular_avatar_menu_graph_nodes
+			.iter()
+			.find(|node| node.menu_key == "component:5")
+			.unwrap();
 		assert_eq!(nested_node.component_index, 5);
-		assert_eq!(nested_node.parent_node_index, Some(1));
+		assert!(nested_node.parent_node_index.is_some());
 		assert_eq!(nested_node.parent_component_index, Some(4));
-		let install_target_node = &unavatar.modular_avatar_menu_graph_nodes[2];
+		let install_target_node = unavatar
+			.modular_avatar_menu_graph_nodes
+			.iter()
+			.find(|node| node.menu_key == "component:7")
+			.unwrap();
 		assert_eq!(install_target_node.component_index, 7);
 		assert_eq!(install_target_node.kind, "install_target");
 		assert_eq!(install_target_node.installer_path.as_deref(), Some("Root/MenuInstaller"));
@@ -6114,9 +6271,10 @@ mod tests {
 		assert_eq!(install_target_edge.target_kind, "installer");
 		assert_eq!(install_target_edge.installer_path.as_deref(), Some("Root/MenuInstaller"));
 		assert!(!install_target_edge.ignored_by_install_target);
-		assert_eq!(report.menu_action_candidates.len(), 2);
+		assert_eq!(report.menu_action_candidates.len(), 3);
 		let menu_action = &report.menu_action_candidates[0];
 		assert_eq!(menu_action.menu_component_index, 2);
+		assert_eq!(menu_action.menu_key, "component:2");
 		assert_eq!(menu_action.menu_label.as_deref(), Some("Hat"));
 		assert_eq!(menu_action.parameter_name, "Hat");
 		assert_eq!(menu_action.parameter_value, 1.0);
@@ -6128,14 +6286,24 @@ mod tests {
 		assert_eq!(menu_action.wardrobe_set_ids, vec!["hat".to_string()]);
 		let nested_menu_action = &report.menu_action_candidates[1];
 		assert_eq!(nested_menu_action.menu_component_index, 5);
+		assert_eq!(nested_menu_action.menu_key, "component:5");
 		assert_eq!(nested_menu_action.menu_label.as_deref(), Some("Glasses"));
 		assert_eq!(nested_menu_action.parameter_name, "Glasses");
 		assert_eq!(nested_menu_action.action_id, "ma:glasses");
 		assert_eq!(nested_menu_action.match_kind, "trigger");
 		assert_eq!(nested_menu_action.wardrobe_set_ids, vec!["glasses".to_string()]);
-		assert_eq!(report.menu_wardrobe_candidates.len(), 2);
+		let external_menu_action = &report.menu_action_candidates[2];
+		assert_eq!(external_menu_action.menu_component_index, 6);
+		assert_eq!(external_menu_action.menu_key, "external:6:0");
+		assert_eq!(external_menu_action.menu_label.as_deref(), Some("External Hat"));
+		assert_eq!(external_menu_action.parameter_name, "Hat");
+		assert_eq!(external_menu_action.action_id, "ma:hat");
+		assert_eq!(external_menu_action.match_kind, "condition");
+		assert_eq!(external_menu_action.wardrobe_set_ids, vec!["hat".to_string()]);
+		assert_eq!(report.menu_wardrobe_candidates.len(), 3);
 		let wardrobe_candidate = &report.menu_wardrobe_candidates[0];
 		assert_eq!(wardrobe_candidate.menu_component_index, 2);
+		assert_eq!(wardrobe_candidate.menu_key, "component:2");
 		assert_eq!(wardrobe_candidate.menu_path, vec!["Hat".to_string()]);
 		assert_eq!(wardrobe_candidate.menu_label.as_deref(), Some("Hat"));
 		assert_eq!(wardrobe_candidate.action_id, "ma:hat");
@@ -6144,6 +6312,7 @@ mod tests {
 		assert!(!wardrobe_candidate.inverted);
 		let nested_wardrobe_candidate = &report.menu_wardrobe_candidates[1];
 		assert_eq!(nested_wardrobe_candidate.menu_component_index, 5);
+		assert_eq!(nested_wardrobe_candidate.menu_key, "component:5");
 		assert_eq!(
 			nested_wardrobe_candidate.menu_path,
 			vec!["Accessories".to_string(), "Glasses".to_string()]
@@ -6153,6 +6322,13 @@ mod tests {
 		assert_eq!(nested_wardrobe_candidate.wardrobe_set_id, "glasses");
 		assert_eq!(nested_wardrobe_candidate.match_kind, "trigger");
 		assert!(!nested_wardrobe_candidate.inverted);
+		let external_wardrobe_candidate = &report.menu_wardrobe_candidates[2];
+		assert_eq!(external_wardrobe_candidate.menu_component_index, 6);
+		assert_eq!(external_wardrobe_candidate.menu_key, "external:6:0");
+		assert_eq!(external_wardrobe_candidate.menu_path, vec!["External Hat".to_string()]);
+		assert_eq!(external_wardrobe_candidate.menu_label.as_deref(), Some("External Hat"));
+		assert_eq!(external_wardrobe_candidate.action_id, "ma:hat");
+		assert_eq!(external_wardrobe_candidate.wardrobe_set_id, "hat");
 		assert_eq!(unavatar.modular_avatar_parameter_count, 2);
 		assert_eq!(unavatar.modular_avatar_parameters[0].component_index, 3);
 		assert_eq!(unavatar.modular_avatar_parameters[0].name_or_prefix, "Hat");
