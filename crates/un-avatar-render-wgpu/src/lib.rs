@@ -3246,9 +3246,11 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 		));
 	}
 	if status.dynamics_contact_probe_would_emit_count > 0 && !status.contact_parameter_emission_enabled {
+		let samples = runtime_dynamics_contact_probe_samples(status);
 		warnings.push(format!(
-			"dynamics contact probes would emit {} parameter value(s), but contact parameter emission is disabled",
-			status.dynamics_contact_probe_would_emit_count
+			"dynamics contact probes would emit {} parameter value(s), but contact parameter emission is disabled{}",
+			status.dynamics_contact_probe_would_emit_count,
+			format_runtime_warning_samples(&samples)
 		));
 	}
 	warnings
@@ -3323,6 +3325,32 @@ fn runtime_dynamics_constraint_ref_samples(status: &RendererRuntimeSnapshot) -> 
 				Some(target_path) => format!("{id}@{target_path}"),
 				None => id,
 			}
+		})
+		.collect()
+}
+
+fn runtime_dynamics_contact_probe_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.contact_probes
+		.iter()
+		.filter(|probe| probe.would_emit)
+		.take(4)
+		.map(|probe| {
+			let receiver = if probe.receiver_source_id.is_empty() {
+				format!("receiver[{}]", probe.receiver_index)
+			} else {
+				probe.receiver_source_id.clone()
+			};
+			let sender = if probe.sender_source_id.is_empty() {
+				format!("sender[{}]", probe.sender_index)
+			} else {
+				probe.sender_source_id.clone()
+			};
+			let target = match &probe.receiver_node_path {
+				Some(receiver_path) => format!("{receiver}@{receiver_path}"),
+				None => receiver,
+			};
+			format!("{target}<={sender}:{}", probe.parameter)
 		})
 		.collect()
 }
@@ -4946,6 +4974,29 @@ mod tests {
 			weight: 1.0,
 		}];
 		status.dynamics_contact_probe_would_emit_count = 3;
+		status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
+			index: 0,
+			receiver_index: 0,
+			sender_index: 1,
+			receiver_source_id: "contact:hand".to_string(),
+			sender_source_id: "contact:sender".to_string(),
+			receiver_node: 1,
+			receiver_node_path: Some("root/hand".to_string()),
+			sender_node: 2,
+			sender_node_path: Some("root/sender".to_string()),
+			parameter: "ContactHand".to_string(),
+			matched_tags: vec!["Hand".to_string()],
+			tag_match: true,
+			overlap: true,
+			would_emit: true,
+			distance: 0.0,
+			threshold: 0.1,
+			receiver_radius: 0.05,
+			sender_radius: 0.05,
+			receiver_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+			sender_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+			approximation: "sphere".to_string(),
+		}];
 		status.contact_parameter_emission_enabled = false;
 
 		let warnings = runtime_dynamics_warnings(&status);
@@ -4967,9 +5018,10 @@ mod tests {
 		assert!(warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")
+				&& warning.contains("samples=[contact:hand@root/hand<=contact:sender:ContactHand]")
+		));
 	}
 
 	#[test]

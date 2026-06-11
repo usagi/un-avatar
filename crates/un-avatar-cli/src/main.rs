@@ -2234,6 +2234,31 @@ fn dynamics_constraint_ref_samples(constraint_refs: &[DiagnoseDynamicsConstraint
 		.collect()
 }
 
+fn dynamics_contact_probe_samples(contact_probes: &[DiagnoseContactProbeSummary]) -> Vec<String> {
+	contact_probes
+		.iter()
+		.filter(|probe| probe.would_emit)
+		.take(4)
+		.map(|probe| {
+			let receiver = if probe.receiver_source_id.is_empty() {
+				format!("receiver[{}]", probe.receiver_index)
+			} else {
+				probe.receiver_source_id.clone()
+			};
+			let sender = if probe.sender_source_id.is_empty() {
+				format!("sender[{}]", probe.sender_index)
+			} else {
+				probe.sender_source_id.clone()
+			};
+			let target = match &probe.receiver_node_path {
+				Some(receiver_path) => format!("{receiver}@{receiver_path}"),
+				None => receiver,
+			};
+			format!("{target}<={sender}:{}", probe.parameter)
+		})
+		.collect()
+}
+
 fn format_warning_samples(samples: &[String]) -> String {
 	if samples.is_empty() {
 		String::new()
@@ -4379,8 +4404,10 @@ fn build_diagnose_report(
 	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
 	let contact_parameter_emission_enabled = doc.runtime_model().contact_parameter_emission_enabled();
 	if contact_probe_would_emit_count > 0 && !contact_parameter_emission_enabled {
+		let samples = dynamics_contact_probe_samples(&dynamics_contact_probes);
 		warnings.push(format!(
-			"dynamics contact probes would emit {contact_probe_would_emit_count} parameter value(s), but contact parameter emission is disabled"
+			"dynamics contact probes would emit {contact_probe_would_emit_count} parameter value(s), but contact parameter emission is disabled{}",
+			format_warning_samples(&samples)
 		));
 	}
 	let dynamics = DiagnoseDynamicsSummary {
@@ -7447,10 +7474,9 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && w.contains("physbone:hair@root")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")));
+		assert!(report.warnings.iter().any(|w| w
+			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
+			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
 			&& w.contains("samples=[physbone:hair@root")));
