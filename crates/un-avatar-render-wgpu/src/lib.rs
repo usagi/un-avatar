@@ -3211,9 +3211,13 @@ fn is_false(value: &bool) -> bool {
 fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let mut warnings = Vec::new();
 	if status.dynamics_group_count > 0 && status.dynamics_enabled_group_count == 0 {
+		let samples = runtime_dynamics_group_samples(status);
 		warnings.push(format!(
-			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}",
-			status.dynamics_group_count, status.dynamics_source_enabled_group_count, status.dynamics_enabled_override_count
+			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}{}",
+			status.dynamics_group_count,
+			status.dynamics_source_enabled_group_count,
+			status.dynamics_enabled_override_count,
+			format_runtime_warning_samples(&samples)
 		));
 	}
 	if status.dynamics_stretch_limit_group_count > 0 {
@@ -3245,6 +3249,15 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	warnings
 }
 
+fn runtime_dynamics_group_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.take(4)
+		.map(runtime_dynamics_group_sample_label)
+		.collect()
+}
+
 fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	status
 		.dynamics_groups
@@ -3255,18 +3268,20 @@ fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> V
 				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
 		})
 		.take(4)
-		.map(|group| {
-			let id = if group.source_id.is_empty() {
-				format!("group[{}]", group.index)
-			} else {
-				group.source_id.clone()
-			};
-			match &group.root_path {
-				Some(root_path) => format!("{id}@{root_path}"),
-				None => id,
-			}
-		})
+		.map(runtime_dynamics_group_sample_label)
 		.collect()
+}
+
+fn runtime_dynamics_group_sample_label(group: &crate::gpu::RuntimeDynamicsGroupStatus) -> String {
+	let id = if group.source_id.is_empty() {
+		format!("group[{}]", group.index)
+	} else {
+		group.source_id.clone()
+	};
+	match &group.root_path {
+		Some(root_path) => format!("{id}@{root_path}"),
+		None => id,
+	}
 }
 
 fn format_runtime_warning_samples(samples: &[String]) -> String {
@@ -4868,9 +4883,10 @@ mod tests {
 
 		let warnings = runtime_dynamics_warnings(&status);
 		assert_eq!(warnings.len(), 5);
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics groups are present but none are currently enabled")));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics groups are present but none are currently enabled")
+				&& warning.contains("samples=[physbone:hair@root/hair]")
+		));
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
 				&& warning.contains("physbone:hair@root/hair")

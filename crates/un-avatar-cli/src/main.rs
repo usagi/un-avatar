@@ -2180,6 +2180,22 @@ fn dynamics_stretch_limit_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Ve
 		.collect()
 }
 
+fn dynamics_group_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String> {
+	groups.iter().take(4).map(dynamics_group_sample_label).collect()
+}
+
+fn dynamics_group_sample_label(group: &DiagnoseDynamicsGroupSummary) -> String {
+	let id = if group.source_id.is_empty() {
+		format!("group[{}]", group.index)
+	} else {
+		group.source_id.clone()
+	};
+	match &group.root_path {
+		Some(root_path) => format!("{id}@{root_path}"),
+		None => id,
+	}
+}
+
 fn format_warning_samples(samples: &[String]) -> String {
 	if samples.is_empty() {
 		String::new()
@@ -4268,9 +4284,13 @@ fn build_diagnose_report(
 	}
 	let dynamics_counts = runtime_dynamics.counts();
 	if dynamics_counts.groups > 0 && dynamics_counts.enabled_groups == 0 {
+		let samples = dynamics_group_samples(&dynamics_groups);
 		warnings.push(format!(
-			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}",
-			dynamics_counts.groups, dynamics_counts.source_enabled_groups, dynamics_counts.runtime_enabled_overrides
+			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}{}",
+			dynamics_counts.groups,
+			dynamics_counts.source_enabled_groups,
+			dynamics_counts.runtime_enabled_overrides,
+			format_warning_samples(&samples)
 		));
 	}
 	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
@@ -7380,7 +7400,7 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics groups are present but none are currently enabled")));
+			.any(|w| w.contains("dynamics groups are present but none are currently enabled") && w.contains("samples=[physbone:hair@root")));
 		assert!(report
 			.warnings
 			.iter()
