@@ -1562,11 +1562,6 @@ impl AvatarApp {
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
-			let contact_probe_status = gpu.map(|g| g.contact_probe_status()).unwrap_or_default();
-			status.contact_probes = contact_probe_status.probes;
-			status.dynamics_contact_probe_count = contact_probe_status.count;
-			status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
-			status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -1597,8 +1592,13 @@ impl AvatarApp {
 				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
 				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
 				status.dynamics_contact_parameter_declaration_count = dynamics.contact_parameter_declarations;
+				let contact_probe_status = gpu.map(|g| g.contact_probe_status()).unwrap_or_default();
+				status.contact_probes = contact_probe_status.probes;
+				status.dynamics_contact_probe_count = contact_probe_status.count;
+				status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
+				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
