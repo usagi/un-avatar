@@ -3183,9 +3183,11 @@ fn is_false(value: &bool) -> bool {
 fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let mut warnings = Vec::new();
 	if status.dynamics_stretch_limit_group_count > 0 {
+		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
-			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={}",
-			status.dynamics_stretch_limit_group_count
+			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={}{}",
+			status.dynamics_stretch_limit_group_count,
+			format_runtime_warning_samples(&samples)
 		));
 	}
 	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
@@ -3207,6 +3209,38 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 		));
 	}
 	warnings
+}
+
+fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+		})
+		.take(4)
+		.map(|group| {
+			let id = if group.source_id.is_empty() {
+				format!("group[{}]", group.index)
+			} else {
+				group.source_id.clone()
+			};
+			match &group.root_path {
+				Some(root_path) => format!("{id}@{root_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn format_runtime_warning_samples(samples: &[String]) -> String {
+	if samples.is_empty() {
+		String::new()
+	} else {
+		format!(" samples=[{}]", samples.join(", "))
+	}
 }
 
 #[derive(Clone, Serialize)]
@@ -4736,6 +4770,37 @@ mod tests {
 	fn runtime_dynamics_warnings_explain_metadata_only_and_disabled_emission() {
 		let mut status = initial_runtime_snapshot(&AvatarWindowOptions::default());
 		status.dynamics_stretch_limit_group_count = 2;
+		status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
+			index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			authored_enabled: true,
+			effective_enabled: true,
+			source_id: "physbone:hair".to_string(),
+			comment: String::new(),
+			category: String::new(),
+			bone_count: 2,
+			root_node: Some(1),
+			root_path: Some("root/hair".to_string()),
+			tip_node: Some(2),
+			tip_path: Some("root/hair/tip".to_string()),
+			stiffness: 0.0,
+			drag_force: 0.0,
+			gravity_power: 0.0,
+			gravity_dir: [0.0, -1.0, 0.0],
+			hit_radius: 0.0,
+			hit_radius_sample_count: 0,
+			hit_radius_sample_min: None,
+			hit_radius_sample_max: None,
+			center_node: None,
+			center_path: None,
+			limit_type: Some("Angle".to_string()),
+			max_angle_x: Some(45.0),
+			max_angle_z: Some(45.0),
+			max_stretch: Some(0.25),
+			allow_grabbing: None,
+			allow_posing: None,
+			interaction_parameter: String::new(),
+		}];
 		status.dynamics_grabbing_enabled_group_count = 1;
 		status.dynamics_posing_enabled_group_count = 2;
 		status.dynamics_vrc_constraint_ref_count = 4;
@@ -4744,9 +4809,10 @@ mod tests {
 
 		let warnings = runtime_dynamics_warnings(&status);
 		assert_eq!(warnings.len(), 4);
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
+				&& warning.contains("physbone:hair@root/hair")
+		));
 		assert!(warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));

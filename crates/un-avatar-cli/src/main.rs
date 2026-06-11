@@ -2154,6 +2154,37 @@ fn dynamics_interaction_hook_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamic
 		.collect()
 }
 
+fn dynamics_stretch_limit_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String> {
+	groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+		})
+		.take(4)
+		.map(|group| {
+			let id = if group.source_id.is_empty() {
+				format!("group[{}]", group.index)
+			} else {
+				group.source_id.clone()
+			};
+			match &group.root_path {
+				Some(root_path) => format!("{id}@{root_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn format_warning_samples(samples: &[String]) -> String {
+	if samples.is_empty() {
+		String::new()
+	} else {
+		format!(" samples=[{}]", samples.join(", "))
+	}
+}
+
 fn dynamics_hit_radius_sample_summary(samples: &[f32]) -> (usize, Option<f32>, Option<f32>) {
 	let mut min = None::<f32>;
 	let mut max = None::<f32>;
@@ -4234,9 +4265,12 @@ fn build_diagnose_report(
 	}
 	let dynamics_counts = runtime_dynamics.counts();
 	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
+		let samples = dynamics_stretch_limit_samples(&dynamics_groups);
 		warnings.push(format!(
-			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={}",
-			dynamics_source_features.stretch_limit_count, dynamics_counts.stretch_limit_groups
+			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={}{}",
+			dynamics_source_features.stretch_limit_count,
+			dynamics_counts.stretch_limit_groups,
+			format_warning_samples(&samples)
 		));
 	}
 	if dynamics_source_features.radius_curve_count > 0 {
@@ -7126,7 +7160,7 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
+			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && !w.contains("samples=[")));
 		assert!(report
 			.warnings
 			.iter()
@@ -7336,7 +7370,7 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
+			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && w.contains("physbone:hair@root")));
 		assert!(report
 			.warnings
 			.iter()
