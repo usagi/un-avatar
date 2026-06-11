@@ -957,6 +957,10 @@ enum RendererControlCommand {
 		#[serde(skip_serializing_if = "Option::is_none")]
 		physics_config: Option<RendererSpringBonePhysicsConfig>,
 	},
+	SetDynamicsEnabled {
+		source_id: String,
+		enabled: bool,
+	},
 	SetAvatarOutline {
 		policy: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -1893,6 +1897,7 @@ pub fn run() {
 			set_renderer_apply_vmc_root_translation,
 			set_renderer_motion_receivers,
 			set_renderer_spring_bones,
+			set_renderer_dynamics_enabled,
 			set_renderer_primary_motion_source,
 			set_renderer_avatar_outline,
 			set_renderer_avatar_rim,
@@ -4949,6 +4954,20 @@ fn set_renderer_spring_bones(id: u32, setting: RendererSpringBoneSetting, state:
 			physics_config: renderer_spring_bone_physics_config(&setting),
 		},
 	)
+}
+
+#[tauri::command]
+fn set_renderer_dynamics_enabled(
+	id: u32,
+	source_id: String,
+	enabled: bool,
+	state: State<'_, Mutex<SupervisorState>>,
+) -> Result<(), String> {
+	let source_id = source_id.trim().to_string();
+	if source_id.is_empty() {
+		return Err("source_id must not be empty".to_string());
+	}
+	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetDynamicsEnabled { source_id, enabled })
 }
 
 /// 旧 UI / IPC 互換の primary motion source 更新。
@@ -10414,6 +10433,32 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_dynamics_enabled_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::SetDynamicsEnabled {
+				source_id: "physbone:hair".to_string(),
+				enabled: true,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"set_dynamics_enabled","source_id":"physbone:hair","enabled":true}"#
 		);
 	}
 
