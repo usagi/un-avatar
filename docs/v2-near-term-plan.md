@@ -143,9 +143,9 @@ MVP control command:
 - runtime evaluation の正本は [`unevaluation-v2.md`](unevaluation-v2.md)。内部 module 名は `runtime_eval` とし、wardrobe / action / animation / parameter / contact の合成は target owner policy で扱う。v2 初期では priority / lock は導入せず、target type ごとの policy で explicit user action と continuous evaluator の衝突を解決する。
 - core は runtime action effect から owner key / target kind / target key を派生する read-only evaluation target write view と、同一 target kind/key に複数 action owner が書く collision diagnostics を持ち、CLI diagnose / renderer runtime status / Supervisor diagnostics で観測できる。これは inactive-state default restore、continuous evaluator、衝突診断の前提であり、source data や runtime scene を直接 mutate しない。
 - core runtime model は node visibility、material property、material slot、dynamics enabled の現在値を read-only に取得できる。inactive-state default restore はまだ実行せず、baseline/source-default の保持方針を固めてからこの API を使う。
-- core は runtime action restore readiness diagnostics を持つ。v2 現段階では baseline/source-default を保持していないため、restore target は `baseline_not_captured` として観測するだけで、inactive-state default restore は実行しない。
-- restore readiness から read-only restore baseline candidates も診断できる。これは capture 候補値の確認用であり、runtime state に baseline を保存する段階ではない。
-- core は restore baseline candidates から deterministic capture plan を作れる。これは保存前の entry 形検証であり、まだ runtime state へ baseline は保存しない。
+- core は runtime action restore readiness diagnostics を持つ。restore target は baseline 未保存なら `baseline_not_captured`、保存済みなら `ready=true` として観測できる。inactive-state default restore はまだ実行しない。
+- restore readiness から read-only restore baseline candidates も診断できる。これは capture 候補値の確認用であり、restore 実行はまだ行わない。
+- core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存でき、保存済み baseline がある action effect は restore readiness で `ready=true` として観測できる。inactive-state default restore の runtime scene 書き戻しはまだ実行しない。
 
 次の段階:
 

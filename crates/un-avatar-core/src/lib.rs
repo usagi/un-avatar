@@ -486,6 +486,10 @@ pub struct UnaRuntimeState {
 	/// and runtime actions write only this transient state.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub dynamics_enabled_overrides: BTreeMap<String, bool>,
+	/// Captured inactive-restore baselines keyed by runtime action owner. These are runtime state snapshots, not source
+	/// defaults; source package action definitions remain in `UnaRuntimeActionSet`.
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	pub restore_baselines: BTreeMap<String, Vec<UnaEvaluationRestoreBaselineEntry>>,
 }
 
 pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 3;
@@ -1957,6 +1961,23 @@ impl<'a> UnaRuntimeModel<'a> {
 		&self.runtime_state().parameter_values
 	}
 
+	pub fn restore_baselines(self) -> &'a BTreeMap<String, Vec<UnaEvaluationRestoreBaselineEntry>> {
+		&self.runtime_state().restore_baselines
+	}
+
+	pub fn restore_baseline(
+		self,
+		owner_key: &str,
+		target_kind: &UnaEvaluationTargetKind,
+		target_key: &str,
+	) -> Option<&'a UnaEvaluationRestoreBaselineEntry> {
+		self.runtime_state()
+			.restore_baselines
+			.get(owner_key)?
+			.iter()
+			.find(|entry| &entry.target_kind == target_kind && entry.target_key == target_key)
+	}
+
 	pub fn node_visible(self, target: &UnaRuntimeNodeTarget) -> Option<bool> {
 		let scene = self.document.scene.as_ref()?;
 		let index = resolve_runtime_node_target(scene, target)?;
@@ -2112,6 +2133,18 @@ impl<'a> UnaRuntimeModel<'a> {
 			}
 		};
 		let current_value_available = current_value.is_some();
+		let baseline_captured = restore_target
+			&& self
+				.restore_baseline(&write.owner_key, &write.target_kind, &write.target_key)
+				.is_some();
+		let ready = restore_target && current_value_available && (!baseline_required || baseline_captured);
+		let reason = if ready {
+			"ready"
+		} else if restore_target && current_value_available && baseline_required && !baseline_captured {
+			"baseline_not_captured"
+		} else {
+			reason
+		};
 		UnaEvaluationRestoreReadiness {
 			owner_key: write.owner_key,
 			action_id: write.action_id,
@@ -2122,7 +2155,7 @@ impl<'a> UnaRuntimeModel<'a> {
 			current_value_available,
 			current_value,
 			baseline_required,
-			ready: false,
+			ready,
 			reason: reason.to_string(),
 		}
 	}
@@ -2201,6 +2234,27 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_runtime_parameter_values(&mut self, values: BTreeMap<String, f32>) {
 		self.runtime_state_mut().parameter_values.extend(values);
+	}
+
+	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		let plan = self
+			.document
+			.runtime_model()
+			.runtime_action_set_restore_baseline_capture_plan(actions);
+		let runtime_state = self.runtime_state_mut();
+		for entry in &plan {
+			let owner_entries = runtime_state.restore_baselines.entry(entry.owner_key.clone()).or_default();
+			owner_entries.retain(|existing| existing.target_kind != entry.target_kind || existing.target_key != entry.target_key);
+			owner_entries.push(entry.clone());
+			owner_entries.sort_by(|left, right| {
+				(&left.target_kind, &left.target_key, stable_json_key(&left.baseline_value)).cmp(&(
+					&right.target_kind,
+					&right.target_key,
+					stable_json_key(&right.baseline_value),
+				))
+			});
+		}
+		plan
 	}
 
 	pub fn set_node_visible(&mut self, target: &UnaRuntimeNodeTarget, visible: bool) -> bool {
@@ -6103,7 +6157,7 @@ mod tests {
 			morph_target_names: Vec::new(),
 			default_morph_weights: Vec::new(),
 		};
-		let document = UnaDocument {
+		let mut document = UnaDocument {
 			scene: Some(UnaSceneSnapshot {
 				nodes: vec![UnaSceneNode {
 					name: Some("Renderer".to_string()),
@@ -6200,7 +6254,9 @@ mod tests {
 
 		let candidates = document
 			.runtime_model()
-			.runtime_action_set_restore_baseline_candidates(&UnaRuntimeActionSet { actions: vec![action] });
+			.runtime_action_set_restore_baseline_candidates(&UnaRuntimeActionSet {
+				actions: vec![action.clone()],
+			});
 		assert_eq!(candidates.len(), 4);
 		assert_eq!(candidates[0].target_key, "node_renderer");
 		assert_eq!(candidates[0].baseline_value, Value::from(true));
@@ -6213,6 +6269,28 @@ mod tests {
 		assert_eq!(plan[0].owner_key, "action:variant:coat");
 		assert_eq!(plan[0].source_action_ids, vec!["variant:coat"]);
 		assert_eq!(plan[0].source_effect_kinds, vec!["node_visibility"]);
+
+		let actions = UnaRuntimeActionSet { actions: vec![action] };
+		let captured = document.runtime_model_mut().capture_runtime_action_restore_baselines(&actions);
+		assert_eq!(captured.len(), 4);
+		assert_eq!(
+			document
+				.runtime_model()
+				.restore_baseline("action:variant:coat", &UnaEvaluationTargetKind::NodeVisibility, "node_renderer")
+				.map(|entry| &entry.baseline_value),
+			Some(&Value::from(true))
+		);
+		let captured_readiness = document.runtime_model().runtime_action_set_restore_readiness(&actions);
+		assert!(captured_readiness[0].ready);
+		assert_eq!(captured_readiness[0].reason, "ready");
+		assert!(captured_readiness[1].ready);
+		assert_eq!(captured_readiness[1].reason, "ready");
+		assert!(captured_readiness[2].ready);
+		assert_eq!(captured_readiness[2].reason, "ready");
+		assert!(captured_readiness[3].ready);
+		assert_eq!(captured_readiness[3].reason, "ready");
+		assert!(!captured_readiness[4].ready);
+		assert_eq!(captured_readiness[4].reason, "target_unresolved");
 	}
 
 	#[test]
@@ -6435,6 +6513,35 @@ mod tests {
 		);
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&3.0));
+	}
+
+	#[test]
+	fn runtime_state_serializes_restore_baselines() {
+		let mut document = UnaDocument::default();
+		document
+			.runtime_state
+			.restore_baselines
+			.entry("action:hat:on".to_string())
+			.or_default()
+			.push(UnaEvaluationRestoreBaselineEntry {
+				owner_key: "action:hat:on".to_string(),
+				target_kind: UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Root/Hat".to_string(),
+				baseline_value: Value::from(true),
+				source_action_ids: vec!["hat:on".to_string()],
+				source_effect_kinds: vec!["node_visibility".to_string()],
+			});
+
+		let json = serde_json::to_string(&document).unwrap();
+		assert!(json.contains("restore_baselines"));
+		let decoded: UnaDocument = serde_json::from_str(&json).unwrap();
+		assert_eq!(
+			decoded
+				.runtime_model()
+				.restore_baseline("action:hat:on", &UnaEvaluationTargetKind::NodeVisibility, "Root/Hat")
+				.map(|entry| &entry.baseline_value),
+			Some(&Value::from(true))
+		);
 	}
 
 	#[test]
