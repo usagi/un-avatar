@@ -130,6 +130,10 @@
 					},
 				})}
 			</dd>
+			{#if runtimeStatus.dynamics_warnings.length}
+				<dt>{$_("renderers.details.diag_dynamics_warnings")}</dt>
+				<dd class="stderr-block">{runtimeStatus.dynamics_warnings.slice(0, sampleLimit).join("\n")}</dd>
+			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
 				<dd class="stderr-block">{runtimeStatus.dynamics_groups.slice(0, sampleLimit).map(groupLabel).join("\n")}</dd>

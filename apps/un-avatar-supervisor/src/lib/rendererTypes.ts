@@ -415,6 +415,7 @@ export type RendererRuntimeStatus = {
 	dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
 	dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
 	dynamics_constraint_refs: RendererRuntimeDynamicsConstraintRefStatus[];
+	dynamics_warnings: string[];
 	camera_locked: boolean;
 	window_focused: boolean;
 	window_activation_seq: number;
@@ -462,6 +463,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "dynamics_contact_parameter_emitted_count"
 	| "dynamics_contact_parameter_reset_to_zero_count"
 	| "dynamics_constraint_ref_count"
+	| "dynamics_warnings"
 	| "runtime_actions"
 	| "runtime_action_target_write_collisions"
 	| "runtime_action_restore_readiness"

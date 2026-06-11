@@ -381,6 +381,8 @@ struct RendererRuntimeStatus {
 	dynamics_colliders: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_constraint_refs: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_warnings: Vec<String>,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -692,6 +694,8 @@ struct RendererRuntimeTelemetry {
 	dynamics_colliders: Vec<serde_json::Value>,
 	#[serde(default)]
 	dynamics_constraint_refs: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_warnings: Vec<String>,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -5836,6 +5840,10 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.as_ref()
 			.map(|telemetry| telemetry.dynamics_constraint_refs.clone())
 			.unwrap_or_default(),
+		dynamics_warnings: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_warnings.clone())
+			.unwrap_or_default(),
 		camera_locked: telemetry.as_ref().is_some_and(|telemetry| telemetry.camera_locked),
 		window_focused: telemetry.as_ref().is_some_and(|telemetry| telemetry.window_focused),
 		window_activation_seq: telemetry.as_ref().map_or(0, |telemetry| telemetry.window_activation_seq),
@@ -9027,6 +9035,7 @@ mod tests {
 			dynamics_groups: Vec::new(),
 			dynamics_colliders: Vec::new(),
 			dynamics_constraint_refs: Vec::new(),
+			dynamics_warnings: Vec::new(),
 			camera_locked: false,
 			window_focused: false,
 			window_activation_seq: 0,
@@ -9082,7 +9091,7 @@ mod tests {
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits that are metadata-only in the current solver"],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -9210,6 +9219,10 @@ mod tests {
 				.and_then(|value| value.get("node_path"))
 				.and_then(serde_json::Value::as_str),
 			Some("root/collider")
+		);
+		assert_eq!(
+			telemetry.dynamics_warnings.first().map(String::as_str),
+			Some("6 dynamics groups carry stretch limits that are metadata-only in the current solver")
 		);
 	}
 
