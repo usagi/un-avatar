@@ -404,11 +404,163 @@ namespace UNAvatar.UnityExporter
             {
                 return TransformTargetJson(root, transform);
             }
-            return new Dictionary<string, object>
+            var json = UnityObjectReferenceHeaderToJson(obj);
+            AddVrcExpressionsMenuSummary(json, root, obj, 0, new HashSet<int>());
+            return json;
+        }
+
+        private static Dictionary<string, object> UnityObjectReferenceHeaderToJson(UnityEngine.Object obj)
+        {
+            var json = new Dictionary<string, object>
             {
                 ["name"] = obj.name ?? "",
                 ["type"] = obj.GetType().FullName ?? obj.GetType().Name
             };
+            var assetPath = UnityEditor.AssetDatabase.GetAssetPath(obj);
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                json["assetPath"] = assetPath;
+                var guid = UnityEditor.AssetDatabase.AssetPathToGUID(assetPath);
+                if (!string.IsNullOrEmpty(guid))
+                {
+                    json["assetGuid"] = guid;
+                }
+            }
+            return json;
+        }
+
+        private void AddVrcExpressionsMenuSummary(
+            Dictionary<string, object> json,
+            Transform root,
+            UnityEngine.Object obj,
+            int depth,
+            HashSet<int> visited)
+        {
+            if (obj == null || !IsVrcExpressionsMenuObject(obj))
+            {
+                return;
+            }
+            json["controlCount"] = VrcExpressionsMenuControls(obj).Count;
+            json["controls"] = VrcExpressionsMenuControlsToJson(root, obj, depth, visited);
+        }
+
+        private static bool IsVrcExpressionsMenuObject(UnityEngine.Object obj)
+        {
+            var fullName = obj != null ? obj.GetType().FullName ?? "" : "";
+            return fullName == "VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu" ||
+                fullName.EndsWith(".VRCExpressionsMenu", StringComparison.Ordinal);
+        }
+
+        private List<object> VrcExpressionsMenuControlsToJson(Transform root, UnityEngine.Object menu, int depth, HashSet<int> visited)
+        {
+            var controls = new List<object>();
+            if (menu == null || depth > 4)
+            {
+                return controls;
+            }
+            var instanceId = menu.GetInstanceID();
+            if (!visited.Add(instanceId))
+            {
+                return controls;
+            }
+            foreach (var control in VrcExpressionsMenuControls(menu))
+            {
+                if (controls.Count >= 64)
+                {
+                    break;
+                }
+                controls.Add(VrcExpressionsMenuControlToJson(root, control, depth, visited));
+            }
+            visited.Remove(instanceId);
+            return controls;
+        }
+
+        private Dictionary<string, object> VrcExpressionsMenuControlToJson(Transform root, object control, int depth, HashSet<int> visited)
+        {
+            var type = control != null ? control.GetType() : null;
+            var subMenu = type != null ? ReadMember(type, control, "subMenu") as UnityEngine.Object : null;
+            var json = new Dictionary<string, object>
+            {
+                ["name"] = type != null ? ReadMember(type, control, "name")?.ToString() ?? "" : "",
+                ["type"] = type != null ? ReadMember(type, control, "type")?.ToString() ?? "" : "",
+                ["parameter"] = VrcExpressionControlParameterName(type != null ? ReadMember(type, control, "parameter") : null),
+                ["subParameters"] = VrcExpressionControlSubParameters(
+                    type != null ? ReadMember(type, control, "subParameters") as IEnumerable : null),
+                ["value"] = type != null ? NumberToFloat(ReadMember(type, control, "value"), 0.0f) : 0.0f,
+                ["subMenu"] = subMenu != null ? VrcExpressionsMenuSubMenuReferenceToJson(root, subMenu, depth + 1, visited) : null
+            };
+            return json;
+        }
+
+        private object VrcExpressionsMenuSubMenuReferenceToJson(Transform root, UnityEngine.Object subMenu, int depth, HashSet<int> visited)
+        {
+            var json = UnityObjectReferenceHeaderToJson(subMenu);
+            if (depth <= 4 && IsVrcExpressionsMenuObject(subMenu))
+            {
+                json["controlCount"] = VrcExpressionsMenuControls(subMenu).Count;
+                json["controls"] = VrcExpressionsMenuControlsToJson(root, subMenu, depth, visited);
+            }
+            return json;
+        }
+
+        private static IList VrcExpressionsMenuControls(UnityEngine.Object menu)
+        {
+            if (menu == null)
+            {
+                return Array.Empty<object>();
+            }
+            var controls = ReadMember(menu.GetType(), menu, "controls") as IList;
+            return controls ?? Array.Empty<object>();
+        }
+
+        private static string VrcExpressionControlParameterName(object parameter)
+        {
+            if (parameter == null)
+            {
+                return "";
+            }
+            return ReadMember(parameter.GetType(), parameter, "name")?.ToString() ?? "";
+        }
+
+        private static List<object> VrcExpressionControlSubParameters(IEnumerable subParameters)
+        {
+            var result = new List<object>();
+            if (subParameters == null)
+            {
+                return result;
+            }
+            foreach (var subParameter in subParameters)
+            {
+                if (result.Count >= 16)
+                {
+                    break;
+                }
+                if (subParameter == null)
+                {
+                    continue;
+                }
+                result.Add(new Dictionary<string, object>
+                {
+                    ["name"] = VrcExpressionControlParameterName(subParameter)
+                });
+            }
+            return result;
+        }
+
+        private static float NumberToFloat(object value, float fallback)
+        {
+            if (value == null)
+            {
+                return fallback;
+            }
+            try
+            {
+                return Convert.ToSingle(value, CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return fallback;
+            }
         }
 
         private static Dictionary<string, object> TransformTargetJson(Transform root, Transform target)

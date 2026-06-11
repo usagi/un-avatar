@@ -832,7 +832,11 @@ struct DiagnoseModularAvatarMenuComponentSummary {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	menu_to_append_path: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	menu_to_append_control_count: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	install_target_menu_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	install_target_menu_control_count: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	installer_path: Option<String>,
 }
@@ -2776,6 +2780,8 @@ fn modular_avatar_ref_path(value: Option<&serde_json::Value>) -> Option<String> 
 	let value = value?;
 	value
 		.get("path")
+		.or_else(|| value.get("assetPath"))
+		.or_else(|| value.get("asset_path"))
 		.or_else(|| value.get("referencePath"))
 		.or_else(|| value.get("reference_path"))
 		.and_then(|path| path.as_str())
@@ -2843,7 +2849,20 @@ fn modular_avatar_menu_component_summary(
 			],
 		)),
 		menu_to_append_path: modular_avatar_ref_path(modular_avatar_component_ref(component, &["menuToAppend", "menu_to_append"])),
+		menu_to_append_control_count: modular_avatar_menu_asset_control_count(modular_avatar_component_ref(
+			component,
+			&["menuToAppend", "menu_to_append"],
+		)),
 		install_target_menu_path: modular_avatar_ref_path(modular_avatar_component_ref(
+			component,
+			&[
+				"installTargetMenu",
+				"install_target_menu",
+				"menuToAppendTarget",
+				"menu_to_append_target",
+			],
+		)),
+		install_target_menu_control_count: modular_avatar_menu_asset_control_count(modular_avatar_component_ref(
 			component,
 			&[
 				"installTargetMenu",
@@ -2857,6 +2876,21 @@ fn modular_avatar_menu_component_summary(
 			&["installer", "Installer", "sourceInstaller", "source_installer"],
 		)),
 	}
+}
+
+fn modular_avatar_menu_asset_control_count(value: Option<&serde_json::Value>) -> Option<usize> {
+	let value = value?;
+	value
+		.get("controlCount")
+		.or_else(|| value.get("control_count"))
+		.and_then(|value| value.as_u64())
+		.and_then(|value| usize::try_from(value).ok())
+		.or_else(|| {
+			value
+				.get("controls")
+				.and_then(|value| value.as_array())
+				.map(|controls| controls.len())
+		})
 }
 
 fn modular_avatar_parameter_summaries(component: &serde_json::Value, component_index: usize) -> Vec<DiagnoseModularAvatarParameterSummary> {
@@ -4985,7 +5019,7 @@ fn run_diagnose(
 		);
 		for menu in unavatar.modular_avatar_menu_components.iter().take(16) {
 			println!(
-				"unavatar.ma_menu[{}#{}]: enabled={} label={:?} type={:?} parameter={:?} value={:?} hierarchy={:?} sibling={:?} target={:?} menu_source={:?} source_target={:?} menu_to_append={:?} install_target_menu={:?} installer={:?}",
+				"unavatar.ma_menu[{}#{}]: enabled={} label={:?} type={:?} parameter={:?} value={:?} hierarchy={:?} sibling={:?} target={:?} menu_source={:?} source_target={:?} menu_to_append={:?} menu_to_append_controls={:?} install_target_menu={:?} install_target_menu_controls={:?} installer={:?}",
 				menu.short_type,
 				menu.component_index,
 				menu.enabled,
@@ -4999,7 +5033,9 @@ fn run_diagnose(
 				menu.menu_source,
 				menu.menu_source_target_path,
 				menu.menu_to_append_path,
+				menu.menu_to_append_control_count,
 				menu.install_target_menu_path,
+				menu.install_target_menu_control_count,
 				menu.installer_path
 			);
 		}
@@ -5827,8 +5863,20 @@ mod tests {
 							"id": "installer-root",
 							"hierarchyPath": "Root/MenuInstaller",
 							"siblingIndex": 1,
-							"menuToAppend": {"path": "Menus/Root"},
-							"installTargetMenu": {"path": "Avatar/Menu"}
+							"menuToAppend": {
+								"assetPath": "Assets/Menus/Root.asset",
+								"controlCount": 2,
+								"controls": [{
+									"name": "External Hat",
+									"type": "Toggle",
+									"parameter": "Hat",
+									"value": 1
+								}]
+							},
+							"installTargetMenu": {
+								"assetPath": "Assets/Menus/Avatar.asset",
+								"controlCount": 1
+							}
 						}, {
 							"shortType": "ModularAvatarMenuInstallTarget",
 							"enabled": true,
@@ -6005,8 +6053,19 @@ mod tests {
 		assert_eq!(installer_candidate.kind, "installer");
 		assert_eq!(installer_candidate.parent_path.as_deref(), Some("Root"));
 		assert_eq!(installer_candidate.sibling_index, Some(1));
-		assert_eq!(installer_candidate.menu_to_append_path.as_deref(), Some("Menus/Root"));
-		assert_eq!(installer_candidate.install_target_menu_path.as_deref(), Some("Avatar/Menu"));
+		let installer_menu = &unavatar.modular_avatar_menu_components[3];
+		assert_eq!(installer_menu.menu_to_append_path.as_deref(), Some("Assets/Menus/Root.asset"));
+		assert_eq!(installer_menu.menu_to_append_control_count, Some(2));
+		assert_eq!(
+			installer_menu.install_target_menu_path.as_deref(),
+			Some("Assets/Menus/Avatar.asset")
+		);
+		assert_eq!(installer_menu.install_target_menu_control_count, Some(1));
+		assert_eq!(installer_candidate.menu_to_append_path.as_deref(), Some("Assets/Menus/Root.asset"));
+		assert_eq!(
+			installer_candidate.install_target_menu_path.as_deref(),
+			Some("Assets/Menus/Avatar.asset")
+		);
 		let group_candidate = &unavatar.modular_avatar_menu_graph_candidates[1];
 		assert_eq!(group_candidate.component_index, 4);
 		assert_eq!(group_candidate.kind, "group");
@@ -6043,8 +6102,11 @@ mod tests {
 		assert_eq!(installer_edge.source_component_index, 6);
 		assert_eq!(installer_edge.source_kind, "installer");
 		assert_eq!(installer_edge.target_kind, "target_menu");
-		assert_eq!(installer_edge.menu_to_append_path.as_deref(), Some("Menus/Root"));
-		assert_eq!(installer_edge.install_target_menu_path.as_deref(), Some("Avatar/Menu"));
+		assert_eq!(installer_edge.menu_to_append_path.as_deref(), Some("Assets/Menus/Root.asset"));
+		assert_eq!(
+			installer_edge.install_target_menu_path.as_deref(),
+			Some("Assets/Menus/Avatar.asset")
+		);
 		assert!(installer_edge.ignored_by_install_target);
 		let install_target_edge = &unavatar.modular_avatar_menu_install_edges[1];
 		assert_eq!(install_target_edge.source_component_index, 7);
