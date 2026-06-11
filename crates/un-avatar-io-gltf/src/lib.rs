@@ -4885,6 +4885,7 @@ fn apply_unavatar_remove_vertex_color(
 enum ModularAvatarVertexFilter {
 	BlendShape { shapes: Vec<String>, threshold: f32 },
 	Axis { center: [f32; 3], axis: [f32; 3] },
+	Bone { bone_node: usize, threshold: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5313,6 +5314,20 @@ fn modular_avatar_vertex_filter_by_axis(component: &Value) -> Option<ModularAvat
 	})
 }
 
+fn modular_avatar_vertex_filter_by_bone(
+	component: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Option<ModularAvatarVertexFilter> {
+	let bone_ref = modular_avatar_component_value(component, &["Bone", "bone", "m_bone"])?;
+	Some(ModularAvatarVertexFilter::Bone {
+		bone_node: modular_avatar_reference_index(bone_ref, node_ids, registry_paths, paths, normalized_paths)?,
+		threshold: modular_avatar_component_f32(component, &["Threshold", "threshold", "m_threshold"]).unwrap_or(0.01),
+	})
+}
+
 fn collect_modular_avatar_vertex_filter_delete_groups(
 	components: &[Value],
 	node_ids: &BTreeMap<String, usize>,
@@ -5391,6 +5406,13 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 						vertex_filters.push(filter);
 					}
 				}
+				Some("VertexFilterByBoneComponent") => {
+					if let Some(filter) = modular_avatar_vertex_filter_by_bone(filter, node_ids, registry_paths, paths, normalized_paths) {
+						vertex_filters.push(filter);
+					} else {
+						has_unsupported = true;
+					}
+				}
 				Some(_) => has_unsupported = true,
 				None => has_unsupported = true,
 			}
@@ -5446,25 +5468,70 @@ fn modular_avatar_axis_filter_mask(primitive: &UnaMeshBuffers, center: [f32; 3],
 		.collect()
 }
 
-fn modular_avatar_single_vertex_filter_mask(primitive: &UnaMeshBuffers, filter: &ModularAvatarVertexFilter) -> Vec<bool> {
+fn modular_avatar_bone_filter_mask(
+	primitive: &UnaMeshBuffers,
+	skin_joint_nodes: Option<&[usize]>,
+	bone_node: usize,
+	threshold: f32,
+) -> Vec<bool> {
+	let mut mask = vec![false; primitive.positions.len()];
+	let (Some(joints), Some(weights), Some(skin_joint_nodes)) = (&primitive.joints, &primitive.weights, skin_joint_nodes) else {
+		return mask;
+	};
+	if joints.len() != mask.len() || weights.len() != mask.len() {
+		return mask;
+	}
+	for (index, (vertex_joints, vertex_weights)) in joints.iter().zip(weights).enumerate() {
+		let mut total_weight = 0.0f32;
+		let mut target_weight = 0.0f32;
+		for slot in 0..4 {
+			let weight = vertex_weights[slot];
+			if weight <= 0.0 {
+				continue;
+			}
+			total_weight += weight;
+			let joint_index = usize::from(vertex_joints[slot]);
+			if skin_joint_nodes.get(joint_index).copied() == Some(bone_node) {
+				target_weight += weight;
+			}
+		}
+		if target_weight > 0.0 && total_weight > 0.0 && target_weight / total_weight >= threshold {
+			mask[index] = true;
+		}
+	}
+	mask
+}
+
+fn modular_avatar_single_vertex_filter_mask(
+	primitive: &UnaMeshBuffers,
+	skin_joint_nodes: Option<&[usize]>,
+	filter: &ModularAvatarVertexFilter,
+) -> Vec<bool> {
 	match filter {
 		ModularAvatarVertexFilter::BlendShape { shapes, threshold } => {
 			modular_avatar_blend_shape_filter_mask(primitive, shapes, *threshold)
 		}
 		ModularAvatarVertexFilter::Axis { center, axis } => modular_avatar_axis_filter_mask(primitive, *center, *axis),
+		ModularAvatarVertexFilter::Bone { bone_node, threshold } => {
+			modular_avatar_bone_filter_mask(primitive, skin_joint_nodes, *bone_node, *threshold)
+		}
 	}
 }
 
-fn modular_avatar_vertex_filter_mask(primitive: &UnaMeshBuffers, group: &ModularAvatarVertexFilterDeleteGroup) -> Vec<bool> {
+fn modular_avatar_vertex_filter_mask(
+	primitive: &UnaMeshBuffers,
+	skin_joint_nodes: Option<&[usize]>,
+	group: &ModularAvatarVertexFilterDeleteGroup,
+) -> Vec<bool> {
 	let mut filters = group.filters.iter();
 	let Some(first) = filters.next() else {
 		return vec![false; primitive.positions.len()];
 	};
-	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, first);
+	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, first);
 	match group.combine {
 		ModularAvatarVertexFilterCombine::Single | ModularAvatarVertexFilterCombine::Union => {
 			for filter in filters {
-				let next = modular_avatar_single_vertex_filter_mask(primitive, filter);
+				let next = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, filter);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target || value;
 				}
@@ -5472,7 +5539,7 @@ fn modular_avatar_vertex_filter_mask(primitive: &UnaMeshBuffers, group: &Modular
 		}
 		ModularAvatarVertexFilterCombine::Intersection => {
 			for filter in filters {
-				let next = modular_avatar_single_vertex_filter_mask(primitive, filter);
+				let next = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, filter);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target && value;
 				}
@@ -5539,6 +5606,12 @@ fn apply_unavatar_vertex_filters(
 		let Some(mesh_idx) = scene.nodes.get(group.target).and_then(|node| node.mesh) else {
 			continue;
 		};
+		let skin_joint_nodes = scene
+			.nodes
+			.get(group.target)
+			.and_then(|node| node.skin)
+			.and_then(|skin_index| scene.skins.get(skin_index))
+			.map(|skin| skin.joint_nodes.clone());
 		let target_mesh_idx = if mesh_user_counts.get(&mesh_idx).copied().unwrap_or(0) > 1 {
 			let Some(mesh) = scene.meshes.get(mesh_idx).cloned() else {
 				continue;
@@ -5555,9 +5628,10 @@ fn apply_unavatar_vertex_filters(
 		let Some(mesh) = scene.meshes.get_mut(target_mesh_idx) else {
 			continue;
 		};
+		let skin_joint_nodes = skin_joint_nodes.as_deref();
 		let mut node_mutated = false;
 		for primitive in mesh {
-			let vertex_mask = modular_avatar_vertex_filter_mask(primitive, &group);
+			let vertex_mask = modular_avatar_vertex_filter_mask(primitive, skin_joint_nodes, &group);
 			if !vertex_mask.iter().any(|value| *value) {
 				continue;
 			}
@@ -12758,6 +12832,75 @@ mod tests {
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 2, 0, 0, 0));
 		assert_eq!(scene.nodes[1].mesh, Some(0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[][..]));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_deletes_bone_weight_selected_triangles() {
+		let mut primitive = test_blend_shape_delete_primitive();
+		primitive.joints = Some(vec![[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0]]);
+		primitive.weights = Some(vec![[1.0, 0.0, 0.0, 0.0]; 4]);
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					skin: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Bone0".to_string()),
+					source_node_id: Some("node_bone0".to_string()),
+					resolved_node_id: None,
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Bone1".to_string()),
+					source_node_id: Some("node_bone1".to_string()),
+					resolved_node_id: None,
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![primitive]],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![2, 3],
+				inverse_bind_matrices: Vec::new(),
+				skeleton_node: None,
+			}],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"enabled": true,
+			"fields": {
+				"m_object": {"nodeId": "node_target", "path": "Root/TargetRenderer"},
+				"m_multiMode": "VertexIntersection",
+				"filters": [{
+					"shortType": "VertexFilterByBoneComponent",
+					"fields": {
+						"m_bone": {"nodeId": "node_bone1", "path": "Root/Bone1"},
+						"m_threshold": 0.5
+					}
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let (nodes, primitives, triangles, missing, skipped, unsupported) =
+			apply_unavatar_vertex_filters(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
+		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[0, 1, 2][..]));
 	}
 
 	#[test]
