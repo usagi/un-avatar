@@ -189,6 +189,20 @@ export type RendererRuntimeDynamicsConstraintRefStatus = {
   weight: number;
 };
 
+export type RendererRuntimeActionStatus = {
+  action_id: string;
+  label?: string;
+  effect_count?: number;
+  effect_kinds?: Record<string, number>;
+  wardrobe_set_id?: string;
+  expression_menu_path?: string;
+  supervisor_command?: string;
+  parameter_name?: string;
+  parameter_value?: number;
+  condition_parameter_names?: string[];
+  current_condition_state?: string;
+};
+
 export type RendererRuntimeStatus = {
   id: number;
   state: RendererState;
@@ -265,6 +279,7 @@ export type RendererRuntimeStatus = {
   dynamics_contact_probe_would_emit_count: number;
   dynamics_constraint_ref_count: number;
   dynamics_vrc_constraint_ref_count: number;
+  runtime_actions: RendererRuntimeActionStatus[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
@@ -314,6 +329,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_contact_probe_count"
   | "dynamics_contact_probe_would_emit_count"
   | "dynamics_constraint_ref_count"
+  | "runtime_actions"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

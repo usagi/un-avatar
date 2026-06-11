@@ -338,6 +338,8 @@ struct RendererRuntimeStatus {
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_actions: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<serde_json::Value>,
@@ -618,6 +620,8 @@ struct RendererRuntimeTelemetry {
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default)]
+	runtime_actions: Vec<serde_json::Value>,
 	#[serde(default)]
 	contact_parameter_declarations: Vec<serde_json::Value>,
 	#[serde(default)]
@@ -5660,6 +5664,10 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		dynamics_vrc_constraint_ref_count: telemetry
 			.as_ref()
 			.map_or(0, |telemetry| telemetry.dynamics_vrc_constraint_ref_count),
+		runtime_actions: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_actions.clone())
+			.unwrap_or_default(),
 		contact_parameter_declarations: telemetry
 			.as_ref()
 			.map(|telemetry| telemetry.contact_parameter_declarations.clone())
@@ -8851,6 +8859,7 @@ mod tests {
 			dynamics_contact_probe_would_emit_count: 0,
 			dynamics_constraint_ref_count: 0,
 			dynamics_vrc_constraint_ref_count: 0,
+			runtime_actions: Vec::new(),
 			contact_parameter_declarations: Vec::new(),
 			contact_probes: Vec::new(),
 			dynamics_groups: Vec::new(),
@@ -8911,7 +8920,7 @@ mod tests {
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_constraint_ref_count":2,"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_constraint_ref_count":2,"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -8940,6 +8949,14 @@ mod tests {
 		assert_eq!(telemetry.dynamics_contact_probe_count, 1);
 		assert_eq!(telemetry.dynamics_contact_probe_would_emit_count, 1);
 		assert_eq!(telemetry.dynamics_constraint_ref_count, 2);
+		assert_eq!(
+			telemetry
+				.runtime_actions
+				.first()
+				.and_then(|value| value.get("current_condition_state"))
+				.and_then(serde_json::Value::as_str),
+			Some("active")
+		);
 		assert_eq!(
 			telemetry
 				.contact_parameter_declarations

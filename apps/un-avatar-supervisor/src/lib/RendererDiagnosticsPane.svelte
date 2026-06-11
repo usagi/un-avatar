@@ -38,6 +38,13 @@
     const target = ref.target_path ?? `#${ref.target_node}`;
     return `${ref.constraint_type ?? "constraint"} @ ${target} (${ref.source_kind})`;
   }
+
+  function runtimeActionLabel(action: RendererRuntimeDiagnosticsData["runtime_actions"][number]): string {
+    const label = action.label || action.action_id;
+    const state = action.current_condition_state ?? "unconditioned";
+    const parameters = action.condition_parameter_names?.join(",") || action.parameter_name || "-";
+    return `${label}: ${state} [${parameters}]`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -98,6 +105,10 @@
         <dd class="stderr-block">
           {runtimeStatus.dynamics_constraint_refs.slice(0, sampleLimit).map(constraintRefLabel).join("\n")}
         </dd>
+      {/if}
+      {#if runtimeStatus.runtime_actions.length}
+        <dt>{$_("renderers.details.diag_runtime_actions")}</dt>
+        <dd class="stderr-block">{runtimeStatus.runtime_actions.slice(0, sampleLimit).map(runtimeActionLabel).join("\n")}</dd>
       {/if}
     {/if}
   </dl>
