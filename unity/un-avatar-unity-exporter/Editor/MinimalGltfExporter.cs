@@ -25,11 +25,17 @@ namespace UNAvatar.UnityExporter
             public List<UnavatarRendererAssetRecord> RendererAssets = new List<UnavatarRendererAssetRecord>();
         }
 
-        public static ExportResult ExportGlb(GameObject root, string directory, string fileName, HashSet<string> morphTargetNames)
+        public static ExportResult ExportGlb(
+            GameObject root,
+            string directory,
+            string fileName,
+            HashSet<string> morphTargetNames,
+            IEnumerable<Texture> extraTextureAssets = null)
         {
             var writer = new Writer(root, morphTargetNames);
             var path = Path.Combine(directory, fileName + ".glb");
             writer.Export(path);
+            writer.ExportAdditionalTextureAssets(extraTextureAssets);
             return new ExportResult
             {
                 Path = path,

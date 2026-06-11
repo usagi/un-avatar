@@ -72,7 +72,8 @@ namespace UNAvatar.UnityExporter
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Exporting GLB", 0.55f);
                 var glbName = SanitizeFileName(avatarRoot.name);
-                var exportResult = MinimalGltfExporter.ExportGlb(clone, tempDir, glbName, null);
+                var modularAvatarExtraTextures = CollectModularAvatarMaskTextures(clone);
+                var exportResult = MinimalGltfExporter.ExportGlb(clone, tempDir, glbName, null, modularAvatarExtraTextures);
                 var tempGlb = exportResult.Path;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Patching UN_avatar extension", 0.8f);

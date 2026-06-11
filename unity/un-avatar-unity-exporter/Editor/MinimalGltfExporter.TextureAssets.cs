@@ -82,6 +82,21 @@ namespace UNAvatar.UnityExporter
                 return asset;
             }
 
+            public void ExportAdditionalTextureAssets(IEnumerable<Texture> textures)
+            {
+                if (textures == null)
+                {
+                    return;
+                }
+                foreach (var texture in textures)
+                {
+                    if (texture != null)
+                    {
+                        ExportUnavatarTextureAsset(texture);
+                    }
+                }
+            }
+
             private UnavatarTextureAssetRecord ExportGeneratedCubemapTextureAsset(Cubemap cubemap)
             {
                 var source = GetTextureSourceInfo(cubemap);

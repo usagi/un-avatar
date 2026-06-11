@@ -9,7 +9,7 @@ namespace UNAvatar.UnityExporter
 {
     public sealed partial class UNAvatarExporterWindow
     {
-        private Dictionary<string, object> BuildModularAvatarPayload(GameObject root)
+        private Dictionary<string, object> BuildModularAvatarPayload(GameObject root, List<UnavatarTextureAssetRecord> textureAssets)
         {
             var componentObjects = root != null ? root.GetComponentsInChildren<Component>(true) : null;
             var components = new List<object>(componentObjects != null ? componentObjects.Length : 0);
@@ -30,7 +30,7 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                components.Add(BuildModularAvatarComponentPayload(root.transform, component));
+                components.Add(BuildModularAvatarComponentPayload(root.transform, component, textureAssets));
             }
 
             return new Dictionary<string, object>
@@ -57,7 +57,10 @@ namespace UNAvatar.UnityExporter
             return type.Name == "MAMoveIndependently" || type.Name == "RemoveVertexColor";
         }
 
-        private Dictionary<string, object> BuildModularAvatarComponentPayload(Transform root, Component component)
+        private Dictionary<string, object> BuildModularAvatarComponentPayload(
+            Transform root,
+            Component component,
+            List<UnavatarTextureAssetRecord> textureAssets)
         {
             var type = component.GetType();
             var payload = new Dictionary<string, object>
@@ -66,7 +69,7 @@ namespace UNAvatar.UnityExporter
                 ["shortType"] = type.Name,
                 ["target"] = TransformTargetJson(root, component.transform),
                 ["enabled"] = !(component is Behaviour behaviour) || behaviour.enabled,
-                ["fields"] = BuildModularAvatarComponentFields(root, component)
+                ["fields"] = BuildModularAvatarComponentFields(root, component, textureAssets)
             };
 
             if (type.Name == "ModularAvatarMergeArmature")
@@ -80,7 +83,10 @@ namespace UNAvatar.UnityExporter
             return payload;
         }
 
-        private Dictionary<string, object> BuildModularAvatarComponentFields(Transform root, Component component)
+        private Dictionary<string, object> BuildModularAvatarComponentFields(
+            Transform root,
+            Component component,
+            List<UnavatarTextureAssetRecord> textureAssets)
         {
             var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
             var json = new Dictionary<string, object>(fields.Length);
@@ -93,7 +99,70 @@ namespace UNAvatar.UnityExporter
                 var value = SafeGetField(field, component);
                 json[field.Name] = ModularAvatarValueToJson(root, component, value, 0);
             }
+            AddModularAvatarMaskTextureFields(root, component, textureAssets, json);
             return json;
+        }
+
+        private static List<Texture> CollectModularAvatarMaskTextures(GameObject root)
+        {
+            var textures = new List<Texture>();
+            if (root == null)
+            {
+                return textures;
+            }
+            var seen = new HashSet<int>();
+            foreach (var component in root.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null || component.GetType().Name != "VertexFilterByMaskComponent")
+                {
+                    continue;
+                }
+                var texture = ReadMember(component.GetType(), component, "m_maskTexture") as Texture;
+                if (texture != null && seen.Add(texture.GetInstanceID()))
+                {
+                    textures.Add(texture);
+                }
+            }
+            return textures;
+        }
+
+        private void AddModularAvatarMaskTextureFields(
+            Transform root,
+            Component component,
+            List<UnavatarTextureAssetRecord> textureAssets,
+            Dictionary<string, object> fields)
+        {
+            var type = component.GetType();
+            if (type.Name != "VertexFilterByMaskComponent")
+            {
+                return;
+            }
+            var texture = ReadMember(type, component, "m_maskTexture") as Texture;
+            fields["m_materialIndex"] = ReadMember(type, component, "m_materialIndex") is int materialIndex ? materialIndex : 0;
+            fields["m_deleteMode"] = ReadMember(type, component, "m_deleteMode")?.ToString() ?? "";
+            fields["m_maskTexture"] = texture != null ? ModularAvatarObjectReferenceToJson(root, texture) : null;
+            fields["maskTextureAssetId"] = TextureAssetIdFor(texture, textureAssets);
+        }
+
+        private static string TextureAssetIdFor(Texture texture, List<UnavatarTextureAssetRecord> textureAssets)
+        {
+            if (texture == null || textureAssets == null)
+            {
+                return "";
+            }
+            var assetPath = UnityEditor.AssetDatabase.GetAssetPath(texture);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return "";
+            }
+            foreach (var asset in textureAssets)
+            {
+                if (asset != null && string.Equals(asset.AssetPath, assetPath, StringComparison.Ordinal))
+                {
+                    return asset.Id ?? "";
+                }
+            }
+            return "";
         }
 
         private static object SafeGetField(FieldInfo field, object instance)

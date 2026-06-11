@@ -3178,7 +3178,10 @@ fn modular_avatar_vertex_filter_summary(
 				component,
 				&["MaterialIndex", "materialIndex", "material_index", "m_materialIndex"],
 			),
-			texture: modular_avatar_component_string(component, &["MaskTexture", "maskTexture", "mask_texture", "m_maskTexture"]),
+			texture: modular_avatar_component_string(
+				component,
+				&["maskTextureAssetId", "MaskTexture", "maskTexture", "mask_texture", "m_maskTexture"],
+			),
 			mode: modular_avatar_component_string(component, &["DeleteMode", "deleteMode", "delete_mode", "m_deleteMode"]),
 		}),
 		_ => None,
@@ -6072,6 +6075,33 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|warning| warning.contains("wardrobe set \"base\"") && warning.contains("no assetGroups")));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_mask_summary_uses_texture_asset_id() {
+		let component = serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"enabled": true,
+			"fields": {
+				"Object": {"path": "Root/Body"},
+				"filters": [{
+					"shortType": "VertexFilterByMaskComponent",
+					"fields": {
+						"m_materialIndex": 2,
+						"m_deleteMode": "DeleteWhite",
+						"maskTextureAssetId": "texture-asset-7"
+					}
+				}]
+			}
+		});
+
+		let summary = modular_avatar_vertex_filter_group_summary(&component, "ModularAvatarMeshCutter").unwrap();
+
+		assert_eq!(summary.filter_count, 1);
+		assert_eq!(summary.filters[0].kind, "mask");
+		assert_eq!(summary.filters[0].material_index, Some(2));
+		assert_eq!(summary.filters[0].mode.as_deref(), Some("DeleteWhite"));
+		assert_eq!(summary.filters[0].texture.as_deref(), Some("texture-asset-7"));
 	}
 
 	#[test]
