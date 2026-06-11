@@ -2063,6 +2063,7 @@ fn unavatar_dynamics_settings(
 	let mut pb_blocker_ignore_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
+	let mut endpoint_ignored_non_leaf_count = 0usize;
 	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_colliders = modular_avatar_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_collider_count = ma_global_colliders.len();
@@ -2142,8 +2143,15 @@ fn unavatar_dynamics_settings(
 				pb_blocker_ignore_count += blocked_nodes.len();
 				root_ignored_nodes.extend(blocked_nodes.iter().copied());
 			}
+			let endpoint_requested = unavatar_dynamics_endpoint_position(item).is_some();
+			let has_non_ignored_child = scene.nodes[root_idx]
+				.children
+				.iter()
+				.any(|child| !root_ignored_nodes.contains(child));
 			if ensure_unavatar_dynamics_endpoint_child(scene, root_idx, item, &root_ignored_nodes) {
 				endpoint_child_count += 1;
+			} else if endpoint_requested && has_non_ignored_child {
+				endpoint_ignored_non_leaf_count += 1;
 			}
 			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes, multi_child_ignore) {
 				if chain.len() < 2 {
@@ -2195,6 +2203,11 @@ fn unavatar_dynamics_settings(
 	}
 	if endpoint_child_count > 0 {
 		report.push_info(format!(".unavatar dynamics: synthesized_endpoint_children={endpoint_child_count}"));
+	}
+	if endpoint_ignored_non_leaf_count > 0 {
+		report.push_warning(format!(
+			".unavatar dynamics: ignored endpointPosition on {endpoint_ignored_non_leaf_count} non-leaf PhysBone root(s)"
+		));
 	}
 	if groups.is_empty() && colliders.is_empty() && contacts.is_empty() && constraint_refs.is_empty() {
 		None
@@ -9859,6 +9872,42 @@ mod tests {
 			.messages
 			.iter()
 			.any(|message| message.contains("synthesized_endpoint_children=1")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_warns_when_endpoint_position_is_ignored_on_non_leaf_root() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_child", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_child", "path": "Root/Child"}
+				],
+				"dynamics": [{
+					"id": "non_leaf_tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"endpointPosition": [0.1, 0.2, 0.3]
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(scene.nodes.len(), 2);
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|warning| warning.contains("ignored endpointPosition on 1 non-leaf PhysBone root")));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
