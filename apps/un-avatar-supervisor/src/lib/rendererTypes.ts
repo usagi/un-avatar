@@ -112,6 +112,20 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	interaction_parameter?: string;
 };
 
+export type RendererRuntimeDynamicsInteractionHookStatus = {
+	group_index: number;
+	source_kind: string;
+	authored_enabled: boolean;
+	effective_enabled: boolean;
+	source_id?: string;
+	root_path?: string;
+	allow_grabbing: boolean;
+	allow_posing: boolean;
+	parameter?: string;
+	suffix_parameters?: string[];
+	metadata_only: boolean;
+};
+
 export type RendererRuntimeDynamicsColliderStatus = {
 	index: number;
 	source_kind: string;
@@ -413,6 +427,7 @@ export type RendererRuntimeStatus = {
 	contact_parameter_emissions: RendererRuntimeContactParameterEmissionStatus[];
 	contact_probes: RendererRuntimeContactProbeStatus[];
 	dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
+	dynamics_interaction_hooks: RendererRuntimeDynamicsInteractionHookStatus[];
 	dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
 	dynamics_constraint_refs: RendererRuntimeDynamicsConstraintRefStatus[];
 	dynamics_warnings: string[];
@@ -474,6 +489,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "runtime_parameter_conflicts"
 	| "menu_wardrobe_candidates"
 	| "dynamics_groups"
+	| "dynamics_interaction_hooks"
 	| "dynamics_colliders"
 	| "contact_parameter_declarations"
 	| "contact_parameter_emission_enabled"

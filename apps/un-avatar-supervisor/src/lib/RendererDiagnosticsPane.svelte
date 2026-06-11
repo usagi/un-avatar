@@ -14,6 +14,14 @@
 		return `${path} (${group.source_kind}, ${state}, bones=${group.bone_count}${parameter})`;
 	}
 
+	function interactionHookLabel(hook: RendererRuntimeDiagnosticsData["dynamics_interaction_hooks"][number]): string {
+		const path = hook.root_path ?? hook.source_id ?? `#${hook.group_index}`;
+		const state = hook.effective_enabled ? "on" : "off";
+		const parameter = hook.parameter ? `, param=${hook.parameter}` : "";
+		const suffixCount = hook.suffix_parameters?.length ?? 0;
+		return `${path} (${hook.source_kind}, ${state}, grab=${hook.allow_grabbing}, pose=${hook.allow_posing}${parameter}, suffixes=${suffixCount}${hook.metadata_only ? ", metadata-only" : ""})`;
+	}
+
 	function colliderLabel(collider: RendererRuntimeDiagnosticsData["dynamics_colliders"][number]): string {
 		const path = collider.node_path ?? `#${collider.node}`;
 		return `${path} (${collider.source_kind}, ${collider.shape}, r=${collider.radius})`;
@@ -137,6 +145,12 @@
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
 				<dd class="stderr-block">{runtimeStatus.dynamics_groups.slice(0, sampleLimit).map(groupLabel).join("\n")}</dd>
+			{/if}
+			{#if runtimeStatus.dynamics_interaction_hooks.length}
+				<dt>{$_("renderers.details.diag_dynamics_interaction_hooks")}</dt>
+				<dd class="stderr-block">
+					{runtimeStatus.dynamics_interaction_hooks.slice(0, sampleLimit).map(interactionHookLabel).join("\n")}
+				</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_colliders.length}
 				<dt>{$_("renderers.details.diag_dynamics_colliders")}</dt>
