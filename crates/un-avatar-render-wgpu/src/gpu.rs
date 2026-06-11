@@ -15,8 +15,8 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
-	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts,
-	UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
+	UnaDocument, UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
+	UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
@@ -4741,6 +4741,13 @@ impl GpuState {
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
 			if !restored.is_empty() {
+				if restored
+					.iter()
+					.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
+				{
+					self.reset_dynamics_nodes_to_rest();
+					self.rebuild_runtime_dynamics();
+				}
 				self.invalidate_applied_document_state();
 			}
 			return Ok(Vec::new());
@@ -4918,6 +4925,13 @@ impl GpuState {
 		let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 		drop(doc);
 		if !restored.is_empty() {
+			if restored
+				.iter()
+				.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
+			{
+				self.reset_dynamics_nodes_to_rest();
+				self.rebuild_runtime_dynamics();
+			}
 			self.invalidate_applied_document_state();
 		}
 		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
