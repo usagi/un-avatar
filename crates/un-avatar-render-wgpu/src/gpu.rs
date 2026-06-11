@@ -16,7 +16,7 @@ use glam::{Mat4, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
 	UnaDocument, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts,
-	UnaRuntimeResolverCacheKey, UnaSceneNode,
+	UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
@@ -144,6 +144,8 @@ pub(crate) struct RuntimeContactParameterDeclarationStatus {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) source_id: String,
 	pub(crate) node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) node_path: Option<String>,
 	pub(crate) parameter: String,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) collision_tags: Vec<String>,
@@ -159,7 +161,11 @@ pub(crate) struct RuntimeContactProbeStatus {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) sender_source_id: String,
 	pub(crate) receiver_node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) receiver_node_path: Option<String>,
 	pub(crate) sender_node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) sender_node_path: Option<String>,
 	pub(crate) parameter: String,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) matched_tags: Vec<String>,
@@ -189,8 +195,12 @@ pub(crate) struct RuntimeDynamicsConstraintRefStatus {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) source_id: String,
 	pub(crate) target_node: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) target_path: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) source_nodes: Vec<usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) source_paths: Vec<String>,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) constraint_type: String,
 	pub(crate) weight: f32,
@@ -725,7 +735,9 @@ fn menu_wardrobe_candidates_from_runtime(
 }
 
 fn contact_parameter_declaration_statuses(doc: &UnaDocument) -> Vec<RuntimeContactParameterDeclarationStatus> {
-	doc.runtime_model()
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
 		.dynamics()
 		.contact_parameter_declarations()
 		.into_iter()
@@ -734,6 +746,7 @@ fn contact_parameter_declaration_statuses(doc: &UnaDocument) -> Vec<RuntimeConta
 			owner_key: declaration.owner_key,
 			source_id: declaration.source_id,
 			node: declaration.node,
+			node_path: node_paths_by_index.get(declaration.node).cloned().flatten(),
 			parameter: declaration.parameter,
 			collision_tags: declaration.collision_tags,
 		})
@@ -744,6 +757,7 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 	let Some(runtime) = doc.runtime_model().scene_profile_dynamics() else {
 		return RuntimeContactProbeStatusSummary::default();
 	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
 	let probes = runtime.contact_probes();
 	let count = probes.len() as u32;
 	let would_emit_count = probes.iter().filter(|probe| probe.would_emit).count() as u32;
@@ -758,7 +772,9 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 			receiver_source_id: probe.receiver_source_id,
 			sender_source_id: probe.sender_source_id,
 			receiver_node: probe.receiver_node,
+			receiver_node_path: node_paths_by_index.get(probe.receiver_node).cloned().flatten(),
 			sender_node: probe.sender_node,
+			sender_node_path: node_paths_by_index.get(probe.sender_node).cloned().flatten(),
 			parameter: probe.parameter,
 			matched_tags: probe.matched_tags,
 			tag_match: probe.tag_match,
@@ -781,7 +797,9 @@ fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusS
 }
 
 fn dynamics_constraint_ref_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsConstraintRefStatus> {
-	doc.runtime_model()
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
 		.dynamics()
 		.constraint_refs()
 		.enumerate()
@@ -791,11 +809,43 @@ fn dynamics_constraint_ref_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsCon
 			source_kind: constraint_ref.source_kind,
 			source_id: constraint_ref.source_id.clone(),
 			target_node: constraint_ref.target_node,
+			target_path: node_paths_by_index.get(constraint_ref.target_node).cloned().flatten(),
 			source_nodes: constraint_ref.source_nodes.clone(),
+			source_paths: constraint_ref
+				.source_nodes
+				.iter()
+				.filter_map(|node| node_paths_by_index.get(*node).cloned().flatten())
+				.collect(),
 			constraint_type: constraint_ref.constraint_type.clone(),
 			weight: constraint_ref.weight,
 		})
 		.collect()
+}
+
+fn scene_node_paths_by_index(scene: &UnaSceneSnapshot) -> Vec<Option<String>> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent: &str, out: &mut [Option<String>]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let segment = node.name.as_deref().unwrap_or("");
+		let path = if parent.is_empty() {
+			segment.to_string()
+		} else if segment.is_empty() {
+			parent.to_string()
+		} else {
+			format!("{parent}/{segment}")
+		};
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = (!path.is_empty()).then_some(path.clone());
+		}
+		for &child in &node.children {
+			visit(scene, child, &path, out);
+		}
+	}
+
+	let mut out = vec![None; scene.nodes.len()];
+	for &root in scene.resolved_roots().iter() {
+		visit(scene, root, "", &mut out);
+	}
+	out
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {

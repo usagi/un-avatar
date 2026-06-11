@@ -4707,6 +4707,7 @@ mod tests {
 				owner_key: "contact:hand".to_string(),
 				source_id: "contact:hand".to_string(),
 				node: 1,
+				node_path: Some("root/receiver".to_string()),
 				parameter: "ContactHand".to_string(),
 				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
 			}];
@@ -4717,7 +4718,9 @@ mod tests {
 				receiver_source_id: "contact:hand".to_string(),
 				sender_source_id: "contact:sender".to_string(),
 				receiver_node: 1,
+				receiver_node_path: Some("root/receiver".to_string()),
 				sender_node: 2,
+				sender_node_path: Some("root/sender".to_string()),
 				parameter: "ContactHand".to_string(),
 				matched_tags: vec!["Hand".to_string()],
 				tag_match: true,
@@ -4742,7 +4745,9 @@ mod tests {
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 				source_id: "constraint:parent".to_string(),
 				target_node: 4,
+				target_path: Some("root/target".to_string()),
 				source_nodes: vec![1, 2],
+				source_paths: vec!["root/source-a".to_string(), "root/source-b".to_string()],
 				constraint_type: "parent".to_string(),
 				weight: 0.75,
 			}];
@@ -4798,6 +4803,10 @@ mod tests {
 			Some("ContactHand")
 		);
 		assert_eq!(
+			declarations[0].get("node_path").and_then(|value| value.as_str()),
+			Some("root/receiver")
+		);
+		assert_eq!(
 			snapshot.get("dynamics_contact_probe_count").and_then(|value| value.as_u64()),
 			Some(1)
 		);
@@ -4813,6 +4822,14 @@ mod tests {
 			.expect("contact probes");
 		assert_eq!(probes.len(), 1);
 		assert_eq!(probes[0].get("parameter").and_then(|value| value.as_str()), Some("ContactHand"));
+		assert_eq!(
+			probes[0].get("receiver_node_path").and_then(|value| value.as_str()),
+			Some("root/receiver")
+		);
+		assert_eq!(
+			probes[0].get("sender_node_path").and_then(|value| value.as_str()),
+			Some("root/sender")
+		);
 		assert_eq!(probes[0].get("would_emit").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(
 			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),
@@ -4830,6 +4847,10 @@ mod tests {
 		assert_eq!(
 			constraint_refs[0].get("constraint_type").and_then(|value| value.as_str()),
 			Some("parent")
+		);
+		assert_eq!(
+			constraint_refs[0].get("target_path").and_then(|value| value.as_str()),
+			Some("root/target")
 		);
 		assert_eq!(
 			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
