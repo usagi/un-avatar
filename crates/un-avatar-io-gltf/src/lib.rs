@@ -13318,6 +13318,91 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_apply_orders_shape_changer_set_before_blendshape_sync() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Body".to_string()),
+					source_node_id: Some("node_body".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![test_morph_primitive("Breast_Big", 0.0)],
+				vec![test_morph_primitive("Jacket_Breast_Big", 0.0)],
+			],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [
+						{
+							"shortType": "ModularAvatarShapeChanger",
+							"enabled": true,
+							"fields": {
+								"m_shapes": [{
+									"m_object": {"nodeId": "node_body", "path": "Root/Body"},
+									"m_shapeName": "Breast_Big",
+									"m_changeType": "Set",
+									"m_value": 50.0
+								}]
+							}
+						},
+						{
+							"shortType": "ModularAvatarBlendshapeSync",
+							"enabled": true,
+							"target": {"nodeId": "node_jacket", "path": "Root/Jacket"},
+							"fields": {
+								"Bindings": [{
+									"referenceMesh": {"resolvedTarget": {"nodeId": "node_body", "path": "Root/Body"}},
+									"blendshape": "Breast_Big",
+									"localBlendshape": "Jacket_Breast_Big",
+									"remapCurve": {
+										"keyCount": 2,
+										"keys": [
+											{"time": 0.0, "value": 0.0},
+											{"time": 1.0, "value": 1.0}
+										]
+									}
+								}]
+							}
+						}
+					]
+				}
+			}),
+		};
+		let mut report = ImportReport::default();
+
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
+		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.5]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("shape_changer_set_applied=1")));
+		assert!(report.messages.iter().any(|message| message.contains("blendshape_sync_applied=1")));
+	}
+
+	#[test]
 	fn modular_avatar_bone_proxy_renames_duplicate_target_child() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
