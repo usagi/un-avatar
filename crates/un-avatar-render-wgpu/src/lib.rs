@@ -3229,15 +3229,20 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 		));
 	}
 	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
+		let samples = runtime_dynamics_interaction_hook_samples(status);
 		warnings.push(format!(
-			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}",
-			status.dynamics_grabbing_enabled_group_count, status.dynamics_posing_enabled_group_count
+			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}{}",
+			status.dynamics_grabbing_enabled_group_count,
+			status.dynamics_posing_enabled_group_count,
+			format_runtime_warning_samples(&samples)
 		));
 	}
 	if status.dynamics_vrc_constraint_ref_count > 0 {
+		let samples = runtime_dynamics_constraint_ref_samples(status);
 		warnings.push(format!(
-			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}",
-			status.dynamics_vrc_constraint_ref_count
+			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}{}",
+			status.dynamics_vrc_constraint_ref_count,
+			format_runtime_warning_samples(&samples)
 		));
 	}
 	if status.dynamics_contact_probe_would_emit_count > 0 && !status.contact_parameter_emission_enabled {
@@ -3282,6 +3287,44 @@ fn runtime_dynamics_group_sample_label(group: &crate::gpu::RuntimeDynamicsGroupS
 		Some(root_path) => format!("{id}@{root_path}"),
 		None => id,
 	}
+}
+
+fn runtime_dynamics_interaction_hook_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_interaction_hooks
+		.iter()
+		.take(4)
+		.map(|hook| {
+			let id = if hook.source_id.is_empty() {
+				format!("group[{}]", hook.group_index)
+			} else {
+				hook.source_id.clone()
+			};
+			match &hook.root_path {
+				Some(root_path) => format!("{id}@{root_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn runtime_dynamics_constraint_ref_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_constraint_refs
+		.iter()
+		.take(4)
+		.map(|constraint_ref| {
+			let id = if constraint_ref.source_id.is_empty() {
+				format!("constraint_ref[{}]", constraint_ref.index)
+			} else {
+				constraint_ref.source_id.clone()
+			};
+			match &constraint_ref.target_path {
+				Some(target_path) => format!("{id}@{target_path}"),
+				None => id,
+			}
+		})
+		.collect()
 }
 
 fn format_runtime_warning_samples(samples: &[String]) -> String {
@@ -4877,7 +4920,31 @@ mod tests {
 		}];
 		status.dynamics_grabbing_enabled_group_count = 1;
 		status.dynamics_posing_enabled_group_count = 2;
+		status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
+			group_index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			authored_enabled: true,
+			effective_enabled: true,
+			source_id: "physbone:hair".to_string(),
+			root_path: Some("root/hair".to_string()),
+			allow_grabbing: true,
+			allow_posing: true,
+			parameter: String::new(),
+			suffix_parameters: Vec::new(),
+			metadata_only: true,
+		}];
 		status.dynamics_vrc_constraint_ref_count = 4;
+		status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
+			index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			source_id: "constraint:parent".to_string(),
+			target_node: 1,
+			target_path: Some("root/target".to_string()),
+			source_nodes: vec![0],
+			source_paths: vec!["root/source".to_string()],
+			constraint_type: "parent".to_string(),
+			weight: 1.0,
+		}];
 		status.dynamics_contact_probe_would_emit_count = 3;
 		status.contact_parameter_emission_enabled = false;
 
@@ -4891,9 +4958,12 @@ mod tests {
 			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
 				&& warning.contains("physbone:hair@root/hair")
 		));
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
+		assert!(warnings.iter().any(|warning| warning
+			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			&& warning.contains("samples=[physbone:hair@root/hair]")));
+		assert!(warnings.iter().any(|warning| warning
+			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
+			&& warning.contains("samples=[constraint:parent@root/target]")));
 		assert!(warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));

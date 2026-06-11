@@ -2196,6 +2196,42 @@ fn dynamics_group_sample_label(group: &DiagnoseDynamicsGroupSummary) -> String {
 	}
 }
 
+fn dynamics_interaction_hook_samples(hooks: &[DiagnoseDynamicsInteractionHookSummary]) -> Vec<String> {
+	hooks
+		.iter()
+		.take(4)
+		.map(|hook| {
+			let id = if hook.source_id.is_empty() {
+				format!("group[{}]", hook.group_index)
+			} else {
+				hook.source_id.clone()
+			};
+			match &hook.root_path {
+				Some(root_path) => format!("{id}@{root_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn dynamics_constraint_ref_samples(constraint_refs: &[DiagnoseDynamicsConstraintRefSummary]) -> Vec<String> {
+	constraint_refs
+		.iter()
+		.take(4)
+		.map(|constraint_ref| {
+			let id = if constraint_ref.source_id.is_empty() {
+				format!("constraint_ref[{}]", constraint_ref.index)
+			} else {
+				constraint_ref.source_id.clone()
+			};
+			match &constraint_ref.target_path {
+				Some(target_path) => format!("{id}@{target_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
 fn format_warning_samples(samples: &[String]) -> String {
 	if samples.is_empty() {
 		String::new()
@@ -4320,18 +4356,22 @@ fn build_diagnose_report(
 		|| dynamics_counts.grabbing_enabled_groups > 0
 		|| dynamics_counts.posing_enabled_groups > 0
 	{
+		let samples = dynamics_interaction_hook_samples(&dynamics_interaction_hooks);
 		warnings.push(format!(
-			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; source_grabbing={} source_posing={} runtime_grabbing_groups={} runtime_posing_groups={}",
+			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; source_grabbing={} source_posing={} runtime_grabbing_groups={} runtime_posing_groups={}{}",
 			dynamics_source_features.grabbing_enabled_count,
 			dynamics_source_features.posing_enabled_count,
 			dynamics_counts.grabbing_enabled_groups,
-			dynamics_counts.posing_enabled_groups
+			dynamics_counts.posing_enabled_groups,
+			format_warning_samples(&samples)
 		));
 	}
 	if dynamics_counts.vrc_constraint_refs > 0 {
+		let samples = dynamics_constraint_ref_samples(&dynamics_constraint_refs);
 		warnings.push(format!(
-			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}",
-			dynamics_counts.vrc_constraint_refs
+			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}{}",
+			dynamics_counts.vrc_constraint_refs,
+			format_warning_samples(&samples)
 		));
 	}
 	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
@@ -7409,14 +7449,12 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));
+		assert!(report.warnings.iter().any(|w| w
+			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			&& w.contains("samples=[physbone:hair@root")));
+		assert!(report.warnings.iter().any(|w| w
+			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
+			&& w.contains("samples=[constraint:parent@root/receiver")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
