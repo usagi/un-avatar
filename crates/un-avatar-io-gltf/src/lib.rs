@@ -4665,8 +4665,64 @@ fn modular_avatar_reference_index(
 	unavatar_node_ref_index(reference, node_ids, registry_paths, paths, normalized_paths)
 }
 
-fn mesh_settings_mode_sets(mode: Option<&str>) -> bool {
-	matches!(mode, Some("Set") | Some("SetOrInherit"))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MeshSettingsInheritMode {
+	Set,
+	Inherit,
+	DontSet,
+	SetOrInherit,
+}
+
+impl MeshSettingsInheritMode {
+	fn from_str(value: Option<&str>) -> Self {
+		match value {
+			Some("Set") => Self::Set,
+			Some("DontSet") => Self::DontSet,
+			Some("SetOrInherit") => Self::SetOrInherit,
+			_ => Self::Inherit,
+		}
+	}
+
+	fn not_final(self) -> bool {
+		matches!(self, Self::Inherit | Self::SetOrInherit)
+	}
+
+	fn sets(self) -> bool {
+		matches!(self, Self::Set | Self::SetOrInherit)
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MeshSettingsResolvedComponent {
+	probe_mode: MeshSettingsInheritMode,
+	probe_anchor: Option<usize>,
+	bounds_mode: MeshSettingsInheritMode,
+	root_bone: Option<usize>,
+	local_bounds: Option<UnaBounds>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MeshSettingsMerged {
+	probe_mode: MeshSettingsInheritMode,
+	probe_anchor: Option<usize>,
+	bounds_mode: MeshSettingsInheritMode,
+	root_bone: Option<usize>,
+	local_bounds: Option<UnaBounds>,
+}
+
+fn mesh_settings_should_use_src_value(current_mode: &mut MeshSettingsInheritMode, src_mode: MeshSettingsInheritMode) -> bool {
+	match (*current_mode, src_mode) {
+		(MeshSettingsInheritMode::Set | MeshSettingsInheritMode::DontSet, _) => false,
+		(_, MeshSettingsInheritMode::Inherit) => false,
+		(_, MeshSettingsInheritMode::DontSet) => {
+			*current_mode = src_mode;
+			true
+		}
+		(_, MeshSettingsInheritMode::Set | MeshSettingsInheritMode::SetOrInherit) => {
+			*current_mode = src_mode;
+			true
+		}
+	}
 }
 
 fn value_vec3(value: &Value) -> Option<[f32; 3]> {
@@ -4689,33 +4745,35 @@ fn mesh_settings_bounds(value: &Value) -> Option<UnaBounds> {
 	Some(UnaBounds { center, extents })
 }
 
-fn apply_mesh_settings_to_subtree(
-	scene: &mut UnaSceneSnapshot,
-	target_root: usize,
-	root_bone: Option<usize>,
-	probe_anchor: Option<usize>,
-	local_bounds: Option<UnaBounds>,
-) -> usize {
-	let parents = scene_parent_indices(scene);
-	let mut applied = 0usize;
-	for idx in 0..scene.nodes.len() {
-		if idx != target_root && !scene_is_descendant_of(&parents, idx, target_root) {
-			continue;
+fn merge_mesh_settings_for_node(
+	parents: &[Option<usize>],
+	settings_by_node: &BTreeMap<usize, MeshSettingsResolvedComponent>,
+	node_index: usize,
+) -> MeshSettingsMerged {
+	let mut merged = MeshSettingsMerged {
+		probe_mode: MeshSettingsInheritMode::Inherit,
+		probe_anchor: None,
+		bounds_mode: MeshSettingsInheritMode::Inherit,
+		root_bone: None,
+		local_bounds: None,
+	};
+	let mut cursor = Some(node_index);
+	while let Some(idx) = cursor {
+		if let Some(settings) = settings_by_node.get(&idx) {
+			if mesh_settings_should_use_src_value(&mut merged.probe_mode, settings.probe_mode) {
+				merged.probe_anchor = settings.probe_anchor;
+			}
+			if mesh_settings_should_use_src_value(&mut merged.bounds_mode, settings.bounds_mode) {
+				merged.root_bone = settings.root_bone;
+				merged.local_bounds = settings.local_bounds;
+			}
 		}
-		let Some(skin_idx) = scene.nodes.get(idx).and_then(|node| node.skin) else {
-			continue;
-		};
-		let Some(skin) = scene.skins.get_mut(skin_idx) else {
-			continue;
-		};
-		skin.skeleton_node = root_bone.or(Some(idx));
-		if let Some(node) = scene.nodes.get_mut(idx) {
-			node.probe_anchor_node = probe_anchor;
-			node.local_bounds = local_bounds;
+		if !merged.probe_mode.not_final() && !merged.bounds_mode.not_final() {
+			break;
 		}
-		applied += 1;
+		cursor = parents.get(idx).copied().flatten();
 	}
-	applied
+	merged
 }
 
 fn apply_unavatar_mesh_settings(
@@ -4730,6 +4788,7 @@ fn apply_unavatar_mesh_settings(
 	let mut probe_anchor_applied = 0usize;
 	let mut bounds_applied = 0usize;
 	let mut missing = 0usize;
+	let mut settings_by_node = BTreeMap::new();
 	for component in components {
 		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarMeshSettings") {
 			continue;
@@ -4746,11 +4805,9 @@ fn apply_unavatar_mesh_settings(
 			continue;
 		};
 		let fields = component.get("fields").and_then(|v| v.as_object());
-		let probe_anchor = if fields
-			.and_then(|fields| fields.get("InheritProbeAnchor"))
-			.and_then(|v| v.as_str())
-			.is_some_and(|mode| mesh_settings_mode_sets(Some(mode)))
-		{
+		let probe_mode =
+			MeshSettingsInheritMode::from_str(fields.and_then(|fields| fields.get("InheritProbeAnchor")).and_then(|v| v.as_str()));
+		let probe_anchor = if probe_mode.sets() {
 			let probe_anchor = fields
 				.and_then(|fields| fields.get("ProbeAnchor"))
 				.and_then(|reference| modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths));
@@ -4763,24 +4820,58 @@ fn apply_unavatar_mesh_settings(
 		} else {
 			None
 		};
-		if !fields
-			.and_then(|fields| fields.get("InheritBounds"))
-			.and_then(|v| v.as_str())
-			.is_some_and(|mode| mesh_settings_mode_sets(Some(mode)))
-		{
+		let bounds_mode = MeshSettingsInheritMode::from_str(fields.and_then(|fields| fields.get("InheritBounds")).and_then(|v| v.as_str()));
+		let root_bone = if bounds_mode.sets() {
+			fields
+				.and_then(|fields| fields.get("RootBone"))
+				.and_then(|reference| modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths))
+		} else {
+			None
+		};
+		let local_bounds = if bounds_mode.sets() {
+			fields.and_then(|fields| fields.get("Bounds")).and_then(mesh_settings_bounds)
+		} else {
+			None
+		};
+		settings_by_node.insert(
+			target_root,
+			MeshSettingsResolvedComponent {
+				probe_mode,
+				probe_anchor,
+				bounds_mode,
+				root_bone,
+				local_bounds,
+			},
+		);
+	}
+	if settings_by_node.is_empty() {
+		return (root_bone_applied, probe_anchor_applied, bounds_applied, missing);
+	}
+	let parents = scene_parent_indices(scene);
+	for node_index in 0..scene.nodes.len() {
+		let Some(skin_idx) = scene.nodes.get(node_index).and_then(|node| node.skin) else {
 			continue;
+		};
+		let merged = merge_mesh_settings_for_node(&parents, &settings_by_node, node_index);
+		if merged.probe_mode.sets() {
+			if let Some(node) = scene.nodes.get_mut(node_index) {
+				node.probe_anchor_node = merged.probe_anchor;
+			}
+			if merged.probe_anchor.is_some() {
+				probe_anchor_applied += 1;
+			}
 		}
-		let root_bone = fields
-			.and_then(|fields| fields.get("RootBone"))
-			.and_then(|reference| modular_avatar_reference_index(reference, node_ids, registry_paths, paths, normalized_paths));
-		let local_bounds = fields.and_then(|fields| fields.get("Bounds")).and_then(mesh_settings_bounds);
-		let applied = apply_mesh_settings_to_subtree(scene, target_root, root_bone, probe_anchor, local_bounds);
-		root_bone_applied += applied;
-		if probe_anchor.is_some() {
-			probe_anchor_applied += applied;
-		}
-		if local_bounds.is_some() {
-			bounds_applied += applied;
+		if merged.bounds_mode.sets() {
+			if let Some(skin) = scene.skins.get_mut(skin_idx) {
+				skin.skeleton_node = merged.root_bone.or(Some(node_index));
+				root_bone_applied += 1;
+			}
+			if let Some(node) = scene.nodes.get_mut(node_index) {
+				node.local_bounds = merged.local_bounds;
+			}
+			if merged.local_bounds.is_some() {
+				bounds_applied += 1;
+			}
 		}
 	}
 	(root_bone_applied, probe_anchor_applied, bounds_applied, missing)
@@ -15140,6 +15231,89 @@ mod tests {
 		assert!(report.messages.iter().any(|m| {
 			m.contains("mesh_settings_root_bones=1") && m.contains("mesh_settings_probe_anchors=1") && m.contains("mesh_settings_bounds=1")
 		}));
+	}
+
+	#[test]
+	fn modular_avatar_mesh_settings_child_dont_set_blocks_parent_inheritance() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Hips".to_string()),
+					source_node_id: Some("node_hips".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Outfit".to_string()),
+					source_node_id: Some("node_outfit".to_string()),
+					children: vec![3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Override".to_string()),
+					source_node_id: Some("node_override".to_string()),
+					children: vec![4],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Mesh".to_string()),
+					source_node_id: Some("node_mesh".to_string()),
+					mesh: Some(0),
+					skin: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1],
+				inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+				skeleton_node: None,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [
+						{
+							"shortType": "ModularAvatarMeshSettings",
+							"enabled": true,
+							"target": {"nodeId": "node_outfit", "path": "Outfit"},
+							"fields": {
+								"InheritProbeAnchor": "SetOrInherit",
+								"ProbeAnchor": {"resolvedTarget": {"nodeId": "node_hips", "path": "Hips"}},
+								"InheritBounds": "SetOrInherit",
+								"RootBone": {"resolvedTarget": {"nodeId": "node_hips", "path": "Hips"}},
+								"Bounds": {"center": [0.0, 0.0, 0.0], "extents": [1.0, 1.0, 1.0]}
+							}
+						},
+						{
+							"shortType": "ModularAvatarMeshSettings",
+							"enabled": true,
+							"target": {"nodeId": "node_override", "path": "Outfit/Override"},
+							"fields": {
+								"InheritProbeAnchor": "DontSet",
+								"InheritBounds": "DontSet"
+							}
+						}
+					]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		assert_eq!(scene.skins[0].skeleton_node, None);
+		assert_eq!(scene.nodes[4].probe_anchor_node, None);
+		assert_eq!(scene.nodes[4].local_bounds, None);
+		assert!(!report.messages.iter().any(|m| m.contains("mesh_settings_root_bones=")));
 	}
 
 	#[test]
