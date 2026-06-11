@@ -240,6 +240,30 @@ impl UnaRuntimeAction {
 			None
 		}
 	}
+
+	pub fn evaluation_target_writes(&self) -> Vec<UnaEvaluationRuntimeActionTargetWrite> {
+		self.effects.iter().map(|effect| effect.evaluation_target_write(&self.id)).collect()
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaEvaluationTargetKind {
+	WardrobeSet,
+	NodeVisibility,
+	MaterialProperty,
+	MaterialSlot,
+	ExpressionWeight,
+	DynamicsEnabled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaEvaluationRuntimeActionTargetWrite {
+	pub owner_key: String,
+	pub action_id: String,
+	pub effect_kind: String,
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -737,6 +761,101 @@ pub enum UnaRuntimeActionEffect {
 		source_id: String,
 		enabled: bool,
 	},
+}
+
+impl UnaRuntimeActionEffect {
+	pub fn evaluation_target_write(&self, action_id: &str) -> UnaEvaluationRuntimeActionTargetWrite {
+		let owner_key = runtime_action_owner_key(action_id);
+		let action_id = action_id.to_string();
+		match self {
+			UnaRuntimeActionEffect::WardrobeSet { set_id } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "wardrobe_set".to_string(),
+				target_kind: UnaEvaluationTargetKind::WardrobeSet,
+				target_key: set_id.clone(),
+			},
+			UnaRuntimeActionEffect::NodeVisibility { target, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "node_visibility".to_string(),
+				target_kind: UnaEvaluationTargetKind::NodeVisibility,
+				target_key: runtime_node_target_key(target),
+			},
+			UnaRuntimeActionEffect::ExpressionWeight { name, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "expression_weight".to_string(),
+				target_kind: UnaEvaluationTargetKind::ExpressionWeight,
+				target_key: name.clone(),
+			},
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "material_color".to_string(),
+				target_kind: UnaEvaluationTargetKind::MaterialProperty,
+				target_key: runtime_material_property_target_key(target, parameter),
+			},
+			UnaRuntimeActionEffect::MaterialScalar { target, parameter, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "material_scalar".to_string(),
+				target_kind: UnaEvaluationTargetKind::MaterialProperty,
+				target_key: runtime_material_property_target_key(target, parameter),
+			},
+			UnaRuntimeActionEffect::MaterialSlot { target, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "material_slot".to_string(),
+				target_kind: UnaEvaluationTargetKind::MaterialSlot,
+				target_key: runtime_material_slot_target_key(target),
+			},
+			UnaRuntimeActionEffect::DynamicsEnabled { source_id, .. } => UnaEvaluationRuntimeActionTargetWrite {
+				owner_key,
+				action_id,
+				effect_kind: "dynamics_enabled".to_string(),
+				target_kind: UnaEvaluationTargetKind::DynamicsEnabled,
+				target_key: source_id.clone(),
+			},
+		}
+	}
+}
+
+pub fn runtime_action_owner_key(action_id: &str) -> String {
+	if action_id.is_empty() {
+		"action:?".to_string()
+	} else {
+		format!("action:{action_id}")
+	}
+}
+
+fn runtime_node_target_key(target: &UnaRuntimeNodeTarget) -> String {
+	target
+		.resolved_node_id
+		.as_deref()
+		.or(target.source_node_id.as_deref())
+		.or(target.path.as_deref())
+		.map(str::to_string)
+		.or_else(|| target.node_index.map(|index| format!("#{index}")))
+		.unwrap_or_else(|| "?".to_string())
+}
+
+fn runtime_material_target_key(target: &UnaRuntimeMaterialTarget) -> String {
+	target
+		.name
+		.as_deref()
+		.map(str::to_string)
+		.or_else(|| target.material_index.map(|index| format!("#{index}")))
+		.unwrap_or_else(|| "?".to_string())
+}
+
+fn runtime_material_property_target_key(target: &UnaRuntimeMaterialTarget, parameter: &str) -> String {
+	format!("{}:{parameter}", runtime_material_target_key(target))
+}
+
+fn runtime_material_slot_target_key(target: &UnaRuntimeMaterialSlotTarget) -> String {
+	let primitive = target.primitive_index.map_or_else(|| "*".to_string(), |index| index.to_string());
+	format!("{}[{primitive}]", runtime_node_target_key(&target.node))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -5480,6 +5599,65 @@ mod tests {
 		let actions = decoded.runtime_model().runtime_actions().unwrap();
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].effects.len(), 2);
+	}
+
+	#[test]
+	fn runtime_action_reports_evaluation_target_writes() {
+		let action = UnaRuntimeAction {
+			id: "variant:coat".to_string(),
+			effects: vec![
+				UnaRuntimeActionEffect::NodeVisibility {
+					target: UnaRuntimeNodeTarget {
+						resolved_node_id: Some("node:coat".to_string()),
+						path: Some("Root/Coat".to_string()),
+						..Default::default()
+					},
+					visible: true,
+				},
+				UnaRuntimeActionEffect::MaterialScalar {
+					target: UnaRuntimeMaterialTarget {
+						material_index: Some(2),
+						name: Some("Coat".to_string()),
+					},
+					parameter: "_Cutoff".to_string(),
+					value: 0.4,
+				},
+				UnaRuntimeActionEffect::MaterialSlot {
+					target: UnaRuntimeMaterialSlotTarget {
+						node: UnaRuntimeNodeTarget {
+							path: Some("Root/Coat".to_string()),
+							..Default::default()
+						},
+						primitive_index: Some(1),
+					},
+					material: None,
+				},
+				UnaRuntimeActionEffect::ExpressionWeight {
+					name: "Smile".to_string(),
+					weight: 0.75,
+				},
+				UnaRuntimeActionEffect::DynamicsEnabled {
+					source_id: "physbone:hair".to_string(),
+					enabled: false,
+				},
+			],
+			..Default::default()
+		};
+
+		let writes = action.evaluation_target_writes();
+
+		assert_eq!(writes.len(), 5);
+		assert!(writes.iter().all(|write| write.owner_key == "action:variant:coat"));
+		assert_eq!(writes[0].target_kind, UnaEvaluationTargetKind::NodeVisibility);
+		assert_eq!(writes[0].target_key, "node:coat");
+		assert_eq!(writes[1].target_kind, UnaEvaluationTargetKind::MaterialProperty);
+		assert_eq!(writes[1].target_key, "Coat:_Cutoff");
+		assert_eq!(writes[2].target_kind, UnaEvaluationTargetKind::MaterialSlot);
+		assert_eq!(writes[2].target_key, "Root/Coat[1]");
+		assert_eq!(writes[3].target_kind, UnaEvaluationTargetKind::ExpressionWeight);
+		assert_eq!(writes[3].target_key, "Smile");
+		assert_eq!(writes[4].target_kind, UnaEvaluationTargetKind::DynamicsEnabled);
+		assert_eq!(writes[4].target_key, "physbone:hair");
 	}
 
 	#[test]

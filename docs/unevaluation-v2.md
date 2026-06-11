@@ -73,6 +73,12 @@ owner key は同じ target へ複数の runtime source が書く時の説明可�
 v2 初期では priority / lock は導入しない。
 必要になった場合は、target type ごとの policy に action policy を後から足す。
 
+実装メモ:
+
+- core は `UnaRuntimeAction::evaluation_target_writes()` で action effect 由来の owner key / target kind / target key を read-only view として公開する。
+- この view は runtime scene や source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
+- `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
+
 ## Contacts
 
 Contacts は v2 初期では interaction / parameter source として扱う。
