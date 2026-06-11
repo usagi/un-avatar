@@ -1597,13 +1597,47 @@ struct ContactProbeSphere {
 	radius: f32,
 }
 
-fn contact_probe_sphere(contact: &UnaDynamicsContact, world: &[[f32; 16]]) -> Option<ContactProbeSphere> {
+#[derive(Clone, Copy, Debug)]
+enum ContactProbeShape {
+	Sphere { center: [f32; 3], radius: f32 },
+	Capsule { a: [f32; 3], b: [f32; 3], radius: f32 },
+	BoundingSphere { center: [f32; 3], radius: f32 },
+}
+
+impl ContactProbeShape {
+	fn bounding_sphere(self) -> ContactProbeSphere {
+		match self {
+			Self::Sphere { center, radius } | Self::BoundingSphere { center, radius } => ContactProbeSphere { center, radius },
+			Self::Capsule { a, b, radius } => ContactProbeSphere {
+				center: vec3_lerp(a, b, 0.5),
+				radius: radius + vec3_distance(a, b) * 0.5,
+			},
+		}
+	}
+}
+
+fn contact_probe_shape(contact: &UnaDynamicsContact, world: &[[f32; 16]]) -> Option<ContactProbeShape> {
 	let matrix = world.get(contact.node).copied()?;
-	let radius = contact_probe_local_radius(contact) * mat4_max_scale(matrix);
-	Some(ContactProbeSphere {
-		center: mat4_transform_point3(matrix, contact.position),
-		radius,
-	})
+	let scale = mat4_max_scale(matrix);
+	let radius = contact.radius.max(0.0) * scale;
+	let center = mat4_transform_point3(matrix, contact.position);
+	match contact.shape {
+		UnaDynamicsColliderShape::Sphere => Some(ContactProbeShape::Sphere { center, radius }),
+		UnaDynamicsColliderShape::Capsule => {
+			let axis = quat_rotate_vec3(contact.rotation, [0.0, 1.0, 0.0]);
+			let half_length = (contact.height.max(0.0) * 0.5 - contact.radius.max(0.0)).max(0.0);
+			let half_vector = mat4_transform_vector3(matrix, vec3_scale(axis, half_length));
+			Some(ContactProbeShape::Capsule {
+				a: vec3_sub(center, half_vector),
+				b: vec3_add(center, half_vector),
+				radius,
+			})
+		}
+		UnaDynamicsColliderShape::Unknown => Some(ContactProbeShape::BoundingSphere {
+			center,
+			radius: contact_probe_local_radius(contact) * scale,
+		}),
+	}
 }
 
 fn contact_probe_local_radius(contact: &UnaDynamicsContact) -> f32 {
@@ -1614,12 +1648,128 @@ fn contact_probe_local_radius(contact: &UnaDynamicsContact) -> f32 {
 	}
 }
 
-fn contact_probe_approximation(receiver: &UnaDynamicsContact, sender: &UnaDynamicsContact) -> String {
-	if receiver.shape == UnaDynamicsColliderShape::Sphere && sender.shape == UnaDynamicsColliderShape::Sphere {
-		"sphere".to_string()
-	} else {
-		"bounding_sphere".to_string()
+fn contact_probe_overlap(
+	receiver: ContactProbeShape,
+	sender: ContactProbeShape,
+) -> (bool, f32, f32, ContactProbeSphere, ContactProbeSphere, String) {
+	let receiver_sphere = receiver.bounding_sphere();
+	let sender_sphere = sender.bounding_sphere();
+	let (distance, threshold, approximation) = match (receiver, sender) {
+		(ContactProbeShape::Sphere { center: a, radius: ar }, ContactProbeShape::Sphere { center: b, radius: br }) => {
+			(vec3_distance(a, b), ar + br, "sphere")
+		}
+		(
+			ContactProbeShape::Sphere { center, radius },
+			ContactProbeShape::Capsule {
+				a,
+				b,
+				radius: capsule_radius,
+			},
+		)
+		| (
+			ContactProbeShape::Capsule {
+				a,
+				b,
+				radius: capsule_radius,
+			},
+			ContactProbeShape::Sphere { center, radius },
+		) => (
+			vec3_distance(center, closest_on_segment_array(center, a, b)),
+			radius + capsule_radius,
+			"sphere_capsule",
+		),
+		(ContactProbeShape::Capsule { a: a0, b: a1, radius: ar }, ContactProbeShape::Capsule { a: b0, b: b1, radius: br }) => {
+			(segment_segment_distance(a0, a1, b0, b1), ar + br, "capsule")
+		}
+		_ => (
+			vec3_distance(receiver_sphere.center, sender_sphere.center),
+			receiver_sphere.radius + sender_sphere.radius,
+			"bounding_sphere",
+		),
+	};
+	(
+		distance <= threshold,
+		distance,
+		threshold,
+		receiver_sphere,
+		sender_sphere,
+		approximation.to_string(),
+	)
+}
+
+fn quat_rotate_vec3(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+	let qv = [q[0], q[1], q[2]];
+	let uv = vec3_cross(qv, v);
+	let uuv = vec3_cross(qv, uv);
+	vec3_add(v, vec3_add(vec3_scale(uv, 2.0 * q[3]), vec3_scale(uuv, 2.0)))
+}
+
+fn closest_on_segment_array(p: [f32; 3], a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	let ab = vec3_sub(b, a);
+	let denom = vec3_len_sq(ab);
+	if denom <= 1e-12 {
+		return a;
 	}
+	let t = (vec3_dot(vec3_sub(p, a), ab) / denom).clamp(0.0, 1.0);
+	vec3_add(a, vec3_scale(ab, t))
+}
+
+fn segment_segment_distance(a0: [f32; 3], a1: [f32; 3], b0: [f32; 3], b1: [f32; 3]) -> f32 {
+	let u = vec3_sub(a1, a0);
+	let v = vec3_sub(b1, b0);
+	let w = vec3_sub(a0, b0);
+	let a = vec3_dot(u, u);
+	let b = vec3_dot(u, v);
+	let c = vec3_dot(v, v);
+	let d = vec3_dot(u, w);
+	let e = vec3_dot(v, w);
+	let denom = a * c - b * b;
+	let mut s_numer;
+	let mut s_denom = denom;
+	let mut t_numer;
+	let mut t_denom = denom;
+	if denom < 1e-12 {
+		s_numer = 0.0;
+		s_denom = 1.0;
+		t_numer = e;
+		t_denom = c;
+	} else {
+		s_numer = b * e - c * d;
+		t_numer = a * e - b * d;
+		if s_numer < 0.0 {
+			s_numer = 0.0;
+			t_numer = e;
+			t_denom = c;
+		} else if s_numer > s_denom {
+			s_numer = s_denom;
+			t_numer = e + b;
+			t_denom = c;
+		}
+	}
+	if t_numer < 0.0 {
+		t_numer = 0.0;
+		if -d < 0.0 {
+			s_numer = 0.0;
+		} else if -d > a {
+			s_numer = s_denom;
+		} else {
+			s_numer = -d;
+			s_denom = a;
+		}
+	} else if t_numer > t_denom {
+		t_numer = t_denom;
+		if -d + b < 0.0 {
+			s_numer = 0.0;
+		} else if -d + b > a {
+			s_numer = s_denom;
+		} else {
+			s_numer = -d + b;
+			s_denom = a;
+		}
+	}
+	let sc = if s_numer.abs() < 1e-12 { 0.0 } else { s_numer / s_denom };
+	let tc = if t_numer.abs() < 1e-12 { 0.0 } else { t_numer / t_denom };
+	vec3_len(vec3_add(w, vec3_sub(vec3_scale(u, sc), vec3_scale(v, tc))))
 }
 
 fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
@@ -1688,6 +1838,14 @@ fn mat4_transform_point3(m: [f32; 16], p: [f32; 3]) -> [f32; 3] {
 	]
 }
 
+fn mat4_transform_vector3(m: [f32; 16], v: [f32; 3]) -> [f32; 3] {
+	[
+		m[0] * v[0] + m[4] * v[1] + m[8] * v[2],
+		m[1] * v[0] + m[5] * v[1] + m[9] * v[2],
+		m[2] * v[0] + m[6] * v[1] + m[10] * v[2],
+	]
+}
+
 fn mat4_max_scale(m: [f32; 16]) -> f32 {
 	let sx = vec3_len([m[0], m[1], m[2]]);
 	let sy = vec3_len([m[4], m[5], m[6]]);
@@ -1697,6 +1855,34 @@ fn mat4_max_scale(m: [f32; 16]) -> f32 {
 
 fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 	vec3_len([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+}
+
+fn vec3_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	[a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	[a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn vec3_scale(v: [f32; 3], scale: f32) -> [f32; 3] {
+	[v[0] * scale, v[1] * scale, v[2] * scale]
+}
+
+fn vec3_lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+	vec3_add(a, vec3_scale(vec3_sub(b, a), t))
+}
+
+fn vec3_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+	a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+	[a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn vec3_len_sq(v: [f32; 3]) -> f32 {
+	vec3_dot(v, v)
 }
 
 fn vec3_len(v: [f32; 3]) -> f32 {
@@ -2040,21 +2226,20 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
 				continue;
 			}
-			let Some(receiver_sphere) = contact_probe_sphere(receiver, &world) else {
+			let Some(receiver_shape) = contact_probe_shape(receiver, &world) else {
 				continue;
 			};
 			for (sender_index, sender) in contacts.iter().enumerate() {
 				if sender.kind != UnaDynamicsContactKind::Sender {
 					continue;
 				}
-				let Some(sender_sphere) = contact_probe_sphere(sender, &world) else {
+				let Some(sender_shape) = contact_probe_shape(sender, &world) else {
 					continue;
 				};
 				let matched_tags = contact_matched_tags(&receiver.collision_tags, &sender.collision_tags);
 				let tag_match = !matched_tags.is_empty();
-				let distance = vec3_distance(receiver_sphere.center, sender_sphere.center);
-				let threshold = receiver_sphere.radius + sender_sphere.radius;
-				let overlap = distance <= threshold;
+				let (overlap, distance, threshold, receiver_sphere, sender_sphere, approximation) =
+					contact_probe_overlap(receiver_shape, sender_shape);
 				probes.push(UnaEvaluationContactProbe {
 					receiver_index,
 					sender_index,
@@ -2073,7 +2258,7 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 					sender_radius: sender_sphere.radius,
 					receiver_shape: receiver.shape.clone(),
 					sender_shape: sender.shape.clone(),
-					approximation: contact_probe_approximation(receiver, sender),
+					approximation,
 				});
 			}
 		}
@@ -6719,6 +6904,58 @@ mod tests {
 		assert!(probes[0].overlap);
 		assert!(probes[0].would_emit);
 		assert_eq!(probes[0].approximation, "sphere");
+	}
+
+	#[test]
+	fn contact_probe_uses_exact_capsule_overlap_when_available() {
+		let document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_node(vec![1, 2]),
+					test_translation_node(0.0, 0.0, 0.0),
+					test_translation_node(0.28, 0.20, 0.0),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				contacts: vec![
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:receiver".to_string(),
+						node: 1,
+						kind: UnaDynamicsContactKind::Receiver,
+						parameter: "ContactHand".to_string(),
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Capsule,
+						radius: 0.05,
+						height: 0.6,
+						..Default::default()
+					},
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:sender".to_string(),
+						node: 2,
+						kind: UnaDynamicsContactKind::Sender,
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let probes = document.runtime_model().scene_profile_dynamics().unwrap().contact_probes();
+		assert_eq!(probes.len(), 1);
+		assert_eq!(probes[0].approximation, "sphere_capsule");
+		assert!(probes[0].tag_match);
+		assert!(!probes[0].overlap);
+		assert!(!probes[0].would_emit);
+		assert!(probes[0].distance > probes[0].threshold);
+		assert!(vec3_distance([0.0, 0.0, 0.0], [0.28, 0.20, 0.0]) < probes[0].receiver_radius + probes[0].sender_radius);
 	}
 
 	#[test]

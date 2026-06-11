@@ -81,7 +81,7 @@ Wardrobe hot switch、runtime action、Menu / Parameter candidate、Contacts met
 1. PhysBone Collider detailed behavior を、source-neutral `UnaDynamicsCollider` と solver backend の差分として詰める。
 2. Stretch / endpoint / scale edge case を、UNDynamics limit / chain term と solver writeback の問題として設計・実装する。
 3. Grabbing / posing は action hook / diagnostics の最小接続に留め、direct manipulation UI は後段へ送る。
-4. Contact evaluation は current runtime scene pose を読む初期実装を固定済み。次は capsule exact overlap と dynamic reactive gating を、同じ source-neutral contact view 上で詰める。
+4. Contact evaluation は current runtime scene pose を読む初期実装と Sphere / Capsule exact overlap を固定済み。次は dynamic reactive gating を、同じ source-neutral contact view 上で詰める。
 5. VRC Constraints solver integration は node constraint / dynamics reset 対象の整理後に扱い、v2 初回では metadata / reset ref を維持する。
 
 ## Non Goals For v2 Initial Release
