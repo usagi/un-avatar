@@ -1179,6 +1179,12 @@ fn scene_node_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
 	out
 }
 
+fn scene_path_for_index(paths: &BTreeMap<String, usize>, index: usize) -> Option<String> {
+	paths
+		.iter()
+		.find_map(|(path, candidate)| (*candidate == index && !path.is_empty()).then(|| path.clone()))
+}
+
 fn scene_node_paths_all(scene: &UnaSceneSnapshot) -> BTreeMap<String, Vec<usize>> {
 	fn visit(scene: &UnaSceneSnapshot, idx: usize, path: String, out: &mut BTreeMap<String, Vec<usize>>) {
 		out.entry(path.clone()).or_default().push(idx);
@@ -1356,6 +1362,29 @@ fn operation_target_registry_path<'a>(registry_paths: &'a BTreeMap<String, Strin
 		.and_then(|node_id| registry_paths.get(node_id).map(String::as_str))
 		.filter(|path| !path.is_empty())
 		.unwrap_or_else(|| operation_target_path(op))
+}
+
+fn unavatar_node_ref_display_path(
+	scene: &UnaSceneSnapshot,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	node_ref: &Value,
+	index: usize,
+) -> String {
+	let registry_path = operation_target_registry_path(registry_paths, node_ref);
+	if !registry_path.is_empty() {
+		return registry_path.to_string();
+	}
+	if let Some(scene_path) = scene_path_for_index(paths, index) {
+		return scene_path;
+	}
+	scene
+		.nodes
+		.get(index)
+		.and_then(|node| node.name.as_deref())
+		.filter(|name| !name.is_empty())
+		.map(str::to_string)
+		.unwrap_or_else(|| format!("#{index}"))
 }
 
 fn collect_current_subtree(scene: &UnaSceneSnapshot, root: usize, out: &mut BTreeSet<usize>) {
@@ -2086,6 +2115,7 @@ fn unavatar_dynamics_settings(
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
 	let mut endpoint_ignored_non_leaf_count = 0usize;
+	let mut endpoint_ignored_non_leaf_samples = Vec::new();
 	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_colliders = modular_avatar_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_collider_count = ma_global_colliders.len();
@@ -2173,6 +2203,15 @@ fn unavatar_dynamics_settings(
 				endpoint_child_count += 1;
 			} else if endpoint_requested && has_non_ignored_child {
 				endpoint_ignored_non_leaf_count += 1;
+				if endpoint_ignored_non_leaf_samples.len() < 8 {
+					let label = if source_id.is_empty() {
+						comment.as_str()
+					} else {
+						source_id.as_str()
+					};
+					let path = unavatar_node_ref_display_path(scene, &registry_paths, &paths, root, root_idx);
+					endpoint_ignored_non_leaf_samples.push(format!("{label}@{path}"));
+				}
 			}
 			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes, multi_child_ignore) {
 				if chain.len() < 2 {
@@ -2228,8 +2267,13 @@ fn unavatar_dynamics_settings(
 		report.push_info(format!(".unavatar dynamics: synthesized_endpoint_children={endpoint_child_count}"));
 	}
 	if endpoint_ignored_non_leaf_count > 0 {
+		let samples = if endpoint_ignored_non_leaf_samples.is_empty() {
+			String::new()
+		} else {
+			format!(" samples=[{}]", endpoint_ignored_non_leaf_samples.join(", "))
+		};
 		report.push_warning(format!(
-			".unavatar dynamics: ignored endpointPosition on {endpoint_ignored_non_leaf_count} non-leaf PhysBone root(s)"
+			".unavatar dynamics: ignored endpointPosition on {endpoint_ignored_non_leaf_count} non-leaf PhysBone root(s){samples}"
 		));
 	}
 	if groups.is_empty() && colliders.is_empty() && contacts.is_empty() && constraint_refs.is_empty() {
@@ -9943,6 +9987,7 @@ mod tests {
 			.messages
 			.iter()
 			.any(|warning| warning.contains("ignored endpointPosition on 1 non-leaf PhysBone root")));
+		assert!(report.messages.iter().any(|warning| warning.contains("non_leaf_tail@Root")));
 	}
 
 	#[test]
