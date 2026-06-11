@@ -395,6 +395,10 @@ struct DiagnoseActionItemSummary {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	parameter_triggers: Vec<DiagnoseActionParameterTrigger>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	condition_parameter_names: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	current_condition_state: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	conditions: Vec<DiagnoseActionConditionSummary>,
 	effect_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -3754,6 +3758,12 @@ fn build_diagnose_report(
 				effect_count: action.effects.len(),
 				trigger_kinds: runtime_action_trigger_kind_counts(action.triggers.iter()),
 				parameter_triggers: runtime_action_parameter_triggers(action.triggers.iter()),
+				condition_parameter_names: runtime_action_condition_parameter_names(action),
+				current_condition_state: runtime_action_current_condition_state(
+					action,
+					runtime_model.scene(),
+					runtime_model.runtime_parameter_values(),
+				),
 				conditions: runtime_action_conditions(action.conditions.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
@@ -4019,6 +4029,48 @@ fn runtime_action_parameter_triggers<'a>(
 			_ => None,
 		})
 		.collect()
+}
+
+fn runtime_action_condition_parameter_names(action: &un_avatar_core::UnaRuntimeAction) -> Vec<String> {
+	let mut names = BTreeSet::new();
+	for condition in &action.conditions {
+		if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
+			names.insert(name.to_string());
+		}
+	}
+	names.into_iter().collect()
+}
+
+fn runtime_action_current_condition_state(
+	action: &un_avatar_core::UnaRuntimeAction,
+	scene: Option<&UnaSceneSnapshot>,
+	parameter_values: &BTreeMap<String, f32>,
+) -> Option<String> {
+	let mut saw_condition = false;
+	let mut saw_runtime_value = false;
+	let mut saw_inactive = false;
+	for condition in &action.conditions {
+		let Some(name) = condition.parameter_name.as_deref() else {
+			continue;
+		};
+		saw_condition = true;
+		let Some(value) = parameter_values.get(name).copied() else {
+			continue;
+		};
+		saw_runtime_value = true;
+		match action.parameter_condition_state_in_scene(scene, name, value) {
+			Some(true) => return Some("active".to_string()),
+			Some(false) => saw_inactive = true,
+			None => {}
+		}
+	}
+	if saw_inactive {
+		Some("inactive".to_string())
+	} else if saw_condition && !saw_runtime_value {
+		Some("missing_parameter".to_string())
+	} else {
+		None
+	}
 }
 
 fn runtime_action_conditions<'a>(
@@ -4362,12 +4414,14 @@ fn run_diagnose(
 		);
 		for action in actions.actions.iter().take(16) {
 			println!(
-				"action[{}]: label={:?} triggers={} conditions={} effects={} trigger_kinds={:?} effect_kinds={:?}",
+				"action[{}]: label={:?} triggers={} conditions={} effects={} condition_state={:?} condition_parameters={:?} trigger_kinds={:?} effect_kinds={:?}",
 				action.id,
 				action.label,
 				action.trigger_count,
 				action.condition_count,
 				action.effect_count,
+				action.current_condition_state,
+				action.condition_parameter_names,
 				action.trigger_kinds,
 				action.effect_kinds
 			);
@@ -5500,6 +5554,7 @@ mod tests {
 		};
 		doc.runtime_model_mut()
 			.set_active_asset_groups(vec!["outfit:jacket".to_string(), "missing:gloves".to_string()]);
+		doc.runtime_model_mut().set_runtime_parameter_value("Hat", 1.0);
 
 		let report = build_diagnose_report(
 			Path::new("avatar.unavatar"),
@@ -5552,6 +5607,10 @@ mod tests {
 		assert!(unavatar.modular_avatar_support_counts_alias.get("unsupported").is_none());
 		assert_eq!(unavatar.modular_avatar_support_counts.get("disabled"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("disabled"), Some(&1));
+		let actions = report.actions.as_ref().unwrap();
+		let hat_action = actions.actions.iter().find(|action| action.id == "ma:hat").unwrap();
+		assert_eq!(hat_action.condition_parameter_names, vec!["Hat".to_string()]);
+		assert_eq!(hat_action.current_condition_state.as_deref(), Some("active"));
 		assert_eq!(unavatar.modular_avatar_type_counts.get("ModularAvatarRemoveVertexColor"), Some(&1));
 		assert_eq!(
 			unavatar.modular_avatar_type_counts_alias.get("ModularAvatarRemoveVertexColor"),
