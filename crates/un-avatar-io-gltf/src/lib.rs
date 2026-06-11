@@ -5260,6 +5260,10 @@ fn modular_avatar_shape_name(shape: &Value) -> Option<String> {
 		.map(str::to_string)
 }
 
+fn modular_avatar_shape_value(shape: &Value) -> f32 {
+	json_f32(shape.get("Value").or_else(|| shape.get("value")).or_else(|| shape.get("m_value"))).unwrap_or(0.0)
+}
+
 fn modular_avatar_shape_object_ref(shape: &Value) -> Option<&Value> {
 	shape
 		.get("Object")
@@ -5267,6 +5271,56 @@ fn modular_avatar_shape_object_ref(shape: &Value) -> Option<&Value> {
 		.or_else(|| shape.get("m_object"))
 		.or_else(|| shape.get("target"))
 		.or_else(|| shape.get("resolvedTarget"))
+}
+
+fn apply_unavatar_shape_changer_sets(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize) {
+	let mut applied = 0usize;
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	for component in components {
+		if component.get("shortType").and_then(Value::as_str) != Some("ModularAvatarShapeChanger") {
+			continue;
+		}
+		if component.get("enabled").and_then(Value::as_bool) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(shapes) = unavatar_modular_avatar_component_array(component, &["Shapes", "shapes", "m_shapes"]) else {
+			continue;
+		};
+		for shape in shapes {
+			if !matches!(modular_avatar_shape_change_type(shape), Some("Set" | "set" | "1")) {
+				continue;
+			}
+			let Some(shape_name) = modular_avatar_shape_name(shape) else {
+				missing += 1;
+				continue;
+			};
+			let Some(target_ref) = modular_avatar_shape_object_ref(shape) else {
+				missing += 1;
+				continue;
+			};
+			let Some(target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+				missing += 1;
+				continue;
+			};
+			if ensure_unique_mesh_for_node(scene, target).is_some()
+				&& apply_blend_shape_weight(scene, target, &shape_name, modular_avatar_shape_value(shape))
+			{
+				applied += 1;
+			} else {
+				missing += 1;
+			}
+		}
+	}
+	(applied, missing, skipped)
 }
 
 fn modular_avatar_mesh_cutter_object_ref(component: &Value) -> Option<&Value> {
@@ -5740,6 +5794,13 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 	if remove_vcol_nodes > 0 || remove_vcol_primitives > 0 || remove_vcol_missing > 0 || remove_vcol_skipped > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: remove_vertex_color_nodes={remove_vcol_nodes}, remove_vertex_color_primitives={remove_vcol_primitives}, remove_vertex_color_missing={remove_vcol_missing}, remove_vertex_color_skipped={remove_vcol_skipped}"
+		));
+	}
+	let (shape_changer_set_applied, shape_changer_set_missing, shape_changer_set_skipped) =
+		apply_unavatar_shape_changer_sets(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if shape_changer_set_applied > 0 || shape_changer_set_missing > 0 || shape_changer_set_skipped > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: shape_changer_set_applied={shape_changer_set_applied}, shape_changer_set_missing={shape_changer_set_missing}, shape_changer_set_skipped={shape_changer_set_skipped}"
 		));
 	}
 	let (
@@ -12901,6 +12962,142 @@ mod tests {
 
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[0, 1, 2][..]));
+	}
+
+	#[test]
+	fn modular_avatar_shape_changer_set_applies_default_morph_and_clones_shared_mesh() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OutsideRenderer".to_string()),
+					source_node_id: Some("node_outside".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![test_morph_primitive("Smile", 0.0)]],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarShapeChanger",
+			"enabled": true,
+			"fields": {
+				"m_shapes": [{
+					"m_object": {"nodeId": "node_target", "path": "Root/TargetRenderer"},
+					"m_shapeName": "Smile",
+					"m_changeType": "Set",
+					"m_value": 75.0
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let result = apply_unavatar_shape_changer_sets(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!(result, (1, 0, 0));
+		assert_eq!(scene.nodes[1].mesh, Some(1));
+		assert_eq!(scene.nodes[2].mesh, Some(0));
+		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.75]);
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
+	}
+
+	#[test]
+	fn modular_avatar_shape_changer_set_feeds_static_blendshape_sync() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Body".to_string()),
+					source_node_id: Some("node_body".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Jacket".to_string()),
+					source_node_id: Some("node_jacket".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![test_morph_primitive("Breast_Big", 0.0)],
+				vec![test_morph_primitive("Jacket_Breast_Big", 0.0)],
+			],
+			..Default::default()
+		};
+		let components = vec![
+			serde_json::json!({
+				"shortType": "ModularAvatarShapeChanger",
+				"enabled": true,
+				"fields": {
+					"m_shapes": [{
+						"m_object": {"nodeId": "node_body", "path": "Root/Body"},
+						"m_shapeName": "Breast_Big",
+						"m_changeType": "Set",
+						"m_value": 50.0
+					}]
+				}
+			}),
+			serde_json::json!({
+				"shortType": "ModularAvatarBlendshapeSync",
+				"enabled": true,
+				"target": {"nodeId": "node_jacket", "path": "Root/Jacket"},
+				"fields": {
+					"Bindings": [{
+						"referenceMesh": {"resolvedTarget": {"nodeId": "node_body", "path": "Root/Body"}},
+						"blendshape": "Breast_Big",
+						"localBlendshape": "Jacket_Breast_Big",
+						"remapCurve": {
+							"keyCount": 2,
+							"keys": [
+								{"time": 0.0, "value": 0.0},
+								{"time": 1.0, "value": 1.0}
+							]
+						}
+					}]
+				}
+			}),
+		];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		assert_eq!(
+			apply_unavatar_shape_changer_sets(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths),
+			(1, 0, 0)
+		);
+		assert_eq!(
+			apply_unavatar_blendshape_syncs(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths),
+			(1, 0, 0, 0)
+		);
+
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
+		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.5]);
 	}
 
 	#[test]
