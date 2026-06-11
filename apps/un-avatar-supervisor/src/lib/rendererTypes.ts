@@ -189,6 +189,22 @@ export type RendererRuntimeDynamicsConstraintRefStatus = {
   weight: number;
 };
 
+export type RendererRuntimeActionTargetWrite = {
+  owner_key: string;
+  action_id: string;
+  effect_kind: string;
+  target_kind: string;
+  target_key: string;
+};
+
+export type RendererRuntimeActionTargetWriteCollision = {
+  target_kind: string;
+  target_key: string;
+  owner_keys: string[];
+  action_ids: string[];
+  writes: RendererRuntimeActionTargetWrite[];
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -201,13 +217,7 @@ export type RendererRuntimeActionStatus = {
   parameter_value?: number;
   condition_parameter_names?: string[];
   current_condition_state?: string;
-  target_writes?: {
-    owner_key: string;
-    action_id: string;
-    effect_kind: string;
-    target_kind: string;
-    target_key: string;
-  }[];
+  target_writes?: RendererRuntimeActionTargetWrite[];
   node_visibility_effects?: {
     node_index?: number;
     source_node_id?: string;
@@ -319,6 +329,7 @@ export type RendererRuntimeStatus = {
   dynamics_constraint_ref_count: number;
   dynamics_vrc_constraint_ref_count: number;
   runtime_actions: RendererRuntimeActionStatus[];
+  runtime_action_target_write_collisions: RendererRuntimeActionTargetWriteCollision[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
@@ -369,6 +380,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_contact_probe_would_emit_count"
   | "dynamics_constraint_ref_count"
   | "runtime_actions"
+  | "runtime_action_target_write_collisions"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

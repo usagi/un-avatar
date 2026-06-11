@@ -76,6 +76,7 @@ v2 初期では priority / lock は導入しない。
 実装メモ:
 
 - core は `UnaRuntimeAction::evaluation_target_writes()` で action effect 由来の owner key / target kind / target key を read-only view として公開し、CLI diagnose / renderer runtime status / Supervisor diagnostics から観測できる。
+- core は `UnaRuntimeActionSet::evaluation_target_write_collisions()` で同一 target kind/key に複数 action owner が書くケースを diagnostics として列挙する。同一 action 内の複数 effect は、その action の内部評価なので初期診断では衝突扱いしない。
 - この view は runtime scene や source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
 - `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
 

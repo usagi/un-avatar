@@ -54,6 +54,12 @@
     const targets = targetCounts.length ? ` ${targetCounts.join(",")}` : "";
     return `${label}: ${state} [${parameters}]${targets}`;
   }
+
+  function runtimeActionCollisionLabel(
+    collision: RendererRuntimeDiagnosticsData["runtime_action_target_write_collisions"][number],
+  ): string {
+    return `${collision.target_kind}:${collision.target_key} owners=${collision.owner_keys.length} actions=${collision.action_ids.join(",")}`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -118,6 +124,12 @@
       {#if runtimeStatus.runtime_actions.length}
         <dt>{$_("renderers.details.diag_runtime_actions")}</dt>
         <dd class="stderr-block">{runtimeStatus.runtime_actions.slice(0, sampleLimit).map(runtimeActionLabel).join("\n")}</dd>
+      {/if}
+      {#if runtimeStatus.runtime_action_target_write_collisions.length}
+        <dt>{$_("renderers.details.diag_runtime_action_collisions")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_action_target_write_collisions.slice(0, sampleLimit).map(runtimeActionCollisionLabel).join("\n")}
+        </dd>
       {/if}
     {/if}
   </dl>

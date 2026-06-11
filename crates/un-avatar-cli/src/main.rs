@@ -381,6 +381,8 @@ struct DiagnoseActionSummary {
 	effect_count: usize,
 	trigger_kinds: BTreeMap<String, usize>,
 	effect_kinds: BTreeMap<String, usize>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	target_write_collisions: Vec<un_avatar_core::UnaEvaluationTargetWriteCollision>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
 
@@ -3779,6 +3781,7 @@ fn build_diagnose_report(
 		effect_count: actions.actions.iter().map(|action| action.effects.len()).sum(),
 		trigger_kinds: runtime_action_trigger_kind_counts(actions.actions.iter().flat_map(|action| action.triggers.iter())),
 		effect_kinds: runtime_action_effect_kind_counts(actions.actions.iter().flat_map(|action| action.effects.iter())),
+		target_write_collisions: actions.evaluation_target_write_collisions(),
 		actions: actions
 			.actions
 			.iter()
@@ -4458,9 +4461,20 @@ fn run_diagnose(
 	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={} trigger_kinds={:?} effect_kinds={:?}",
-			actions.action_count, actions.trigger_count, actions.effect_count, actions.trigger_kinds, actions.effect_kinds
+			"actions: actions={} triggers={} effects={} target_write_collisions={} trigger_kinds={:?} effect_kinds={:?}",
+			actions.action_count,
+			actions.trigger_count,
+			actions.effect_count,
+			actions.target_write_collisions.len(),
+			actions.trigger_kinds,
+			actions.effect_kinds
 		);
+		for collision in actions.target_write_collisions.iter().take(16) {
+			println!(
+				"action_target_collision: {:?}:{} owners={:?} actions={:?}",
+				collision.target_kind, collision.target_key, collision.owner_keys, collision.action_ids
+			);
+		}
 		for action in actions.actions.iter().take(16) {
 			println!(
 				"action[{}]: label={:?} triggers={} conditions={} effects={} condition_state={:?} condition_parameters={:?} trigger_kinds={:?} effect_kinds={:?}",
@@ -6151,6 +6165,59 @@ mod tests {
 		assert_eq!(action.dynamics_enabled_effects.len(), 1);
 		assert_eq!(action.dynamics_enabled_effects[0].source_id, "physbone:hair");
 		assert!(!action.dynamics_enabled_effects[0].enabled);
+	}
+
+	#[test]
+	fn diagnose_report_summarizes_action_target_write_collisions() {
+		let doc = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![
+					un_avatar_core::UnaRuntimeAction {
+						id: "hat:on".to_string(),
+						effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+							target: un_avatar_core::UnaRuntimeNodeTarget {
+								path: Some("Root/Hat".to_string()),
+								..Default::default()
+							},
+							visible: true,
+						}],
+						..Default::default()
+					},
+					un_avatar_core::UnaRuntimeAction {
+						id: "hat:off".to_string(),
+						effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+							target: un_avatar_core::UnaRuntimeNodeTarget {
+								path: Some("Root/Hat".to_string()),
+								..Default::default()
+							},
+							visible: false,
+						}],
+						..Default::default()
+					},
+				],
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		let actions = report.actions.as_ref().unwrap();
+		assert_eq!(actions.target_write_collisions.len(), 1);
+		assert_eq!(actions.target_write_collisions[0].target_key, "Root/Hat");
+		assert_eq!(actions.target_write_collisions[0].action_ids, vec!["hat:off", "hat:on"]);
 	}
 
 	#[test]

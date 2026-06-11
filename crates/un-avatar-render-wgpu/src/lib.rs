@@ -1559,6 +1559,7 @@ impl AvatarApp {
 			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
+			status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
@@ -3163,6 +3164,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_actions: Vec<gpu::RuntimeActionStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_target_write_collisions: Vec<un_avatar_core::UnaEvaluationTargetWriteCollision>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	menu_action_candidates: Vec<gpu::RuntimeMenuActionCandidateStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
@@ -3345,6 +3348,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		runtime_parameter_values: BTreeMap::new(),
 		wardrobe_actions: Vec::new(),
 		runtime_actions: Vec::new(),
+		runtime_action_target_write_collisions: Vec::new(),
 		menu_action_candidates: Vec::new(),
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
@@ -4722,6 +4726,13 @@ mod tests {
 				.into_iter()
 				.collect(),
 			}];
+			status.runtime_action_target_write_collisions = vec![un_avatar_core::UnaEvaluationTargetWriteCollision {
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				owner_keys: vec!["action:wardrobe:field_drape".to_string(), "action:wardrobe:coat_off".to_string()],
+				action_ids: vec!["wardrobe:field_drape".to_string(), "wardrobe:coat_off".to_string()],
+				writes: Vec::new(),
+			}];
 			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
 				menu_component_index: 2,
 				menu_label: Some("Wardrobe".to_string()),
@@ -5229,6 +5240,15 @@ mod tests {
 				.and_then(|value| value.get("node_visibility"))
 				.and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		let action_collisions = snapshot
+			.get("runtime_action_target_write_collisions")
+			.and_then(|value| value.as_array())
+			.expect("runtime action target write collisions");
+		assert_eq!(action_collisions.len(), 1);
+		assert_eq!(
+			action_collisions[0].get("target_key").and_then(|value| value.as_str()),
+			Some("Avatar/Coat")
 		);
 		let menu_action_candidates = snapshot
 			.get("menu_action_candidates")

@@ -151,6 +151,45 @@ impl UnaRuntimeActionSet {
 	pub fn find_action(&self, query: UnaRuntimeActionQuery<'_>) -> Option<&UnaRuntimeAction> {
 		self.actions.iter().find(|action| action.matches_query(query))
 	}
+
+	pub fn evaluation_target_write_collisions(&self) -> Vec<UnaEvaluationTargetWriteCollision> {
+		let mut writes_by_target: BTreeMap<(UnaEvaluationTargetKind, String), Vec<UnaEvaluationRuntimeActionTargetWrite>> = BTreeMap::new();
+		for action in &self.actions {
+			for write in action.evaluation_target_writes() {
+				writes_by_target
+					.entry((write.target_kind.clone(), write.target_key.clone()))
+					.or_default()
+					.push(write);
+			}
+		}
+		writes_by_target
+			.into_iter()
+			.filter_map(|((target_kind, target_key), writes)| {
+				let owner_keys = writes
+					.iter()
+					.map(|write| write.owner_key.clone())
+					.collect::<BTreeSet<_>>()
+					.into_iter()
+					.collect::<Vec<_>>();
+				if owner_keys.len() < 2 {
+					return None;
+				}
+				let action_ids = writes
+					.iter()
+					.map(|write| write.action_id.clone())
+					.collect::<BTreeSet<_>>()
+					.into_iter()
+					.collect::<Vec<_>>();
+				Some(UnaEvaluationTargetWriteCollision {
+					target_kind,
+					target_key,
+					owner_keys,
+					action_ids,
+					writes,
+				})
+			})
+			.collect()
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -246,7 +285,7 @@ impl UnaRuntimeAction {
 	}
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaEvaluationTargetKind {
 	WardrobeSet,
@@ -264,6 +303,15 @@ pub struct UnaEvaluationRuntimeActionTargetWrite {
 	pub effect_kind: String,
 	pub target_kind: UnaEvaluationTargetKind,
 	pub target_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaEvaluationTargetWriteCollision {
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
+	pub owner_keys: Vec<String>,
+	pub action_ids: Vec<String>,
+	pub writes: Vec<UnaEvaluationRuntimeActionTargetWrite>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -5658,6 +5706,67 @@ mod tests {
 		assert_eq!(writes[3].target_key, "Smile");
 		assert_eq!(writes[4].target_kind, UnaEvaluationTargetKind::DynamicsEnabled);
 		assert_eq!(writes[4].target_key, "physbone:hair");
+	}
+
+	#[test]
+	fn runtime_action_set_reports_target_write_collisions_between_actions() {
+		let actions = UnaRuntimeActionSet {
+			actions: vec![
+				UnaRuntimeAction {
+					id: "hat:on".to_string(),
+					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+						target: UnaRuntimeNodeTarget {
+							path: Some("Root/Hat".to_string()),
+							..Default::default()
+						},
+						visible: true,
+					}],
+					..Default::default()
+				},
+				UnaRuntimeAction {
+					id: "hat:off".to_string(),
+					effects: vec![UnaRuntimeActionEffect::NodeVisibility {
+						target: UnaRuntimeNodeTarget {
+							path: Some("Root/Hat".to_string()),
+							..Default::default()
+						},
+						visible: false,
+					}],
+					..Default::default()
+				},
+				UnaRuntimeAction {
+					id: "coat:multi".to_string(),
+					effects: vec![
+						UnaRuntimeActionEffect::MaterialScalar {
+							target: UnaRuntimeMaterialTarget {
+								name: Some("Coat".to_string()),
+								..Default::default()
+							},
+							parameter: "_Cutoff".to_string(),
+							value: 0.4,
+						},
+						UnaRuntimeActionEffect::MaterialScalar {
+							target: UnaRuntimeMaterialTarget {
+								name: Some("Coat".to_string()),
+								..Default::default()
+							},
+							parameter: "_Cutoff".to_string(),
+							value: 0.6,
+						},
+					],
+					..Default::default()
+				},
+			],
+		};
+
+		let collisions = actions.evaluation_target_write_collisions();
+
+		assert_eq!(collisions.len(), 1);
+		assert_eq!(collisions[0].target_kind, UnaEvaluationTargetKind::NodeVisibility);
+		assert_eq!(collisions[0].target_key, "Root/Hat");
+		assert_eq!(collisions[0].owner_keys, vec!["action:hat:off", "action:hat:on"]);
+		assert_eq!(collisions[0].action_ids, vec!["hat:off", "hat:on"]);
+		assert_eq!(collisions[0].writes.len(), 2);
 	}
 
 	#[test]
