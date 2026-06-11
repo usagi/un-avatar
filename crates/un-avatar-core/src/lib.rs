@@ -350,6 +350,23 @@ pub struct UnaEvaluationRestoreBaselineEntry {
 	pub source_effect_kinds: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaEvaluationRestoreApplyEntry {
+	pub owner_key: String,
+	pub action_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub condition_state: Option<String>,
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub baseline_value: Option<Value>,
+	pub current_value_available: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub current_value: Option<Value>,
+	pub ready: bool,
+	pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeActionCondition {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2054,6 +2071,53 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn runtime_action_set_restore_baseline_capture_plan(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		restore_baseline_capture_plan_from_candidates(self.runtime_action_set_restore_baseline_candidates(actions))
+	}
+
+	pub fn runtime_action_restore_apply_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreApplyEntry> {
+		let condition_state = action
+			.current_parameter_condition_state(self.scene(), self.runtime_parameter_values())
+			.map(str::to_string);
+		self.runtime_action_restore_readiness(action)
+			.into_iter()
+			.filter(|readiness| readiness.restore_target)
+			.map(|readiness| {
+				let baseline = self
+					.restore_baseline(&readiness.owner_key, &readiness.target_kind, &readiness.target_key)
+					.map(|entry| entry.baseline_value.clone());
+				let inactive = condition_state.as_deref() == Some("inactive");
+				let ready = inactive && readiness.ready;
+				let reason = if inactive {
+					readiness.reason.clone()
+				} else {
+					match condition_state.as_deref() {
+						Some("active") => "action_active".to_string(),
+						Some("missing_parameter") => "condition_missing_parameter".to_string(),
+						Some(other) => format!("condition_{other}"),
+						None => "condition_unavailable".to_string(),
+					}
+				};
+				UnaEvaluationRestoreApplyEntry {
+					owner_key: readiness.owner_key,
+					action_id: readiness.action_id,
+					condition_state: condition_state.clone(),
+					target_kind: readiness.target_kind,
+					target_key: readiness.target_key,
+					baseline_value: baseline,
+					current_value_available: readiness.current_value_available,
+					current_value: readiness.current_value,
+					ready,
+					reason,
+				}
+			})
+			.collect()
+	}
+
+	pub fn runtime_action_set_restore_apply_plan(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreApplyEntry> {
+		actions
+			.actions
+			.iter()
+			.flat_map(|action| self.runtime_action_restore_apply_plan(action))
+			.collect()
 	}
 
 	fn resolve_material(self, target: &UnaRuntimeMaterialTarget) -> Option<&'a UnaMaterialPbr> {
@@ -6203,6 +6267,11 @@ mod tests {
 		};
 		let action = UnaRuntimeAction {
 			id: "variant:coat".to_string(),
+			conditions: vec![UnaRuntimeActionCondition {
+				parameter_name: Some("Coat".to_string()),
+				parameter_value: Some(1.0),
+				..Default::default()
+			}],
 			effects: vec![
 				UnaRuntimeActionEffect::NodeVisibility {
 					target: UnaRuntimeNodeTarget {
@@ -6325,6 +6394,14 @@ mod tests {
 				.map(|entry| &entry.baseline_value),
 			Some(&Value::from(true))
 		);
+		document.runtime_model_mut().set_runtime_parameter_value("Coat", 0.0);
+		let apply_plan = document.runtime_model().runtime_action_set_restore_apply_plan(&actions);
+		assert_eq!(apply_plan.len(), 5);
+		assert_eq!(apply_plan[0].condition_state.as_deref(), Some("inactive"));
+		assert!(apply_plan[0].ready);
+		assert_eq!(apply_plan[0].reason, "ready");
+		assert_eq!(apply_plan[0].baseline_value, Some(Value::from(true)));
+		assert_eq!(apply_plan[0].current_value, Some(Value::from(false)));
 	}
 
 	#[test]
