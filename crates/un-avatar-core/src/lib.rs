@@ -911,6 +911,19 @@ pub struct UnaDynamicsContact {
 	pub rotation: [f32; 4],
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnaEvaluationContactParameterDeclaration {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub owner_key: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
+	pub node: usize,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub collision_tags: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaDynamicsConstraintRef {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
@@ -1079,6 +1092,24 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.spring_bones.into_iter().flat_map(|settings| settings.contacts.iter())
 	}
 
+	pub fn contact_parameter_declarations(self) -> Vec<UnaEvaluationContactParameterDeclaration> {
+		self.contacts()
+			.enumerate()
+			.filter_map(|(index, contact)| {
+				if contact.kind != UnaDynamicsContactKind::Receiver || contact.parameter.is_empty() {
+					return None;
+				}
+				Some(UnaEvaluationContactParameterDeclaration {
+					owner_key: contact_owner_key(&contact.source_id, index),
+					source_id: contact.source_id.clone(),
+					node: contact.node,
+					parameter: contact.parameter.clone(),
+					collision_tags: contact.collision_tags.clone(),
+				})
+			})
+			.collect()
+	}
+
 	pub fn constraint_refs(self) -> impl Iterator<Item = &'a UnaDynamicsConstraintRef> {
 		self.spring_bones.into_iter().flat_map(|settings| settings.constraint_refs.iter())
 	}
@@ -1147,6 +1178,16 @@ impl<'a> UnaRuntimeDynamics<'a> {
 			}
 		}
 		counts
+	}
+}
+
+fn contact_owner_key(source_id: &str, fallback_index: usize) -> String {
+	if source_id.is_empty() {
+		format!("contact:receiver:{fallback_index}")
+	} else if source_id.starts_with("contact:") {
+		source_id.to_string()
+	} else {
+		format!("contact:{source_id}")
 	}
 }
 
@@ -5103,6 +5144,13 @@ mod tests {
 		assert_eq!(counts.vrc_contact_senders, 1);
 		assert_eq!(counts.constraint_refs, 1);
 		assert_eq!(counts.vrc_constraint_refs, 1);
+		let contact_parameters = dynamics.contact_parameter_declarations();
+		assert_eq!(contact_parameters.len(), 1);
+		assert_eq!(contact_parameters[0].owner_key, "contact:hand");
+		assert_eq!(contact_parameters[0].source_id, "contact:hand");
+		assert_eq!(contact_parameters[0].node, 3);
+		assert_eq!(contact_parameters[0].parameter, "ContactHand");
+		assert_eq!(contact_parameters[0].collision_tags, vec!["Hand", "Interact"]);
 	}
 
 	#[test]

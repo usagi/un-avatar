@@ -505,6 +505,7 @@ struct DiagnoseDynamicsSummary {
 	contact_count: usize,
 	vrc_contact_sender_count: usize,
 	vrc_contact_receiver_count: usize,
+	contact_parameter_declaration_count: usize,
 	constraint_ref_count: usize,
 	vrc_constraint_ref_count: usize,
 	source_limit_count: usize,
@@ -516,6 +517,8 @@ struct DiagnoseDynamicsSummary {
 	source_posing_enabled_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contacts: Vec<DiagnoseDynamicsContactSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_declarations: Vec<DiagnoseContactParameterDeclarationSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	constraint_refs: Vec<DiagnoseDynamicsConstraintRefSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -591,6 +594,20 @@ struct DiagnoseDynamicsContactSummary {
 	radius: f32,
 	height: f32,
 	position: [f32; 3],
+}
+
+#[derive(Serialize)]
+struct DiagnoseContactParameterDeclarationSummary {
+	index: usize,
+	owner_key: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	node_path: Option<String>,
+	parameter: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	collision_tags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1938,6 +1955,29 @@ fn dynamics_contact_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsContactS
 			radius: contact.radius,
 			height: contact.height,
 			position: contact.position,
+		})
+		.collect()
+}
+
+fn dynamics_contact_parameter_declaration_summaries(doc: &UnaDocument) -> Vec<DiagnoseContactParameterDeclarationSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	runtime
+		.dynamics
+		.contact_parameter_declarations()
+		.into_iter()
+		.enumerate()
+		.map(|(index, declaration)| DiagnoseContactParameterDeclarationSummary {
+			index,
+			owner_key: declaration.owner_key,
+			source_id: declaration.source_id,
+			node: declaration.node,
+			node_path: node_paths_by_index.get(declaration.node).cloned().flatten(),
+			parameter: declaration.parameter,
+			collision_tags: declaration.collision_tags,
 		})
 		.collect()
 }
@@ -3664,6 +3704,7 @@ fn build_diagnose_report(
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
+	let dynamics_contact_parameter_declarations = dynamics_contact_parameter_declaration_summaries(&doc);
 	let dynamics_constraint_refs = dynamics_constraint_ref_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
@@ -3717,6 +3758,7 @@ fn build_diagnose_report(
 		contact_count: dynamics_counts.contacts,
 		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
 		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
+		contact_parameter_declaration_count: dynamics_contact_parameter_declarations.len(),
 		constraint_ref_count: dynamics_counts.constraint_refs,
 		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,
@@ -3727,6 +3769,7 @@ fn build_diagnose_report(
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
 		contacts: dynamics_contacts,
+		contact_parameter_declarations: dynamics_contact_parameter_declarations,
 		constraint_refs: dynamics_constraint_refs,
 		groups: dynamics_groups,
 	};
@@ -4372,7 +4415,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4389,6 +4432,7 @@ fn run_diagnose(
 		report.dynamics.contact_count,
 		report.dynamics.vrc_contact_sender_count,
 		report.dynamics.vrc_contact_receiver_count,
+		report.dynamics.contact_parameter_declaration_count,
 		report.dynamics.constraint_ref_count,
 		report.dynamics.vrc_constraint_ref_count,
 		report.dynamics.source_limit_count,
@@ -4447,6 +4491,17 @@ fn run_diagnose(
 			contact.radius,
 			contact.height,
 			contact.position
+		);
+	}
+	for declaration in report.dynamics.contact_parameter_declarations.iter().take(16) {
+		println!(
+			"  dynamics_contact_parameter[{}]: owner={:?} source_id={:?} node={:?} parameter={:?} tags={:?}",
+			declaration.index,
+			declaration.owner_key,
+			declaration.source_id,
+			declaration.node_path.as_deref().unwrap_or("#"),
+			declaration.parameter,
+			declaration.collision_tags
 		);
 	}
 	for constraint_ref in report.dynamics.constraint_refs.iter().take(16) {
@@ -6002,6 +6057,15 @@ mod tests {
 		assert_eq!(report.dynamics.contacts[0].parameter, "ContactHand");
 		assert_eq!(report.dynamics.contacts[0].collision_tags, vec!["Hand", "Interact"]);
 		assert_eq!(report.dynamics.contacts[0].radius, 0.05);
+		assert_eq!(report.dynamics.contact_parameter_declaration_count, 1);
+		assert_eq!(report.dynamics.contact_parameter_declarations.len(), 1);
+		assert_eq!(report.dynamics.contact_parameter_declarations[0].owner_key, "contact:hand");
+		assert_eq!(report.dynamics.contact_parameter_declarations[0].source_id, "contact:hand");
+		assert_eq!(report.dynamics.contact_parameter_declarations[0].parameter, "ContactHand");
+		assert_eq!(
+			report.dynamics.contact_parameter_declarations[0].collision_tags,
+			vec!["Hand", "Interact"]
+		);
 		assert_eq!(report.dynamics.constraint_ref_count, 2);
 		assert_eq!(report.dynamics.vrc_constraint_ref_count, 2);
 		assert_eq!(report.dynamics.constraint_refs.len(), 2);

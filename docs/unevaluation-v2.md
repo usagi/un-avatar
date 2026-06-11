@@ -82,11 +82,12 @@ Contacts は v2 初期では interaction / parameter source として扱う。
 
 1. Phase A: Contacts metadata + diagnostics
    - source id、kind、tags、shape、parameter、counts、warning。
-   - 現状の v2 scope。
+   - 実装済み。
 2. Phase B: Contact parameter declaration
    - Receiver が emit し得る parameter を UNEvaluation に宣言する。
    - 値はまだ書かない。
    - UI / diagnostics / action resolver が namespace を把握できる。
+   - core runtime view と CLI diagnose の declared parameter count / sample は実装済み。
 3. Phase C: Diagnostics-only contact probe
    - overlap 計算はするが parameter state へは書かない。
    - `would_emit parameter=X value=1` を diagnose / debug status に出す。
