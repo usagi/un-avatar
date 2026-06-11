@@ -2949,12 +2949,15 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			return Vec::new();
 		}
 		let emissions = self.document.runtime_model().contact_parameter_emissions();
-		let mut parameter_values = BTreeMap::<String, f32>::new();
+		let mut contact_parameter_values = BTreeMap::<String, f32>::new();
 		for emission in &emissions {
-			let value = parameter_values.entry(emission.parameter.clone()).or_insert(0.0);
+			let value = contact_parameter_values.entry(emission.parameter.clone()).or_insert(0.0);
 			*value = value.max(emission.value);
 		}
-		self.set_runtime_parameter_values(parameter_values);
+		let runtime_state = self.runtime_state_mut();
+		for (name, value) in contact_parameter_values {
+			runtime_state.parameter_values.insert(name, value);
+		}
 		emissions
 	}
 
@@ -7984,8 +7987,10 @@ mod tests {
 		document.unavatar.as_mut().unwrap().source = serde_json::json!({
 			"runtime": {"capabilities": ["contacts.parameter_emission"]}
 		});
+		document.runtime_model_mut().set_runtime_parameter_value("MenuToggle", 1.0);
 		let applied = document.runtime_model_mut().apply_contact_parameter_emissions();
 		assert_eq!(applied.len(), 2);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("MenuToggle"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
 	}
