@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+target
+src-tauri/target
+coverage
+*.log
+Cargo.lock
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
