@@ -228,6 +228,15 @@ export type RendererRuntimeActionRestoreBaselineCandidate = {
   baseline_value: unknown;
 };
 
+export type RendererRuntimeActionRestoreBaselineEntry = {
+  owner_key: string;
+  target_kind: string;
+  target_key: string;
+  baseline_value: unknown;
+  source_action_ids: string[];
+  source_effect_kinds: string[];
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -355,6 +364,7 @@ export type RendererRuntimeStatus = {
   runtime_action_target_write_collisions: RendererRuntimeActionTargetWriteCollision[];
   runtime_action_restore_readiness: RendererRuntimeActionRestoreReadiness[];
   runtime_action_restore_baseline_candidates: RendererRuntimeActionRestoreBaselineCandidate[];
+  runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
@@ -408,6 +418,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "runtime_action_target_write_collisions"
   | "runtime_action_restore_readiness"
   | "runtime_action_restore_baseline_candidates"
+  | "runtime_action_restore_baseline_capture_plan"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

@@ -387,6 +387,8 @@ struct DiagnoseActionSummary {
 	restore_readiness: Vec<un_avatar_core::UnaEvaluationRestoreReadiness>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	restore_baseline_candidates: Vec<un_avatar_core::UnaEvaluationRestoreBaselineCandidate>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	restore_baseline_capture_plan: Vec<un_avatar_core::UnaEvaluationRestoreBaselineEntry>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
 
@@ -3788,6 +3790,7 @@ fn build_diagnose_report(
 		target_write_collisions: actions.evaluation_target_write_collisions(),
 		restore_readiness: runtime_model.runtime_action_set_restore_readiness(actions),
 		restore_baseline_candidates: runtime_model.runtime_action_set_restore_baseline_candidates(actions),
+		restore_baseline_capture_plan: runtime_model.runtime_action_set_restore_baseline_capture_plan(actions),
 		actions: actions
 			.actions
 			.iter()
@@ -4467,13 +4470,14 @@ fn run_diagnose(
 	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} restore_baseline_candidates={} trigger_kinds={:?} effect_kinds={:?}",
+			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} restore_baseline_candidates={} restore_baseline_capture_plan={} trigger_kinds={:?} effect_kinds={:?}",
 			actions.action_count,
 			actions.trigger_count,
 			actions.effect_count,
 			actions.target_write_collisions.len(),
 			actions.restore_readiness.len(),
 			actions.restore_baseline_candidates.len(),
+			actions.restore_baseline_capture_plan.len(),
 			actions.trigger_kinds,
 			actions.effect_kinds
 		);
@@ -4501,6 +4505,17 @@ fn run_diagnose(
 			println!(
 				"action_restore_baseline_candidate: {}:{} target={:?}:{} value={}",
 				candidate.owner_key, candidate.effect_kind, candidate.target_kind, candidate.target_key, candidate.baseline_value
+			);
+		}
+		for entry in actions.restore_baseline_capture_plan.iter().take(16) {
+			println!(
+				"action_restore_baseline_capture: {} target={:?}:{} value={} actions={:?} effects={:?}",
+				entry.owner_key,
+				entry.target_kind,
+				entry.target_key,
+				entry.baseline_value,
+				entry.source_action_ids,
+				entry.source_effect_kinds
 			);
 		}
 		for action in actions.actions.iter().take(16) {

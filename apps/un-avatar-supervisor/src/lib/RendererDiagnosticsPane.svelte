@@ -72,6 +72,12 @@
   ): string {
     return `${candidate.owner_key}:${candidate.effect_kind} ${candidate.target_kind}:${candidate.target_key} value=${JSON.stringify(candidate.baseline_value)}`;
   }
+
+  function runtimeActionRestoreCaptureLabel(
+    entry: RendererRuntimeDiagnosticsData["runtime_action_restore_baseline_capture_plan"][number],
+  ): string {
+    return `${entry.owner_key} ${entry.target_kind}:${entry.target_key} value=${JSON.stringify(entry.baseline_value)} actions=${entry.source_action_ids.join(",")}`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -153,6 +159,12 @@
         <dt>{$_("renderers.details.diag_runtime_action_restore_baseline")}</dt>
         <dd class="stderr-block">
           {runtimeStatus.runtime_action_restore_baseline_candidates.slice(0, sampleLimit).map(runtimeActionRestoreBaselineLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.runtime_action_restore_baseline_capture_plan.length}
+        <dt>{$_("renderers.details.diag_runtime_action_restore_capture")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_action_restore_baseline_capture_plan.slice(0, sampleLimit).map(runtimeActionRestoreCaptureLabel).join("\n")}
         </dd>
       {/if}
     {/if}
