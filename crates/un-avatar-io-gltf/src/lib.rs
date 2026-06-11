@@ -14104,6 +14104,74 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_bone_proxy_resolves_avatar_root_and_root_relative_sub_path() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_head".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ProxyA".to_string()),
+					source_node_id: Some("node_proxy_a".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ProxyB".to_string()),
+					source_node_id: Some("node_proxy_b".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let humanoid = HumanoidProfile::default();
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [
+						{
+							"shortType": "ModularAvatarBoneProxy",
+							"enabled": true,
+							"target": {"nodeId": "node_proxy_a", "path": "ProxyA"},
+							"fields": {
+								"boneReference": "LastBone",
+								"subPath": "Head",
+								"attachmentMode": "AsChildAtRoot"
+							}
+						},
+						{
+							"shortType": "ModularAvatarBoneProxy",
+							"enabled": true,
+							"target": {"nodeId": "node_proxy_b", "path": "ProxyB"},
+							"fields": {
+								"boneReference": "LastBone",
+								"subPath": "$$AVATAR",
+								"attachmentMode": "AsChildAtRoot"
+							}
+						}
+					]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar_with_humanoid(&mut scene, &unavatar, &humanoid, &mut report);
+
+		assert_eq!(scene.nodes[1].children, vec![2]);
+		assert!(scene.nodes[0].children.contains(&3));
+		assert!(report.messages.iter().any(|m| m.contains("bone_proxy_applied=2")));
+	}
+
+	#[test]
 	fn modular_avatar_replace_object_moves_children_and_remaps_node_references() {
 		let mut scene = UnaSceneSnapshot {
 			skins: vec![UnaSkin {
