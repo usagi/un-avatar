@@ -107,6 +107,10 @@ pub(crate) struct RuntimeActionStatus {
 	pub(crate) parameter_name: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) parameter_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) condition_parameter_names: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) current_condition_state: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -607,7 +611,53 @@ fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a U
 	counts
 }
 
-fn runtime_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeActionStatus> {
+fn runtime_action_current_condition_state(
+	action: &un_avatar_core::UnaRuntimeAction,
+	scene: Option<&UnaSceneSnapshot>,
+	parameter_values: &BTreeMap<String, f32>,
+) -> Option<String> {
+	let mut saw_condition = false;
+	let mut saw_runtime_value = false;
+	let mut saw_inactive = false;
+	for condition in &action.conditions {
+		let Some(name) = condition.parameter_name.as_deref() else {
+			continue;
+		};
+		saw_condition = true;
+		let Some(value) = parameter_values.get(name).copied() else {
+			continue;
+		};
+		saw_runtime_value = true;
+		match action.parameter_condition_state_in_scene(scene, name, value) {
+			Some(true) => return Some("active".to_string()),
+			Some(false) => saw_inactive = true,
+			None => {}
+		}
+	}
+	if saw_inactive {
+		Some("inactive".to_string())
+	} else if saw_condition && !saw_runtime_value {
+		Some("missing_parameter".to_string())
+	} else {
+		None
+	}
+}
+
+fn runtime_action_condition_parameter_names(action: &un_avatar_core::UnaRuntimeAction) -> Vec<String> {
+	let mut names = BTreeSet::new();
+	for condition in &action.conditions {
+		if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
+			names.insert(name.to_string());
+		}
+	}
+	names.into_iter().collect()
+}
+
+fn runtime_action_statuses(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&UnaSceneSnapshot>,
+	parameter_values: &BTreeMap<String, f32>,
+) -> Vec<RuntimeActionStatus> {
 	let mut statuses = Vec::new();
 	for action in &actions.actions {
 		let mut status = RuntimeActionStatus {
@@ -615,6 +665,8 @@ fn runtime_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec
 			label: action.label.clone(),
 			effect_count: action.effects.len(),
 			effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+			condition_parameter_names: runtime_action_condition_parameter_names(action),
+			current_condition_state: runtime_action_current_condition_state(action, scene, parameter_values),
 			..Default::default()
 		};
 		for trigger in &action.triggers {
@@ -4033,7 +4085,7 @@ impl GpuState {
 		};
 		doc.runtime_model()
 			.runtime_actions()
-			.map(runtime_action_statuses)
+			.map(|actions| runtime_action_statuses(actions, doc.runtime_model().scene(), doc.runtime_model().runtime_parameter_values()))
 			.unwrap_or_default()
 	}
 

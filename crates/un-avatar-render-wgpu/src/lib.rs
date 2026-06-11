@@ -4672,6 +4672,8 @@ mod tests {
 				supervisor_command: Some("field_drape".to_string()),
 				parameter_name: Some("Outfit".to_string()),
 				parameter_value: Some(1.0),
+				condition_parameter_names: vec!["Outfit".to_string()],
+				current_condition_state: Some("active".to_string()),
 				wardrobe_set_id: Some("field_drape".to_string()),
 				effect_kinds: [
 					("node_visibility".to_string(), 1),
@@ -5117,6 +5119,18 @@ mod tests {
 			Some("field_drape")
 		);
 		assert_eq!(runtime_actions[0].get("effect_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(
+			runtime_actions[0]
+				.get("condition_parameter_names")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			runtime_actions[0].get("current_condition_state").and_then(|value| value.as_str()),
+			Some("active")
+		);
 		assert_eq!(
 			runtime_actions[0]
 				.get("effect_kinds")
