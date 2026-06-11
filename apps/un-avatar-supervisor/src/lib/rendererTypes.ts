@@ -201,6 +201,13 @@ export type RendererRuntimeActionStatus = {
   parameter_value?: number;
   condition_parameter_names?: string[];
   current_condition_state?: string;
+  target_writes?: {
+    owner_key: string;
+    action_id: string;
+    effect_kind: string;
+    target_kind: string;
+    target_key: string;
+  }[];
   node_visibility_effects?: {
     node_index?: number;
     source_node_id?: string;

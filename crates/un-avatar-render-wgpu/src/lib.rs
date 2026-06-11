@@ -4675,6 +4675,13 @@ mod tests {
 				condition_parameter_names: vec!["Outfit".to_string()],
 				current_condition_state: Some("active".to_string()),
 				wardrobe_set_id: Some("field_drape".to_string()),
+				target_writes: vec![un_avatar_core::UnaEvaluationRuntimeActionTargetWrite {
+					owner_key: "action:wardrobe:field_drape".to_string(),
+					action_id: "wardrobe:field_drape".to_string(),
+					effect_kind: "node_visibility".to_string(),
+					target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+					target_key: "Avatar/Coat".to_string(),
+				}],
 				node_visibility_effects: vec![crate::gpu::RuntimeActionNodeVisibilityEffectStatus {
 					node_index: Some(3),
 					path: Some("Avatar/Coat".to_string()),
@@ -5161,6 +5168,15 @@ mod tests {
 		assert_eq!(
 			runtime_actions[0].get("current_condition_state").and_then(|value| value.as_str()),
 			Some("active")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("target_writes")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("owner_key"))
+				.and_then(|value| value.as_str()),
+			Some("action:wardrobe:field_drape")
 		);
 		assert_eq!(
 			runtime_actions[0]

@@ -402,6 +402,8 @@ struct DiagnoseActionItemSummary {
 	conditions: Vec<DiagnoseActionConditionSummary>,
 	effect_kinds: BTreeMap<String, usize>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	target_writes: Vec<un_avatar_core::UnaEvaluationRuntimeActionTargetWrite>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	node_visibility_effects: Vec<DiagnoseActionNodeVisibilityEffect>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	material_property_effects: Vec<DiagnoseActionMaterialPropertyEffect>,
@@ -3794,6 +3796,7 @@ fn build_diagnose_report(
 					.map(str::to_string),
 				conditions: runtime_action_conditions(action.conditions.iter()),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
+				target_writes: action.evaluation_target_writes(),
 				node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
 				material_property_effects: runtime_action_material_property_effects(action.effects.iter()),
 				material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
@@ -4505,6 +4508,16 @@ fn run_diagnose(
 					.collect::<Vec<_>>()
 					.join(", ");
 				println!("action[{}].conditions: {}", action.id, conditions);
+			}
+			if !action.target_writes.is_empty() {
+				let writes = action
+					.target_writes
+					.iter()
+					.take(8)
+					.map(|write| format!("{}:{}={}", write.owner_key, write.effect_kind, write.target_key))
+					.collect::<Vec<_>>()
+					.join(", ");
+				println!("action[{}].target_writes: {}", action.id, writes);
 			}
 			if !action.node_visibility_effects.is_empty() {
 				let effects = action
@@ -6118,6 +6131,13 @@ mod tests {
 		);
 
 		let action = &report.actions.as_ref().unwrap().actions[0];
+		assert_eq!(action.target_writes.len(), 4);
+		assert_eq!(action.target_writes[0].owner_key, "action:variant:coat");
+		assert_eq!(
+			action.target_writes[0].target_kind,
+			un_avatar_core::UnaEvaluationTargetKind::MaterialProperty
+		);
+		assert_eq!(action.target_writes[0].target_key, "Coat:_Color");
 		assert_eq!(action.material_property_effects.len(), 2);
 		assert_eq!(action.material_property_effects[0].property_kind, "color");
 		assert_eq!(action.material_property_effects[0].material_name.as_deref(), Some("Coat"));

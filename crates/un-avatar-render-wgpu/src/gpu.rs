@@ -112,6 +112,8 @@ pub(crate) struct RuntimeActionStatus {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) current_condition_state: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) target_writes: Vec<un_avatar_core::UnaEvaluationRuntimeActionTargetWrite>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) node_visibility_effects: Vec<RuntimeActionNodeVisibilityEffectStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) material_property_effects: Vec<RuntimeActionMaterialPropertyEffectStatus>,
@@ -776,6 +778,7 @@ fn runtime_action_statuses(
 			current_condition_state: action
 				.current_parameter_condition_state(scene, parameter_values)
 				.map(str::to_string),
+			target_writes: action.evaluation_target_writes(),
 			node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
 			material_property_effects: runtime_action_material_property_effects(action.effects.iter()),
 			material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
@@ -6235,6 +6238,11 @@ mod tests {
 
 		let statuses = runtime_action_statuses(&actions, None, &Default::default());
 
+		assert_eq!(statuses[0].target_writes[0].owner_key, "action:variant:coat");
+		assert_eq!(
+			statuses[0].target_writes[0].target_kind,
+			un_avatar_core::UnaEvaluationTargetKind::NodeVisibility
+		);
 		assert_eq!(statuses[0].node_visibility_effects[0].path.as_deref(), Some("Avatar/Coat"));
 		assert_eq!(statuses[0].material_property_effects[0].property_kind, "scalar");
 		assert_eq!(statuses[0].material_property_effects[0].parameter, "_Cutoff");

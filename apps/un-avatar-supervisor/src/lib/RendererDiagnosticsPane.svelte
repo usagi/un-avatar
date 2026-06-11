@@ -44,6 +44,7 @@
     const state = action.current_condition_state ?? "unconditioned";
     const parameters = action.condition_parameter_names?.join(",") || action.parameter_name || "-";
     const targetCounts = [
+      action.target_writes?.length ? `writes=${action.target_writes.length}` : null,
       action.node_visibility_effects?.length ? `nodes=${action.node_visibility_effects.length}` : null,
       action.material_property_effects?.length ? `matProps=${action.material_property_effects.length}` : null,
       action.material_slot_effects?.length ? `matSlots=${action.material_slot_effects.length}` : null,
