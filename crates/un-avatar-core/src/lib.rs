@@ -2111,7 +2111,7 @@ pub struct UnaRuntimeSceneDynamics<'a> {
 	pub dynamics: UnaRuntimeDynamics<'a>,
 }
 
-const PHYSBONE_PARAMETER_SUFFIXES: &[&str] = &[
+pub const UNA_PHYSBONE_PARAMETER_SUFFIXES: &[&str] = &[
 	"_IsGrabbed",
 	"_Angle",
 	"_Stretch",
@@ -2521,7 +2521,7 @@ impl<'a> UnaRuntimeModel<'a> {
 			} else {
 				format!("physbone_interaction:{}", group.source_id)
 			};
-			for suffix in PHYSBONE_PARAMETER_SUFFIXES {
+			for suffix in UNA_PHYSBONE_PARAMETER_SUFFIXES {
 				add_runtime_parameter_definition_source(
 					&mut definitions,
 					&format!("{}{}", interaction.parameter, suffix),
@@ -7091,7 +7091,7 @@ mod tests {
 		};
 
 		let definitions = document.runtime_model().runtime_parameter_definitions();
-		assert_eq!(definitions.len(), PHYSBONE_PARAMETER_SUFFIXES.len());
+		assert_eq!(definitions.len(), UNA_PHYSBONE_PARAMETER_SUFFIXES.len());
 		let names = definitions.iter().map(|definition| definition.name.as_str()).collect::<Vec<_>>();
 		assert!(names.contains(&"HairPB_IsGrabbed"));
 		assert!(names.contains(&"HairPB_IsPosed"));

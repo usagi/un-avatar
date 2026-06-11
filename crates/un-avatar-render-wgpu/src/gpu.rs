@@ -330,6 +330,25 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsInteractionHookStatus {
+	pub(crate) group_index: usize,
+	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
+	pub(crate) authored_enabled: bool,
+	pub(crate) effective_enabled: bool,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) root_path: Option<String>,
+	pub(crate) allow_grabbing: bool,
+	pub(crate) allow_posing: bool,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) suffix_parameters: Vec<String>,
+	pub(crate) metadata_only: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub(crate) struct RuntimeDynamicsColliderStatus {
 	pub(crate) index: usize,
 	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
@@ -1203,6 +1222,47 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 					.map(|interaction| interaction.parameter.clone())
 					.unwrap_or_default(),
 			}
+		})
+		.collect()
+}
+
+fn dynamics_interaction_hook_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsInteractionHookStatus> {
+	let runtime_model = doc.runtime_model();
+	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
+	runtime_model
+		.dynamics()
+		.dynamics_groups()
+		.enumerate()
+		.take(DYNAMICS_GROUP_STATUS_LIMIT)
+		.filter_map(|(group_index, group)| {
+			let interaction = group.interaction?;
+			let allow_grabbing = interaction.allow_grabbing.unwrap_or(false);
+			let allow_posing = interaction.allow_posing.unwrap_or(false);
+			if !allow_grabbing && !allow_posing && interaction.parameter.is_empty() {
+				return None;
+			}
+			let suffix_parameters = if interaction.parameter.is_empty() {
+				Vec::new()
+			} else {
+				un_avatar_core::UNA_PHYSBONE_PARAMETER_SUFFIXES
+					.iter()
+					.map(|suffix| format!("{}{}", interaction.parameter, suffix))
+					.collect()
+			};
+			let root_node = group.chain.bone_node_indices.first().copied();
+			Some(RuntimeDynamicsInteractionHookStatus {
+				group_index,
+				source_kind: group.source_kind,
+				authored_enabled: group.authored_enabled,
+				effective_enabled: group.effective_enabled,
+				source_id: group.source_id.to_string(),
+				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				allow_grabbing,
+				allow_posing,
+				parameter: interaction.parameter.clone(),
+				suffix_parameters,
+				metadata_only: true,
+			})
 		})
 		.collect()
 }
@@ -4696,6 +4756,16 @@ impl GpuState {
 			return Vec::new();
 		};
 		dynamics_group_statuses(&doc)
+	}
+
+	pub(crate) fn dynamics_interaction_hooks(&self) -> Vec<RuntimeDynamicsInteractionHookStatus> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		dynamics_interaction_hook_statuses(&doc)
 	}
 
 	pub(crate) fn dynamics_colliders(&self) -> Vec<RuntimeDynamicsColliderStatus> {

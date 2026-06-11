@@ -593,6 +593,8 @@ struct DiagnoseDynamicsSummary {
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	constraint_refs: Vec<DiagnoseDynamicsConstraintRefSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	interaction_hooks: Vec<DiagnoseDynamicsInteractionHookSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
 }
 
@@ -659,6 +661,25 @@ struct DiagnoseDynamicsGroupSummary {
 	hit_radius_sample_min: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	hit_radius_sample_max: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsInteractionHookSummary {
+	group_index: usize,
+	source_kind: UnaDynamicsSourceKind,
+	enabled: bool,
+	source_enabled: bool,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	root_path: Option<String>,
+	allow_grabbing: bool,
+	allow_posing: bool,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	parameter: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	suffix_parameters: Vec<String>,
+	metadata_only: bool,
 }
 
 #[derive(Serialize)]
@@ -2083,6 +2104,52 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				hit_radius_sample_min,
 				hit_radius_sample_max,
 			}
+		})
+		.collect()
+}
+
+fn dynamics_interaction_hook_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsInteractionHookSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let groups = runtime.dynamics.groups();
+	if groups.is_empty() {
+		return Vec::new();
+	}
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	groups
+		.iter()
+		.enumerate()
+		.filter_map(|(group_index, group)| {
+			let interaction = group.interaction.as_ref()?;
+			let allow_grabbing = interaction.allow_grabbing.unwrap_or(false);
+			let allow_posing = interaction.allow_posing.unwrap_or(false);
+			if !allow_grabbing && !allow_posing && interaction.parameter.is_empty() {
+				return None;
+			}
+			let suffix_parameters = if interaction.parameter.is_empty() {
+				Vec::new()
+			} else {
+				un_avatar_core::UNA_PHYSBONE_PARAMETER_SUFFIXES
+					.iter()
+					.map(|suffix| format!("{}{}", interaction.parameter, suffix))
+					.collect()
+			};
+			let root_node = group.bone_node_indices.first().copied();
+			Some(DiagnoseDynamicsInteractionHookSummary {
+				group_index,
+				source_kind: group.source_kind,
+				enabled: runtime.dynamics.group_enabled(group),
+				source_enabled: group.enabled,
+				source_id: group.source_id.clone(),
+				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				allow_grabbing,
+				allow_posing,
+				parameter: interaction.parameter.clone(),
+				suffix_parameters,
+				metadata_only: true,
+			})
 		})
 		.collect()
 }
@@ -4124,6 +4191,7 @@ fn build_diagnose_report(
 	let dynamics_contact_probes = dynamics_contact_probe_summaries(&doc);
 	let dynamics_contact_parameter_emissions = dynamics_contact_parameter_emission_summaries(&doc);
 	let dynamics_constraint_refs = dynamics_constraint_ref_summaries(&doc);
+	let dynamics_interaction_hooks = dynamics_interaction_hook_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
 			"dynamics source_id {source_id:?} lowers to {count} runtime groups; wardrobe/action dynamics toggles may affect multiple chains"
@@ -4261,6 +4329,7 @@ fn build_diagnose_report(
 		contact_probes: dynamics_contact_probes,
 		contact_parameter_emissions: dynamics_contact_parameter_emissions,
 		constraint_refs: dynamics_constraint_refs,
+		interaction_hooks: dynamics_interaction_hooks,
 		groups: dynamics_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
@@ -5197,6 +5266,23 @@ fn run_diagnose(
 			limit,
 			interaction,
 			group.comment
+		);
+	}
+	for hook in report.dynamics.interaction_hooks.iter().take(16) {
+		let suffix_preview = hook.suffix_parameters.iter().take(3).cloned().collect::<Vec<_>>();
+		println!(
+			"  dynamics_interaction_hook[group={}]: source={:?} enabled={} id={:?} root={:?} grab={} pose={} parameter={:?} suffix_count={} suffix_preview={:?} metadata_only={}",
+			hook.group_index,
+			hook.source_kind,
+			hook.enabled,
+			hook.source_id,
+			hook.root_path.as_deref().unwrap_or("#"),
+			hook.allow_grabbing,
+			hook.allow_posing,
+			hook.parameter,
+			hook.suffix_parameters.len(),
+			suffix_preview,
+			hook.metadata_only
 		);
 	}
 	for contact in report.dynamics.contacts.iter().take(16) {
@@ -7267,6 +7353,19 @@ mod tests {
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
 		assert_eq!(report.dynamics.groups[0].interaction_parameter, "HairPB");
+		assert_eq!(report.dynamics.interaction_hooks.len(), 2);
+		assert_eq!(report.dynamics.interaction_hooks[0].group_index, 0);
+		assert_eq!(report.dynamics.interaction_hooks[0].parameter, "HairPB");
+		assert!(report.dynamics.interaction_hooks[0].allow_grabbing);
+		assert!(!report.dynamics.interaction_hooks[0].allow_posing);
+		assert!(report.dynamics.interaction_hooks[0].metadata_only);
+		assert!(report.dynamics.interaction_hooks[0]
+			.suffix_parameters
+			.iter()
+			.any(|parameter| parameter == "HairPB_IsGrabbed"));
+		assert_eq!(report.dynamics.interaction_hooks[1].group_index, 1);
+		assert!(report.dynamics.interaction_hooks[1].allow_posing);
+		assert!(report.dynamics.interaction_hooks[1].suffix_parameters.is_empty());
 		assert_eq!(report.dynamics.limit_group_count, 1);
 		assert_eq!(report.dynamics.angle_limit_group_count, 1);
 		assert_eq!(report.dynamics.stretch_limit_group_count, 1);

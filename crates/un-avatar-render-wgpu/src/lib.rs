@@ -1614,6 +1614,7 @@ impl AvatarApp {
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_interaction_hooks = gpu.map(|g| g.dynamics_interaction_hooks()).unwrap_or_default();
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 				status.dynamics_warnings = runtime_dynamics_warnings(&status);
@@ -3280,6 +3281,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_interaction_hooks: Vec<gpu::RuntimeDynamicsInteractionHookStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_colliders: Vec<gpu::RuntimeDynamicsColliderStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
@@ -3474,6 +3477,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		contact_parameter_emissions: Vec::new(),
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
+		dynamics_interaction_hooks: Vec::new(),
 		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
 		dynamics_warnings: Vec::new(),
@@ -5057,6 +5061,22 @@ mod tests {
 				allow_posing: Some(false),
 				interaction_parameter: "HairPB".to_string(),
 			}];
+			status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
+				group_index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				authored_enabled: false,
+				effective_enabled: true,
+				source_id: "physbone:hair".to_string(),
+				root_path: Some("root/hair".to_string()),
+				allow_grabbing: true,
+				allow_posing: false,
+				parameter: "HairPB".to_string(),
+				suffix_parameters: un_avatar_core::UNA_PHYSBONE_PARAMETER_SUFFIXES
+					.iter()
+					.map(|suffix| format!("HairPB{suffix}"))
+					.collect(),
+				metadata_only: true,
+			}];
 			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
 				index: 0,
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
@@ -5207,6 +5227,24 @@ mod tests {
 			dynamics_groups[0].get("hit_radius_sample_max").and_then(|value| value.as_f64()),
 			Some(0.04)
 		);
+		let interaction_hooks = snapshot
+			.get("dynamics_interaction_hooks")
+			.and_then(|value| value.as_array())
+			.expect("dynamics interaction hooks");
+		assert_eq!(interaction_hooks.len(), 1);
+		assert_eq!(
+			interaction_hooks[0].get("parameter").and_then(|value| value.as_str()),
+			Some("HairPB")
+		);
+		assert_eq!(
+			interaction_hooks[0].get("metadata_only").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		let suffix_parameters = interaction_hooks[0]
+			.get("suffix_parameters")
+			.and_then(|value| value.as_array())
+			.expect("suffix parameters");
+		assert!(suffix_parameters.iter().any(|value| value.as_str() == Some("HairPB_IsGrabbed")));
 		let dynamics_colliders = snapshot
 			.get("dynamics_colliders")
 			.and_then(|value| value.as_array())
