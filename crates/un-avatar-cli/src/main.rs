@@ -28,6 +28,8 @@ use un_avatar_io_una::{io_registry_with_una, read_una_any, UnaFileV0};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
 
+const DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT: usize = 24;
+
 #[derive(Serialize)]
 struct ConvertJsonReport {
 	import_format_id: String,
@@ -5337,7 +5339,7 @@ fn run_diagnose(
 		report.dynamics.source_posing_enabled_count,
 		report.dynamics.source_interaction_parameter_count
 	);
-	for group in report.dynamics.groups.iter().take(16) {
+	for group in report.dynamics.groups.iter().take(DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT) {
 		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {
 			(None, None, None, None) => String::new(),
 			(limit_type, max_angle_x, max_angle_z, max_stretch) => format!(
