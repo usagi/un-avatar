@@ -93,6 +93,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_wardrobe",
 	"activate_action",
 	"set_parameter",
+	"set_dynamics_enabled",
 	"set_expression_override",
 	"clear_expression_overrides",
 	"set_look_at",
@@ -236,6 +237,11 @@ enum RendererControlEvent {
 	SetParameter {
 		name: String,
 		value: f32,
+		result: CommandResultSlot,
+	},
+	SetDynamicsEnabled {
+		source_id: String,
+		enabled: bool,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -443,6 +449,11 @@ enum RendererControlCommand {
 		name: String,
 		#[serde(alias = "parameterValue")]
 		value: f32,
+	},
+	SetDynamicsEnabled {
+		#[serde(alias = "sourceId")]
+		source_id: String,
+		enabled: bool,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -698,6 +709,7 @@ impl RendererControlCommand {
 			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
 			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
 			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
+			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -2671,6 +2683,22 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(outcome.map(|_| ()));
 				}
 			}
+			RendererControlEvent::SetDynamicsEnabled {
+				source_id,
+				enabled,
+				result,
+			} => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_runtime_dynamics_enabled(&source_id, enabled),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
 			RendererControlEvent::SceneState { result } => {
 				let state = if self.startup_failed.is_some() {
 					SCENE_STATE_FAILED
@@ -3852,6 +3880,9 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			parameter_value,
 		),
 		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
+		Ok(RendererControlCommand::SetDynamicsEnabled { source_id, enabled }) => {
+			dispatch_set_dynamics_enabled_command(proxy, source_id, enabled)
+		}
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -3875,6 +3906,23 @@ fn dispatch_set_parameter_command(proxy: &EventLoopProxy<RendererControlEvent>, 
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_parameter")
+}
+
+fn dispatch_set_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlEvent>, source_id: String, enabled: bool) -> String {
+	let source_id = source_id.trim().to_string();
+	if source_id.is_empty() {
+		return "err dynamics source_id required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetDynamicsEnabled {
+		source_id,
+		enabled,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_dynamics_enabled")
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
@@ -5743,6 +5791,10 @@ mod tests {
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
 			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_parameter"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_dynamics_enabled"))));
 	}
 
 	#[test]
@@ -5940,6 +5992,17 @@ mod tests {
 		};
 		assert_eq!(name, "JacketColor");
 		assert_eq!(value, 1.0);
+	}
+
+	#[test]
+	fn parses_json_set_dynamics_enabled_control_command() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"set_dynamics_enabled","sourceId":"physbone:hair","enabled":true}"#).unwrap();
+		let RendererControlCommand::SetDynamicsEnabled { source_id, enabled } = command else {
+			panic!("expected set_dynamics_enabled command");
+		};
+		assert_eq!(source_id, "physbone:hair");
+		assert!(enabled);
 	}
 
 	#[test]

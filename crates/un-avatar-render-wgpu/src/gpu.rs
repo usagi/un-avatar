@@ -4871,7 +4871,7 @@ impl GpuState {
 		Ok(())
 	}
 
-	fn set_runtime_dynamics_enabled(&mut self, source_id: &str, enabled: bool) -> Result<(), String> {
+	pub(crate) fn set_runtime_dynamics_enabled(&mut self, source_id: &str, enabled: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
