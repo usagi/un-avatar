@@ -4727,6 +4727,12 @@ impl GpuState {
 		self.runtime_dynamics_physics = spring_bone_physics;
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
+		prepared
+			.document
+			.write()
+			.map_err(|_| "document: RwLock poisoned".to_string())?
+			.runtime_model_mut()
+			.apply_runtime_parameter_initial_values();
 		self.document = Some(prepared.document);
 		self.invalidate_applied_document_state();
 		self.scene_meshes = prepared.scene_meshes;

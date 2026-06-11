@@ -2205,6 +2205,13 @@ impl<'a> UnaRuntimeModel<'a> {
 		&self.runtime_state().parameter_values
 	}
 
+	pub fn runtime_parameter_initial_values(self) -> BTreeMap<String, f32> {
+		self.runtime_parameter_definitions()
+			.into_iter()
+			.filter_map(|definition| Some((definition.name, definition.default_value?)))
+			.collect()
+	}
+
 	pub fn runtime_parameter_definitions(self) -> Vec<UnaRuntimeParameterDefinition> {
 		let mut definitions = BTreeMap::<String, UnaRuntimeParameterDefinition>::new();
 		if let Some(actions) = self.runtime_actions() {
@@ -2630,6 +2637,20 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn set_runtime_parameter_values(&mut self, values: BTreeMap<String, f32>) {
 		self.runtime_state_mut().parameter_values.extend(values);
+	}
+
+	pub fn apply_runtime_parameter_initial_values(&mut self) -> BTreeMap<String, f32> {
+		let initial_values = self.document.runtime_model().runtime_parameter_initial_values();
+		let runtime_state = self.runtime_state_mut();
+		let mut applied = BTreeMap::new();
+		for (name, value) in initial_values {
+			if runtime_state.parameter_values.contains_key(&name) {
+				continue;
+			}
+			runtime_state.parameter_values.insert(name.clone(), value);
+			applied.insert(name, value);
+		}
+		applied
 	}
 
 	pub fn apply_contact_parameter_emissions(&mut self) -> Vec<UnaEvaluationContactParameterEmission> {
@@ -6742,6 +6763,53 @@ mod tests {
 		assert_eq!(conflicts.len(), 1);
 		assert_eq!(conflicts[0].name, "Hat");
 		assert_eq!(conflicts[0].reason, "contact_transient_overlaps_action_parameter");
+	}
+
+	#[test]
+	fn runtime_parameter_initial_values_apply_missing_modular_avatar_defaults() {
+		let mut document = UnaDocument {
+			runtime_state: UnaRuntimeState {
+				parameter_values: BTreeMap::from([("Existing".to_string(), 4.0)]),
+				..Default::default()
+			},
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [{
+							"shortType": "ModularAvatarParameters",
+							"fields": {
+								"parameters": [
+									{
+										"nameOrPrefix": "Existing",
+										"syncType": "Float",
+										"defaultValue": 2.0
+									},
+									{
+										"nameOrPrefix": "ExplicitZero",
+										"syncType": "Float",
+										"defaultValue": 0.0,
+										"hasExplicitDefaultValue": true
+									}
+								]
+							}
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(
+			document.runtime_model().runtime_parameter_initial_values(),
+			BTreeMap::from([("Existing".to_string(), 2.0), ("ExplicitZero".to_string(), 0.0)])
+		);
+		assert_eq!(
+			document.runtime_model_mut().apply_runtime_parameter_initial_values(),
+			BTreeMap::from([("ExplicitZero".to_string(), 0.0)])
+		);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("Existing"), Some(&4.0));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ExplicitZero"), Some(&0.0));
 	}
 
 	#[test]
