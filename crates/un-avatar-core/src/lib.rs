@@ -323,6 +323,8 @@ pub struct UnaEvaluationRestoreReadiness {
 	pub target_key: String,
 	pub restore_target: bool,
 	pub current_value_available: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub current_value: Option<Value>,
 	pub baseline_required: bool,
 	pub ready: bool,
 	pub reason: String,
@@ -1958,24 +1960,27 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	fn runtime_action_effect_restore_readiness(self, action_id: &str, effect: &UnaRuntimeActionEffect) -> UnaEvaluationRestoreReadiness {
 		let write = effect.evaluation_target_write(action_id);
-		let (restore_target, current_value_available, baseline_required, reason) = match effect {
-			UnaRuntimeActionEffect::WardrobeSet { .. } => (false, false, false, "not_restore_target"),
-			UnaRuntimeActionEffect::ExpressionWeight { .. } => (false, false, false, "not_restore_target"),
-			UnaRuntimeActionEffect::NodeVisibility { target, .. } => (
-				true,
-				self.node_visible(target).is_some(),
-				true,
-				if self.node_visible(target).is_some() {
-					"baseline_not_captured"
-				} else {
-					"target_unresolved"
-				},
-			),
-			UnaRuntimeActionEffect::MaterialColor { target, parameter, .. } => {
-				let available = self.material_color(target, parameter).is_some();
+		let (restore_target, current_value, baseline_required, reason) = match effect {
+			UnaRuntimeActionEffect::WardrobeSet { .. } => (false, None, false, "not_restore_target"),
+			UnaRuntimeActionEffect::ExpressionWeight { .. } => (false, None, false, "not_restore_target"),
+			UnaRuntimeActionEffect::NodeVisibility { target, .. } => {
+				let current_value = self.node_visible(target).map(Value::from);
+				let available = current_value.is_some();
 				(
 					true,
-					available,
+					current_value,
+					true,
+					if available { "baseline_not_captured" } else { "target_unresolved" },
+				)
+			}
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, .. } => {
+				let current_value = self
+					.material_color(target, parameter)
+					.map(|color| Value::Array(color.into_iter().map(Value::from).collect()));
+				let available = current_value.is_some();
+				(
+					true,
+					current_value,
 					true,
 					if available {
 						"baseline_not_captured"
@@ -1985,10 +1990,11 @@ impl<'a> UnaRuntimeModel<'a> {
 				)
 			}
 			UnaRuntimeActionEffect::MaterialScalar { target, parameter, .. } => {
-				let available = self.material_scalar(target, parameter).is_some();
+				let current_value = self.material_scalar(target, parameter).map(Value::from);
+				let available = current_value.is_some();
 				(
 					true,
-					available,
+					current_value,
 					true,
 					if available {
 						"baseline_not_captured"
@@ -1998,24 +2004,29 @@ impl<'a> UnaRuntimeModel<'a> {
 				)
 			}
 			UnaRuntimeActionEffect::MaterialSlot { target, .. } => {
-				let available = self.material_slot(target).is_some();
+				let current_value = self
+					.material_slot(target)
+					.map(|slot| slot.map_or(Value::Null, |index| Value::from(index as u64)));
+				let available = current_value.is_some();
 				(
 					true,
-					available,
+					current_value,
 					true,
 					if available { "baseline_not_captured" } else { "target_unresolved" },
 				)
 			}
 			UnaRuntimeActionEffect::DynamicsEnabled { source_id, .. } => {
-				let available = self.dynamics_enabled(source_id).is_some();
+				let current_value = self.dynamics_enabled(source_id).map(Value::from);
+				let available = current_value.is_some();
 				(
 					true,
-					available,
+					current_value,
 					true,
 					if available { "baseline_not_captured" } else { "target_unresolved" },
 				)
 			}
 		};
+		let current_value_available = current_value.is_some();
 		UnaEvaluationRestoreReadiness {
 			owner_key: write.owner_key,
 			action_id: write.action_id,
@@ -2024,6 +2035,7 @@ impl<'a> UnaRuntimeModel<'a> {
 			target_key: write.target_key,
 			restore_target,
 			current_value_available,
+			current_value,
 			baseline_required,
 			ready: false,
 			reason: reason.to_string(),
@@ -6085,12 +6097,16 @@ mod tests {
 		assert_eq!(readiness.len(), 6);
 		assert!(readiness[0].restore_target);
 		assert!(readiness[0].current_value_available);
+		assert_eq!(readiness[0].current_value, Some(Value::from(true)));
 		assert!(readiness[0].baseline_required);
 		assert!(!readiness[0].ready);
 		assert_eq!(readiness[0].reason, "baseline_not_captured");
 		assert_eq!(readiness[1].reason, "baseline_not_captured");
+		assert_eq!(readiness[1].current_value, Some(Value::from(0.0)));
 		assert_eq!(readiness[2].reason, "baseline_not_captured");
+		assert_eq!(readiness[2].current_value, Some(Value::from(0_u64)));
 		assert_eq!(readiness[3].reason, "baseline_not_captured");
+		assert_eq!(readiness[3].current_value, Some(Value::from(true)));
 		assert!(readiness[4].restore_target);
 		assert!(!readiness[4].current_value_available);
 		assert_eq!(readiness[4].reason, "target_unresolved");

@@ -213,6 +213,7 @@ export type RendererRuntimeActionRestoreReadiness = {
   target_key: string;
   restore_target: boolean;
   current_value_available: boolean;
+  current_value?: unknown;
   baseline_required: boolean;
   ready: boolean;
   reason: string;

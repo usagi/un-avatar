@@ -4745,6 +4745,7 @@ mod tests {
 				target_key: "Avatar/Coat".to_string(),
 				restore_target: true,
 				current_value_available: true,
+				current_value: Some(serde_json::Value::from(true)),
 				baseline_required: true,
 				ready: false,
 				reason: "baseline_not_captured".to_string(),
