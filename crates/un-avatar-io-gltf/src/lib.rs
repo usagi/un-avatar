@@ -4882,9 +4882,9 @@ fn apply_unavatar_remove_vertex_color(
 }
 
 #[derive(Clone, Debug)]
-struct ModularAvatarBlendShapeVertexFilter {
-	shapes: Vec<String>,
-	threshold: f32,
+enum ModularAvatarVertexFilter {
+	BlendShape { shapes: Vec<String>, threshold: f32 },
+	Axis { center: [f32; 3], axis: [f32; 3] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4898,7 +4898,7 @@ enum ModularAvatarVertexFilterCombine {
 struct ModularAvatarVertexFilterDeleteGroup {
 	target: usize,
 	combine: ModularAvatarVertexFilterCombine,
-	filters: Vec<ModularAvatarBlendShapeVertexFilter>,
+	filters: Vec<ModularAvatarVertexFilter>,
 }
 
 fn modular_avatar_component_value<'a>(component: &'a Value, names: &[&str]) -> Option<&'a Value> {
@@ -5285,7 +5285,7 @@ fn modular_avatar_mesh_cutter_combine(component: &Value) -> ModularAvatarVertexF
 	}
 }
 
-fn modular_avatar_vertex_filter_by_shape(component: &Value) -> Option<ModularAvatarBlendShapeVertexFilter> {
+fn modular_avatar_vertex_filter_by_shape(component: &Value) -> Option<ModularAvatarVertexFilter> {
 	let shapes = modular_avatar_component_value(component, &["Shapes", "shapes", "m_shapes"])
 		.and_then(Value::as_array)
 		.map(|values| {
@@ -5300,9 +5300,16 @@ fn modular_avatar_vertex_filter_by_shape(component: &Value) -> Option<ModularAva
 	if shapes.is_empty() {
 		return None;
 	}
-	Some(ModularAvatarBlendShapeVertexFilter {
+	Some(ModularAvatarVertexFilter::BlendShape {
 		shapes,
 		threshold: modular_avatar_component_f32(component, &["Threshold", "threshold", "m_threshold"]).unwrap_or(0.001),
+	})
+}
+
+fn modular_avatar_vertex_filter_by_axis(component: &Value) -> Option<ModularAvatarVertexFilter> {
+	Some(ModularAvatarVertexFilter::Axis {
+		center: json_vec3(modular_avatar_component_value(component, &["Center", "center", "m_center"])).unwrap_or([0.0; 3]),
+		axis: json_vec3(modular_avatar_component_value(component, &["Axis", "axis", "m_axis"])).unwrap_or([0.0, 1.0, 0.0]),
 	})
 }
 
@@ -5350,7 +5357,7 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 				groups.push(ModularAvatarVertexFilterDeleteGroup {
 					target,
 					combine: ModularAvatarVertexFilterCombine::Single,
-					filters: vec![ModularAvatarBlendShapeVertexFilter {
+					filters: vec![ModularAvatarVertexFilter::BlendShape {
 						shapes: vec![shape_name],
 						threshold,
 					}],
@@ -5370,13 +5377,18 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 		else {
 			continue;
 		};
-		let mut blend_shape_filters = Vec::new();
+		let mut vertex_filters = Vec::new();
 		let mut has_unsupported = false;
 		for filter in filters {
 			match filter.get("shortType").and_then(Value::as_str) {
 				Some("VertexFilterByShapeComponent") => {
 					if let Some(filter) = modular_avatar_vertex_filter_by_shape(filter) {
-						blend_shape_filters.push(filter);
+						vertex_filters.push(filter);
+					}
+				}
+				Some("VertexFilterByAxisComponent") => {
+					if let Some(filter) = modular_avatar_vertex_filter_by_axis(filter) {
+						vertex_filters.push(filter);
 					}
 				}
 				Some(_) => has_unsupported = true,
@@ -5387,26 +5399,26 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 			unsupported += 1;
 			continue;
 		}
-		if blend_shape_filters.is_empty() {
+		if vertex_filters.is_empty() {
 			continue;
 		}
 		groups.push(ModularAvatarVertexFilterDeleteGroup {
 			target,
-			combine: if blend_shape_filters.len() == 1 {
+			combine: if vertex_filters.len() == 1 {
 				ModularAvatarVertexFilterCombine::Single
 			} else {
 				modular_avatar_mesh_cutter_combine(component)
 			},
-			filters: blend_shape_filters,
+			filters: vertex_filters,
 		});
 	}
 	(groups, missing, skipped, unsupported)
 }
 
-fn modular_avatar_blend_shape_filter_mask(primitive: &UnaMeshBuffers, filter: &ModularAvatarBlendShapeVertexFilter) -> Vec<bool> {
+fn modular_avatar_blend_shape_filter_mask(primitive: &UnaMeshBuffers, shapes: &[String], threshold: f32) -> Vec<bool> {
 	let mut mask = vec![false; primitive.positions.len()];
-	let threshold_sq = filter.threshold * filter.threshold;
-	for shape in &filter.shapes {
+	let threshold_sq = threshold * threshold;
+	for shape in shapes {
 		let Some(shape_index) = primitive.morph_target_names.iter().position(|name| name == shape) else {
 			continue;
 		};
@@ -5423,16 +5435,36 @@ fn modular_avatar_blend_shape_filter_mask(primitive: &UnaMeshBuffers, filter: &M
 	mask
 }
 
+fn modular_avatar_axis_filter_mask(primitive: &UnaMeshBuffers, center: [f32; 3], axis: [f32; 3]) -> Vec<bool> {
+	primitive
+		.positions
+		.iter()
+		.map(|position| {
+			let offset = [position[0] - center[0], position[1] - center[1], position[2] - center[2]];
+			axis[0] * offset[0] + axis[1] * offset[1] + axis[2] * offset[2] > 0.0
+		})
+		.collect()
+}
+
+fn modular_avatar_single_vertex_filter_mask(primitive: &UnaMeshBuffers, filter: &ModularAvatarVertexFilter) -> Vec<bool> {
+	match filter {
+		ModularAvatarVertexFilter::BlendShape { shapes, threshold } => {
+			modular_avatar_blend_shape_filter_mask(primitive, shapes, *threshold)
+		}
+		ModularAvatarVertexFilter::Axis { center, axis } => modular_avatar_axis_filter_mask(primitive, *center, *axis),
+	}
+}
+
 fn modular_avatar_vertex_filter_mask(primitive: &UnaMeshBuffers, group: &ModularAvatarVertexFilterDeleteGroup) -> Vec<bool> {
 	let mut filters = group.filters.iter();
 	let Some(first) = filters.next() else {
 		return vec![false; primitive.positions.len()];
 	};
-	let mut mask = modular_avatar_blend_shape_filter_mask(primitive, first);
+	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, first);
 	match group.combine {
 		ModularAvatarVertexFilterCombine::Single | ModularAvatarVertexFilterCombine::Union => {
 			for filter in filters {
-				let next = modular_avatar_blend_shape_filter_mask(primitive, filter);
+				let next = modular_avatar_single_vertex_filter_mask(primitive, filter);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target || value;
 				}
@@ -5440,7 +5472,7 @@ fn modular_avatar_vertex_filter_mask(primitive: &UnaMeshBuffers, group: &Modular
 		}
 		ModularAvatarVertexFilterCombine::Intersection => {
 			for filter in filters {
-				let next = modular_avatar_blend_shape_filter_mask(primitive, filter);
+				let next = modular_avatar_single_vertex_filter_mask(primitive, filter);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target && value;
 				}
@@ -12677,6 +12709,55 @@ mod tests {
 		assert_eq!(scene.nodes[2].mesh, Some(0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[0, 1, 2, 1, 3, 2][..]));
 		assert_eq!(scene.meshes[1][0].indices.as_deref(), Some(&[0, 1, 2][..]));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_deletes_axis_selected_triangles() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![test_blend_shape_delete_primitive()]],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"enabled": true,
+			"fields": {
+				"m_object": {"nodeId": "node_target", "path": "Root/TargetRenderer"},
+				"m_multiMode": "VertexIntersection",
+				"filters": [{
+					"shortType": "VertexFilterByAxisComponent",
+					"fields": {
+						"m_center": [0.0, 0.5, 0.0],
+						"m_axis": [0.0, 1.0, 0.0]
+					}
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let (nodes, primitives, triangles, missing, skipped, unsupported) =
+			apply_unavatar_vertex_filters(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 2, 0, 0, 0));
+		assert_eq!(scene.nodes[1].mesh, Some(0));
+		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[][..]));
 	}
 
 	#[test]

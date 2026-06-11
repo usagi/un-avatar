@@ -113,8 +113,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Exporter serializes `Bounds` as structured center/extents/size. Runtime applies RootBone override to skin skeleton metadata, stores ProbeAnchor / Bounds on target renderer nodes, and exposes them in renderer debug metadata.
   - remaining: exact renderer culling behavior, inverted root bone behavior, and unskinned mesh conversion.
 - `[~]` MA Mesh Cutter
-  - done: Mesh Cutter / VertexFilter component payloads are classified as resolver-capable metadata and diagnose exposes a common vertex filter group representation with target, combine mode, and blendshape / mask / bone / axis filter summaries when the source payload carries them. Runtime resolver applies blendshape-based Mesh Cutter filters by selecting vertices whose morph target position delta exceeds the MA threshold and removing any triangle that references a selected vertex, cloning shared meshes before mutation.
-  - remaining: mask / bone / axis filter execution, generated mesh cache key detail, and dynamic reactive gating beyond enabled static payloads.
+  - done: Mesh Cutter / VertexFilter component payloads are classified as resolver-capable metadata and diagnose exposes a common vertex filter group representation with target, combine mode, and blendshape / mask / bone / axis filter summaries when the source payload carries them. Runtime resolver applies blendshape-based Mesh Cutter filters by selecting vertices whose morph target position delta exceeds the MA threshold, applies axis filters with the same `dot(axis, vertex-center) > 0` predicate used by Modular Avatar for mesh-space vertices, and removes any triangle that references a selected vertex, cloning shared meshes before mutation.
+  - remaining: mask / bone filter execution, SkinnedMeshRenderer BakeMesh-equivalent axis evaluation, generated mesh cache key detail, and dynamic reactive gating beyond enabled static payloads.
 - `[~]` MA Shape Changer
   - done: Shape Changer delete-shape payloads are represented as blendshape vertex filters with threshold metadata in diagnose. Runtime resolver applies delete-shape payloads with the same blendshape vertex selection and triangle removal path as Mesh Cutter.
   - remaining: Set-mode morph defaults, Blendshape Sync propagation, and dynamic reactive gating beyond enabled static payloads.
@@ -122,8 +122,8 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
   - done: Runtime resolver applies `Mode=Remove` to renderer meshes under the nearest Remove Vertex Color component, honors nested `DontRemove`, strips `colors_0`, clones shared mesh buffers before mutation so subtree-external renderers keep their vertex colors, and reports removed node / primitive counts.
   - remaining: exporter schema parity for every serialized mode spelling and fixture coverage through full `.unavatar` import/export.
 - `[~]` vertex filters: by blendshape, mask, bone, axis
-  - done: common filter representation exists in core and diagnose metadata for blendshape, mask, bone, and axis filters.
-  - remaining: resolver-side vertex selection and mesh mutation.
+  - done: common filter representation exists in core and diagnose metadata for blendshape, mask, bone, and axis filters. Resolver-side vertex selection and mesh mutation exists for blendshape and mesh-space axis filters.
+  - remaining: mask / bone filter mutation, SkinnedMeshRenderer BakeMesh-equivalent axis evaluation, and dynamic reactive gating.
 
 ### Materials / Reactive Objects
 
