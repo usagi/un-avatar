@@ -84,6 +84,7 @@ namespace UNAvatar.UnityExporter
                         ["pull"] = group.TryGetValue("pull", out var pull) ? pull : 0.0f,
                         ["gravity"] = group.TryGetValue("gravity", out var gravity) ? gravity : new List<object>(),
                         ["radius"] = group.TryGetValue("radius", out var radius) ? radius : 0.0f,
+                        ["radiusCurveKeyCount"] = SourceCurveKeyCount(group, "radiusCurve"),
                         ["limit"] = SourceLimitSample(group),
                         ["interaction"] = SourceInteractionSample(group)
                     });
@@ -136,8 +137,21 @@ namespace UNAvatar.UnityExporter
                 ["limitType"] = sourceParams != null && sourceParams.TryGetValue("limitType", out var limitType) ? limitType : "",
                 ["maxAngleX"] = sourceParams != null && sourceParams.TryGetValue("maxAngleX", out var maxAngleX) ? maxAngleX : 0.0f,
                 ["maxAngleZ"] = sourceParams != null && sourceParams.TryGetValue("maxAngleZ", out var maxAngleZ) ? maxAngleZ : 0.0f,
-                ["maxStretch"] = sourceParams != null && sourceParams.TryGetValue("maxStretch", out var maxStretch) ? maxStretch : 0.0f
+                ["maxStretch"] = sourceParams != null && sourceParams.TryGetValue("maxStretch", out var maxStretch) ? maxStretch : 0.0f,
+                ["maxStretchCurveKeyCount"] = SourceCurveKeyCount(group, "maxStretchCurve")
             };
+        }
+
+        private static int SourceCurveKeyCount(Dictionary<string, object> group, string curveName)
+        {
+            var sourceParams = SourceParams(group);
+            if (sourceParams == null ||
+                !sourceParams.TryGetValue(curveName, out var rawCurve) ||
+                !(rawCurve is Dictionary<string, object> curve))
+            {
+                return 0;
+            }
+            return curve.TryGetValue("keyCount", out var keyCount) && keyCount is int intKeyCount ? intKeyCount : 0;
         }
 
         private static Dictionary<string, object> SourceInteractionSample(Dictionary<string, object> group)
@@ -293,12 +307,26 @@ namespace UNAvatar.UnityExporter
                 ["gravityFalloff"] = ReadFloatMember(type, component, "gravityFalloff", 0.0f),
                 ["immobile"] = ReadFloatMember(type, component, "immobile", 0.0f),
                 ["radius"] = ReadFloatMember(type, component, "radius", 0.02f),
+                ["pullCurve"] = ReadAnimationCurveMember(type, component, "pullCurve"),
+                ["springCurve"] = ReadAnimationCurveMember(type, component, "springCurve"),
+                ["stiffnessCurve"] = ReadAnimationCurveMember(type, component, "stiffnessCurve"),
+                ["gravityCurve"] = ReadAnimationCurveMember(type, component, "gravityCurve"),
+                ["gravityFalloffCurve"] = ReadAnimationCurveMember(type, component, "gravityFalloffCurve"),
+                ["immobileCurve"] = ReadAnimationCurveMember(type, component, "immobileCurve"),
+                ["radiusCurve"] = ReadAnimationCurveMember(type, component, "radiusCurve"),
                 ["endpointPosition"] = Vector3Json(ReadVector3Member(type, component, "endpointPosition", Vector3.zero)),
                 ["multiChildType"] = ReadMember(type, component, "multiChildType")?.ToString() ?? "",
                 ["maxStretch"] = ReadFloatMember(type, component, "maxStretch", 0.0f),
                 ["limitType"] = ReadMember(type, component, "limitType")?.ToString() ?? "",
                 ["maxAngleX"] = ReadFloatMember(type, component, "maxAngleX", 0.0f),
                 ["maxAngleZ"] = ReadFloatMember(type, component, "maxAngleZ", 0.0f),
+                ["maxAngleXCurve"] = ReadAnimationCurveMember(type, component, "maxAngleXCurve"),
+                ["maxAngleZCurve"] = ReadAnimationCurveMember(type, component, "maxAngleZCurve"),
+                ["maxStretchCurve"] = ReadAnimationCurveMember(type, component, "maxStretchCurve"),
+                ["maxSquish"] = ReadFloatMember(type, component, "maxSquish", 0.0f),
+                ["maxSquishCurve"] = ReadAnimationCurveMember(type, component, "maxSquishCurve"),
+                ["stretchMotion"] = ReadFloatMember(type, component, "stretchMotion", 0.0f),
+                ["stretchMotionCurve"] = ReadAnimationCurveMember(type, component, "stretchMotionCurve"),
                 ["allowCollision"] = ReadBoolMember(type, component, "allowCollision", false),
                 ["allowGrabbing"] = ReadBoolMember(type, component, "allowGrabbing", false),
                 ["allowPosing"] = ReadBoolMember(type, component, "allowPosing", false),
@@ -509,6 +537,11 @@ namespace UNAvatar.UnityExporter
         {
             var value = ReadMember(type, instance, name);
             return value is Quaternion quaternion && IsFinite(quaternion) ? quaternion : fallback;
+        }
+
+        private static object ReadAnimationCurveMember(Type type, object instance, string name)
+        {
+            return AnimationCurveToJson(ReadMember(type, instance, name) as AnimationCurve);
         }
 
         private static float ReadFloatMember(Type type, object instance, string name, float fallback)
