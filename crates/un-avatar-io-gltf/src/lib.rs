@@ -1614,12 +1614,23 @@ fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
 }
 
 fn unavatar_dynamics_collider_shape(value: &Value) -> UnaDynamicsColliderShape {
-	let shape = value
+	let shape_value = value
 		.get("shapeType")
 		.or_else(|| value.get("shape_type"))
-		.or_else(|| value.get("shape"))
-		.and_then(Value::as_str)
-		.unwrap_or("");
+		.or_else(|| value.get("shape"));
+	if matches!(shape_value.and_then(Value::as_u64), Some(0)) {
+		return UnaDynamicsColliderShape::Sphere;
+	}
+	if matches!(shape_value.and_then(Value::as_u64), Some(1)) {
+		return UnaDynamicsColliderShape::Capsule;
+	}
+	let shape = shape_value.and_then(Value::as_str).unwrap_or("");
+	if shape == "0" {
+		return UnaDynamicsColliderShape::Sphere;
+	}
+	if shape == "1" {
+		return UnaDynamicsColliderShape::Capsule;
+	}
 	if shape.eq_ignore_ascii_case("sphere") {
 		UnaDynamicsColliderShape::Sphere
 	} else if shape.eq_ignore_ascii_case("capsule") {
@@ -9553,9 +9564,14 @@ mod tests {
 							"insideBounds": false
 						}, {
 							"root": {"nodeId": "node_root", "path": "Root"},
-							"shapeType": "Sphere",
+							"shapeType": 0,
 							"radius": 0.2,
 							"insideBounds": true
+						}, {
+							"root": {"nodeId": "node_root", "path": "Root"},
+							"shapeType": "1",
+							"radius": 0.06,
+							"height": 0.4
 						}]
 					}
 				}, {
@@ -9598,7 +9614,7 @@ mod tests {
 		assert_eq!(interaction.allow_grabbing, Some(true));
 		assert_eq!(interaction.allow_posing, Some(false));
 		assert_eq!(interaction.parameter, "HairPB");
-		assert_eq!(settings.colliders.len(), 3);
+		assert_eq!(settings.colliders.len(), 4);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::Unknown);
 		assert_eq!(settings.colliders[0].node, 0);
 		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Sphere);
@@ -9613,6 +9629,9 @@ mod tests {
 		assert!(!settings.colliders[1].inside_bounds);
 		assert_eq!(settings.colliders[2].radius, 0.2);
 		assert!(settings.colliders[2].inside_bounds);
+		assert_eq!(settings.colliders[3].shape, UnaDynamicsColliderShape::Capsule);
+		assert_eq!(settings.colliders[3].radius, 0.06);
+		assert_eq!(settings.colliders[3].height, 0.4);
 		assert_eq!(settings.contacts.len(), 1);
 		assert_eq!(settings.contacts[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.contacts[0].kind, UnaDynamicsContactKind::Receiver);
