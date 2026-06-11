@@ -2131,11 +2131,10 @@ fn unavatar_dynamics_settings(
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
 		let limit = unavatar_dynamics_limit(item);
 		let interaction = unavatar_dynamics_interaction(item);
+		let source_params = unavatar_dynamics_source_params(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
-			item.get("ignoreTransforms")
-				.or_else(|| item.get("ignore_transforms"))
-				.or_else(|| item.get("ignoredTransforms"))
-				.or_else(|| item.get("ignored_transforms")),
+			unavatar_dynamics_source_value(item, source_params, "ignoreTransforms", "ignore_transforms")
+				.or_else(|| unavatar_dynamics_source_value(item, source_params, "ignoredTransforms", "ignored_transforms")),
 			&node_ids,
 			&registry_paths,
 			&paths,
@@ -9944,6 +9943,47 @@ mod tests {
 			.messages
 			.iter()
 			.any(|warning| warning.contains("ignored endpointPosition on 1 non-leaf PhysBone root")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_synthesizes_endpoint_when_all_children_are_ignored() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_ignored", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_ignored", "path": "Root/Ignored"}
+				],
+				"dynamics": [{
+					"id": "ignored_child_leaf_tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"ignoreTransforms": [{"nodeId": "node_ignored", "path": "Root/Ignored"}],
+						"endpointPosition": [0.0, 0.25, 0.0]
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(scene.nodes.len(), 3);
+		assert_eq!(scene.nodes[0].children, vec![1, 2]);
+		let (_, _, endpoint_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		assert_eq!(endpoint_translation.to_array(), [-0.0, 0.25, 0.0]);
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 2]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
