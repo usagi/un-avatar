@@ -4725,6 +4725,7 @@ mod tests {
 				value_samples: vec![1.0],
 				current_value: Some(1.0),
 				transient: false,
+				..Default::default()
 			}];
 			status.runtime_parameter_conflicts = vec![un_avatar_core::UnaRuntimeParameterConflict {
 				name: "ContactHand".to_string(),

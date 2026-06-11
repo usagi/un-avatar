@@ -209,6 +209,22 @@ pub struct UnaRuntimeAction {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeParameterDefinition {
 	pub name: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub remap_to: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sync_type: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub default_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub has_explicit_default_value: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub local_only: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub saved: Option<bool>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub internal_parameter: bool,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub is_prefix: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub owner_keys: Vec<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1922,6 +1938,91 @@ fn add_runtime_parameter_definition_source(
 	definition.transient |= transient;
 }
 
+fn add_modular_avatar_parameter_definition(
+	definitions: &mut BTreeMap<String, UnaRuntimeParameterDefinition>,
+	component_index: usize,
+	parameter: &Value,
+) {
+	const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
+
+	let Some(name) = parameter
+		.get("nameOrPrefix")
+		.or_else(|| parameter.get("name_or_prefix"))
+		.or_else(|| parameter.get("name"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+	else {
+		return;
+	};
+	let owner_key = format!("modular_avatar_parameter:{component_index}:{name}");
+	add_runtime_parameter_definition_source(definitions, name, &owner_key, "modular_avatar_parameter", None, false);
+	let Some(definition) = definitions.get_mut(name) else {
+		return;
+	};
+	definition.remap_to = parameter
+		.get("remapTo")
+		.or_else(|| parameter.get("remap_to"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.or(definition.remap_to.take());
+	definition.sync_type = parameter
+		.get("syncType")
+		.or_else(|| parameter.get("sync_type"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string)
+		.or_else(|| definition.sync_type.take())
+		.or_else(|| Some("NotSynced".to_string()));
+	let has_explicit_default_value = json_bool(
+		parameter
+			.get("hasExplicitDefaultValue")
+			.or_else(|| parameter.get("has_explicit_default_value")),
+	);
+	definition.has_explicit_default_value |= has_explicit_default_value;
+	if let Some(default_value) = parameter
+		.get("defaultValue")
+		.or_else(|| parameter.get("default_value"))
+		.and_then(json_number_f32)
+		.filter(|default_value| has_explicit_default_value || default_value.abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON)
+	{
+		definition.default_value = Some(default_value);
+		if !definition
+			.value_samples
+			.iter()
+			.any(|existing| (*existing - default_value).abs() <= f32::EPSILON)
+		{
+			definition.value_samples.push(default_value);
+		}
+	}
+	definition.local_only = Some(json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))));
+	definition.saved = Some(json_bool(parameter.get("saved")));
+	definition.internal_parameter |= json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter")));
+	definition.is_prefix |= json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix")));
+}
+
+fn modular_avatar_parameter_values(component: &Value) -> impl Iterator<Item = &Value> {
+	component
+		.get("fields")
+		.and_then(|fields| fields.get("parameters"))
+		.or_else(|| component.get("parameters"))
+		.and_then(Value::as_array)
+		.into_iter()
+		.flatten()
+}
+
+fn json_bool(value: Option<&Value>) -> bool {
+	value.and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn json_number_f32(value: &Value) -> Option<f32> {
+	match value {
+		Value::Number(number) => number.as_f64().map(|value| value as f32),
+		Value::String(value) => value.parse::<f32>().ok(),
+		_ => None,
+	}
+}
+
 impl<'a> UnaRuntimeSceneDynamics<'a> {
 	pub fn contact_probes(self) -> Vec<UnaEvaluationContactProbe> {
 		let world = scene_world_matrices(self.scene);
@@ -2129,6 +2230,24 @@ impl<'a> UnaRuntimeModel<'a> {
 							false,
 						);
 					}
+				}
+			}
+		}
+		if let Some(components) = self
+			.document
+			.unavatar
+			.as_ref()
+			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
+			.and_then(|modular_avatar| modular_avatar.get("components"))
+			.and_then(Value::as_array)
+		{
+			for (component_index, component) in components.iter().enumerate() {
+				let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
+				if short_type != "ModularAvatarParameters" {
+					continue;
+				}
+				for parameter in modular_avatar_parameter_values(component) {
+					add_modular_avatar_parameter_definition(&mut definitions, component_index, parameter);
 				}
 			}
 		}
@@ -6529,6 +6648,26 @@ mod tests {
 					},
 				],
 			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [{
+							"shortType": "ModularAvatarParameters",
+							"fields": {
+								"parameters": [{
+									"nameOrPrefix": "Hat",
+									"remapTo": "Hat_Remapped",
+									"syncType": "Bool",
+									"defaultValue": 1.0,
+									"localOnly": false,
+									"saved": true
+								}]
+							}
+						}]
+					}
+				}),
+			}),
 			spring_bones: Some(UnaSpringBoneSettings {
 				contacts: vec![UnaDynamicsContact {
 					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
@@ -6554,10 +6693,17 @@ mod tests {
 				"action_condition".to_string(),
 				"action_trigger".to_string(),
 				"contact_receiver".to_string(),
+				"modular_avatar_parameter".to_string(),
 				"runtime_state".to_string()
 			]
 		);
 		assert_eq!(definitions[0].value_samples, vec![0.0, 1.0]);
+		assert_eq!(definitions[0].remap_to.as_deref(), Some("Hat_Remapped"));
+		assert_eq!(definitions[0].sync_type.as_deref(), Some("Bool"));
+		assert_eq!(definitions[0].default_value, Some(1.0));
+		assert!(!definitions[0].has_explicit_default_value);
+		assert_eq!(definitions[0].local_only, Some(false));
+		assert_eq!(definitions[0].saved, Some(true));
 		assert!(definitions[0].transient);
 		let conflicts = document.runtime_model().runtime_parameter_conflicts();
 		assert_eq!(conflicts.len(), 1);
