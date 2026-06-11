@@ -1883,6 +1883,49 @@ impl<'a> UnaRuntimeModel<'a> {
 		&self.runtime_state().parameter_values
 	}
 
+	pub fn node_visible(self, target: &UnaRuntimeNodeTarget) -> Option<bool> {
+		let scene = self.document.scene.as_ref()?;
+		let index = resolve_runtime_node_target(scene, target)?;
+		scene.nodes.get(index).map(|node| node.visible)
+	}
+
+	pub fn material_color(self, target: &UnaRuntimeMaterialTarget, parameter: &str) -> Option<[f32; 4]> {
+		let material = self.resolve_material(target)?;
+		read_runtime_material_color(material, parameter)
+	}
+
+	pub fn material_scalar(self, target: &UnaRuntimeMaterialTarget, parameter: &str) -> Option<f32> {
+		let material = self.resolve_material(target)?;
+		read_runtime_material_scalar(material, parameter)
+	}
+
+	pub fn material_slot(self, target: &UnaRuntimeMaterialSlotTarget) -> Option<Option<usize>> {
+		let scene = self.document.scene.as_ref()?;
+		let node_index = resolve_runtime_node_target(scene, &target.node)?;
+		let mesh_index = scene.nodes.get(node_index).and_then(|node| node.mesh)?;
+		let primitive_index = target.primitive_index.unwrap_or(0);
+		scene
+			.meshes
+			.get(mesh_index)
+			.and_then(|mesh| mesh.get(primitive_index))
+			.map(|primitive| primitive.material_index)
+	}
+
+	pub fn dynamics_enabled(self, source_id: &str) -> Option<bool> {
+		self.dynamics()
+			.dynamics_groups()
+			.find(|group| group.source_id == source_id)
+			.map(|group| group.effective_enabled)
+	}
+
+	fn resolve_material(self, target: &UnaRuntimeMaterialTarget) -> Option<&'a UnaMaterialPbr> {
+		let scene = self.document.scene.as_ref()?;
+		if let Some(index) = resolve_runtime_material_index(scene, target) {
+			return scene.materials.get(index);
+		}
+		None
+	}
+
 	pub fn scene_expression_catalog(self) -> Option<UnaRuntimeSceneExpressions<'a>> {
 		Some(UnaRuntimeSceneExpressions {
 			scene: self.scene()?,
@@ -2129,6 +2172,20 @@ pub fn apply_runtime_material_color(material: &mut UnaMaterialPbr, parameter: &s
 	}
 }
 
+pub fn read_runtime_material_color(material: &UnaMaterialPbr, parameter: &str) -> Option<[f32; 4]> {
+	let key = runtime_material_parameter_key(parameter);
+	match key.as_str() {
+		"" | "color" | "basecolor" | "maincolor" => Some(material.base_color_factor),
+		"emissive" | "emission" | "emissivecolor" | "emissioncolor" => Some([
+			material.emissive_factor[0],
+			material.emissive_factor[1],
+			material.emissive_factor[2],
+			1.0,
+		]),
+		_ => None,
+	}
+}
+
 pub fn apply_runtime_material_scalar(material: &mut UnaMaterialPbr, parameter: &str, value: f32) -> Result<(), String> {
 	if !value.is_finite() {
 		return Err(format!("runtime material scalar parameter `{parameter}` received non-finite value"));
@@ -2156,6 +2213,18 @@ pub fn apply_runtime_material_scalar(material: &mut UnaMaterialPbr, parameter: &
 			Ok(())
 		}
 		_ => Err(format!("runtime material scalar parameter `{parameter}` is not supported")),
+	}
+}
+
+pub fn read_runtime_material_scalar(material: &UnaMaterialPbr, parameter: &str) -> Option<f32> {
+	let key = runtime_material_parameter_key(parameter);
+	match key.as_str() {
+		"alpha" | "opacity" => Some(material.base_color_factor[3]),
+		"metallic" | "metallicfactor" => Some(material.metallic_factor),
+		"roughness" | "roughnessfactor" => Some(material.roughness_factor),
+		"smoothness" | "smoothnessfactor" => Some(1.0 - material.roughness_factor),
+		"cutoff" | "alphacutoff" | "alphacutofffactor" => Some(material.alpha_cutoff),
+		_ => None,
 	}
 }
 
@@ -5134,6 +5203,15 @@ mod tests {
 			false,
 		));
 		assert!(!document.scene.as_ref().unwrap().nodes[2].visible);
+		assert_eq!(
+			document.runtime_model().node_visible(&UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id: Some("node_fallback".to_string()),
+				resolved_node_id: None,
+				path: None,
+			}),
+			Some(false)
+		);
 
 		assert!(!document.runtime_model_mut().set_node_visible(
 			&UnaRuntimeNodeTarget {
@@ -5197,6 +5275,16 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(document.scene.as_ref().unwrap().materials[1].emissive_factor, [2.0, 1.0, 0.0]);
+		assert_eq!(
+			document.runtime_model().material_color(
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Accent".to_string()),
+				},
+				"_EmissionColor",
+			),
+			Some([2.0, 1.0, 0.0, 1.0])
+		);
 
 		document
 			.runtime_model_mut()
@@ -5210,6 +5298,16 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(document.scene.as_ref().unwrap().materials[1].roughness_factor, 0.25);
+		assert_eq!(
+			document.runtime_model().material_scalar(
+				&UnaRuntimeMaterialTarget {
+					material_index: None,
+					name: Some("Accent".to_string()),
+				},
+				"_Smoothness",
+			),
+			Some(0.75)
+		);
 
 		let err = document
 			.runtime_model_mut()
@@ -5330,6 +5428,18 @@ mod tests {
 			)
 			.unwrap();
 		assert_eq!(document.scene.as_ref().unwrap().meshes[0][0].material_index, Some(0));
+		assert_eq!(
+			document.runtime_model().material_slot(&UnaRuntimeMaterialSlotTarget {
+				node: UnaRuntimeNodeTarget {
+					node_index: None,
+					source_node_id: None,
+					resolved_node_id: None,
+					path: Some("Root/Renderer".to_string()),
+				},
+				primitive_index: None,
+			}),
+			Some(Some(0))
+		);
 
 		document
 			.runtime_model_mut()
@@ -5396,6 +5506,9 @@ mod tests {
 			document.runtime_state.dynamics_enabled_overrides,
 			BTreeMap::from([("physbone:hair".to_string(), false)])
 		);
+		assert_eq!(document.runtime_model().dynamics_enabled("physbone:hair"), Some(false));
+		assert_eq!(document.runtime_model().dynamics_enabled("physbone:tail"), Some(true));
+		assert_eq!(document.runtime_model().dynamics_enabled("physbone:missing"), None);
 	}
 
 	#[test]
