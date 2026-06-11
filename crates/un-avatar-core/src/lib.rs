@@ -448,9 +448,7 @@ impl UnaRuntimeActionCondition {
 		let Some(scene) = scene else {
 			return false;
 		};
-		resolve_runtime_node_target(scene, target)
-			.and_then(|index| scene.nodes.get(index))
-			.is_some_and(|node| node.visible)
+		resolve_runtime_node_target(scene, target).is_some_and(|index| scene.effective_node_visible(index))
 	}
 
 	pub fn active_parent_nodes_match(&self, scene: Option<&UnaSceneSnapshot>) -> bool {
@@ -460,11 +458,9 @@ impl UnaRuntimeActionCondition {
 		let Some(scene) = scene else {
 			return false;
 		};
-		self.active_parent_nodes.iter().all(|target| {
-			resolve_runtime_node_target(scene, target)
-				.and_then(|index| scene.nodes.get(index))
-				.is_some_and(|node| node.visible)
-		})
+		self.active_parent_nodes
+			.iter()
+			.all(|target| resolve_runtime_node_target(scene, target).is_some_and(|index| scene.effective_node_visible(index)))
 	}
 }
 
@@ -3187,6 +3183,29 @@ impl UnaSceneSnapshot {
 		resolved_scene_roots(&self.nodes, &self.roots)
 	}
 
+	pub fn effective_visibility(&self) -> Vec<bool> {
+		fn visit(scene: &UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
+			let Some(node) = scene.nodes.get(idx) else { return };
+			let visible = parent_visible && node.visible;
+			if let Some(slot) = out.get_mut(idx) {
+				*slot = visible;
+			}
+			for &child in &node.children {
+				visit(scene, child, visible, out);
+			}
+		}
+
+		let mut out = vec![false; self.nodes.len()];
+		for &root in self.resolved_roots().iter() {
+			visit(self, root, true, &mut out);
+		}
+		out
+	}
+
+	pub fn effective_node_visible(&self, node_index: usize) -> bool {
+		self.effective_visibility().get(node_index).copied().unwrap_or(false)
+	}
+
 	pub fn asset_group_ownership_counts(&self) -> UnaSceneAssetGroupOwnershipCounts {
 		let mut counts = UnaSceneAssetGroupOwnershipCounts {
 			groups: self.asset_group_ownership.len(),
@@ -5873,6 +5892,20 @@ mod tests {
 	}
 
 	#[test]
+	fn effective_visibility_inherits_hidden_parent_state() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_node(vec![1]), test_node(Vec::new()), test_node(Vec::new())],
+			roots: Vec::new(),
+			..Default::default()
+		};
+		scene.nodes[0].visible = false;
+
+		assert_eq!(scene.effective_visibility(), vec![false, false, true]);
+		assert!(!scene.effective_node_visible(1));
+		assert!(scene.effective_node_visible(2));
+	}
+
+	#[test]
 	fn runtime_model_reports_unavatar_source() {
 		let document = UnaDocument {
 			unavatar: Some(UnaUnavatarExtension {
@@ -6709,6 +6742,36 @@ mod tests {
 		assert_eq!(conflicts.len(), 1);
 		assert_eq!(conflicts[0].name, "Hat");
 		assert_eq!(conflicts[0].reason, "contact_transient_overlaps_action_parameter");
+	}
+
+	#[test]
+	fn runtime_action_conditions_use_effective_node_visibility() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_node(vec![1]), test_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let action = UnaRuntimeAction {
+			id: "hat:on".to_string(),
+			conditions: vec![UnaRuntimeActionCondition {
+				source_node: Some(UnaRuntimeNodeTarget {
+					node_index: Some(1),
+					..Default::default()
+				}),
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
+				active_parent_nodes: vec![UnaRuntimeNodeTarget {
+					node_index: Some(1),
+					..Default::default()
+				}],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(true));
+		scene.nodes[0].visible = false;
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(false));
 	}
 
 	#[test]
