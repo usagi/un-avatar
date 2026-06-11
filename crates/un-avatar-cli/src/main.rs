@@ -575,6 +575,8 @@ struct DiagnoseDynamicsSummary {
 	source_radius_curve_count: usize,
 	source_angle_limit_curve_count: usize,
 	source_stretch_limit_curve_count: usize,
+	source_collider_count: usize,
+	source_unknown_shape_collider_count: usize,
 	source_collision_disabled_count: usize,
 	source_inside_bounds_collider_count: usize,
 	source_grabbing_enabled_count: usize,
@@ -603,6 +605,8 @@ struct DynamicsSourceFeatureCounts {
 	radius_curve_count: usize,
 	angle_limit_curve_count: usize,
 	stretch_limit_curve_count: usize,
+	collider_count: usize,
+	unknown_shape_collider_count: usize,
 	collision_disabled_count: usize,
 	inside_bounds_collider_count: usize,
 	grabbing_enabled_count: usize,
@@ -2320,6 +2324,11 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 			counts.interaction_parameter_count += 1;
 		}
 		if let Some(colliders) = dynamics_source_value(item, source_params, "colliders", "colliders").and_then(|value| value.as_array()) {
+			counts.collider_count += colliders.len();
+			counts.unknown_shape_collider_count += colliders
+				.iter()
+				.filter(|collider| !dynamics_source_collider_shape_known(collider))
+				.count();
 			counts.inside_bounds_collider_count += colliders
 				.iter()
 				.filter(|collider| {
@@ -2333,6 +2342,18 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		}
 	}
 	counts
+}
+
+fn dynamics_source_collider_shape_known(collider: &serde_json::Value) -> bool {
+	let shape = collider
+		.get("shapeType")
+		.or_else(|| collider.get("shape_type"))
+		.or_else(|| collider.get("shape"));
+	if matches!(shape.and_then(|shape| shape.as_u64()), Some(0 | 1)) {
+		return true;
+	}
+	let shape = shape.and_then(|shape| shape.as_str()).unwrap_or_default();
+	shape == "0" || shape == "1" || shape.eq_ignore_ascii_case("sphere") || shape.eq_ignore_ascii_case("capsule")
 }
 
 fn wardrobe_dynamics_enable_targets(doc: &UnaDocument) -> Vec<String> {
@@ -4157,6 +4178,8 @@ fn build_diagnose_report(
 		source_radius_curve_count: dynamics_source_features.radius_curve_count,
 		source_angle_limit_curve_count: dynamics_source_features.angle_limit_curve_count,
 		source_stretch_limit_curve_count: dynamics_source_features.stretch_limit_curve_count,
+		source_collider_count: dynamics_source_features.collider_count,
+		source_unknown_shape_collider_count: dynamics_source_features.unknown_shape_collider_count,
 		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
@@ -5030,7 +5053,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={} source_interaction_parameters={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_colliders={} source_unknown_shape_colliders={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={} source_interaction_parameters={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -5063,6 +5086,8 @@ fn run_diagnose(
 		report.dynamics.source_radius_curve_count,
 		report.dynamics.source_angle_limit_curve_count,
 		report.dynamics.source_stretch_limit_curve_count,
+		report.dynamics.source_collider_count,
+		report.dynamics.source_unknown_shape_collider_count,
 		report.dynamics.source_collision_disabled_count,
 		report.dynamics.source_inside_bounds_collider_count,
 		report.dynamics.source_grabbing_enabled_count,
@@ -6890,7 +6915,9 @@ mod tests {
 								"maxAngleXCurve": {"keys": [{"time": 0.0, "value": 1.0}]},
 								"maxStretchCurve": {"keyCount": 3},
 								"colliders": [
-									{"insideBounds": true}
+									{"shapeType": 0, "insideBounds": true},
+									{"shapeType": "1"},
+									{"shapeType": "box"}
 								]
 							}
 						}
@@ -6924,6 +6951,8 @@ mod tests {
 		assert_eq!(report.dynamics.source_radius_curve_count, 1);
 		assert_eq!(report.dynamics.source_angle_limit_curve_count, 1);
 		assert_eq!(report.dynamics.source_stretch_limit_curve_count, 1);
+		assert_eq!(report.dynamics.source_collider_count, 3);
+		assert_eq!(report.dynamics.source_unknown_shape_collider_count, 1);
 		assert_eq!(report.dynamics.source_collision_disabled_count, 1);
 		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
 		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
