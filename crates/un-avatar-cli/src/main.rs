@@ -506,6 +506,8 @@ struct DiagnoseDynamicsSummary {
 	vrc_contact_sender_count: usize,
 	vrc_contact_receiver_count: usize,
 	contact_parameter_declaration_count: usize,
+	contact_probe_count: usize,
+	contact_probe_would_emit_count: usize,
 	constraint_ref_count: usize,
 	vrc_constraint_ref_count: usize,
 	source_limit_count: usize,
@@ -519,6 +521,8 @@ struct DiagnoseDynamicsSummary {
 	contacts: Vec<DiagnoseDynamicsContactSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<DiagnoseContactParameterDeclarationSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	contact_probes: Vec<DiagnoseContactProbeSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	constraint_refs: Vec<DiagnoseDynamicsConstraintRefSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
@@ -608,6 +612,36 @@ struct DiagnoseContactParameterDeclarationSummary {
 	parameter: String,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	collision_tags: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseContactProbeSummary {
+	index: usize,
+	receiver_index: usize,
+	sender_index: usize,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	receiver_source_id: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	sender_source_id: String,
+	receiver_node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	receiver_node_path: Option<String>,
+	sender_node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	sender_node_path: Option<String>,
+	parameter: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	matched_tags: Vec<String>,
+	tag_match: bool,
+	overlap: bool,
+	would_emit: bool,
+	distance: f32,
+	threshold: f32,
+	receiver_radius: f32,
+	sender_radius: f32,
+	receiver_shape: un_avatar_core::UnaDynamicsColliderShape,
+	sender_shape: un_avatar_core::UnaDynamicsColliderShape,
+	approximation: String,
 }
 
 #[derive(Serialize)]
@@ -1980,6 +2014,176 @@ fn dynamics_contact_parameter_declaration_summaries(doc: &UnaDocument) -> Vec<Di
 			collision_tags: declaration.collision_tags,
 		})
 		.collect()
+}
+
+fn dynamics_contact_probe_summaries(doc: &UnaDocument) -> Vec<DiagnoseContactProbeSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	let world = scene_world_matrices(runtime.scene);
+	let contacts = runtime.dynamics.contacts().collect::<Vec<_>>();
+	let mut probes = Vec::new();
+	for (receiver_index, receiver) in contacts.iter().enumerate() {
+		if receiver.kind != un_avatar_core::UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
+			continue;
+		}
+		let Some(receiver_sphere) = contact_probe_sphere(receiver, &world) else {
+			continue;
+		};
+		for (sender_index, sender) in contacts.iter().enumerate() {
+			if sender.kind != un_avatar_core::UnaDynamicsContactKind::Sender {
+				continue;
+			}
+			let Some(sender_sphere) = contact_probe_sphere(sender, &world) else {
+				continue;
+			};
+			let matched_tags = contact_matched_tags(&receiver.collision_tags, &sender.collision_tags);
+			let tag_match = !matched_tags.is_empty();
+			let distance = vec3_distance(receiver_sphere.center, sender_sphere.center);
+			let threshold = receiver_sphere.radius + sender_sphere.radius;
+			let overlap = distance <= threshold;
+			probes.push(DiagnoseContactProbeSummary {
+				index: probes.len(),
+				receiver_index,
+				sender_index,
+				receiver_source_id: receiver.source_id.clone(),
+				sender_source_id: sender.source_id.clone(),
+				receiver_node: receiver.node,
+				receiver_node_path: node_paths_by_index.get(receiver.node).cloned().flatten(),
+				sender_node: sender.node,
+				sender_node_path: node_paths_by_index.get(sender.node).cloned().flatten(),
+				parameter: receiver.parameter.clone(),
+				matched_tags,
+				tag_match,
+				overlap,
+				would_emit: tag_match && overlap,
+				distance,
+				threshold,
+				receiver_radius: receiver_sphere.radius,
+				sender_radius: sender_sphere.radius,
+				receiver_shape: receiver.shape.clone(),
+				sender_shape: sender.shape.clone(),
+				approximation: contact_probe_approximation(receiver, sender),
+			});
+		}
+	}
+	probes
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ContactProbeSphere {
+	center: [f32; 3],
+	radius: f32,
+}
+
+fn contact_probe_sphere(contact: &un_avatar_core::UnaDynamicsContact, world: &[[f32; 16]]) -> Option<ContactProbeSphere> {
+	let matrix = world.get(contact.node).copied()?;
+	let radius = contact_probe_local_radius(contact) * mat4_max_scale(matrix);
+	Some(ContactProbeSphere {
+		center: mat4_transform_point3(matrix, contact.position),
+		radius,
+	})
+}
+
+fn contact_probe_local_radius(contact: &un_avatar_core::UnaDynamicsContact) -> f32 {
+	let radius = contact.radius.max(0.0);
+	match contact.shape {
+		un_avatar_core::UnaDynamicsColliderShape::Capsule => radius + contact.height.max(0.0) * 0.5,
+		un_avatar_core::UnaDynamicsColliderShape::Sphere | un_avatar_core::UnaDynamicsColliderShape::Unknown => radius,
+	}
+}
+
+fn contact_probe_approximation(receiver: &un_avatar_core::UnaDynamicsContact, sender: &un_avatar_core::UnaDynamicsContact) -> String {
+	if receiver.shape == un_avatar_core::UnaDynamicsColliderShape::Sphere
+		&& sender.shape == un_avatar_core::UnaDynamicsColliderShape::Sphere
+	{
+		"sphere".to_string()
+	} else {
+		"bounding_sphere".to_string()
+	}
+}
+
+fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
+	let sender = sender_tags.iter().collect::<BTreeSet<_>>();
+	receiver_tags
+		.iter()
+		.filter(|tag| sender.contains(tag))
+		.cloned()
+		.collect::<BTreeSet<_>>()
+		.into_iter()
+		.collect()
+}
+
+fn scene_world_matrices(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<[f32; 16]> {
+	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent: [f32; 16], world: &mut [[f32; 16]], seen: &mut [bool]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		if idx >= world.len() {
+			return;
+		}
+		let current = mat4_mul(parent, node.transform);
+		world[idx] = current;
+		seen[idx] = true;
+		for &child in &node.children {
+			visit(scene, child, current, world, seen);
+		}
+	}
+
+	let mut world = vec![identity_mat4(); scene.nodes.len().max(1)];
+	let mut seen = vec![false; scene.nodes.len().max(1)];
+	for &root in scene.resolved_roots().iter() {
+		visit(scene, root, identity_mat4(), &mut world, &mut seen);
+	}
+	for index in 0..scene.nodes.len() {
+		if !seen[index] {
+			visit(scene, index, identity_mat4(), &mut world, &mut seen);
+		}
+	}
+	world
+}
+
+fn identity_mat4() -> [f32; 16] {
+	[
+		1.0, 0.0, 0.0, 0.0, //
+		0.0, 1.0, 0.0, 0.0, //
+		0.0, 0.0, 1.0, 0.0, //
+		0.0, 0.0, 0.0, 1.0,
+	]
+}
+
+fn mat4_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+	let mut out = [0.0; 16];
+	for col in 0..4 {
+		for row in 0..4 {
+			out[col * 4 + row] =
+				a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+		}
+	}
+	out
+}
+
+fn mat4_transform_point3(m: [f32; 16], p: [f32; 3]) -> [f32; 3] {
+	[
+		m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+		m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+		m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
+	]
+}
+
+fn mat4_max_scale(m: [f32; 16]) -> f32 {
+	let sx = vec3_len([m[0], m[1], m[2]]);
+	let sy = vec3_len([m[4], m[5], m[6]]);
+	let sz = vec3_len([m[8], m[9], m[10]]);
+	sx.max(sy).max(sz).max(0.0)
+}
+
+fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+	vec3_len([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+}
+
+fn vec3_len(v: [f32; 3]) -> f32 {
+	(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 fn dynamics_constraint_ref_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsConstraintRefSummary> {
@@ -3705,6 +3909,7 @@ fn build_diagnose_report(
 	let dynamics_groups = dynamics_group_summaries(&doc);
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
 	let dynamics_contact_parameter_declarations = dynamics_contact_parameter_declaration_summaries(&doc);
+	let dynamics_contact_probes = dynamics_contact_probe_summaries(&doc);
 	let dynamics_constraint_refs = dynamics_constraint_ref_summaries(&doc);
 	for (source_id, count) in duplicate_dynamics_source_ids(&dynamics_groups) {
 		warnings.push(format!(
@@ -3759,6 +3964,8 @@ fn build_diagnose_report(
 		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
 		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
 		contact_parameter_declaration_count: dynamics_counts.contact_parameter_declarations,
+		contact_probe_count: dynamics_contact_probes.len(),
+		contact_probe_would_emit_count: dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count(),
 		constraint_ref_count: dynamics_counts.constraint_refs,
 		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,
@@ -3770,6 +3977,7 @@ fn build_diagnose_report(
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
 		contacts: dynamics_contacts,
 		contact_parameter_declarations: dynamics_contact_parameter_declarations,
+		contact_probes: dynamics_contact_probes,
 		constraint_refs: dynamics_constraint_refs,
 		groups: dynamics_groups,
 	};
@@ -4415,7 +4623,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_probes={} contact_probe_would_emit={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4433,6 +4641,8 @@ fn run_diagnose(
 		report.dynamics.vrc_contact_sender_count,
 		report.dynamics.vrc_contact_receiver_count,
 		report.dynamics.contact_parameter_declaration_count,
+		report.dynamics.contact_probe_count,
+		report.dynamics.contact_probe_would_emit_count,
 		report.dynamics.constraint_ref_count,
 		report.dynamics.vrc_constraint_ref_count,
 		report.dynamics.source_limit_count,
@@ -4502,6 +4712,24 @@ fn run_diagnose(
 			declaration.node_path.as_deref().unwrap_or("#"),
 			declaration.parameter,
 			declaration.collision_tags
+		);
+	}
+	for probe in report.dynamics.contact_probes.iter().take(16) {
+		println!(
+			"  dynamics_contact_probe[{}]: receiver={} sender={} parameter={:?} tags={:?} tag_match={} overlap={} would_emit={} distance={} threshold={} radii={}/{} approx={}",
+			probe.index,
+			probe.receiver_node_path.as_deref().unwrap_or("#"),
+			probe.sender_node_path.as_deref().unwrap_or("#"),
+			probe.parameter,
+			probe.matched_tags,
+			probe.tag_match,
+			probe.overlap,
+			probe.would_emit,
+			probe.distance,
+			probe.threshold,
+			probe.receiver_radius,
+			probe.sender_radius,
+			probe.approximation
 		);
 	}
 	for constraint_ref in report.dynamics.constraint_refs.iter().take(16) {
@@ -5042,6 +5270,29 @@ mod tests {
 	use std::fs;
 
 	use un_avatar_io_una::write_una_path;
+
+	fn test_scene_node(name: &str, transform: [f32; 16], children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
+		un_avatar_core::UnaSceneNode {
+			name: Some(name.to_string()),
+			source_node_id: None,
+			resolved_node_id: None,
+			visible: true,
+			transform,
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
+	fn translation_mat4(x: f32, y: f32, z: f32) -> [f32; 16] {
+		let mut m = identity_mat4();
+		m[12] = x;
+		m[13] = y;
+		m[14] = z;
+		m
+	}
 
 	#[test]
 	fn parse_plugin_path_trims_and_skips_empty() {
@@ -5931,7 +6182,15 @@ mod tests {
 	#[test]
 	fn diagnose_report_warns_on_duplicate_dynamics_source_ids() {
 		let doc = UnaDocument {
-			scene: Some(un_avatar_core::UnaSceneSnapshot::default()),
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node("root", identity_mat4(), vec![1, 2]),
+					test_scene_node("receiver", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+					test_scene_node("sender", translation_mat4(0.07, 0.0, 0.0), Vec::new()),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
 			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
 				groups: vec![
 					un_avatar_core::UnaSpringBoneGroup {
@@ -6066,6 +6325,14 @@ mod tests {
 			report.dynamics.contact_parameter_declarations[0].collision_tags,
 			vec!["Hand", "Interact"]
 		);
+		assert_eq!(report.dynamics.contact_probe_count, 1);
+		assert_eq!(report.dynamics.contact_probe_would_emit_count, 1);
+		assert_eq!(report.dynamics.contact_probes.len(), 1);
+		assert!(report.dynamics.contact_probes[0].tag_match);
+		assert!(report.dynamics.contact_probes[0].overlap);
+		assert!(report.dynamics.contact_probes[0].would_emit);
+		assert_eq!(report.dynamics.contact_probes[0].parameter, "ContactHand");
+		assert_eq!(report.dynamics.contact_probes[0].matched_tags, vec!["Hand"]);
 		assert_eq!(report.dynamics.constraint_ref_count, 2);
 		assert_eq!(report.dynamics.vrc_constraint_ref_count, 2);
 		assert_eq!(report.dynamics.constraint_refs.len(), 2);

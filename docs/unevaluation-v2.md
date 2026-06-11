@@ -92,6 +92,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - overlap 計算はするが parameter state へは書かない。
    - `would_emit parameter=X value=1` を diagnose / debug status に出す。
    - 座標系、tag match、shape overlap、誤爆を検証する。
+   - CLI diagnose の static scene pose probe は実装済み。Sphere は sphere、Capsule / Unknown は bounding sphere 近似で扱い、runtime parameter state は変更しない。
 4. Phase D: Opt-in parameter emission
    - profile flag または `.unavatar` capability で明示有効化する。
    - contact 切断時は 0。
@@ -99,7 +100,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - owner key は `contact:<source_id>`。
 
 v2 初期リリース目標は Phase A + Phase B まで。
-Phase C は debug-only として追加してよい。
+Phase C は debug-only diagnostics として追加済み。
 Phase D は配信事故を避けるため、実サンプルと diagnostics-only probe で十分に検証してから入れる。
 
 ## Constraints And Interactions
