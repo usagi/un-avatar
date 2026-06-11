@@ -29,6 +29,7 @@ use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
 
 const DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT: usize = 24;
+const DIAGNOSE_TEXT_LIST_LIMIT: usize = 16;
 
 #[derive(Serialize)]
 struct ConvertJsonReport {
@@ -4938,6 +4939,12 @@ fn diagnose_menu_wardrobe_candidates(
 	candidates
 }
 
+fn print_omitted_text_items(label: &str, total: usize, limit: usize) {
+	if total > limit {
+		println!("  {label}: showing {limit}/{total}, omitted {}", total - limit);
+	}
+}
+
 fn run_diagnose(
 	plugin_dirs: &[PathBuf],
 	path: PathBuf,
@@ -5401,7 +5408,8 @@ fn run_diagnose(
 			group.comment
 		);
 	}
-	for hook in report.dynamics.interaction_hooks.iter().take(16) {
+	print_omitted_text_items("dynamics_group", report.dynamics.groups.len(), DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT);
+	for hook in report.dynamics.interaction_hooks.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		let suffix_preview = hook.suffix_parameters.iter().take(3).cloned().collect::<Vec<_>>();
 		println!(
 			"  dynamics_interaction_hook[group={}]: source={:?} enabled={} id={:?} root={:?} grab={} pose={} parameter={:?} suffix_count={} suffix_preview={:?} metadata_only={}",
@@ -5418,7 +5426,12 @@ fn run_diagnose(
 			hook.metadata_only
 		);
 	}
-	for contact in report.dynamics.contacts.iter().take(16) {
+	print_omitted_text_items(
+		"dynamics_interaction_hook",
+		report.dynamics.interaction_hooks.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
+	for contact in report.dynamics.contacts.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_contact[{}]: source={:?} kind={:?} id={:?} node={:?} parameter={:?} tags={:?} shape={:?} radius={} height={} position={:?}",
 			contact.index,
@@ -5434,7 +5447,8 @@ fn run_diagnose(
 			contact.position
 		);
 	}
-	for declaration in report.dynamics.contact_parameter_declarations.iter().take(16) {
+	print_omitted_text_items("dynamics_contact", report.dynamics.contacts.len(), DIAGNOSE_TEXT_LIST_LIMIT);
+	for declaration in report.dynamics.contact_parameter_declarations.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_contact_parameter[{}]: owner={:?} source_id={:?} node={:?} parameter={:?} tags={:?}",
 			declaration.index,
@@ -5445,7 +5459,12 @@ fn run_diagnose(
 			declaration.collision_tags
 		);
 	}
-	for probe in report.dynamics.contact_probes.iter().take(16) {
+	print_omitted_text_items(
+		"dynamics_contact_parameter",
+		report.dynamics.contact_parameter_declarations.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
+	for probe in report.dynamics.contact_probes.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_contact_probe[{}]: receiver={} sender={} parameter={:?} tags={:?} tag_match={} overlap={} would_emit={} distance={} threshold={} radii={}/{} approx={}",
 			probe.index,
@@ -5463,7 +5482,12 @@ fn run_diagnose(
 			probe.approximation
 		);
 	}
-	for emission in report.dynamics.contact_parameter_emissions.iter().take(16) {
+	print_omitted_text_items(
+		"dynamics_contact_probe",
+		report.dynamics.contact_probes.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
+	for emission in report.dynamics.contact_parameter_emissions.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_contact_parameter_emission[{}]: owner={:?} receiver={} parameter={:?} value={} emitted={} senders={:?}",
 			emission.index,
@@ -5475,7 +5499,12 @@ fn run_diagnose(
 			emission.sender_source_ids
 		);
 	}
-	for constraint_ref in report.dynamics.constraint_refs.iter().take(16) {
+	print_omitted_text_items(
+		"dynamics_contact_parameter_emission",
+		report.dynamics.contact_parameter_emissions.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
+	for constraint_ref in report.dynamics.constraint_refs.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_constraint_ref[{}]: source={:?} id={:?} type={:?} target={:?} sources={:?} weight={}",
 			constraint_ref.index,
@@ -5495,6 +5524,11 @@ fn run_diagnose(
 			constraint_ref.weight
 		);
 	}
+	print_omitted_text_items(
+		"dynamics_constraint_ref",
+		report.dynamics.constraint_refs.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
 	if let Some(unavatar) = &report.unavatar {
 		println!(
 			"unavatar: spec={} generator={:?} name={:?} source={:?} raw_dynamics={} modular_avatar_components={} support={:?} types={:?} disabled_types={:?} menu_components={} blendshape_syncs={} vertex_filter_groups={}",
