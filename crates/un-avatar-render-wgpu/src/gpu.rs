@@ -4332,6 +4332,16 @@ impl GpuState {
 		contact_parameter_declaration_statuses(&doc)
 	}
 
+	pub(crate) fn contact_parameter_emission_enabled(&self) -> bool {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return false;
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return false;
+		};
+		doc.runtime_model().contact_parameter_emission_enabled()
+	}
+
 	pub(crate) fn contact_probe_status(&self) -> RuntimeContactProbeStatusSummary {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return RuntimeContactProbeStatusSummary::default();

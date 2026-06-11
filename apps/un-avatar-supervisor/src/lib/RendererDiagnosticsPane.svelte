@@ -135,6 +135,8 @@
           {runtimeStatus.contact_parameter_declarations.slice(0, sampleLimit).map(contactDeclarationLabel).join("\n")}
         </dd>
       {/if}
+      <dt>{$_("renderers.details.diag_contact_parameter_emission")}</dt>
+      <dd>{runtimeStatus.contact_parameter_emission_enabled ? "enabled" : "disabled"}</dd>
       {#if runtimeStatus.contact_probes.length}
         <dt>{$_("renderers.details.diag_contact_probes")}</dt>
         <dd class="stderr-block">{runtimeStatus.contact_probes.slice(0, sampleLimit).map(contactProbeLabel).join("\n")}</dd>

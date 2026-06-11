@@ -380,6 +380,7 @@ export type RendererRuntimeStatus = {
   runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
   runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
+  contact_parameter_emission_enabled: boolean;
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
   dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
@@ -437,6 +438,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"
+  | "contact_parameter_emission_enabled"
   | "contact_probes"
   | "dynamics_constraint_refs"
 >;

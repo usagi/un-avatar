@@ -552,6 +552,7 @@ struct DiagnoseDynamicsSummary {
 	vrc_contact_sender_count: usize,
 	vrc_contact_receiver_count: usize,
 	contact_parameter_declaration_count: usize,
+	contact_parameter_emission_enabled: bool,
 	contact_probe_count: usize,
 	contact_probe_would_emit_count: usize,
 	constraint_ref_count: usize,
@@ -3889,6 +3890,7 @@ fn build_diagnose_report(
 		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
 		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
 		contact_parameter_declaration_count: dynamics_counts.contact_parameter_declarations,
+		contact_parameter_emission_enabled: doc.runtime_model().contact_parameter_emission_enabled(),
 		contact_probe_count: dynamics_contact_probes.len(),
 		contact_probe_would_emit_count: dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count(),
 		constraint_ref_count: dynamics_counts.constraint_refs,
@@ -4716,7 +4718,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_probes={} contact_probe_would_emit={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4734,6 +4736,7 @@ fn run_diagnose(
 		report.dynamics.vrc_contact_sender_count,
 		report.dynamics.vrc_contact_receiver_count,
 		report.dynamics.contact_parameter_declaration_count,
+		report.dynamics.contact_parameter_emission_enabled,
 		report.dynamics.contact_probe_count,
 		report.dynamics.contact_probe_would_emit_count,
 		report.dynamics.constraint_ref_count,

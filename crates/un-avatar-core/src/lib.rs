@@ -1970,6 +1970,13 @@ impl<'a> UnaRuntimeModel<'a> {
 		&self.document.runtime_state
 	}
 
+	pub fn contact_parameter_emission_enabled(self) -> bool {
+		self.document
+			.unavatar
+			.as_ref()
+			.is_some_and(UnaUnavatarExtension::contact_parameter_emission_enabled)
+	}
+
 	pub fn resolver_cache_key(self) -> UnaRuntimeResolverCacheKey {
 		UnaRuntimeResolverCacheKey::from_document(self.document)
 	}
@@ -2704,6 +2711,50 @@ pub fn read_runtime_material_scalar(material: &UnaMaterialPbr, parameter: &str) 
 pub struct UnaUnavatarExtension {
 	pub spec_version: String,
 	pub source: Value,
+}
+
+impl UnaUnavatarExtension {
+	pub fn contact_parameter_emission_enabled(&self) -> bool {
+		unavatar_capability_enabled(&self.source, &["contact_parameter_emission", "contacts.parameter_emission"])
+			|| self
+				.source
+				.get("contacts")
+				.and_then(|contacts| {
+					contacts
+						.get("parameterEmissionEnabled")
+						.or_else(|| contacts.get("parameter_emission_enabled"))
+				})
+				.and_then(Value::as_bool)
+				.unwrap_or(false)
+			|| self
+				.source
+				.get("runtime")
+				.and_then(|runtime| runtime.get("contacts"))
+				.and_then(|contacts| {
+					contacts
+						.get("parameterEmissionEnabled")
+						.or_else(|| contacts.get("parameter_emission_enabled"))
+				})
+				.and_then(Value::as_bool)
+				.unwrap_or(false)
+	}
+}
+
+fn unavatar_capability_enabled(source: &Value, names: &[&str]) -> bool {
+	fn array_has_name(array: Option<&Vec<Value>>, names: &[&str]) -> bool {
+		array
+			.into_iter()
+			.flatten()
+			.any(|value| value.as_str().is_some_and(|candidate| names.iter().any(|name| candidate == *name)))
+	}
+	array_has_name(source.get("capabilities").and_then(Value::as_array), names)
+		|| array_has_name(
+			source
+				.get("runtime")
+				.and_then(|runtime| runtime.get("capabilities"))
+				.and_then(Value::as_array),
+			names,
+		)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -6878,6 +6929,28 @@ mod tests {
 				.map(|entry| &entry.baseline_value),
 			Some(&Value::from(true))
 		);
+	}
+
+	#[test]
+	fn unavatar_contact_parameter_emission_is_explicit_opt_in() {
+		let mut document = UnaDocument {
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({}),
+			}),
+			..Default::default()
+		};
+		assert!(!document.runtime_model().contact_parameter_emission_enabled());
+
+		document.unavatar.as_mut().unwrap().source = serde_json::json!({
+			"runtime": {"capabilities": ["contacts.parameter_emission"]}
+		});
+		assert!(document.runtime_model().contact_parameter_emission_enabled());
+
+		document.unavatar.as_mut().unwrap().source = serde_json::json!({
+			"contacts": {"parameterEmissionEnabled": true}
+		});
+		assert!(document.runtime_model().contact_parameter_emission_enabled());
 	}
 
 	#[test]

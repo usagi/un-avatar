@@ -111,6 +111,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - core runtime view、CLI diagnose、renderer runtime status の static scene pose probe は実装済み。Sphere は sphere、Capsule / Unknown は bounding sphere 近似で扱い、runtime parameter state は変更しない。
 4. Phase D: Opt-in parameter emission
    - profile flag または `.unavatar` capability で明示有効化する。
+   - `.unavatar` capability / contacts flag の opt-in 判定は CLI diagnose / renderer runtime status / Supervisor diagnostics で観測できる。
    - contact 切断時は 0。
    - 複数 Receiver が同じ parameter を書く場合は max / OR。
    - owner key は `contact:<source_id>`。

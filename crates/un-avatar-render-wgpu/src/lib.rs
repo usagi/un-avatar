@@ -1569,6 +1569,7 @@ impl AvatarApp {
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
+			status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3126,6 +3127,10 @@ fn normalize_key_name(name: &str) -> String {
 	}
 }
 
+fn is_false(value: &bool) -> bool {
+	!*value
+}
+
 #[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
@@ -3185,6 +3190,8 @@ struct RendererRuntimeSnapshot {
 	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<gpu::RuntimeContactParameterDeclarationStatus>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	contact_parameter_emission_enabled: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3370,6 +3377,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		menu_action_candidates: Vec::new(),
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
+		contact_parameter_emission_enabled: false,
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
 		dynamics_colliders: Vec::new(),
@@ -4829,6 +4837,7 @@ mod tests {
 				parameter: "ContactHand".to_string(),
 				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
 			}];
+			status.contact_parameter_emission_enabled = true;
 			status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
 				index: 0,
 				receiver_index: 0,
@@ -4964,6 +4973,10 @@ mod tests {
 		assert_eq!(
 			declarations[0].get("node_path").and_then(|value| value.as_str()),
 			Some("root/receiver")
+		);
+		assert_eq!(
+			snapshot.get("contact_parameter_emission_enabled").and_then(|value| value.as_bool()),
+			Some(true)
 		);
 		assert_eq!(
 			snapshot.get("dynamics_contact_probe_count").and_then(|value| value.as_u64()),
