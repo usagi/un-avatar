@@ -22,6 +22,13 @@
 		return candidate.menu_label || candidate.wardrobe_set_id;
 	}
 
+	function candidateTitle(candidate: RendererRuntimeMenuWardrobeCandidateStatus): string {
+		if (!candidate.menu_path_truncated) return candidate.action_id;
+		return $_("renderers.controls.wardrobe_menu_path_truncated_title", {
+			values: { action: candidate.action_id },
+		});
+	}
+
 	function activate(candidate: RendererRuntimeMenuWardrobeCandidateStatus): void {
 		void onActivateWardrobeMenuCandidate(renderer.id, candidate.action_id, candidate.wardrobe_set_id);
 	}
@@ -51,7 +58,7 @@
 					type="button"
 					class:active={runtimeStatus?.active_wardrobe_set === candidate.wardrobe_set_id}
 					disabled={busy || !rendererRunning}
-					title={candidate.action_id}
+					title={candidateTitle(candidate)}
 					onclick={() => activate(candidate)}
 				>
 					<Shirt size={14} />
