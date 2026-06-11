@@ -13,7 +13,9 @@
 	const candidateLimit = 8;
 
 	$: rendererRunning = renderer.pid != null;
-	$: candidates = (runtimeStatus?.menu_wardrobe_candidates ?? []).slice(0, candidateLimit);
+	$: allCandidates = runtimeStatus?.menu_wardrobe_candidates ?? [];
+	$: candidates = allCandidates.slice(0, candidateLimit);
+	$: hiddenCandidateCount = Math.max(0, allCandidates.length - candidates.length);
 
 	function candidateLabel(candidate: RendererRuntimeMenuWardrobeCandidateStatus): string {
 		if (candidate.menu_path?.length) return candidate.menu_path.join(" / ");
@@ -29,7 +31,19 @@
 	<section class="renderer-control-card renderer-control-wardrobe-menu">
 		<div class="renderer-control-card-heading">
 			<h3>{$_("renderers.controls.wardrobe_menu")}</h3>
-			<span>{$_("renderers.controls.wardrobe_menu_count", { values: { count: candidates.length } })}</span>
+			<span>
+				{#if hiddenCandidateCount}
+					{$_("renderers.controls.wardrobe_menu_count_limited", {
+						values: {
+							count: candidates.length,
+							total: allCandidates.length,
+							hidden: hiddenCandidateCount,
+						},
+					})}
+				{:else}
+					{$_("renderers.controls.wardrobe_menu_count", { values: { count: candidates.length } })}
+				{/if}
+			</span>
 		</div>
 		<div class="runtime-button-row wardrobe-menu-grid">
 			{#each candidates as candidate}
