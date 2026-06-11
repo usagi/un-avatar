@@ -17,35 +17,36 @@ const browser = await chromium.connectOverCDP("http://127.0.0.1:9222");
 const report = { contexts: browser.contexts().length, pages: [] };
 
 for (const ctx of browser.contexts()) {
-  for (const page of ctx.pages()) {
-    const consoleMessages = [];
-    const errors = [];
-    page.on("console", (msg) =>
-      consoleMessages.push({ type: msg.type(), text: msg.text() }),
-    );
-    page.on("pageerror", (e) => errors.push(String(e)));
+	for (const page of ctx.pages()) {
+		const consoleMessages = [];
+		const errors = [];
+		page.on("console", (msg) => consoleMessages.push({ type: msg.type(), text: msg.text() }));
+		page.on("pageerror", (e) => errors.push(String(e)));
 
-    const url = page.url();
-    const title = await page.title().catch(() => "");
-    await page.waitForTimeout(1500);
-    const appHtml =
-      (await page.locator("#app").innerHTML().catch(() => "<#app missing>")) ?? "";
+		const url = page.url();
+		const title = await page.title().catch(() => "");
+		await page.waitForTimeout(1500);
+		const appHtml =
+			(await page
+				.locator("#app")
+				.innerHTML()
+				.catch(() => "<#app missing>")) ?? "";
 
-    const shot = path.join(outDir, "un-avatar-tauri-webview.png");
-    await page.screenshot({ path: shot, fullPage: true }).catch((e) => {
-      errors.push(String(e));
-    });
+		const shot = path.join(outDir, "un-avatar-tauri-webview.png");
+		await page.screenshot({ path: shot, fullPage: true }).catch((e) => {
+			errors.push(String(e));
+		});
 
-    report.pages.push({
-      url,
-      title,
-      appInnerLength: appHtml.length,
-      appInnerPreview: appHtml.slice(0, 400),
-      screenshot: shot,
-      consoleTail: consoleMessages.slice(-15),
-      errors,
-    });
-  }
+		report.pages.push({
+			url,
+			title,
+			appInnerLength: appHtml.length,
+			appInnerPreview: appHtml.slice(0, 400),
+			screenshot: shot,
+			consoleTail: consoleMessages.slice(-15),
+			errors,
+		});
+	}
 }
 
 await browser.close();

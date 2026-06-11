@@ -3,37 +3,20 @@ import type { ColorModeChangeHandler } from "./profileColorActions";
 import type { RendererWindowPatch } from "./rendererTypes";
 
 export type RendererPaneActions = {
-  onSetSpoutOutput: (
-    enabled: boolean,
-    size: { width: number; height: number } | null,
-    label?: string,
-  ) => void | Promise<void>;
-  onMatchSpoutToWindow: () => void | Promise<void>;
-  onSetWindow: (
-    patch: RendererWindowPatch,
-    label: string,
-  ) => void | Promise<void>;
-  onSaveWindow: () => void | Promise<void>;
-  onRestoreWindow: () => void | Promise<void>;
-  onSetShowAxes: (enabled: boolean) => void | Promise<void>;
-  onSetShowBoneColliders: (enabled: boolean) => void | Promise<void>;
-  onSetCameraLock: (enabled: boolean) => void | Promise<void>;
-  onSetCameraOrbitPreset: (preset: CameraOrbitPreset) => void | Promise<void>;
-  onSaveCamera: () => void | Promise<void>;
-  onRestoreCamera: () => void | Promise<void>;
-  onSetClearColor: (rgb: [number, number, number]) => void | Promise<void>;
-  onColorModeChange: ColorModeChangeHandler;
-  onClearExpressionOverrides: (
-    rendererId: number,
-  ) => void | Promise<void>;
-  onSetExpressionOverride: (
-    rendererId: number,
-    preset: string,
-    weight: number,
-  ) => void;
-  onActivateWardrobeMenuCandidate: (
-    rendererId: number,
-    actionId: string,
-    wardrobeSetId: string,
-  ) => void | Promise<void>;
+	onSetSpoutOutput: (enabled: boolean, size: { width: number; height: number } | null, label?: string) => void | Promise<void>;
+	onMatchSpoutToWindow: () => void | Promise<void>;
+	onSetWindow: (patch: RendererWindowPatch, label: string) => void | Promise<void>;
+	onSaveWindow: () => void | Promise<void>;
+	onRestoreWindow: () => void | Promise<void>;
+	onSetShowAxes: (enabled: boolean) => void | Promise<void>;
+	onSetShowBoneColliders: (enabled: boolean) => void | Promise<void>;
+	onSetCameraLock: (enabled: boolean) => void | Promise<void>;
+	onSetCameraOrbitPreset: (preset: CameraOrbitPreset) => void | Promise<void>;
+	onSaveCamera: () => void | Promise<void>;
+	onRestoreCamera: () => void | Promise<void>;
+	onSetClearColor: (rgb: [number, number, number]) => void | Promise<void>;
+	onColorModeChange: ColorModeChangeHandler;
+	onClearExpressionOverrides: (rendererId: number) => void | Promise<void>;
+	onSetExpressionOverride: (rendererId: number, preset: string, weight: number) => void;
+	onActivateWardrobeMenuCandidate: (rendererId: number, actionId: string, wardrobeSetId: string) => void | Promise<void>;
 };
