@@ -172,6 +172,7 @@ pub(crate) struct RuntimeActionDynamicsEnabledEffectStatus {
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub(crate) struct RuntimeMenuActionCandidateStatus {
 	pub(crate) menu_component_index: usize,
+	pub(crate) menu_key: String,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) menu_label: Option<String>,
 	pub(crate) parameter_name: String,
@@ -190,6 +191,7 @@ pub(crate) struct RuntimeMenuActionCandidateStatus {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct RuntimeMenuWardrobeCandidateStatus {
 	pub(crate) menu_component_index: usize,
+	pub(crate) menu_key: String,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) menu_path: Vec<String>,
 	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -875,6 +877,7 @@ fn runtime_action_statuses(
 #[derive(Clone, Debug)]
 struct RuntimeMenuComponentSummary {
 	component_index: usize,
+	menu_key: String,
 	#[allow(clippy::struct_field_names)]
 	hierarchy_path: Option<String>,
 	sibling_index: Option<usize>,
@@ -886,6 +889,7 @@ struct RuntimeMenuComponentSummary {
 #[derive(Clone, Debug)]
 struct RuntimeMenuGraphCandidate {
 	component_index: usize,
+	menu_key: String,
 	label: Option<String>,
 	hierarchy_path: Option<String>,
 	sibling_index: Option<usize>,
@@ -893,7 +897,7 @@ struct RuntimeMenuGraphCandidate {
 
 #[derive(Clone, Debug)]
 struct RuntimeMenuGraphNode {
-	component_index: usize,
+	menu_key: String,
 	label: Option<String>,
 	hierarchy_path: Option<String>,
 	parent_node_index: Option<usize>,
@@ -958,6 +962,7 @@ fn menu_action_candidates_from_runtime(
 				.collect::<Vec<_>>();
 			candidates.push(RuntimeMenuActionCandidateStatus {
 				menu_component_index: menu.component_index,
+				menu_key: menu.menu_key.clone(),
 				menu_label: menu.label.clone(),
 				parameter_name: parameter_name.clone(),
 				parameter_value,
@@ -972,11 +977,18 @@ fn menu_action_candidates_from_runtime(
 		}
 	}
 	candidates.sort_by(|a, b| {
-		(a.menu_component_index, a.action_id.as_str(), a.match_kind.as_str()).cmp(&(
-			b.menu_component_index,
-			b.action_id.as_str(),
-			b.match_kind.as_str(),
-		))
+		(
+			a.menu_component_index,
+			a.menu_key.as_str(),
+			a.action_id.as_str(),
+			a.match_kind.as_str(),
+		)
+			.cmp(&(
+				b.menu_component_index,
+				b.menu_key.as_str(),
+				b.action_id.as_str(),
+				b.match_kind.as_str(),
+			))
 	});
 	Some(candidates)
 }
@@ -993,18 +1005,18 @@ fn menu_wardrobe_candidates_from_runtime(
 	if nodes.is_empty() {
 		return Vec::new();
 	}
-	let menu_path_by_component = nodes
+	let menu_path_by_key = nodes
 		.iter()
 		.enumerate()
-		.map(|(index, node)| (node.component_index, menu_graph_node_path(&nodes, index)))
+		.map(|(index, node)| (node.menu_key.as_str(), menu_graph_node_path(&nodes, index)))
 		.collect::<BTreeMap<_, _>>();
 	let mut candidates = Vec::new();
 	for action_candidate in action_candidates {
 		if action_candidate.wardrobe_set_ids.is_empty() {
 			continue;
 		}
-		let menu_path = menu_path_by_component
-			.get(&action_candidate.menu_component_index)
+		let menu_path = menu_path_by_key
+			.get(action_candidate.menu_key.as_str())
 			.cloned()
 			.unwrap_or_else(|| RuntimeMenuGraphNodePath {
 				labels: action_candidate.menu_label.iter().cloned().collect(),
@@ -1013,6 +1025,7 @@ fn menu_wardrobe_candidates_from_runtime(
 		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
 			candidates.push(RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: action_candidate.menu_component_index,
+				menu_key: action_candidate.menu_key.clone(),
 				menu_path: menu_path.labels.clone(),
 				menu_path_truncated: menu_path.truncated,
 				menu_label: action_candidate.menu_label.clone(),
@@ -1024,11 +1037,18 @@ fn menu_wardrobe_candidates_from_runtime(
 		}
 	}
 	candidates.sort_by(|a, b| {
-		(a.menu_component_index, a.wardrobe_set_id.as_str(), a.action_id.as_str()).cmp(&(
-			b.menu_component_index,
-			b.wardrobe_set_id.as_str(),
-			b.action_id.as_str(),
-		))
+		(
+			a.menu_component_index,
+			a.menu_key.as_str(),
+			a.wardrobe_set_id.as_str(),
+			a.action_id.as_str(),
+		)
+			.cmp(&(
+				b.menu_component_index,
+				b.menu_key.as_str(),
+				b.wardrobe_set_id.as_str(),
+				b.action_id.as_str(),
+			))
 	});
 	candidates
 }
@@ -1255,21 +1275,22 @@ fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtensio
 	else {
 		return Vec::new();
 	};
-	components
-		.iter()
-		.enumerate()
-		.filter_map(|(component_index, component)| {
-			let short_type = component
-				.get("shortType")
-				.and_then(|value| value.as_str())
-				.filter(|value| !value.is_empty())
-				.unwrap_or("unknown");
-			if !modular_avatar_is_menu_metadata_type(short_type) {
-				return None;
-			}
-			Some(modular_avatar_menu_component_summary(component, component_index))
-		})
-		.collect()
+	let mut menu_components = Vec::new();
+	for (component_index, component) in components.iter().enumerate() {
+		let short_type = component
+			.get("shortType")
+			.and_then(|value| value.as_str())
+			.filter(|value| !value.is_empty())
+			.unwrap_or("unknown");
+		if !modular_avatar_is_menu_metadata_type(short_type) {
+			continue;
+		}
+		menu_components.push(modular_avatar_menu_component_summary(component, component_index));
+		if short_type == "ModularAvatarMenuInstaller" {
+			menu_components.extend(modular_avatar_external_menu_component_summaries(component, component_index));
+		}
+	}
+	menu_components
 }
 
 fn modular_avatar_menu_component_summary(component: &Value, component_index: usize) -> RuntimeMenuComponentSummary {
@@ -1293,6 +1314,7 @@ fn modular_avatar_menu_component_summary(component: &Value, component_index: usi
 		.or_else(|| modular_avatar_component_string(component, &["parameterName", "parameter_name"]));
 	RuntimeMenuComponentSummary {
 		component_index,
+		menu_key: format!("component:{component_index}"),
 		hierarchy_path: modular_avatar_component_string(component, &["hierarchyPath", "hierarchy_path", "componentPath", "component_path"]),
 		sibling_index: modular_avatar_component_usize(component, &["siblingIndex", "sibling_index", "transformSiblingIndex", "order"]),
 		label: modular_avatar_component_string(component, &["label", "Label", "name", "Name", "displayName", "display_name"])
@@ -1307,11 +1329,80 @@ fn modular_avatar_menu_component_summary(component: &Value, component_index: usi
 	}
 }
 
+fn modular_avatar_external_menu_component_summaries(component: &Value, component_index: usize) -> Vec<RuntimeMenuComponentSummary> {
+	let Some(menu_asset) = modular_avatar_component_ref(component, &["menuToAppend", "menu_to_append"]) else {
+		return Vec::new();
+	};
+	let asset_path = modular_avatar_ref_path(Some(menu_asset)).unwrap_or_else(|| format!("external-menu:{component_index}"));
+	let Some(controls) = menu_asset.get("controls").and_then(|value| value.as_array()) else {
+		return Vec::new();
+	};
+	controls
+		.iter()
+		.enumerate()
+		.map(|(control_index, control)| {
+			let label = modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"]);
+			RuntimeMenuComponentSummary {
+				component_index,
+				menu_key: format!("external:{component_index}:{control_index}"),
+				hierarchy_path: Some(format!(
+					"{}/{}",
+					asset_path.trim_matches('/'),
+					label.clone().unwrap_or_else(|| format!("control:{control_index}"))
+				)),
+				sibling_index: Some(control_index),
+				label,
+				parameter_name: modular_avatar_external_menu_control_parameter(control),
+				value: control
+					.get("value")
+					.or_else(|| control.get("Value"))
+					.and_then(json_number_f64)
+					.map(|value| value as f32),
+			}
+		})
+		.collect()
+}
+
+fn modular_avatar_external_menu_control_parameter(control: &Value) -> Option<String> {
+	control
+		.get("parameter")
+		.or_else(|| control.get("Parameter"))
+		.and_then(|parameter| {
+			parameter
+				.as_str()
+				.or_else(|| parameter.get("name").and_then(|value| value.as_str()))
+				.or_else(|| parameter.get("Name").and_then(|value| value.as_str()))
+		})
+		.filter(|value| !value.is_empty())
+		.map(str::to_owned)
+}
+
+fn modular_avatar_ref_path(value: Option<&Value>) -> Option<String> {
+	let value = value?;
+	value
+		.get("path")
+		.or_else(|| value.get("assetPath"))
+		.or_else(|| value.get("asset_path"))
+		.or_else(|| value.get("referencePath"))
+		.or_else(|| value.get("reference_path"))
+		.and_then(|path| path.as_str())
+		.filter(|path| !path.is_empty())
+		.map(str::to_owned)
+		.or_else(|| {
+			value
+				.get("resolvedTarget")
+				.or_else(|| value.get("target"))
+				.or_else(|| value.get("targetObject"))
+				.and_then(|nested| modular_avatar_ref_path(Some(nested)))
+		})
+}
+
 fn modular_avatar_menu_graph_candidates(components: &[RuntimeMenuComponentSummary]) -> Vec<RuntimeMenuGraphCandidate> {
 	let mut candidates = components
 		.iter()
 		.map(|component| RuntimeMenuGraphCandidate {
 			component_index: component.component_index,
+			menu_key: component.menu_key.clone(),
 			label: component.label.clone(),
 			hierarchy_path: component.hierarchy_path.clone(),
 			sibling_index: component.sibling_index,
@@ -1348,7 +1439,7 @@ fn modular_avatar_menu_graph_nodes(candidates: &[RuntimeMenuGraphCandidate]) -> 
 				.and_then(menu_parent_path)
 				.and_then(|parent_path| path_to_node.get(parent_path).copied());
 			RuntimeMenuGraphNode {
-				component_index: candidate.component_index,
+				menu_key: candidate.menu_key.clone(),
 				label: candidate.label.clone(),
 				hierarchy_path: candidate.hierarchy_path.clone(),
 				parent_node_index,
@@ -6332,28 +6423,29 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode,
-		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode, WardrobeAssetUploadPlan,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, modular_avatar_menu_components,
+		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
+		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode,
+		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
+	use serde_json::json;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
 	fn menu_graph_node_path_reports_truncated_cycles() {
 		let nodes = vec![
 			RuntimeMenuGraphNode {
-				component_index: 10,
+				menu_key: "component:10".to_string(),
 				label: Some("A".to_string()),
 				hierarchy_path: Some("Root/A".to_string()),
 				parent_node_index: Some(1),
 			},
 			RuntimeMenuGraphNode {
-				component_index: 11,
+				menu_key: "component:11".to_string(),
 				label: Some("B".to_string()),
 				hierarchy_path: Some("Root/B".to_string()),
 				parent_node_index: Some(0),
@@ -6363,6 +6455,39 @@ mod tests {
 		let path = menu_graph_node_path(&nodes, 0);
 		assert!(path.truncated);
 		assert_eq!(path.labels, vec!["B".to_string(), "A".to_string()]);
+	}
+
+	#[test]
+	fn modular_avatar_menu_components_expand_external_menu_controls() {
+		let unavatar = un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "ModularAvatarMenuInstaller",
+						"enabled": true,
+						"hierarchyPath": "Root/MenuInstaller",
+						"menuToAppend": {
+							"assetPath": "Assets/Menus/Root.asset",
+							"controls": [{
+								"name": "External Hat",
+								"type": "Toggle",
+								"parameter": "Hat",
+								"value": 1.0
+							}]
+						}
+					}]
+				}
+			}),
+		};
+
+		let components = modular_avatar_menu_components(&unavatar);
+		assert_eq!(components.len(), 2);
+		assert_eq!(components[0].menu_key, "component:0");
+		assert_eq!(components[1].menu_key, "external:0:0");
+		assert_eq!(components[1].label.as_deref(), Some("External Hat"));
+		assert_eq!(components[1].parameter_name.as_deref(), Some("Hat"));
+		assert_eq!(components[1].value, Some(1.0));
 	}
 
 	#[test]

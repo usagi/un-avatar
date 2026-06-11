@@ -4883,6 +4883,7 @@ mod tests {
 			}];
 			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
 				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
 				menu_label: Some("Wardrobe".to_string()),
 				parameter_name: "Outfit".to_string(),
 				parameter_value: 1.0,
@@ -4903,6 +4904,7 @@ mod tests {
 			}];
 			status.menu_wardrobe_candidates = vec![crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
 				menu_path: vec!["Wardrobe".to_string()],
 				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
@@ -5689,6 +5691,7 @@ mod tests {
 		let candidates = vec![
 			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 1,
+				menu_key: "component:1".to_string(),
 				menu_path: vec!["Wardrobe".to_string()],
 				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
@@ -5699,6 +5702,7 @@ mod tests {
 			},
 			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
 				menu_path: vec!["Helmet".to_string()],
 				menu_path_truncated: false,
 				menu_label: Some("Helmet".to_string()),
