@@ -521,6 +521,8 @@ struct DiagnoseMenuWardrobeCandidate {
 	menu_component_index: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	menu_path: Vec<String>,
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	menu_path_truncated: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	menu_label: Option<String>,
 	action_id: String,
@@ -4356,13 +4358,24 @@ fn menu_graph_node_display_label(node: &DiagnoseModularAvatarMenuGraphNode) -> O
 	})
 }
 
-fn menu_graph_node_path(nodes: &[DiagnoseModularAvatarMenuGraphNode], node_index: usize) -> Vec<String> {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MenuGraphNodePath {
+	labels: Vec<String>,
+	truncated: bool,
+}
+
+fn menu_graph_node_path(nodes: &[DiagnoseModularAvatarMenuGraphNode], node_index: usize) -> MenuGraphNodePath {
 	let mut labels = Vec::new();
 	let mut seen = BTreeSet::new();
 	let mut current_index = Some(node_index);
 	while let Some(index) = current_index {
-		if index >= nodes.len() || !seen.insert(index) {
-			break;
+		if index >= nodes.len() {
+			labels.reverse();
+			return MenuGraphNodePath { labels, truncated: true };
+		}
+		if !seen.insert(index) {
+			labels.reverse();
+			return MenuGraphNodePath { labels, truncated: true };
 		}
 		let node = &nodes[index];
 		if let Some(label) = menu_graph_node_display_label(node) {
@@ -4371,7 +4384,7 @@ fn menu_graph_node_path(nodes: &[DiagnoseModularAvatarMenuGraphNode], node_index
 		current_index = node.parent_node_index;
 	}
 	labels.reverse();
-	labels
+	MenuGraphNodePath { labels, truncated: false }
 }
 
 fn diagnose_menu_wardrobe_candidates(
@@ -4395,11 +4408,15 @@ fn diagnose_menu_wardrobe_candidates(
 		let menu_path = node_by_component
 			.get(&action_candidate.menu_component_index)
 			.map(|node_index| menu_graph_node_path(&unavatar.modular_avatar_menu_graph_nodes, *node_index))
-			.unwrap_or_else(|| action_candidate.menu_label.iter().cloned().collect());
+			.unwrap_or_else(|| MenuGraphNodePath {
+				labels: action_candidate.menu_label.iter().cloned().collect(),
+				truncated: false,
+			});
 		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
 			candidates.push(DiagnoseMenuWardrobeCandidate {
 				menu_component_index: action_candidate.menu_component_index,
-				menu_path: menu_path.clone(),
+				menu_path: menu_path.labels.clone(),
+				menu_path_truncated: menu_path.truncated,
 				menu_label: action_candidate.menu_label.clone(),
 				action_id: action_candidate.action_id.clone(),
 				wardrobe_set_id: wardrobe_set_id.clone(),
@@ -4785,10 +4802,11 @@ fn run_diagnose(
 	}
 	for candidate in report.menu_wardrobe_candidates.iter().take(16) {
 		println!(
-			"menu_wardrobe_candidate[#{} -> {}]: path={:?} label={:?} action={} match={} inverted={}",
+			"menu_wardrobe_candidate[#{} -> {}]: path={:?} truncated={} label={:?} action={} match={} inverted={}",
 			candidate.menu_component_index,
 			candidate.wardrobe_set_id,
 			candidate.menu_path,
+			candidate.menu_path_truncated,
 			candidate.menu_label,
 			candidate.action_id,
 			candidate.match_kind,
@@ -5498,6 +5516,46 @@ mod tests {
 			0.0, 0.0, 1.0, 0.0, //
 			0.0, 0.0, 0.0, 1.0,
 		]
+	}
+
+	#[test]
+	fn menu_graph_node_path_reports_truncated_cycles() {
+		let nodes = vec![
+			DiagnoseModularAvatarMenuGraphNode {
+				node_index: 0,
+				component_index: 10,
+				short_type: "ModularAvatarMenuGroup".to_string(),
+				kind: "group".to_string(),
+				label: Some("A".to_string()),
+				hierarchy_path: Some("Root/A".to_string()),
+				parent_path: Some("Root/B".to_string()),
+				parent_node_index: Some(1),
+				parent_component_index: Some(11),
+				child_component_indices: Vec::new(),
+				menu_to_append_path: None,
+				install_target_menu_path: None,
+				installer_path: None,
+			},
+			DiagnoseModularAvatarMenuGraphNode {
+				node_index: 1,
+				component_index: 11,
+				short_type: "ModularAvatarMenuGroup".to_string(),
+				kind: "group".to_string(),
+				label: Some("B".to_string()),
+				hierarchy_path: Some("Root/B".to_string()),
+				parent_path: Some("Root/A".to_string()),
+				parent_node_index: Some(0),
+				parent_component_index: Some(10),
+				child_component_indices: Vec::new(),
+				menu_to_append_path: None,
+				install_target_menu_path: None,
+				installer_path: None,
+			},
+		];
+
+		let path = menu_graph_node_path(&nodes, 0);
+		assert!(path.truncated);
+		assert_eq!(path.labels, vec!["B".to_string(), "A".to_string()]);
 	}
 
 	#[test]

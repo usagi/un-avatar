@@ -4904,6 +4904,7 @@ mod tests {
 			status.menu_wardrobe_candidates = vec![crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 2,
 				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
 				action_id: "wardrobe:field_drape".to_string(),
 				wardrobe_set_id: "field_drape".to_string(),
@@ -5689,6 +5690,7 @@ mod tests {
 			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 1,
 				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
 				action_id: "wardrobe:field_drape".to_string(),
 				wardrobe_set_id: "field_drape".to_string(),
@@ -5698,6 +5700,7 @@ mod tests {
 			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: 2,
 				menu_path: vec!["Helmet".to_string()],
+				menu_path_truncated: false,
 				menu_label: Some("Helmet".to_string()),
 				action_id: "wardrobe:helmet".to_string(),
 				wardrobe_set_id: "helmet".to_string(),

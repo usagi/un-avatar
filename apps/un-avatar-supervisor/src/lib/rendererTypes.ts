@@ -245,6 +245,7 @@ export type RendererRuntimeActionRestoreApplyEntry = {
 export type RendererRuntimeMenuWardrobeCandidateStatus = {
 	menu_component_index?: number;
 	menu_path?: string[];
+	menu_path_truncated?: boolean;
 	menu_label?: string;
 	action_id: string;
 	wardrobe_set_id: string;

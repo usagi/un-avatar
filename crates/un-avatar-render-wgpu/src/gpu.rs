@@ -192,6 +192,8 @@ pub(crate) struct RuntimeMenuWardrobeCandidateStatus {
 	pub(crate) menu_component_index: usize,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) menu_path: Vec<String>,
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub(crate) menu_path_truncated: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) menu_label: Option<String>,
 	pub(crate) action_id: String,
@@ -897,6 +899,12 @@ struct RuntimeMenuGraphNode {
 	parent_node_index: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RuntimeMenuGraphNodePath {
+	labels: Vec<String>,
+	truncated: bool,
+}
+
 fn menu_action_candidates_from_runtime(
 	unavatar: Option<&un_avatar_core::UnaUnavatarExtension>,
 	actions: &un_avatar_core::UnaRuntimeActionSet,
@@ -998,11 +1006,15 @@ fn menu_wardrobe_candidates_from_runtime(
 		let menu_path = menu_path_by_component
 			.get(&action_candidate.menu_component_index)
 			.cloned()
-			.unwrap_or_else(|| action_candidate.menu_label.iter().cloned().collect());
+			.unwrap_or_else(|| RuntimeMenuGraphNodePath {
+				labels: action_candidate.menu_label.iter().cloned().collect(),
+				truncated: false,
+			});
 		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
 			candidates.push(RuntimeMenuWardrobeCandidateStatus {
 				menu_component_index: action_candidate.menu_component_index,
-				menu_path: menu_path.clone(),
+				menu_path: menu_path.labels.clone(),
+				menu_path_truncated: menu_path.truncated,
 				menu_label: action_candidate.menu_label.clone(),
 				action_id: action_candidate.action_id.clone(),
 				wardrobe_set_id: wardrobe_set_id.clone(),
@@ -1364,13 +1376,18 @@ fn menu_graph_node_display_label(node: &RuntimeMenuGraphNode) -> Option<String> 
 	})
 }
 
-fn menu_graph_node_path(nodes: &[RuntimeMenuGraphNode], node_index: usize) -> Vec<String> {
+fn menu_graph_node_path(nodes: &[RuntimeMenuGraphNode], node_index: usize) -> RuntimeMenuGraphNodePath {
 	let mut labels = Vec::new();
 	let mut seen = BTreeSet::new();
 	let mut current_index = Some(node_index);
 	while let Some(index) = current_index {
-		if index >= nodes.len() || !seen.insert(index) {
-			break;
+		if index >= nodes.len() {
+			labels.reverse();
+			return RuntimeMenuGraphNodePath { labels, truncated: true };
+		}
+		if !seen.insert(index) {
+			labels.reverse();
+			return RuntimeMenuGraphNodePath { labels, truncated: true };
 		}
 		let node = &nodes[index];
 		if let Some(label) = menu_graph_node_display_label(node) {
@@ -1379,7 +1396,7 @@ fn menu_graph_node_path(nodes: &[RuntimeMenuGraphNode], node_index: usize) -> Ve
 		current_index = node.parent_node_index;
 	}
 	labels.reverse();
-	labels
+	RuntimeMenuGraphNodePath { labels, truncated: false }
 }
 
 fn modular_avatar_component_fields(component: &Value) -> Option<&Value> {
@@ -6315,15 +6332,38 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
+		menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
 		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode,
 		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
-		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode, WardrobeAssetUploadPlan,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+
+	#[test]
+	fn menu_graph_node_path_reports_truncated_cycles() {
+		let nodes = vec![
+			RuntimeMenuGraphNode {
+				component_index: 10,
+				label: Some("A".to_string()),
+				hierarchy_path: Some("Root/A".to_string()),
+				parent_node_index: Some(1),
+			},
+			RuntimeMenuGraphNode {
+				component_index: 11,
+				label: Some("B".to_string()),
+				hierarchy_path: Some("Root/B".to_string()),
+				parent_node_index: Some(0),
+			},
+		];
+
+		let path = menu_graph_node_path(&nodes, 0);
+		assert!(path.truncated);
+		assert_eq!(path.labels, vec!["B".to_string(), "A".to_string()]);
+	}
 
 	#[test]
 	fn runtime_action_parameter_selection_respects_inverted_conditions() {
