@@ -47,7 +47,7 @@ Source data:
 Runtime state:
 
 - active wardrobe set、active asset groups、runtime action parameter、dynamics enabled override は runtime state に属する。
-- `dynamicsEnable` は authored default を書き換えず、stable dynamics id に対する runtime override として扱う。Renderer runtime control の `set_dynamics_enabled` command も同じ runtime override 経路を使い、`sourceId` / `enabled` で個別 group を切り替える。Supervisor diagnostics の group toggle はこの command の QA 用 UI であり、source data や authored default は変更しない。
+- `dynamicsEnable` は authored default を書き換えず、stable dynamics id に対する runtime override として扱う。Renderer runtime control の `set_dynamics_enabled` command も同じ runtime override 経路を使い、`sourceId` / `enabled` で個別 group を切り替える。`set_all_dynamics_enabled` は QA 用に全 runtime dynamics group の override を一括設定する。Supervisor diagnostics の group toggle / all toggle はこれら command の QA 用 UI であり、source data や authored default は変更しない。
 - solver state は source scene を直接 mutate せず、resolved scene / pose buffer / runtime dynamics view から構築する。
 - runtime state の owner policy と continuous evaluator は UNEvaluation が扱う。UNDynamics solver は評価済み enabled state / parameters / colliders を読むだけで、wardrobe / action / contact の優先順位を決めない。
 
