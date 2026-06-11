@@ -1881,6 +1881,16 @@ td small {
 	word-break: break-word;
 }
 
+.renderer-pane-scroll dt small {
+	display: block;
+	margin-top: 2px;
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
 .renderer-pane-scroll dd small,
 .renderer-pane-scroll dd span,
 .renderer-pane-scroll dd code {

@@ -10,8 +10,12 @@
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
 
 	const sampleLimit = 4;
+	const dynamicsGroupLimit = 24;
 
 	$: rendererRunning = renderer.pid != null;
+	$: dynamicsGroups = runtimeStatus?.dynamics_groups ?? [];
+	$: visibleDynamicsGroups = dynamicsGroups.slice(0, dynamicsGroupLimit);
+	$: hiddenDynamicsGroupCount = Math.max(0, dynamicsGroups.length - visibleDynamicsGroups.length);
 
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
@@ -155,9 +159,22 @@
 				<dd class="stderr-block">{runtimeStatus.dynamics_warnings.slice(0, sampleLimit).join("\n")}</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
-				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
+				<dt>
+					{$_("renderers.details.diag_dynamics_groups")}
+					{#if hiddenDynamicsGroupCount}
+						<small>
+							{$_("renderers.details.diag_dynamics_groups_limited", {
+								values: {
+									count: visibleDynamicsGroups.length,
+									total: dynamicsGroups.length,
+									hidden: hiddenDynamicsGroupCount,
+								},
+							})}
+						</small>
+					{/if}
+				</dt>
 				<dd class="diagnostics-action-list">
-					{#each runtimeStatus.dynamics_groups.slice(0, sampleLimit) as group}
+					{#each visibleDynamicsGroups as group}
 						<div class="diagnostics-action-row">
 							<code>{groupLabel(group)}</code>
 							<button
