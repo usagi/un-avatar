@@ -513,6 +513,23 @@ fn decode_unavatar_texture_asset(
 				pixels,
 			})
 		}
+		"image/png" | "image/jpeg" => {
+			let format = if mime_type == "image/png" {
+				image::ImageFormat::Png
+			} else {
+				image::ImageFormat::Jpeg
+			};
+			let decoded = image::load_from_memory_with_format(bytes, format).map_err(|e| format!("{mime_type} decode: {e}"))?;
+			let rgba = decoded.to_rgba8();
+			let width = rgba.width();
+			let height = rgba.height();
+			Ok(UnaImageRgba {
+				width,
+				height,
+				pixel_format: UnaImagePixelFormat::R8G8B8A8,
+				pixels: rgba.into_raw(),
+			})
+		}
 		other => Err(format!("unsupported UN_avatar texture asset MIME: {other}")),
 	}
 }
@@ -4883,9 +4900,29 @@ fn apply_unavatar_remove_vertex_color(
 
 #[derive(Clone, Debug)]
 enum ModularAvatarVertexFilter {
-	BlendShape { shapes: Vec<String>, threshold: f32 },
-	Axis { center: [f32; 3], axis: [f32; 3] },
-	Bone { bone_node: usize, threshold: f32 },
+	BlendShape {
+		shapes: Vec<String>,
+		threshold: f32,
+	},
+	Axis {
+		center: [f32; 3],
+		axis: [f32; 3],
+	},
+	Bone {
+		bone_node: usize,
+		threshold: f32,
+	},
+	Mask {
+		material_index: usize,
+		image_index: usize,
+		mode: ModularAvatarMaskDeleteMode,
+	},
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModularAvatarMaskDeleteMode {
+	DeleteBlack,
+	DeleteWhite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4900,6 +4937,12 @@ struct ModularAvatarVertexFilterDeleteGroup {
 	target: usize,
 	combine: ModularAvatarVertexFilterCombine,
 	filters: Vec<ModularAvatarVertexFilter>,
+}
+
+struct ModularAvatarVertexFilterContext<'a> {
+	images: &'a [UnaImageRgba],
+	image_sources: &'a [Option<UnaImageSourceMetadata>],
+	texture_asset_map: &'a BTreeMap<String, usize>,
 }
 
 fn modular_avatar_component_value<'a>(component: &'a Value, names: &[&str]) -> Option<&'a Value> {
@@ -5382,12 +5425,41 @@ fn modular_avatar_vertex_filter_by_bone(
 	})
 }
 
+fn modular_avatar_mask_delete_mode(component: &Value) -> ModularAvatarMaskDeleteMode {
+	let value = modular_avatar_component_value(component, &["DeleteMode", "deleteMode", "delete_mode", "m_deleteMode"]);
+	match value {
+		Some(Value::String(mode)) => match mode.as_str() {
+			"DeleteWhite" | "delete_white" | "White" | "white" | "1" => ModularAvatarMaskDeleteMode::DeleteWhite,
+			_ => ModularAvatarMaskDeleteMode::DeleteBlack,
+		},
+		Some(Value::Number(number)) if number.as_u64() == Some(1) => ModularAvatarMaskDeleteMode::DeleteWhite,
+		_ => ModularAvatarMaskDeleteMode::DeleteBlack,
+	}
+}
+
+fn modular_avatar_vertex_filter_by_mask(
+	component: &Value,
+	texture_asset_map: &BTreeMap<String, usize>,
+) -> Option<ModularAvatarVertexFilter> {
+	let texture_asset_id =
+		modular_avatar_component_string(component, &["maskTextureAssetId", "MaskTextureAssetId", "mask_texture_asset_id"])?;
+	let image_index = texture_asset_map.get(&texture_asset_id).copied()?;
+	Some(ModularAvatarVertexFilter::Mask {
+		material_index: modular_avatar_component_value(component, &["MaterialIndex", "materialIndex", "material_index", "m_materialIndex"])
+			.and_then(|value| json_usize(Some(value)))
+			.unwrap_or(0),
+		image_index,
+		mode: modular_avatar_mask_delete_mode(component),
+	})
+}
+
 fn collect_modular_avatar_vertex_filter_delete_groups(
 	components: &[Value],
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	context: &ModularAvatarVertexFilterContext<'_>,
 ) -> (Vec<ModularAvatarVertexFilterDeleteGroup>, usize, usize, usize) {
 	let mut groups = Vec::new();
 	let mut missing = 0usize;
@@ -5462,6 +5534,13 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 				}
 				Some("VertexFilterByBoneComponent") => {
 					if let Some(filter) = modular_avatar_vertex_filter_by_bone(filter, node_ids, registry_paths, paths, normalized_paths) {
+						vertex_filters.push(filter);
+					} else {
+						has_unsupported = true;
+					}
+				}
+				Some("VertexFilterByMaskComponent") => {
+					if let Some(filter) = modular_avatar_vertex_filter_by_mask(filter, context.texture_asset_map) {
 						vertex_filters.push(filter);
 					} else {
 						has_unsupported = true;
@@ -5556,9 +5635,74 @@ fn modular_avatar_bone_filter_mask(
 	mask
 }
 
+fn modular_avatar_wrap_uv(value: f32, mode: UnaTextureWrapMode) -> f32 {
+	match mode {
+		UnaTextureWrapMode::ClampToEdge => value.clamp(0.0, 1.0),
+		UnaTextureWrapMode::Repeat => value.rem_euclid(1.0),
+		UnaTextureWrapMode::MirroredRepeat => {
+			let repeated = value.rem_euclid(2.0);
+			if repeated <= 1.0 {
+				repeated
+			} else {
+				2.0 - repeated
+			}
+		}
+	}
+}
+
+fn modular_avatar_mask_pixel_selected(px: &[u8], mode: ModularAvatarMaskDeleteMode) -> bool {
+	match mode {
+		ModularAvatarMaskDeleteMode::DeleteBlack => px == [0, 0, 0, 255],
+		ModularAvatarMaskDeleteMode::DeleteWhite => px == [255, 255, 255, 255],
+	}
+}
+
+fn modular_avatar_mask_filter_mask(
+	primitive: &UnaMeshBuffers,
+	primitive_index: usize,
+	primitive_count: usize,
+	image: &UnaImageRgba,
+	source: Option<&UnaImageSourceMetadata>,
+	material_index: usize,
+	mode: ModularAvatarMaskDeleteMode,
+) -> Vec<bool> {
+	let mut mask = vec![false; primitive.positions.len()];
+	let selected_primitive = material_index.min(primitive_count.saturating_sub(1));
+	if primitive_index != selected_primitive || image.width == 0 || image.height == 0 {
+		return mask;
+	}
+	let Some(uvs) = primitive.tex_coords_0.as_ref() else {
+		return mask;
+	};
+	if uvs.len() != mask.len() {
+		return mask;
+	}
+	let sampler = source.and_then(|source| source.sampler).unwrap_or_default();
+	let pixels = image.rgba8_compat_pixels();
+	let width = image.width as usize;
+	let height = image.height as usize;
+	for (index, uv) in uvs.iter().enumerate() {
+		let u = modular_avatar_wrap_uv(uv[0], sampler.wrap_s);
+		let v = modular_avatar_wrap_uv(uv[1], sampler.wrap_t);
+		let x = ((u * image.width as f32).floor() as usize).min(width - 1);
+		let y = ((v * image.height as f32).floor() as usize).min(height - 1);
+		let offset = (y * width + x) * 4;
+		if pixels
+			.get(offset..offset + 4)
+			.is_some_and(|px| modular_avatar_mask_pixel_selected(px, mode))
+		{
+			mask[index] = true;
+		}
+	}
+	mask
+}
+
 fn modular_avatar_single_vertex_filter_mask(
 	primitive: &UnaMeshBuffers,
 	skin_joint_nodes: Option<&[usize]>,
+	primitive_index: usize,
+	primitive_count: usize,
+	context: &ModularAvatarVertexFilterContext<'_>,
 	filter: &ModularAvatarVertexFilter,
 ) -> Vec<bool> {
 	match filter {
@@ -5569,23 +5713,51 @@ fn modular_avatar_single_vertex_filter_mask(
 		ModularAvatarVertexFilter::Bone { bone_node, threshold } => {
 			modular_avatar_bone_filter_mask(primitive, skin_joint_nodes, *bone_node, *threshold)
 		}
+		ModularAvatarVertexFilter::Mask {
+			material_index,
+			image_index,
+			mode,
+		} => context.images.get(*image_index).map_or_else(
+			|| vec![false; primitive.positions.len()],
+			|image| {
+				modular_avatar_mask_filter_mask(
+					primitive,
+					primitive_index,
+					primitive_count,
+					image,
+					context.image_sources.get(*image_index).and_then(Option::as_ref),
+					*material_index,
+					*mode,
+				)
+			},
+		),
 	}
 }
 
 fn modular_avatar_vertex_filter_mask(
 	primitive: &UnaMeshBuffers,
 	skin_joint_nodes: Option<&[usize]>,
+	primitive_index: usize,
+	primitive_count: usize,
+	context: &ModularAvatarVertexFilterContext<'_>,
 	group: &ModularAvatarVertexFilterDeleteGroup,
 ) -> Vec<bool> {
 	let mut filters = group.filters.iter();
 	let Some(first) = filters.next() else {
 		return vec![false; primitive.positions.len()];
 	};
-	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, first);
+	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, primitive_index, primitive_count, context, first);
 	match group.combine {
 		ModularAvatarVertexFilterCombine::Single | ModularAvatarVertexFilterCombine::Union => {
 			for filter in filters {
-				let next = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, filter);
+				let next = modular_avatar_single_vertex_filter_mask(
+					primitive,
+					skin_joint_nodes,
+					primitive_index,
+					primitive_count,
+					context,
+					filter,
+				);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target || value;
 				}
@@ -5593,7 +5765,14 @@ fn modular_avatar_vertex_filter_mask(
 		}
 		ModularAvatarVertexFilterCombine::Intersection => {
 			for filter in filters {
-				let next = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, filter);
+				let next = modular_avatar_single_vertex_filter_mask(
+					primitive,
+					skin_joint_nodes,
+					primitive_index,
+					primitive_count,
+					context,
+					filter,
+				);
 				for (target, value) in mask.iter_mut().zip(next) {
 					*target = *target && value;
 				}
@@ -5632,6 +5811,7 @@ fn filter_mesh_primitive_triangles_by_vertex_mask(primitive: &mut UnaMeshBuffers
 	removed
 }
 
+#[cfg(test)]
 fn apply_unavatar_vertex_filters(
 	scene: &mut UnaSceneSnapshot,
 	components: &[Value],
@@ -5640,8 +5820,35 @@ fn apply_unavatar_vertex_filters(
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
 ) -> (usize, usize, usize, usize, usize, usize) {
+	apply_unavatar_vertex_filters_with_texture_assets(
+		scene,
+		components,
+		node_ids,
+		registry_paths,
+		paths,
+		normalized_paths,
+		&BTreeMap::new(),
+	)
+}
+
+fn apply_unavatar_vertex_filters_with_texture_assets(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	texture_asset_map: &BTreeMap<String, usize>,
+) -> (usize, usize, usize, usize, usize, usize) {
+	let images = scene.images.clone();
+	let image_sources = scene.image_sources.clone();
+	let context = ModularAvatarVertexFilterContext {
+		images: &images,
+		image_sources: &image_sources,
+		texture_asset_map,
+	};
 	let (groups, missing, skipped, unsupported) =
-		collect_modular_avatar_vertex_filter_delete_groups(components, node_ids, registry_paths, paths, normalized_paths);
+		collect_modular_avatar_vertex_filter_delete_groups(components, node_ids, registry_paths, paths, normalized_paths, &context);
 	if groups.is_empty() {
 		return (0, 0, 0, missing, skipped, unsupported);
 	}
@@ -5684,8 +5891,10 @@ fn apply_unavatar_vertex_filters(
 		};
 		let skin_joint_nodes = skin_joint_nodes.as_deref();
 		let mut node_mutated = false;
-		for primitive in mesh {
-			let vertex_mask = modular_avatar_vertex_filter_mask(primitive, skin_joint_nodes, &group);
+		let primitive_count = mesh.len();
+		for (primitive_index, primitive) in mesh.iter_mut().enumerate() {
+			let vertex_mask =
+				modular_avatar_vertex_filter_mask(primitive, skin_joint_nodes, primitive_index, primitive_count, &context, &group);
 			if !vertex_mask.iter().any(|value| *value) {
 				continue;
 			}
@@ -5777,7 +5986,17 @@ fn unavatar_modular_avatar_component_inverted(component: &Value) -> bool {
 		.unwrap_or(false)
 }
 
+#[cfg(test)]
 fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
+	apply_unavatar_modular_avatar_with_texture_assets(scene, unavatar, &BTreeMap::new(), report);
+}
+
+fn apply_unavatar_modular_avatar_with_texture_assets(
+	scene: &mut UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+	texture_asset_map: &BTreeMap<String, usize>,
+	report: &mut ImportReport,
+) {
 	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
 		return;
 	};
@@ -5810,7 +6029,15 @@ fn apply_unavatar_modular_avatar(scene: &mut UnaSceneSnapshot, unavatar: &UnaUna
 		vertex_filter_missing,
 		vertex_filter_skipped,
 		vertex_filter_unsupported,
-	) = apply_unavatar_vertex_filters(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	) = apply_unavatar_vertex_filters_with_texture_assets(
+		scene,
+		components,
+		&node_ids,
+		&registry_paths,
+		&paths,
+		&normalized_paths,
+		texture_asset_map,
+	);
 	if vertex_filter_nodes > 0
 		|| vertex_filter_primitives > 0
 		|| vertex_filter_triangles > 0
@@ -8687,9 +8914,10 @@ impl AvatarImporter for GltfImporter {
 		if let Some(original_image_sources) = original_image_sources {
 			scene.image_sources = original_image_sources;
 		}
+		let mut texture_asset_map = BTreeMap::new();
 		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin.as_deref()) {
-			let asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);
-			apply_unavatar_material_texture_asset_refs(&mut scene, root, &asset_map);
+			texture_asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);
+			apply_unavatar_material_texture_asset_refs(&mut scene, root, &texture_asset_map);
 		}
 		let unavatar = root_json.as_ref().and_then(unavatar_extension_from_root);
 		let humanoid_profile = unavatar
@@ -8698,7 +8926,7 @@ impl AvatarImporter for GltfImporter {
 		if let Some(unavatar) = &unavatar {
 			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
 			apply_unavatar_asset_group_ownership(&mut scene, unavatar, &mut report);
-			apply_unavatar_modular_avatar(&mut scene, unavatar, &mut report);
+			apply_unavatar_modular_avatar_with_texture_assets(&mut scene, unavatar, &texture_asset_map, &mut report);
 			if let Some(humanoid_profile) = &humanoid_profile {
 				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
 					retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
@@ -8779,6 +9007,7 @@ pub fn register_gltf_importer(registry: &mut IoRegistry) {
 mod tests {
 	use super::*;
 	use glam::Mat4;
+	use image::ImageEncoder;
 	use std::io::Write;
 	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind};
 
@@ -9525,6 +9754,87 @@ mod tests {
 			})
 		);
 		assert_eq!(scene.materials[0].mtoon.as_ref().unwrap().matcap_texture_index, Some(0));
+	}
+
+	#[test]
+	fn imports_unavatar_png_texture_asset() {
+		let mut png = Vec::new();
+		image::codecs::png::PngEncoder::new(&mut png)
+			.write_image(&[0, 0, 0, 255, 255, 255, 255, 255], 2, 1, image::ColorType::Rgba8.into())
+			.unwrap();
+		let mut bin = vec![0; 12];
+		let png_offset = bin.len();
+		bin.extend_from_slice(&png);
+		let json = format!(
+			r#"{{
+				"asset": {{"version": "2.0"}},
+				"scene": 0,
+				"scenes": [{{"nodes": [0]}}],
+				"meshes": [{{
+					"primitives": [{{
+						"attributes": {{"POSITION": 0}}
+					}}]
+				}}],
+				"accessors": [
+					{{"bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3", "min": [0, 0, 0], "max": [0, 0, 0]}}
+				],
+				"bufferViews": [
+					{{"buffer": 0, "byteOffset": 0, "byteLength": 12}},
+					{{"buffer": 0, "byteOffset": {png_offset}, "byteLength": {png_len}}}
+				],
+				"buffers": [{{"byteLength": {bin_len}}}],
+				"nodes": [
+					{{"name": "root", "mesh": 0}}
+				],
+				"extensionsUsed": ["UN_avatar"],
+				"extensions": {{
+					"UN_avatar": {{
+						"specVersion": "0.1-preview",
+						"textureAssets": [{{
+							"id": "mask-png",
+							"name": "mask",
+							"mimeType": "image/png",
+							"colorSpace": "sRGB",
+							"channels": "rgba",
+							"sampler": {{"magFilter": 9728, "minFilter": 9728, "wrapS": 33071, "wrapT": 33648}},
+							"bufferView": 1
+						}}]
+					}}
+				}}
+			}}"#,
+			png_offset = png_offset,
+			png_len = png.len(),
+			bin_len = bin.len()
+		);
+		let bytes = glb_bytes_with_bin(&json, &bin);
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp
+			.import(
+				&mut ctx,
+				ImportInput::Bytes {
+					bytes: bytes.into(),
+					path_hint: Some(std::path::PathBuf::from("mask.unavatar")),
+				},
+				ImportOptions,
+			)
+			.unwrap();
+
+		let scene = got.document.scene.as_ref().unwrap();
+		assert_eq!(scene.images.len(), 1);
+		assert_eq!(scene.images[0].width, 2);
+		assert_eq!(scene.images[0].height, 1);
+		assert_eq!(scene.images[0].pixel_format, UnaImagePixelFormat::R8G8B8A8);
+		assert_eq!(scene.images[0].pixels, vec![0, 0, 0, 255, 255, 255, 255, 255]);
+		assert_eq!(
+			scene.image_sources[0].as_ref().unwrap().sampler,
+			Some(UnaTextureSampler {
+				mag_filter: UnaTextureFilterMode::Nearest,
+				min_filter: UnaTextureFilterMode::Nearest,
+				wrap_s: UnaTextureWrapMode::ClampToEdge,
+				wrap_t: UnaTextureWrapMode::MirroredRepeat,
+			})
+		);
 	}
 
 	#[test]
@@ -12962,6 +13272,72 @@ mod tests {
 
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[0, 1, 2][..]));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_deletes_mask_selected_triangles() {
+		let mut primitive = test_blend_shape_delete_primitive();
+		primitive.tex_coords_0 = Some(vec![[0.0, 0.0], [0.75, 0.0], [0.0, 0.75], [0.75, 0.75]]);
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![primitive]],
+			images: vec![UnaImageRgba {
+				width: 2,
+				height: 2,
+				pixel_format: UnaImagePixelFormat::R8G8B8A8,
+				pixels: vec![0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
+			}],
+			image_sources: vec![Some(UnaImageSourceMetadata::default())],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"enabled": true,
+			"fields": {
+				"m_object": {"nodeId": "node_target", "path": "Root/TargetRenderer"},
+				"m_multiMode": "VertexIntersection",
+				"filters": [{
+					"shortType": "VertexFilterByMaskComponent",
+					"fields": {
+						"maskTextureAssetId": "mask_0",
+						"m_materialIndex": 0,
+						"m_deleteMode": "DeleteBlack"
+					}
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+		let texture_asset_map = BTreeMap::from([("mask_0".to_string(), 0usize)]);
+
+		let (nodes, primitives, triangles, missing, skipped, unsupported) = apply_unavatar_vertex_filters_with_texture_assets(
+			&mut scene,
+			&components,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+			&texture_asset_map,
+		);
+
+		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
+		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[1, 3, 2][..]));
 	}
 
 	#[test]
