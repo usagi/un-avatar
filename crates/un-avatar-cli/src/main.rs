@@ -4170,6 +4170,12 @@ fn build_diagnose_report(
 			dynamics_counts.posing_enabled_groups
 		));
 	}
+	if dynamics_counts.vrc_constraint_refs > 0 {
+		warnings.push(format!(
+			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}",
+			dynamics_counts.vrc_constraint_refs
+		));
+	}
 	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
 	let contact_parameter_emission_enabled = doc.runtime_model().contact_parameter_emission_enabled();
 	if contact_probe_would_emit_count > 0 && !contact_parameter_emission_enabled {
@@ -7153,6 +7159,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
