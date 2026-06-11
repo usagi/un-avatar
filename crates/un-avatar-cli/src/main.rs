@@ -3758,7 +3758,7 @@ fn build_diagnose_report(
 		contact_count: dynamics_counts.contacts,
 		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
 		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
-		contact_parameter_declaration_count: dynamics_contact_parameter_declarations.len(),
+		contact_parameter_declaration_count: dynamics_counts.contact_parameter_declarations,
 		constraint_ref_count: dynamics_counts.constraint_refs,
 		vrc_constraint_ref_count: dynamics_counts.vrc_constraint_refs,
 		source_limit_count: dynamics_source_features.limit_count,

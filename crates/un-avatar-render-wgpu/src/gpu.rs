@@ -929,6 +929,7 @@ pub struct DynamicsRuntimeCounts {
 	pub contacts: u32,
 	pub vrc_contact_senders: u32,
 	pub vrc_contact_receivers: u32,
+	pub contact_parameter_declarations: u32,
 	pub constraint_refs: u32,
 	pub vrc_constraint_refs: u32,
 }
@@ -955,6 +956,7 @@ impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
 			contacts: counts.contacts as u32,
 			vrc_contact_senders: counts.vrc_contact_senders as u32,
 			vrc_contact_receivers: counts.vrc_contact_receivers as u32,
+			contact_parameter_declarations: counts.contact_parameter_declarations as u32,
 			constraint_refs: counts.constraint_refs as u32,
 			vrc_constraint_refs: counts.vrc_constraint_refs as u32,
 		}

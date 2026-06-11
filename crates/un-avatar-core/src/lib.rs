@@ -1011,6 +1011,7 @@ pub struct UnaRuntimeDynamicsCounts {
 	pub contacts: usize,
 	pub vrc_contact_senders: usize,
 	pub vrc_contact_receivers: usize,
+	pub contact_parameter_declarations: usize,
 	pub constraint_refs: usize,
 	pub vrc_constraint_refs: usize,
 }
@@ -1163,6 +1164,9 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		}
 		for contact in self.contacts() {
 			counts.contacts += 1;
+			if contact.kind == UnaDynamicsContactKind::Receiver && !contact.parameter.is_empty() {
+				counts.contact_parameter_declarations += 1;
+			}
 			if contact.source_kind == UnaDynamicsSourceKind::VrcPhysBone {
 				match contact.kind {
 					UnaDynamicsContactKind::Sender => counts.vrc_contact_senders += 1,
@@ -5142,6 +5146,7 @@ mod tests {
 		assert_eq!(counts.contacts, 2);
 		assert_eq!(counts.vrc_contact_receivers, 1);
 		assert_eq!(counts.vrc_contact_senders, 1);
+		assert_eq!(counts.contact_parameter_declarations, 1);
 		assert_eq!(counts.constraint_refs, 1);
 		assert_eq!(counts.vrc_constraint_refs, 1);
 		let contact_parameters = dynamics.contact_parameter_declarations();

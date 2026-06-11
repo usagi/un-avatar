@@ -1590,6 +1590,7 @@ impl AvatarApp {
 				status.dynamics_contact_count = dynamics.contacts;
 				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
 				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
+				status.dynamics_contact_parameter_declaration_count = dynamics.contact_parameter_declarations;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 			}
@@ -3253,6 +3254,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_vrc_contact_receiver_count: u32,
 	#[serde(default)]
+	dynamics_contact_parameter_declaration_count: u32,
+	#[serde(default)]
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
@@ -3374,6 +3377,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_contact_count: 0,
 		dynamics_vrc_contact_sender_count: 0,
 		dynamics_vrc_contact_receiver_count: 0,
+		dynamics_contact_parameter_declaration_count: 0,
 		dynamics_constraint_ref_count: 0,
 		dynamics_vrc_constraint_ref_count: 0,
 		camera_locked: opts.camera_locked,
@@ -4681,6 +4685,7 @@ mod tests {
 			status.dynamics_contact_count = 2;
 			status.dynamics_vrc_contact_sender_count = 1;
 			status.dynamics_vrc_contact_receiver_count = 1;
+			status.dynamics_contact_parameter_declaration_count = 1;
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
 			status.dynamics_limit_group_count = 4;
@@ -4711,6 +4716,12 @@ mod tests {
 		);
 		assert_eq!(
 			snapshot.get("dynamics_vrc_contact_receiver_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_declaration_count")
+				.and_then(|value| value.as_u64()),
 			Some(1)
 		);
 		assert_eq!(
