@@ -587,28 +587,44 @@ fn wardrobe_residency_gap_index_status_list(mut indices: Vec<usize>) -> Wardrobe
 	WardrobeResidencyGapIndexStatus { indices, truncated }
 }
 
+#[cfg(test)]
 fn runtime_action_id_for_parameter(
 	actions: &un_avatar_core::UnaRuntimeActionSet,
 	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
 	name: &str,
 	value: f32,
 ) -> Option<String> {
-	let condition_match = actions
+	runtime_action_ids_for_parameter(actions, scene, name, value).into_iter().next()
+}
+
+fn runtime_action_ids_for_parameter(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
+	name: &str,
+	value: f32,
+) -> Vec<String> {
+	let condition_matches = actions
 		.actions
 		.iter()
-		.find(|action| action.parameter_condition_state_in_scene(scene, name, value) == Some(true));
-	condition_match
-		.or_else(|| {
-			actions.actions.iter().find(|action| {
-				action.parameter_condition_state_in_scene(scene, name, value).is_none()
-					&& action.matches_query(UnaRuntimeActionQuery {
-						parameter_name: Some(name),
-						parameter_value: Some(value),
-						..Default::default()
-					})
-			})
+		.filter(|action| action.parameter_condition_state_in_scene(scene, name, value) == Some(true))
+		.map(|action| action.id.clone())
+		.collect::<Vec<_>>();
+	if !condition_matches.is_empty() {
+		return condition_matches;
+	}
+	actions
+		.actions
+		.iter()
+		.filter(|action| {
+			action.parameter_condition_state_in_scene(scene, name, value).is_none()
+				&& action.matches_query(UnaRuntimeActionQuery {
+					parameter_name: Some(name),
+					parameter_value: Some(value),
+					..Default::default()
+				})
 		})
 		.map(|action| action.id.clone())
+		.collect()
 }
 
 fn wardrobe_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeWardrobeActionStatus> {
@@ -4365,16 +4381,30 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model_mut().set_runtime_parameter_value(name.to_string(), value);
 		}
-		let matching_action_id = {
+		let (matching_action_ids, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
-			runtime
-				.runtime_actions()
-				.and_then(|actions| runtime_action_id_for_parameter(actions, runtime.scene(), name, value))
+			let Some(actions) = runtime.runtime_actions() else {
+				return Ok(None);
+			};
+			(
+				runtime_action_ids_for_parameter(actions, runtime.scene(), name, value),
+				actions.clone(),
+			)
 		};
-		matching_action_id
-			.map(|action_id| self.activate_runtime_action(Some(&action_id), None, None, None, None))
-			.transpose()
+		let mut last_activation = None;
+		for action_id in matching_action_ids {
+			last_activation = Some(self.activate_runtime_action(Some(&action_id), None, None, None, None)?);
+		}
+		if last_activation.is_none() {
+			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
+			drop(doc);
+			if !restored.is_empty() {
+				self.invalidate_applied_document_state();
+			}
+		}
+		Ok(last_activation)
 	}
 
 	pub(crate) fn apply_wardrobe_set(&mut self, set_id: &str) -> Result<(), String> {
@@ -6099,9 +6129,9 @@ fn create_startup_splash_pipeline(
 mod tests {
 	use super::{
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, runtime_action_id_for_parameter,
-		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, WardrobeAssetUploadPlan,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		runtime_action_ids_for_parameter, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
@@ -6141,9 +6171,23 @@ mod tests {
 					effects: Vec::new(),
 					..Default::default()
 				},
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:glow".to_string(),
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					effects: Vec::new(),
+					..Default::default()
+				},
 			],
 		};
 
+		assert_eq!(
+			runtime_action_ids_for_parameter(&actions, None, "Hat", 1.0),
+			vec!["hat:on".to_string(), "hat:glow".to_string()]
+		);
 		assert_eq!(
 			runtime_action_id_for_parameter(&actions, None, "Hat", 1.0).as_deref(),
 			Some("hat:on")
