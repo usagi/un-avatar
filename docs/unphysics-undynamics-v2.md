@@ -78,7 +78,7 @@ Wardrobe hot switch、runtime action、Menu / Parameter candidate、Contacts met
 
 優先順:
 
-1. Stretch / endpoint / per-chain radius curve を、UNDynamics limit / chain term と solver writeback の問題として設計・実装する。local collider scale と PhysBone collider position / rotation / radius / height / insideBounds は solver / debug draw の runtime world 展開で反映済み。
+1. Stretch を、UNDynamics limit / chain term と solver writeback の問題として設計・実装する。local collider scale、PhysBone collider position / rotation / radius / height / insideBounds、leaf endpointPosition synthetic child、sourceParams.ignoreTransforms で leaf 扱いになる endpointPosition、per-chain radius curve は solver / debug draw / chain lowering の runtime 展開へ反映済み。
 2. PhysBone particle radius curve は、source-neutral chain sample metadata と solver hit radius の問題として扱う。v2 初期では `radiusCurve` を base radius 倍率として chain tail ごとに sample し、per-joint `hit_radius_samples` として collider constraint へ渡す。PhysBone 完全互換の粒子半径 semantics は、solver / writeback の検証後に必要範囲だけ拡張する。
 3. Grabbing / posing は action hook / diagnostics の最小接続に留め、direct manipulation UI は後段へ送る。
 4. Contact evaluation は current runtime scene pose を読む初期実装と Sphere / Capsule exact overlap を固定済み。次は dynamic reactive gating を、同じ source-neutral contact view 上で詰める。
