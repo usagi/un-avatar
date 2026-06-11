@@ -5874,8 +5874,10 @@ mod tests {
 		assert_eq!(unavatar.asset_group_count, 3);
 		assert_eq!(unavatar.modular_avatar_component_count, 10);
 		assert_eq!(unavatar.modular_avatar_component_count_alias, 10);
-		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&3));
-		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("resolver"), Some(&3));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("resolver"), Some(&1));
+		assert_eq!(unavatar.modular_avatar_support_counts.get("approximate"), Some(&2));
+		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("approximate"), Some(&2));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("runtime_action"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts_alias.get("runtime_action"), Some(&1));
 		assert_eq!(unavatar.modular_avatar_support_counts.get("metadata"), Some(&6));

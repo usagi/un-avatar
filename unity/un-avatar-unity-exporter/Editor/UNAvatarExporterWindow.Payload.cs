@@ -577,14 +577,14 @@ namespace UNAvatar.UnityExporter
         {
             return shortType switch
             {
-                "ModularAvatarBoneProxy" or
                 "ModularAvatarBlendshapeSync" or
                 "ModularAvatarMergeArmature" or
                 "ModularAvatarMeshCutter" or
                 "ModularAvatarMeshSettings" or
+                "ModularAvatarShapeChanger" => "approximate",
+                "ModularAvatarBoneProxy" or
                 "ModularAvatarRemoveVertexColor" or
-                "ModularAvatarReplaceObject" or
-                "ModularAvatarShapeChanger" => "resolver",
+                "ModularAvatarReplaceObject" => "resolver",
                 "ModularAvatarMaterialSetter" or
                 "ModularAvatarMaterialSwap" or
                 "ModularAvatarObjectToggle" => "runtime_action",

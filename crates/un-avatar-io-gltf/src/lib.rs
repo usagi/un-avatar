@@ -6067,6 +6067,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		return;
 	}
 	let mut resolver_supported = 0usize;
+	let mut approximate_supported = 0usize;
 	let mut runtime_action_supported = 0usize;
 	let mut metadata_supported = 0usize;
 	let mut unsupported = 0usize;
@@ -6095,6 +6096,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		}
 		match local_support_kind {
 			"resolver" => resolver_supported += 1,
+			"approximate" => approximate_supported += 1,
 			"metadata" => metadata_supported += 1,
 			"runtime_action" => runtime_action_supported += 1,
 			_ => {
@@ -6128,9 +6130,10 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		.collect::<Vec<_>>()
 		.join(",");
 	report.push_info(format!(
-		".unavatar Modular Avatar components: total={}, resolver_supported={}, runtime_action_supported={}, metadata_supported={}, unsupported={}, disabled={}, support_kind_mismatches={}, unsupported_types={}",
+		".unavatar Modular Avatar components: total={}, resolver_supported={}, approximate_supported={}, runtime_action_supported={}, metadata_supported={}, unsupported={}, disabled={}, support_kind_mismatches={}, unsupported_types={}",
 		components.len(),
 		resolver_supported,
+		approximate_supported,
 		runtime_action_supported,
 		metadata_supported,
 		unsupported,
@@ -13108,7 +13111,8 @@ mod tests {
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
 		assert!(message.contains("total=18"));
-		assert!(message.contains("resolver_supported=2"));
+		assert!(message.contains("resolver_supported=1"));
+		assert!(message.contains("approximate_supported=1"));
 		assert!(message.contains("runtime_action_supported=1"));
 		assert!(message.contains("metadata_supported=3"));
 		assert!(message.contains("unsupported=12"));
@@ -13179,7 +13183,7 @@ mod tests {
 			.iter()
 			.find(|message| message.contains("Modular Avatar components"))
 			.unwrap();
-		assert!(message.contains("resolver_supported=1"));
+		assert!(message.contains("approximate_supported=1"));
 		assert!(message.contains("support_kind_mismatches=1"));
 		assert!(report.diagnostics.iter().any(|diagnostic| {
 			diagnostic.severity == un_avatar_core::ReportSeverity::Warning

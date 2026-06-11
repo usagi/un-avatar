@@ -564,14 +564,12 @@ pub const UNA_RUNTIME_RESOLVER_VERSION: u32 = 3;
 
 pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 	match short_type {
-		"ModularAvatarBoneProxy"
-		| "ModularAvatarBlendshapeSync"
+		"ModularAvatarBlendshapeSync"
 		| "ModularAvatarMergeArmature"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
-		| "ModularAvatarRemoveVertexColor"
-		| "ModularAvatarReplaceObject"
-		| "ModularAvatarShapeChanger" => "resolver",
+		| "ModularAvatarShapeChanger" => "approximate",
+		"ModularAvatarBoneProxy" | "ModularAvatarRemoveVertexColor" | "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
 		"ModularAvatarConvertConstraints"
 		| "ModularAvatarFloorAdjuster"
@@ -7869,7 +7867,7 @@ mod tests {
 	#[test]
 	fn modular_avatar_component_support_kind_classifies_known_runtime_features() {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBoneProxy"), "resolver");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBlendshapeSync"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarBlendshapeSync"), "approximate");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarRemoveVertexColor"), "resolver");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMaterialSwap"), "runtime_action");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarObjectToggle"), "runtime_action");
@@ -7883,8 +7881,10 @@ mod tests {
 			modular_avatar_component_support_kind("ModularAvatarVisibleHeadAccessory"),
 			"metadata"
 		);
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "resolver");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "resolver");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeArmature"), "approximate");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshCutter"), "approximate");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMeshSettings"), "approximate");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarShapeChanger"), "approximate");
 		assert_eq!(
 			modular_avatar_component_support_kind("ModularAvatarConvertConstraints"),
 			"unsupported"
