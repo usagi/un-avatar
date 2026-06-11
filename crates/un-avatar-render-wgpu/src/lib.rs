@@ -1616,6 +1616,7 @@ impl AvatarApp {
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
+				status.dynamics_warnings = runtime_dynamics_warnings(&status);
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
@@ -3178,6 +3179,23 @@ fn is_false(value: &bool) -> bool {
 	!*value
 }
 
+fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	let mut warnings = Vec::new();
+	if status.dynamics_stretch_limit_group_count > 0 {
+		warnings.push(format!(
+			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={}",
+			status.dynamics_stretch_limit_group_count
+		));
+	}
+	if status.dynamics_contact_probe_would_emit_count > 0 && !status.contact_parameter_emission_enabled {
+		warnings.push(format!(
+			"dynamics contact probes would emit {} parameter value(s), but contact parameter emission is disabled",
+			status.dynamics_contact_probe_would_emit_count
+		));
+	}
+	warnings
+}
+
 #[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
@@ -3253,6 +3271,8 @@ struct RendererRuntimeSnapshot {
 	dynamics_colliders: Vec<gpu::RuntimeDynamicsColliderStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_warnings: Vec<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3444,6 +3464,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_groups: Vec::new(),
 		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
+		dynamics_warnings: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -4671,9 +4692,9 @@ mod tests {
 	};
 
 	use super::{
-		compact_window_title_status, parse_renderer_control_command, resolve_activate_action_from_menu_path, start_runtime_status_server,
-		AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan,
-		SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command, resolve_activate_action_from_menu_path,
+		runtime_dynamics_warnings, start_runtime_status_server, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode,
+		CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -4693,6 +4714,23 @@ mod tests {
 				Err(error) => panic!("connect runtime status {address}: {error}"),
 			}
 		}
+	}
+
+	#[test]
+	fn runtime_dynamics_warnings_explain_metadata_only_and_disabled_emission() {
+		let mut status = initial_runtime_snapshot(&AvatarWindowOptions::default());
+		status.dynamics_stretch_limit_group_count = 2;
+		status.dynamics_contact_probe_would_emit_count = 3;
+		status.contact_parameter_emission_enabled = false;
+
+		let warnings = runtime_dynamics_warnings(&status);
+		assert_eq!(warnings.len(), 2);
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")));
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")));
 	}
 
 	#[test]
@@ -5025,6 +5063,7 @@ mod tests {
 			status.dynamics_stretch_limit_group_count = 1;
 			status.dynamics_grabbing_enabled_group_count = 2;
 			status.dynamics_posing_enabled_group_count = 1;
+			status.dynamics_warnings = runtime_dynamics_warnings(&status);
 		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
@@ -5195,6 +5234,14 @@ mod tests {
 			snapshot.get("dynamics_stretch_limit_group_count").and_then(|value| value.as_u64()),
 			Some(1)
 		);
+		let dynamics_warnings = snapshot
+			.get("dynamics_warnings")
+			.and_then(|value| value.as_array())
+			.expect("dynamics warnings");
+		assert_eq!(dynamics_warnings.len(), 1);
+		assert!(dynamics_warnings[0]
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")));
 		assert_eq!(
 			snapshot
 				.get("dynamics_grabbing_enabled_group_count")
