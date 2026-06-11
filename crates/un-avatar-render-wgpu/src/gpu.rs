@@ -2057,6 +2057,22 @@ fn reset_runtime_dynamics_nodes_to_rest(
 	changed
 }
 
+fn reset_runtime_dynamics_nodes_to_rest_for_source_id(
+	scene: &mut un_avatar_core::UnaSceneSnapshot,
+	dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
+	rest_nodes: &[UnaSceneNode],
+	source_id: &str,
+) -> bool {
+	let mut changed = false;
+	for node_index in dynamics.reset_node_indices_for_source_id(source_id) {
+		if let (Some(dst), Some(src)) = (scene.nodes.get_mut(node_index), rest_nodes.get(node_index)) {
+			dst.transform = src.transform;
+			changed = true;
+		}
+	}
+	changed
+}
+
 pub(crate) struct GpuSceneBuildContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
@@ -2694,6 +2710,49 @@ mod motion_buffer_tests {
 		));
 		assert_eq!(scene.nodes[0].transform, rest);
 		assert_eq!(scene.nodes[1].transform, untouched);
+	}
+
+	#[test]
+	fn reset_runtime_dynamics_nodes_to_rest_for_source_id_preserves_other_sources() {
+		let hair_current = [1.0; 16];
+		let tail_current = [2.0; 16];
+		let linked_current = [3.0; 16];
+		let rest = [4.0; 16];
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![test_node(hair_current), test_node(tail_current), test_node(linked_current)],
+			..Default::default()
+		};
+		let rest_nodes = vec![test_node(rest), test_node(rest), test_node(rest)];
+		let settings = un_avatar_core::UnaSpringBoneSettings {
+			groups: vec![
+				un_avatar_core::UnaSpringBoneGroup {
+					source_id: "physbone:hair".to_string(),
+					bone_node_indices: vec![0],
+					..Default::default()
+				},
+				un_avatar_core::UnaSpringBoneGroup {
+					source_id: "physbone:tail".to_string(),
+					bone_node_indices: vec![1],
+					..Default::default()
+				},
+			],
+			constraint_refs: vec![un_avatar_core::UnaDynamicsConstraintRef {
+				target_node: 2,
+				source_nodes: vec![0],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert!(reset_runtime_dynamics_nodes_to_rest_for_source_id(
+			&mut scene,
+			settings.runtime_dynamics(),
+			&rest_nodes,
+			"physbone:hair",
+		));
+		assert_eq!(scene.nodes[0].transform, rest);
+		assert_eq!(scene.nodes[1].transform, tail_current);
+		assert_eq!(scene.nodes[2].transform, rest);
 	}
 }
 
@@ -4708,6 +4767,7 @@ impl GpuState {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
+		let rest_nodes = self.rest_nodes.as_ref().map(Arc::clone);
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		let Some(mut runtime) = doc.runtime_scene_and_dynamics_mut() else {
 			return Err("document has no runtime scene".to_string());
@@ -4715,8 +4775,10 @@ impl GpuState {
 		if !runtime.dynamics.set_group_enabled_by_source_id(source_id, enabled) {
 			return Err(format!("runtime dynamics source_id `{source_id}` not found"));
 		}
+		if let Some(rest_nodes) = rest_nodes.as_ref() {
+			reset_runtime_dynamics_nodes_to_rest_for_source_id(runtime.scene, runtime.dynamics.as_readonly(), rest_nodes, source_id);
+		}
 		drop(doc);
-		self.reset_dynamics_nodes_to_rest();
 		self.rebuild_runtime_dynamics();
 		self.invalidate_applied_document_state();
 		Ok(())

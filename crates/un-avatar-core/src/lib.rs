@@ -1481,6 +1481,29 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		nodes.into_iter().collect()
 	}
 
+	pub fn reset_node_indices_for_source_id(self, source_id: &str) -> Vec<usize> {
+		if source_id.is_empty() {
+			return Vec::new();
+		}
+		let mut nodes = BTreeSet::new();
+		for group in self.groups().iter().filter(|group| group.source_id == source_id) {
+			nodes.extend(group.bone_node_indices.iter().copied());
+		}
+		if nodes.is_empty() {
+			return Vec::new();
+		}
+		let source_nodes = nodes.clone();
+		for constraint_ref in self.constraint_refs() {
+			let overlaps = source_nodes.contains(&constraint_ref.target_node)
+				|| constraint_ref.source_nodes.iter().any(|node| source_nodes.contains(node));
+			if overlaps {
+				nodes.insert(constraint_ref.target_node);
+				nodes.extend(constraint_ref.source_nodes.iter().copied());
+			}
+		}
+		nodes.into_iter().collect()
+	}
+
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
 		self.spring_bones.into_iter().flat_map(|settings| settings.colliders.iter())
 	}
@@ -8343,6 +8366,46 @@ mod tests {
 		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
 		assert_eq!(dynamics.reset_node_indices(), vec![0, 1, 2, 3, 6, 7]);
 		assert_eq!(dynamics.colliders().map(|collider| collider.node).collect::<Vec<_>>(), vec![4, 5]);
+	}
+
+	#[test]
+	fn runtime_dynamics_resets_nodes_by_source_id_with_linked_constraints() {
+		let document = UnaDocument {
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![
+					UnaSpringBoneGroup {
+						source_id: "physbone:hair".to_string(),
+						bone_node_indices: vec![1, 2],
+						..Default::default()
+					},
+					UnaSpringBoneGroup {
+						source_id: "physbone:tail".to_string(),
+						bone_node_indices: vec![5],
+						..Default::default()
+					},
+				],
+				constraint_refs: vec![
+					UnaDynamicsConstraintRef {
+						target_node: 3,
+						source_nodes: vec![2, 4],
+						..Default::default()
+					},
+					UnaDynamicsConstraintRef {
+						target_node: 6,
+						source_nodes: vec![7],
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let dynamics = document.runtime_model().dynamics();
+
+		assert_eq!(dynamics.reset_node_indices_for_source_id("physbone:hair"), vec![1, 2, 3, 4]);
+		assert_eq!(dynamics.reset_node_indices_for_source_id("physbone:tail"), vec![5]);
+		assert!(dynamics.reset_node_indices_for_source_id("").is_empty());
+		assert!(dynamics.reset_node_indices_for_source_id("physbone:missing").is_empty());
 	}
 
 	#[test]
