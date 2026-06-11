@@ -6283,6 +6283,38 @@ mod tests {
 	}
 
 	#[test]
+	fn runtime_action_parameter_selection_checks_source_node_active_state() {
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![test_scene_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "hat:on".to_string(),
+				conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+					source_node: Some(un_avatar_core::UnaRuntimeNodeTarget {
+						node_index: Some(0),
+						..Default::default()
+					}),
+					parameter_name: Some("Hat".to_string()),
+					parameter_value: Some(1.0),
+					..Default::default()
+				}],
+				effects: Vec::new(),
+				..Default::default()
+			}],
+		};
+
+		assert_eq!(
+			runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0).as_deref(),
+			Some("hat:on")
+		);
+		scene.nodes[0].visible = false;
+		assert_eq!(runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0), None);
+	}
+
+	#[test]
 	fn runtime_action_statuses_report_current_condition_state() {
 		let actions = un_avatar_core::UnaRuntimeActionSet {
 			actions: vec![un_avatar_core::UnaRuntimeAction {

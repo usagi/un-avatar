@@ -395,7 +395,19 @@ impl UnaRuntimeActionCondition {
 
 	pub fn parameter_condition_matches_in_scene(&self, scene: Option<&UnaSceneSnapshot>, name: &str, value: f32) -> Option<bool> {
 		let active = self.parameter_condition_matches(name, value)?;
-		Some(active && self.active_parent_nodes_match(scene))
+		Some(active && self.source_node_matches(scene) && self.active_parent_nodes_match(scene))
+	}
+
+	pub fn source_node_matches(&self, scene: Option<&UnaSceneSnapshot>) -> bool {
+		let Some(target) = self.source_node.as_ref() else {
+			return true;
+		};
+		let Some(scene) = scene else {
+			return false;
+		};
+		resolve_runtime_node_target(scene, target)
+			.and_then(|index| scene.nodes.get(index))
+			.is_some_and(|node| node.visible)
 	}
 
 	pub fn active_parent_nodes_match(&self, scene: Option<&UnaSceneSnapshot>) -> bool {
@@ -6743,6 +6755,32 @@ mod tests {
 					node_index: Some(0),
 					..Default::default()
 				}],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(true));
+		scene.nodes[0].visible = false;
+		assert_eq!(action.parameter_condition_state_in_scene(Some(&scene), "Hat", 1.0), Some(false));
+		assert_eq!(action.parameter_condition_state_in_scene(None, "Hat", 1.0), Some(false));
+	}
+
+	#[test]
+	fn runtime_action_condition_checks_source_node_active_state() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let action = UnaRuntimeAction {
+			conditions: vec![UnaRuntimeActionCondition {
+				source_node: Some(UnaRuntimeNodeTarget {
+					node_index: Some(0),
+					..Default::default()
+				}),
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
 				..Default::default()
 			}],
 			..Default::default()
