@@ -2107,6 +2107,17 @@ pub struct UnaRuntimeSceneDynamics<'a> {
 	pub dynamics: UnaRuntimeDynamics<'a>,
 }
 
+const PHYSBONE_PARAMETER_SUFFIXES: &[&str] = &[
+	"_IsGrabbed",
+	"_Angle",
+	"_Stretch",
+	"_IsPosed",
+	"_Squish",
+	"_Hit",
+	"_Ratio",
+	"_Distance",
+];
+
 fn add_runtime_parameter_definition_source(
 	definitions: &mut BTreeMap<String, UnaRuntimeParameterDefinition>,
 	name: &str,
@@ -2493,6 +2504,29 @@ impl<'a> UnaRuntimeModel<'a> {
 				Some(0.0),
 				true,
 			);
+		}
+		for (group_index, group) in self.dynamics().groups().iter().enumerate() {
+			let Some(interaction) = group.interaction.as_ref() else {
+				continue;
+			};
+			if interaction.parameter.is_empty() {
+				continue;
+			}
+			let owner_key = if group.source_id.is_empty() {
+				format!("physbone_interaction:{group_index}:{}", interaction.parameter)
+			} else {
+				format!("physbone_interaction:{}", group.source_id)
+			};
+			for suffix in PHYSBONE_PARAMETER_SUFFIXES {
+				add_runtime_parameter_definition_source(
+					&mut definitions,
+					&format!("{}{}", interaction.parameter, suffix),
+					&owner_key,
+					"physbone_interaction",
+					None,
+					true,
+				);
+			}
 		}
 		for (name, value) in self.runtime_parameter_values() {
 			add_runtime_parameter_definition_source(
@@ -7018,6 +7052,40 @@ mod tests {
 		let actions = decoded.runtime_model().runtime_actions().unwrap();
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].effects.len(), 2);
+	}
+
+	#[test]
+	fn runtime_parameter_definitions_include_physbone_interaction_suffixes() {
+		let document = UnaDocument {
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:hair".to_string(),
+					interaction: Some(UnaDynamicsInteraction {
+						parameter: "HairPB".to_string(),
+						allow_grabbing: Some(true),
+						allow_posing: Some(true),
+					}),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let definitions = document.runtime_model().runtime_parameter_definitions();
+		assert_eq!(definitions.len(), PHYSBONE_PARAMETER_SUFFIXES.len());
+		let names = definitions.iter().map(|definition| definition.name.as_str()).collect::<Vec<_>>();
+		assert!(names.contains(&"HairPB_IsGrabbed"));
+		assert!(names.contains(&"HairPB_IsPosed"));
+		assert!(names.contains(&"HairPB_Angle"));
+		for definition in definitions {
+			assert_eq!(definition.owner_keys, vec!["physbone_interaction:physbone:hair".to_string()]);
+			assert_eq!(definition.source_kinds, vec!["physbone_interaction".to_string()]);
+			assert!(definition.value_samples.is_empty());
+			assert_eq!(definition.current_value, None);
+			assert!(definition.transient);
+		}
 	}
 
 	#[test]

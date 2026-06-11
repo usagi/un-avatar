@@ -130,6 +130,7 @@ v2 初期では transform dependency metadata、reset / rebuild 対象、diagnos
 solver integration は transform evaluation layer が安定してから行う。
 
 grabbing / posing は `UNInteraction` の capability metadata とする。
+VRC PhysBone `parameter` は Modular Avatar 本家の `PhysBoneSuffixes` と同じ `_IsGrabbed` / `_Angle` / `_Stretch` / `_IsPosed` / `_Squish` / `_Hit` / `_Ratio` / `_Distance` を runtime parameter definition として宣言するが、direct interaction evaluator が入るまでは値を書かない。
 v2 初期では UI / diagnostics / future hook 用であり、物理的な操作挙動は持たせない。
 
 ## Diagnostics
