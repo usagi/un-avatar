@@ -1109,6 +1109,8 @@ pub struct UnaSpringBoneGroup {
 	pub center_node: Option<usize>,
 	#[serde(default)]
 	pub hit_radius: f32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub hit_radius_samples: Vec<f32>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub limit: Option<UnaDynamicsLimit>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1130,6 +1132,7 @@ pub struct UnaDynamicsParameters {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsChain<'a> {
 	pub bone_node_indices: &'a [usize],
+	pub hit_radius_samples: &'a [f32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1165,6 +1168,7 @@ impl<'a> UnaDynamicsGroup<'a> {
 			},
 			chain: UnaDynamicsChain {
 				bone_node_indices: &group.bone_node_indices,
+				hit_radius_samples: &group.hit_radius_samples,
 			},
 			limit: group.limit.as_ref(),
 			interaction: group.interaction.as_ref(),
@@ -6818,6 +6822,7 @@ mod tests {
 					drag_force: 0.3,
 					center_node: Some(10),
 					hit_radius: 0.04,
+					hit_radius_samples: Vec::new(),
 					limit: Some(UnaDynamicsLimit {
 						limit_type: "angle".to_string(),
 						max_angle_x: 45.0,

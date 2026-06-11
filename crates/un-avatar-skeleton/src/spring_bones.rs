@@ -287,6 +287,8 @@ struct JointRuntime {
 	bone_axis: Vec3,
 	/// rest pose での「子 → 子の子」までの距離 (m)。次の tail 拘束距離。
 	length: f32,
+	/// Collider radius used for this joint tail.
+	hit_radius: f32,
 	/// 動的: 現在フレームの tail (world)。
 	curr_tail: Vec3,
 	/// 動的: 前フレームの tail (world)。`curr - prev` が Verlet 速度。
@@ -579,6 +581,14 @@ impl SpringBoneSimulator {
 					trans.length().max(1e-4)
 				};
 				let curr = world0[child].transform_point3(Vec3::ZERO) + world0[child].transform_vector3(bone_axis) * length;
+				let hit_radius = g
+					.chain
+					.hit_radius_samples
+					.get(i)
+					.copied()
+					.filter(|value| value.is_finite())
+					.unwrap_or(g.parameters.hit_radius)
+					.max(0.0);
 				joints.push(JointRuntime {
 					parent_node: parent,
 					child_node: child,
@@ -587,6 +597,7 @@ impl SpringBoneSimulator {
 					rest_local_scale: scale,
 					bone_axis,
 					length,
+					hit_radius,
 					curr_tail: curr,
 					prev_tail: curr,
 					rest_lambda: 0.0,
@@ -748,7 +759,7 @@ fn step_group(
 					joint.length,
 					&rt.world_scratch,
 					bone_colliders,
-					group.parameters.hit_radius,
+					joint.hit_radius,
 				);
 				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 			}
@@ -763,7 +774,7 @@ fn step_group(
 				joint.length,
 				&rt.world_scratch,
 				bone_colliders,
-				group.parameters.hit_radius,
+				joint.hit_radius,
 			);
 			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
 		}
@@ -926,6 +937,7 @@ mod tests {
 				drag_force: 0.2,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
@@ -971,6 +983,7 @@ mod tests {
 				drag_force: 0.0,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: Some(UnaDynamicsLimit {
 					limit_type: "Angle".to_string(),
 					max_angle_x: 10.0,
@@ -1020,6 +1033,7 @@ mod tests {
 				drag_force: 0.4,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
@@ -1044,6 +1058,45 @@ mod tests {
 	}
 
 	#[test]
+	fn simulator_uses_per_joint_hit_radius_samples() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.03,
+				hit_radius_samples: vec![0.015, 0.006],
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(runtime.joints.len(), 2);
+		assert!((runtime.joints[0].hit_radius - 0.015).abs() < 1e-6);
+		assert!((runtime.joints[1].hit_radius - 0.006).abs() < 1e-6);
+	}
+
+	#[test]
 	fn simulator_skips_disabled_groups() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
@@ -1063,6 +1116,7 @@ mod tests {
 				drag_force: 0.4,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1],
@@ -1100,6 +1154,7 @@ mod tests {
 				drag_force: 0.4,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
@@ -1186,6 +1241,7 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1],
@@ -1237,6 +1293,7 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1],
@@ -1290,6 +1347,7 @@ mod tests {
 				drag_force: 0.2,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
@@ -1354,6 +1412,7 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
 				limit: None,
 				interaction: None,
 				bone_node_indices: vec![0, 1],

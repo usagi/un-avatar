@@ -4152,10 +4152,17 @@ fn build_diagnose_report(
 		));
 	}
 	if dynamics_source_features.radius_curve_count > 0 {
-		warnings.push(format!(
-			"dynamics radius curves are metadata-only in the current solver; source_radius_curves={}",
-			dynamics_source_features.radius_curve_count
-		));
+		if dynamics_counts.groups > 0 {
+			warnings.push(format!(
+				"dynamics radius curves are approximated as per-joint hit radius in the current solver; source_radius_curves={}",
+				dynamics_source_features.radius_curve_count
+			));
+		} else {
+			warnings.push(format!(
+				"dynamics radius curves are metadata-only in the current solver because no runtime dynamics groups were lowered; source_radius_curves={}",
+				dynamics_source_features.radius_curve_count
+			));
+		}
 	}
 	if dynamics_source_features.grabbing_enabled_count > 0
 		|| dynamics_source_features.posing_enabled_count > 0
@@ -7022,6 +7029,76 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
+	}
+
+	#[test]
+	fn diagnose_report_warns_that_lowered_radius_curves_are_approximated() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node("root", test_identity_mat4(), vec![1]),
+					test_scene_node("tip", translation_mat4(0.0, 1.0, 0.0), Vec::new()),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: true,
+					source_id: "physbone:hair".into(),
+					bone_node_indices: vec![0, 1],
+					hit_radius: 0.03,
+					hit_radius_samples: vec![0.015],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1".into(),
+				source: serde_json::json!({
+					"dynamics": [{
+						"id": "physbone:hair",
+						"source": "vrc_physbone",
+						"roots": [{"nodeId": "root"}],
+						"sourceParams": {
+							"radiusCurve": {
+								"keys": [
+									{"time": 0.0, "value": 1.0},
+									{"time": 1.0, "value": 0.5}
+								]
+							}
+						}
+					}]
+				}),
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert_eq!(report.dynamics.source_radius_curve_count, 1);
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics radius curves are approximated as per-joint hit radius")));
+		assert!(!report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver")));
 	}
 
 	#[test]

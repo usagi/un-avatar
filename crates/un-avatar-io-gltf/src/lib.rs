@@ -2039,6 +2039,28 @@ fn unavatar_dynamics_interaction(value: &Value) -> Option<UnaDynamicsInteraction
 	}
 }
 
+fn unavatar_dynamics_radius_samples(value: &Value, hit_radius: f32, joint_count: usize) -> Vec<f32> {
+	if joint_count == 0 {
+		return Vec::new();
+	}
+	let source_params = unavatar_dynamics_source_params(value);
+	let curve = unavatar_dynamics_source_value(value, source_params, "radiusCurve", "radius_curve");
+	let Some(_) = animation_curve_evaluate(curve, 1.0) else {
+		return Vec::new();
+	};
+	let base_radius = hit_radius.max(0.0);
+	(0..joint_count)
+		.map(|index| {
+			let input = (index + 1) as f32 / joint_count as f32;
+			animation_curve_evaluate(curve, input)
+				.map(|scale| base_radius * scale)
+				.filter(|radius| radius.is_finite())
+				.unwrap_or(base_radius)
+				.max(0.0)
+		})
+		.collect()
+}
+
 fn unavatar_dynamics_settings(
 	scene: &mut UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
@@ -2158,6 +2180,7 @@ fn unavatar_dynamics_settings(
 					short_chains += 1;
 					continue;
 				}
+				let hit_radius_samples = unavatar_dynamics_radius_samples(item, hit_radius, chain.len() - 1);
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
 					// VRC PhysBone is imported as source metadata and an action target, but the
@@ -2173,6 +2196,7 @@ fn unavatar_dynamics_settings(
 					drag_force,
 					center_node: None,
 					hit_radius,
+					hit_radius_samples,
 					limit: limit.clone(),
 					interaction: interaction.clone(),
 					bone_node_indices: chain,
@@ -5368,15 +5392,15 @@ fn modular_avatar_blendshape_sync_binding_shape(binding: &Value, names: &[&str])
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ModularAvatarCurveKey {
+struct AnimationCurveKey {
 	time: f32,
 	value: f32,
 	in_tangent: Option<f32>,
 	out_tangent: Option<f32>,
 }
 
-fn modular_avatar_curve_key(key: &Value) -> Option<ModularAvatarCurveKey> {
-	Some(ModularAvatarCurveKey {
+fn animation_curve_key(key: &Value) -> Option<AnimationCurveKey> {
+	Some(AnimationCurveKey {
 		time: key.get("time").and_then(json_number_f32)?,
 		value: key.get("value").and_then(json_number_f32)?,
 		in_tangent: key.get("inTangent").or_else(|| key.get("in_tangent")).and_then(json_number_f32),
@@ -5384,7 +5408,7 @@ fn modular_avatar_curve_key(key: &Value) -> Option<ModularAvatarCurveKey> {
 	})
 }
 
-fn modular_avatar_curve_segment_evaluate(a: ModularAvatarCurveKey, b: ModularAvatarCurveKey, input: f32) -> f32 {
+fn animation_curve_segment_evaluate(a: AnimationCurveKey, b: AnimationCurveKey, input: f32) -> f32 {
 	let span = b.time - a.time;
 	if span.abs() <= f32::EPSILON {
 		return b.value;
@@ -5402,36 +5426,40 @@ fn modular_avatar_curve_segment_evaluate(a: ModularAvatarCurveKey, b: ModularAva
 	h00 * a.value + h10 * m0 + h01 * b.value + h11 * m1
 }
 
-fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32 {
+fn animation_curve_evaluate(curve: Option<&Value>, input: f32) -> Option<f32> {
 	let Some(keys) = curve
 		.and_then(|curve| curve.get("keys").or_else(|| curve.get("Keys")))
 		.and_then(Value::as_array)
 	else {
-		return input;
+		return None;
 	};
 	if keys.len() < 2 {
-		return input;
+		return None;
 	}
 	let mut keys = keys
 		.iter()
-		.filter_map(modular_avatar_curve_key)
+		.filter_map(animation_curve_key)
 		.filter(|key| key.time.is_finite() && key.value.is_finite())
 		.collect::<Vec<_>>();
 	if keys.len() < 2 {
-		return input;
+		return None;
 	}
 	keys.sort_by(|a, b| a.time.total_cmp(&b.time));
 	if input <= keys[0].time {
-		return keys[0].value;
+		return Some(keys[0].value);
 	}
 	for pair in keys.windows(2) {
 		let a = pair[0];
 		let b = pair[1];
 		if input <= b.time {
-			return modular_avatar_curve_segment_evaluate(a, b, input);
+			return Some(animation_curve_segment_evaluate(a, b, input));
 		}
 	}
-	keys.last().map(|key| key.value).unwrap_or(input)
+	keys.last().map(|key| key.value)
+}
+
+fn modular_avatar_remap_curve_evaluate(curve: Option<&Value>, input: f32) -> f32 {
+	animation_curve_evaluate(curve, input).unwrap_or(input)
 }
 
 fn modular_avatar_remap_curve_linear_origin_scale(curve: Option<&Value>) -> Option<f32> {
@@ -5446,7 +5474,7 @@ fn modular_avatar_remap_curve_linear_origin_scale(curve: Option<&Value>) -> Opti
 	}
 	let mut keys = keys
 		.iter()
-		.filter_map(modular_avatar_curve_key)
+		.filter_map(animation_curve_key)
 		.filter(|key| key.time.is_finite() && key.value.is_finite())
 		.collect::<Vec<_>>();
 	if keys.len() < 2 {
@@ -9567,6 +9595,12 @@ mod tests {
 						"maxAngleX": 45.0,
 						"maxAngleZ": 30.0,
 						"maxStretch": 0.2,
+						"radiusCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
 						"colliders": [{
 							"root": {"nodeId": "node_root", "path": "Root"},
 							"shapeType": "Sphere",
@@ -9617,6 +9651,8 @@ mod tests {
 		assert_eq!(settings.groups[0].comment, "hair_front");
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
+		assert_eq!(settings.groups[0].hit_radius_samples.len(), 1);
+		assert!((settings.groups[0].hit_radius_samples[0] - 0.015).abs() < 1e-6);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
 		let limit = settings.groups[0].limit.as_ref().expect("limit");
 		assert_eq!(limit.limit_type, "Angle");
