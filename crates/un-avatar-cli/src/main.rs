@@ -4138,6 +4138,12 @@ fn build_diagnose_report(
 		}
 	}
 	let dynamics_source_features = dynamics_source_feature_counts(&doc);
+	if dynamics_source_features.unknown_shape_collider_count > 0 {
+		warnings.push(format!(
+			"raw dynamics source colliders include {} unknown shape collider(s); unsupported PhysBone collider shapes will not affect the solver",
+			dynamics_source_features.unknown_shape_collider_count
+		));
+	}
 	let dynamics_counts = runtime_dynamics.counts();
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: dynamics_counts.groups,
@@ -6962,6 +6968,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("raw dynamics entries but no runtime dynamics groups")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("raw dynamics source colliders include 1 unknown shape collider")));
 	}
 
 	#[test]
