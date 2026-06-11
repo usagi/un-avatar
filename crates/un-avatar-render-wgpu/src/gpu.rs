@@ -304,6 +304,11 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) gravity_power: f32,
 	pub(crate) gravity_dir: [f32; 3],
 	pub(crate) hit_radius: f32,
+	pub(crate) hit_radius_sample_count: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) hit_radius_sample_min: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) hit_radius_sample_max: Option<f32>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) center_node: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1159,6 +1164,8 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 			let root_node = group.chain.bone_node_indices.first().copied();
 			let tip_node = group.chain.bone_node_indices.last().copied();
 			let center_node = group.parameters.center_node;
+			let (hit_radius_sample_count, hit_radius_sample_min, hit_radius_sample_max) =
+				dynamics_hit_radius_sample_summary(group.chain.hit_radius_samples);
 			let limit_type = group
 				.limit
 				.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone()));
@@ -1180,6 +1187,9 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				gravity_power: group.parameters.gravity_power,
 				gravity_dir: group.parameters.gravity_dir,
 				hit_radius: group.parameters.hit_radius,
+				hit_radius_sample_count,
+				hit_radius_sample_min,
+				hit_radius_sample_max,
 				center_node,
 				center_path: center_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
 				limit_type,
@@ -1195,6 +1205,16 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 			}
 		})
 		.collect()
+}
+
+fn dynamics_hit_radius_sample_summary(samples: &[f32]) -> (usize, Option<f32>, Option<f32>) {
+	let mut min = None::<f32>;
+	let mut max = None::<f32>;
+	for sample in samples.iter().copied().filter(|sample| sample.is_finite()) {
+		min = Some(min.map_or(sample, |value| value.min(sample)));
+		max = Some(max.map_or(sample, |value| value.max(sample)));
+	}
+	(samples.len(), min, max)
 }
 
 fn dynamics_collider_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsColliderStatus> {

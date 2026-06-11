@@ -654,6 +654,11 @@ struct DiagnoseDynamicsGroupSummary {
 	#[serde(skip_serializing_if = "String::is_empty")]
 	interaction_parameter: String,
 	hit_radius: f32,
+	hit_radius_sample_count: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	hit_radius_sample_min: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	hit_radius_sample_max: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -2040,6 +2045,8 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 		.map(|(index, group)| {
 			let root_node = group.bone_node_indices.first().copied();
 			let tip_node = group.bone_node_indices.last().copied();
+			let (hit_radius_sample_count, hit_radius_sample_min, hit_radius_sample_max) =
+				dynamics_hit_radius_sample_summary(&group.hit_radius_samples);
 			DiagnoseDynamicsGroupSummary {
 				index,
 				source_kind: group.source_kind,
@@ -2072,9 +2079,22 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 					.map(|interaction| interaction.parameter.clone())
 					.unwrap_or_default(),
 				hit_radius: group.hit_radius,
+				hit_radius_sample_count,
+				hit_radius_sample_min,
+				hit_radius_sample_max,
 			}
 		})
 		.collect()
+}
+
+fn dynamics_hit_radius_sample_summary(samples: &[f32]) -> (usize, Option<f32>, Option<f32>) {
+	let mut min = None::<f32>;
+	let mut max = None::<f32>;
+	for sample in samples.iter().copied().filter(|sample| sample.is_finite()) {
+		min = Some(min.map_or(sample, |value| value.min(sample)));
+		max = Some(max.map_or(sample, |value| value.max(sample)));
+	}
+	(samples.len(), min, max)
 }
 
 fn dynamics_contact_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsContactSummary> {
@@ -7091,6 +7111,9 @@ mod tests {
 		);
 
 		assert_eq!(report.dynamics.source_radius_curve_count, 1);
+		assert_eq!(report.dynamics.groups[0].hit_radius_sample_count, 1);
+		assert_eq!(report.dynamics.groups[0].hit_radius_sample_min, Some(0.015));
+		assert_eq!(report.dynamics.groups[0].hit_radius_sample_max, Some(0.015));
 		assert!(report
 			.warnings
 			.iter()

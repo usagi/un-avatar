@@ -5044,6 +5044,9 @@ mod tests {
 				gravity_power: 0.1,
 				gravity_dir: [0.0, -1.0, 0.0],
 				hit_radius: 0.04,
+				hit_radius_sample_count: 2,
+				hit_radius_sample_min: Some(0.02),
+				hit_radius_sample_max: Some(0.04),
 				center_node: Some(0),
 				center_path: Some("root".to_string()),
 				limit_type: Some("Angle".to_string()),
@@ -5191,6 +5194,18 @@ mod tests {
 		assert_eq!(
 			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
 			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_min").and_then(|value| value.as_f64()),
+			Some(0.02)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_max").and_then(|value| value.as_f64()),
+			Some(0.04)
 		);
 		let dynamics_colliders = snapshot
 			.get("dynamics_colliders")
