@@ -17,6 +17,8 @@
 	$: dynamicsGroups = runtimeStatus?.dynamics_groups ?? [];
 	$: visibleDynamicsGroups = dynamicsGroups.slice(0, dynamicsGroupLimit);
 	$: hiddenDynamicsGroupCount = Math.max(0, dynamicsGroups.length - visibleDynamicsGroups.length);
+	$: canSetDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_dynamics_enabled") ?? false;
+	$: canSetAllDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_all_dynamics_enabled") ?? false;
 
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
@@ -114,11 +116,12 @@
 	}
 
 	function toggleDynamicsGroup(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): void {
-		if (!group.source_id) return;
+		if (!canSetDynamicsEnabled || !group.source_id) return;
 		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
 	}
 
 	function setAllDynamicsGroups(enabled: boolean): void {
+		if (!canSetAllDynamicsEnabled) return;
 		void onSetAllDynamicsEnabled(renderer.id, enabled);
 	}
 </script>
@@ -186,7 +189,7 @@
 						<span>
 							<button
 								type="button"
-								disabled={busy || !rendererRunning || !runtimeStatus.dynamics_group_count}
+								disabled={busy || !rendererRunning || !canSetAllDynamicsEnabled || !runtimeStatus.dynamics_group_count}
 								onclick={() => setAllDynamicsGroups(true)}
 							>
 								<Power size={13} />
@@ -194,7 +197,7 @@
 							</button>
 							<button
 								type="button"
-								disabled={busy || !rendererRunning || !runtimeStatus.dynamics_group_count}
+								disabled={busy || !rendererRunning || !canSetAllDynamicsEnabled || !runtimeStatus.dynamics_group_count}
 								onclick={() => setAllDynamicsGroups(false)}
 							>
 								<Power size={13} />
@@ -210,7 +213,7 @@
 							<button
 								type="button"
 								class:active={group.effective_enabled}
-								disabled={busy || !rendererRunning || !group.source_id}
+								disabled={busy || !rendererRunning || !canSetDynamicsEnabled || !group.source_id}
 								title={group.source_id ?? group.root_path ?? `#${group.index}`}
 								onclick={() => toggleDynamicsGroup(group)}
 							>

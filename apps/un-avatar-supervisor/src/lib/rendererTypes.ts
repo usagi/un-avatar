@@ -468,6 +468,7 @@ export type RendererDiagnosticsData = Pick<RendererInstance, "id" | "pid" | "las
 export type RendererRuntimeDiagnosticsData = Pick<
 	RendererRuntimeStatus,
 	| "note"
+	| "control_capabilities"
 	| "dynamics_group_count"
 	| "dynamics_enabled_group_count"
 	| "dynamics_source_enabled_group_count"
