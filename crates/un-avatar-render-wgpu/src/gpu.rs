@@ -19,8 +19,8 @@ use un_avatar_core::{
 	UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
-	build_dynamics_bone_colliders, collider_stats, BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
-	DynamicsPhysicsConfig, DynamicsSimulator,
+	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
+	BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator,
 };
 use winit::window::Window;
 
@@ -6041,7 +6041,7 @@ fn append_collider_wire_vertices(collider: BoneColliderPrimitive, world: &[Mat4]
 			append_wire_sphere(b, radius, COLOR, out);
 		}
 		BoneColliderPrimitive::LocalSphere { node, center, radius, .. } => {
-			if let Some(center) = world.get(node).map(|m| m.transform_point3(Vec3::from(center))) {
+			if let Some((center, radius)) = local_sphere_world(world, node, center, radius) {
 				append_wire_sphere(center, radius, COLOR, out);
 			}
 		}
@@ -6053,13 +6053,9 @@ fn append_collider_wire_vertices(collider: BoneColliderPrimitive, world: &[Mat4]
 			radius,
 			..
 		} => {
-			let Some(m) = world.get(node) else {
+			let Some((a, b, radius)) = local_capsule_world(world, node, center, axis, half_length, radius) else {
 				return;
 			};
-			let center = m.transform_point3(Vec3::from(center));
-			let axis = m.transform_vector3(Vec3::from(axis)).try_normalize().unwrap_or(Vec3::Y);
-			let a = center - axis * half_length.max(0.0);
-			let b = center + axis * half_length.max(0.0);
 			push_debug_line(a, b, COLOR, out);
 			append_wire_sphere(a, radius, COLOR, out);
 			append_wire_sphere(b, radius, COLOR, out);

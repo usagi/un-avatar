@@ -65,7 +65,7 @@ Source importer は authored fields を UNDynamics terms へ写像する責務�
 3. Done: No-behavior-change bridge: 既存 `UnaSpringBoneSettings` を UNDynamics view へ写し、現 solver の挙動を変えずに tests を通す。
 4. Done: Solver naming bridge: `SpringBoneSimulator` を互換名として残しつつ、`DynamicsSimulator` alias と neutral renderer runtime names から呼べる形へ寄せる。
 5. Done: Collider path cleanup: solver 入力の collider 構築を source-neutral names に寄せ、`allowCollision=false` / `insideBounds` の扱いを明示する。
-6. Done for initial solver: PhysBone colliders: sphere / capsule / inside bounds は UNDynamics collider として solver / debug draw へ接続済み。VRChat PhysBone との詳細挙動差、半径曲線、endpoint / scale edge case は detailed behavior task として残す。
+6. Done for initial solver: PhysBone colliders: sphere / capsule / inside bounds は UNDynamics collider として solver / debug draw へ接続済み。local source collider は runtime node scale を solver / debug draw の両方で反映する。VRChat PhysBone との詳細挙動差、半径曲線、endpoint edge case は detailed behavior task として残す。
 7. In progress: PhysBone limits: angle limit は UNDynamics cone constraint として solver へ近似反映済み。stretch limit は現 solver が主に回転を書き戻すため metadata / diagnostics に留め、translation / scale 反映設計後に扱う。CLI diagnose は raw source limit count と normalized runtime group limit count の両方を angle / stretch に分けて観測できる。
 8. Done for v2 initial metadata: Interactions / Contacts / Constraints: grabbing / posing は group metadata として保持し、contacts / constraints は source-neutral metadata と runtime / diagnostics counts へ接続済み。Modular Avatar PBBlocker は VRC PhysBone lowering の ignore set に合成する。VRC Contact source id は sender / receiver 種別と同一 Transform 上の重複 ordinal で一意化する。Renderer runtime status は dynamics group / collider / contact parameter declaration / contact probe / constraint ref の bounded list も公開する。Contacts parameter emission は [`unevaluation-v2.md`](unevaluation-v2.md) の Phase A-D に従い、v2 初期範囲の metadata + parameter declaration は core runtime view / renderer runtime status / CLI diagnose まで接続済み。core runtime view、CLI diagnose、renderer runtime status は current runtime scene pose の diagnostics-only contact probe / would_emit count も出す。opt-in 時だけ同じ current runtime scene pose probe から runtime parameter state へ 1/0 を書く。
 9. In progress: Runtime integration: wardrobe hot switch / action state は dynamics enabled override を runtime state に書き、変更時に dynamic nodes を rest pose へ戻して simulator / collider state を同じ設定で再構築する。animation state 連動、continuous evaluator、blend は UNEvaluation の設計に従って実装する。
@@ -79,7 +79,7 @@ Wardrobe hot switch、runtime action、Menu / Parameter candidate、Contacts met
 優先順:
 
 1. PhysBone Collider detailed behavior を、source-neutral `UnaDynamicsCollider` と solver backend の差分として詰める。
-2. Stretch / endpoint / scale edge case を、UNDynamics limit / chain term と solver writeback の問題として設計・実装する。
+2. Stretch / endpoint edge case を、UNDynamics limit / chain term と solver writeback の問題として設計・実装する。local collider scale は solver / debug draw の runtime world 展開で反映済み。
 3. Grabbing / posing は action hook / diagnostics の最小接続に留め、direct manipulation UI は後段へ送る。
 4. Contact evaluation は current runtime scene pose を読む初期実装と Sphere / Capsule exact overlap を固定済み。次は dynamic reactive gating を、同じ source-neutral contact view 上で詰める。
 5. VRC Constraints solver integration は node constraint / dynamics reset 対象の整理後に扱い、v2 初回では metadata / reset ref を維持する。
