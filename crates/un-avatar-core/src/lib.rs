@@ -2548,24 +2548,36 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn runtime_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
-		let mut conflicts = self
-			.runtime_parameter_definitions()
-			.into_iter()
-			.filter_map(|definition| {
-				let has_contact = definition.source_kinds.iter().any(|kind| kind == "contact_receiver");
-				let has_action = definition
-					.source_kinds
-					.iter()
-					.any(|kind| kind == "action_trigger" || kind == "action_condition");
-				(has_contact && has_action).then(|| UnaRuntimeParameterConflict {
-					name: definition.name,
+		let mut conflicts = Vec::new();
+		for definition in self.runtime_parameter_definitions() {
+			let has_action = definition
+				.source_kinds
+				.iter()
+				.any(|kind| kind == "action_trigger" || kind == "action_condition");
+			if !has_action {
+				continue;
+			}
+			let has_contact = definition.source_kinds.iter().any(|kind| kind == "contact_receiver");
+			let has_physbone_interaction = definition.source_kinds.iter().any(|kind| kind == "physbone_interaction");
+			if has_contact {
+				conflicts.push(UnaRuntimeParameterConflict {
+					name: definition.name.clone(),
 					reason: "contact_transient_overlaps_action_parameter".to_string(),
+					owner_keys: definition.owner_keys.clone(),
+					source_kinds: definition.source_kinds.clone(),
+					value_samples: definition.value_samples.clone(),
+				});
+			}
+			if has_physbone_interaction {
+				conflicts.push(UnaRuntimeParameterConflict {
+					name: definition.name,
+					reason: "physbone_interaction_overlaps_action_parameter".to_string(),
 					owner_keys: definition.owner_keys,
 					source_kinds: definition.source_kinds,
 					value_samples: definition.value_samples,
-				})
-			})
-			.collect::<Vec<_>>();
+				});
+			}
+		}
 		conflicts.extend(self.modular_avatar_parameter_conflicts());
 		conflicts
 	}
@@ -7182,6 +7194,51 @@ mod tests {
 		assert_eq!(conflicts.len(), 1);
 		assert_eq!(conflicts[0].name, "Hat");
 		assert_eq!(conflicts[0].reason, "contact_transient_overlaps_action_parameter");
+	}
+
+	#[test]
+	fn runtime_parameter_conflicts_report_physbone_interaction_action_overlap() {
+		let document = UnaDocument {
+			runtime_actions: Some(UnaRuntimeActionSet {
+				actions: vec![UnaRuntimeAction {
+					id: "hair:grabbed".to_string(),
+					conditions: vec![UnaRuntimeActionCondition {
+						parameter_name: Some("HairPB_IsGrabbed".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					..Default::default()
+				}],
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				groups: vec![UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:hair".to_string(),
+					interaction: Some(UnaDynamicsInteraction {
+						parameter: "HairPB".to_string(),
+						allow_grabbing: Some(true),
+						allow_posing: Some(true),
+					}),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let conflicts = document.runtime_model().runtime_parameter_conflicts();
+		assert_eq!(conflicts.len(), 1);
+		assert_eq!(conflicts[0].name, "HairPB_IsGrabbed");
+		assert_eq!(conflicts[0].reason, "physbone_interaction_overlaps_action_parameter");
+		assert_eq!(
+			conflicts[0].owner_keys,
+			vec!["action:hair:grabbed".to_string(), "physbone_interaction:physbone:hair".to_string()]
+		);
+		assert_eq!(
+			conflicts[0].source_kinds,
+			vec!["action_condition".to_string(), "physbone_interaction".to_string()]
+		);
+		assert_eq!(conflicts[0].value_samples, vec![1.0]);
 	}
 
 	#[test]
