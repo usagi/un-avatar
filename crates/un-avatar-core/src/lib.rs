@@ -568,6 +568,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMergeArmature"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
+		| "ModularAvatarScaleAdjuster"
 		| "ModularAvatarShapeChanger" => "approximate",
 		"ModularAvatarBoneProxy" | "ModularAvatarRemoveVertexColor" | "ModularAvatarReplaceObject" => "resolver",
 		"ModularAvatarMaterialSetter" | "ModularAvatarMaterialSwap" | "ModularAvatarObjectToggle" => "runtime_action",
@@ -580,7 +581,6 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarPBBlocker"
 		| "ModularAvatarPlatformFilter"
 		| "ModularAvatarRenameVRChatCollisionTags"
-		| "ModularAvatarScaleAdjuster"
 		| "ModularAvatarVRChatSettings"
 		| "ModularAvatarWorldFixedObject"
 		| "ModularAvatarWorldScaleObject"
@@ -7900,7 +7900,7 @@ mod tests {
 			modular_avatar_component_support_kind("ModularAvatarRenameVRChatCollisionTags"),
 			"unsupported"
 		);
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarScaleAdjuster"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarScaleAdjuster"), "approximate");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarVRChatSettings"), "unsupported");
 		assert_eq!(
 			modular_avatar_component_support_kind("ModularAvatarWorldFixedObject"),

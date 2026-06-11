@@ -4877,6 +4877,77 @@ fn apply_unavatar_mesh_settings(
 	(root_bone_applied, probe_anchor_applied, bounds_applied, missing)
 }
 
+fn apply_unavatar_scale_adjusters(
+	scene: &mut UnaSceneSnapshot,
+	components: &[Value],
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> (usize, usize, usize, usize) {
+	let mut proxies_created = 0usize;
+	let mut skin_joints_remapped = 0usize;
+	let mut missing = 0usize;
+	let mut skipped = 0usize;
+	let mut mappings = BTreeMap::<usize, usize>::new();
+	for component in components {
+		if component.get("shortType").and_then(|v| v.as_str()) != Some("ModularAvatarScaleAdjuster") {
+			continue;
+		}
+		if component.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+			skipped += 1;
+			continue;
+		}
+		let Some(target_ref) = component.get("target") else {
+			missing += 1;
+			continue;
+		};
+		let Some(target) = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		if mappings.contains_key(&target) {
+			continue;
+		}
+		let scale = json_vec3(modular_avatar_component_value(component, &["Scale", "scale", "m_Scale"])).unwrap_or([1.0, 1.0, 1.0]);
+		let proxy = scene.nodes.len();
+		let target_id = scene
+			.nodes
+			.get(target)
+			.and_then(|node| node.source_node_id.as_deref().or(node.resolved_node_id.as_deref()))
+			.unwrap_or("node");
+		scene.nodes.push(UnaSceneNode {
+			name: Some("ScaleProxy".to_string()),
+			source_node_id: None,
+			resolved_node_id: Some(format!("{target_id}#ma-scale-proxy")),
+			visible: true,
+			transform: Mat4::from_scale(Vec3::from(scale)).to_cols_array(),
+			children: Vec::new(),
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		});
+		if let Some(node) = scene.nodes.get_mut(target) {
+			node.children.push(proxy);
+		}
+		mappings.insert(target, proxy);
+		proxies_created += 1;
+	}
+	if mappings.is_empty() {
+		return (proxies_created, skin_joints_remapped, missing, skipped);
+	}
+	for skin in &mut scene.skins {
+		for joint in &mut skin.joint_nodes {
+			if let Some(proxy) = mappings.get(joint).copied() {
+				*joint = proxy;
+				skin_joints_remapped += 1;
+			}
+		}
+	}
+	(proxies_created, skin_joints_remapped, missing, skipped)
+}
+
 fn replace_object_target_ref(component: &Value) -> Option<&Value> {
 	component
 		.get("fields")
@@ -6252,6 +6323,15 @@ fn apply_unavatar_modular_avatar_with_context(
 		report.push_info(format!(
 			".unavatar Modular Avatar: mesh_settings_root_bones={}, mesh_settings_probe_anchors={}, mesh_settings_bounds={}, mesh_settings_missing={}",
 			mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing
+		));
+	}
+
+	let (scale_adjuster_proxies, scale_adjuster_skin_joints, scale_adjuster_missing, scale_adjuster_skipped) =
+		apply_unavatar_scale_adjusters(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	if scale_adjuster_proxies > 0 || scale_adjuster_skin_joints > 0 || scale_adjuster_missing > 0 || scale_adjuster_skipped > 0 {
+		report.push_info(format!(
+			".unavatar Modular Avatar: scale_adjuster_proxies={}, scale_adjuster_skin_joints={}, scale_adjuster_missing={}, scale_adjuster_skipped={}",
+			scale_adjuster_proxies, scale_adjuster_skin_joints, scale_adjuster_missing, scale_adjuster_skipped
 		));
 	}
 
@@ -9574,7 +9654,6 @@ mod tests {
 			"ModularAvatarPlatformFilter",
 			"ModularAvatarRenameVRChatCollisionTags",
 			"ModularAvatarVRChatSettings",
-			"ModularAvatarScaleAdjuster",
 		] {
 			import_marks_enabled_unsupported_modular_avatar_component_partial_success_of(short_type);
 		}
@@ -13112,10 +13191,10 @@ mod tests {
 			.unwrap();
 		assert!(message.contains("total=18"));
 		assert!(message.contains("resolver_supported=1"));
-		assert!(message.contains("approximate_supported=1"));
+		assert!(message.contains("approximate_supported=2"));
 		assert!(message.contains("runtime_action_supported=1"));
 		assert!(message.contains("metadata_supported=3"));
-		assert!(message.contains("unsupported=12"));
+		assert!(message.contains("unsupported=11"));
 		assert!(message.contains("disabled=1"));
 		assert!(message.contains("support_kind_mismatches=0"));
 		assert!(message.contains("ModularAvatarConvertConstraints:1"));
@@ -13124,7 +13203,6 @@ mod tests {
 		assert!(message.contains("ModularAvatarPBBlocker:1"));
 		assert!(message.contains("ModularAvatarPlatformFilter:1"));
 		assert!(message.contains("ModularAvatarRenameVRChatCollisionTags:1"));
-		assert!(message.contains("ModularAvatarScaleAdjuster:1"));
 		assert!(message.contains("ModularAvatarVRChatSettings:1"));
 		assert!(message.contains("ModularAvatarWorldFixedObject:1"));
 		assert!(message.contains("ModularAvatarWorldScaleObject:1"));
@@ -13143,12 +13221,11 @@ mod tests {
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPBBlocker"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarPlatformFilter"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarRenameVRChatCollisionTags"));
-		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarScaleAdjuster"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarVRChatSettings"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldFixedObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.ModularAvatarWorldScaleObject"));
 		assert!(unsupported_features.contains(&"ModularAvatar.MAMoveIndependently"));
-		assert_eq!(report.lost_features.len(), 11);
+		assert_eq!(report.lost_features.len(), 10);
 		for unsupported_type in [
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
@@ -13156,7 +13233,6 @@ mod tests {
 			"ModularAvatarPBBlocker",
 			"ModularAvatarPlatformFilter",
 			"ModularAvatarRenameVRChatCollisionTags",
-			"ModularAvatarScaleAdjuster",
 			"ModularAvatarVRChatSettings",
 			"ModularAvatarWorldFixedObject",
 			"ModularAvatarWorldScaleObject",
@@ -15318,6 +15394,73 @@ mod tests {
 		assert_eq!(scene.nodes[4].probe_anchor_node, None);
 		assert_eq!(scene.nodes[4].local_bounds, None);
 		assert!(!report.messages.iter().any(|m| m.contains("mesh_settings_root_bones=")));
+	}
+
+	#[test]
+	fn modular_avatar_scale_adjuster_creates_proxy_and_remaps_skin_joints() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2, 3],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("ScaleBone".to_string()),
+					source_node_id: Some("node_scale_bone".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("OtherBone".to_string()),
+					source_node_id: Some("node_other_bone".to_string()),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Mesh".to_string()),
+					source_node_id: Some("node_mesh".to_string()),
+					mesh: Some(0),
+					skin: Some(0),
+					..test_node(Vec::new())
+				},
+			],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1, 2],
+				inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+				skeleton_node: None,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarScaleAdjuster",
+						"enabled": true,
+						"target": {"nodeId": "node_scale_bone", "path": "ScaleBone"},
+						"fields": {
+							"m_Scale": [2.0, 3.0, 4.0]
+						}
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+
+		let proxy = scene.nodes.len() - 1;
+		assert_eq!(scene.nodes[1].children, vec![proxy]);
+		assert_eq!(scene.nodes[proxy].name.as_deref(), Some("ScaleProxy"));
+		let (scale, _, _) = Mat4::from_cols_array(&scene.nodes[proxy].transform).to_scale_rotation_translation();
+		assert_vec3_near(scale, Vec3::new(2.0, 3.0, 4.0));
+		assert_eq!(scene.skins[0].joint_nodes, vec![proxy, 2]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|m| { m.contains("scale_adjuster_proxies=1") && m.contains("scale_adjuster_skin_joints=1") }));
 	}
 
 	#[test]

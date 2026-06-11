@@ -106,6 +106,9 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 - `[~]` MA World Fixed Object / World Scale Object
   - done: component types are explicitly categorized and reported as unsupported transform metadata in importer diagnostics.
   - remaining: runtime approximation for fixed-world or fixed-scale transform behavior.
+- `[~]` MA Scale Adjuster
+  - done: Runtime creates a MA-like scale proxy node under each enabled Scale Adjuster target and remaps skin joint references from the adjusted bone to that proxy, matching the render-visible part of upstream `ScaleAdjusterPass`.
+  - remaining: Humanoid avatar descriptor rebuild, PhysBone blocker semantics, preview shadow hierarchy parity, and broader fixture coverage.
 
 ### Mesh Settings / Geometry Mutation
 

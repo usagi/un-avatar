@@ -581,6 +581,7 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarMergeArmature" or
                 "ModularAvatarMeshCutter" or
                 "ModularAvatarMeshSettings" or
+                "ModularAvatarScaleAdjuster" or
                 "ModularAvatarShapeChanger" => "approximate",
                 "ModularAvatarBoneProxy" or
                 "ModularAvatarRemoveVertexColor" or
@@ -597,7 +598,6 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarPBBlocker" or
                 "ModularAvatarPlatformFilter" or
                 "ModularAvatarRenameVRChatCollisionTags" or
-                "ModularAvatarScaleAdjuster" or
                 "ModularAvatarVRChatSettings" or
                 "ModularAvatarWorldFixedObject" or
                 "ModularAvatarWorldScaleObject" or
