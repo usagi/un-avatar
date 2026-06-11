@@ -43,7 +43,15 @@
     const label = action.label || action.action_id;
     const state = action.current_condition_state ?? "unconditioned";
     const parameters = action.condition_parameter_names?.join(",") || action.parameter_name || "-";
-    return `${label}: ${state} [${parameters}]`;
+    const targetCounts = [
+      action.node_visibility_effects?.length ? `nodes=${action.node_visibility_effects.length}` : null,
+      action.material_property_effects?.length ? `matProps=${action.material_property_effects.length}` : null,
+      action.material_slot_effects?.length ? `matSlots=${action.material_slot_effects.length}` : null,
+      action.expression_weight_effects?.length ? `expr=${action.expression_weight_effects.length}` : null,
+      action.dynamics_enabled_effects?.length ? `dyn=${action.dynamics_enabled_effects.length}` : null,
+    ].filter(Boolean);
+    const targets = targetCounts.length ? ` ${targetCounts.join(",")}` : "";
+    return `${label}: ${state} [${parameters}]${targets}`;
   }
 </script>
 

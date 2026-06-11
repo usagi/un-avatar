@@ -4667,7 +4667,7 @@ mod tests {
 			status.runtime_actions = vec![crate::gpu::RuntimeActionStatus {
 				action_id: "wardrobe:field_drape".to_string(),
 				label: "Field Drape".to_string(),
-				effect_count: 4,
+				effect_count: 5,
 				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
 				supervisor_command: Some("field_drape".to_string()),
 				parameter_name: Some("Outfit".to_string()),
@@ -4675,11 +4675,42 @@ mod tests {
 				condition_parameter_names: vec!["Outfit".to_string()],
 				current_condition_state: Some("active".to_string()),
 				wardrobe_set_id: Some("field_drape".to_string()),
+				node_visibility_effects: vec![crate::gpu::RuntimeActionNodeVisibilityEffectStatus {
+					node_index: Some(3),
+					path: Some("Avatar/Coat".to_string()),
+					visible: true,
+					..Default::default()
+				}],
+				material_property_effects: vec![crate::gpu::RuntimeActionMaterialPropertyEffectStatus {
+					property_kind: "color".to_string(),
+					material_index: Some(2),
+					material_name: Some("Coat".to_string()),
+					parameter: "_Color".to_string(),
+					color_value: Some([1.0, 0.5, 0.25, 1.0]),
+					..Default::default()
+				}],
+				material_slot_effects: vec![crate::gpu::RuntimeActionMaterialSlotEffectStatus {
+					node_index: Some(3),
+					path: Some("Avatar/Coat".to_string()),
+					primitive_index: Some(0),
+					material_index: Some(2),
+					material_name: Some("Coat".to_string()),
+					..Default::default()
+				}],
+				expression_weight_effects: vec![crate::gpu::RuntimeActionExpressionWeightEffectStatus {
+					name: "Smile".to_string(),
+					weight: 0.75,
+				}],
+				dynamics_enabled_effects: vec![crate::gpu::RuntimeActionDynamicsEnabledEffectStatus {
+					source_id: "physbone:hair".to_string(),
+					enabled: true,
+				}],
 				effect_kinds: [
 					("node_visibility".to_string(), 1),
-					("expression_weight".to_string(), 2),
+					("expression_weight".to_string(), 1),
 					("material_color".to_string(), 1),
-					("material_scalar".to_string(), 1),
+					("material_slot".to_string(), 1),
+					("dynamics_enabled".to_string(), 1),
 				]
 				.into_iter()
 				.collect(),
@@ -5118,7 +5149,7 @@ mod tests {
 			runtime_actions[0].get("wardrobe_set_id").and_then(|value| value.as_str()),
 			Some("field_drape")
 		);
-		assert_eq!(runtime_actions[0].get("effect_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(runtime_actions[0].get("effect_count").and_then(|value| value.as_u64()), Some(5));
 		assert_eq!(
 			runtime_actions[0]
 				.get("condition_parameter_names")
@@ -5130,6 +5161,51 @@ mod tests {
 		assert_eq!(
 			runtime_actions[0].get("current_condition_state").and_then(|value| value.as_str()),
 			Some("active")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("node_visibility_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("path"))
+				.and_then(|value| value.as_str()),
+			Some("Avatar/Coat")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("material_property_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("parameter"))
+				.and_then(|value| value.as_str()),
+			Some("_Color")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("material_slot_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("material_name"))
+				.and_then(|value| value.as_str()),
+			Some("Coat")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("expression_weight_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("name"))
+				.and_then(|value| value.as_str()),
+			Some("Smile")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("dynamics_enabled_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("source_id"))
+				.and_then(|value| value.as_str()),
+			Some("physbone:hair")
 		);
 		assert_eq!(
 			runtime_actions[0]

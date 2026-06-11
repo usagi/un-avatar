@@ -201,6 +201,38 @@ export type RendererRuntimeActionStatus = {
   parameter_value?: number;
   condition_parameter_names?: string[];
   current_condition_state?: string;
+  node_visibility_effects?: {
+    node_index?: number;
+    source_node_id?: string;
+    resolved_node_id?: string;
+    path?: string;
+    visible: boolean;
+  }[];
+  material_property_effects?: {
+    property_kind: string;
+    material_index?: number;
+    material_name?: string;
+    parameter: string;
+    scalar_value?: number;
+    color_value?: [number, number, number, number];
+  }[];
+  material_slot_effects?: {
+    node_index?: number;
+    source_node_id?: string;
+    resolved_node_id?: string;
+    path?: string;
+    primitive_index?: number;
+    material_index?: number;
+    material_name?: string;
+  }[];
+  expression_weight_effects?: {
+    name: string;
+    weight: number;
+  }[];
+  dynamics_enabled_effects?: {
+    source_id: string;
+    enabled: boolean;
+  }[];
 };
 
 export type RendererRuntimeStatus = {

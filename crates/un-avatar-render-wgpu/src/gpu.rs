@@ -111,6 +111,60 @@ pub(crate) struct RuntimeActionStatus {
 	pub(crate) condition_parameter_names: Vec<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) current_condition_state: Option<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) node_visibility_effects: Vec<RuntimeActionNodeVisibilityEffectStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) material_property_effects: Vec<RuntimeActionMaterialPropertyEffectStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) material_slot_effects: Vec<RuntimeActionMaterialSlotEffectStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) expression_weight_effects: Vec<RuntimeActionExpressionWeightEffectStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) dynamics_enabled_effects: Vec<RuntimeActionDynamicsEnabledEffectStatus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionNodeVisibilityEffectStatus {
+	pub(crate) node_index: Option<usize>,
+	pub(crate) source_node_id: Option<String>,
+	pub(crate) resolved_node_id: Option<String>,
+	pub(crate) path: Option<String>,
+	pub(crate) visible: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionMaterialPropertyEffectStatus {
+	pub(crate) property_kind: String,
+	pub(crate) material_index: Option<usize>,
+	pub(crate) material_name: Option<String>,
+	pub(crate) parameter: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) scalar_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) color_value: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionMaterialSlotEffectStatus {
+	pub(crate) node_index: Option<usize>,
+	pub(crate) source_node_id: Option<String>,
+	pub(crate) resolved_node_id: Option<String>,
+	pub(crate) path: Option<String>,
+	pub(crate) primitive_index: Option<usize>,
+	pub(crate) material_index: Option<usize>,
+	pub(crate) material_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionExpressionWeightEffectStatus {
+	pub(crate) name: String,
+	pub(crate) weight: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeActionDynamicsEnabledEffectStatus {
+	pub(crate) source_id: String,
+	pub(crate) enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -611,6 +665,101 @@ fn runtime_action_effect_kind_counts<'a>(effects: impl IntoIterator<Item = &'a U
 	counts
 }
 
+fn runtime_action_node_visibility_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<RuntimeActionNodeVisibilityEffectStatus> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::NodeVisibility { target, visible } => Some(RuntimeActionNodeVisibilityEffectStatus {
+				node_index: target.node_index,
+				source_node_id: target.source_node_id.clone(),
+				resolved_node_id: target.resolved_node_id.clone(),
+				path: target.path.clone(),
+				visible: *visible,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_material_property_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<RuntimeActionMaterialPropertyEffectStatus> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::MaterialColor { target, parameter, color } => Some(RuntimeActionMaterialPropertyEffectStatus {
+				property_kind: "color".to_string(),
+				material_index: target.material_index,
+				material_name: target.name.clone(),
+				parameter: parameter.clone(),
+				scalar_value: None,
+				color_value: Some(*color),
+			}),
+			UnaRuntimeActionEffect::MaterialScalar { target, parameter, value } => Some(RuntimeActionMaterialPropertyEffectStatus {
+				property_kind: "scalar".to_string(),
+				material_index: target.material_index,
+				material_name: target.name.clone(),
+				parameter: parameter.clone(),
+				scalar_value: Some(*value),
+				color_value: None,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_material_slot_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<RuntimeActionMaterialSlotEffectStatus> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::MaterialSlot { target, material } => Some(RuntimeActionMaterialSlotEffectStatus {
+				node_index: target.node.node_index,
+				source_node_id: target.node.source_node_id.clone(),
+				resolved_node_id: target.node.resolved_node_id.clone(),
+				path: target.node.path.clone(),
+				primitive_index: target.primitive_index,
+				material_index: material.as_ref().and_then(|material| material.material_index),
+				material_name: material.as_ref().and_then(|material| material.name.clone()),
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_expression_weight_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<RuntimeActionExpressionWeightEffectStatus> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::ExpressionWeight { name, weight } => Some(RuntimeActionExpressionWeightEffectStatus {
+				name: name.clone(),
+				weight: *weight,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
+fn runtime_action_dynamics_enabled_effects<'a>(
+	effects: impl IntoIterator<Item = &'a UnaRuntimeActionEffect>,
+) -> Vec<RuntimeActionDynamicsEnabledEffectStatus> {
+	effects
+		.into_iter()
+		.filter_map(|effect| match effect {
+			UnaRuntimeActionEffect::DynamicsEnabled { source_id, enabled } => Some(RuntimeActionDynamicsEnabledEffectStatus {
+				source_id: source_id.clone(),
+				enabled: *enabled,
+			}),
+			_ => None,
+		})
+		.collect()
+}
+
 fn runtime_action_statuses(
 	actions: &un_avatar_core::UnaRuntimeActionSet,
 	scene: Option<&UnaSceneSnapshot>,
@@ -627,6 +776,11 @@ fn runtime_action_statuses(
 			current_condition_state: action
 				.current_parameter_condition_state(scene, parameter_values)
 				.map(str::to_string),
+			node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
+			material_property_effects: runtime_action_material_property_effects(action.effects.iter()),
+			material_slot_effects: runtime_action_material_slot_effects(action.effects.iter()),
+			expression_weight_effects: runtime_action_expression_weight_effects(action.effects.iter()),
+			dynamics_enabled_effects: runtime_action_dynamics_enabled_effects(action.effects.iter()),
 			..Default::default()
 		};
 		for trigger in &action.triggers {
@@ -6027,6 +6181,67 @@ mod tests {
 		assert_eq!(active[0].current_condition_state.as_deref(), Some("active"));
 		assert_eq!(inactive[0].current_condition_state.as_deref(), Some("inactive"));
 		assert_eq!(missing[0].current_condition_state.as_deref(), Some("missing_parameter"));
+	}
+
+	#[test]
+	fn runtime_action_statuses_report_effect_targets() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "variant:coat".to_string(),
+				label: "Coat".to_string(),
+				effects: vec![
+					un_avatar_core::UnaRuntimeActionEffect::NodeVisibility {
+						target: un_avatar_core::UnaRuntimeNodeTarget {
+							node_index: Some(4),
+							path: Some("Avatar/Coat".to_string()),
+							..Default::default()
+						},
+						visible: true,
+					},
+					un_avatar_core::UnaRuntimeActionEffect::MaterialScalar {
+						target: un_avatar_core::UnaRuntimeMaterialTarget {
+							material_index: Some(2),
+							name: Some("Coat".to_string()),
+						},
+						parameter: "_Cutoff".to_string(),
+						value: 0.4,
+					},
+					un_avatar_core::UnaRuntimeActionEffect::MaterialSlot {
+						target: un_avatar_core::UnaRuntimeMaterialSlotTarget {
+							node: un_avatar_core::UnaRuntimeNodeTarget {
+								node_index: Some(4),
+								path: Some("Avatar/Coat".to_string()),
+								..Default::default()
+							},
+							primitive_index: Some(1),
+						},
+						material: Some(un_avatar_core::UnaRuntimeMaterialTarget {
+							material_index: Some(3),
+							name: Some("Coat Accent".to_string()),
+						}),
+					},
+					un_avatar_core::UnaRuntimeActionEffect::ExpressionWeight {
+						name: "Smile".to_string(),
+						weight: 0.75,
+					},
+					un_avatar_core::UnaRuntimeActionEffect::DynamicsEnabled {
+						source_id: "physbone:hair".to_string(),
+						enabled: false,
+					},
+				],
+				..Default::default()
+			}],
+		};
+
+		let statuses = runtime_action_statuses(&actions, None, &Default::default());
+
+		assert_eq!(statuses[0].node_visibility_effects[0].path.as_deref(), Some("Avatar/Coat"));
+		assert_eq!(statuses[0].material_property_effects[0].property_kind, "scalar");
+		assert_eq!(statuses[0].material_property_effects[0].parameter, "_Cutoff");
+		assert_eq!(statuses[0].material_slot_effects[0].material_name.as_deref(), Some("Coat Accent"));
+		assert_eq!(statuses[0].expression_weight_effects[0].name, "Smile");
+		assert_eq!(statuses[0].dynamics_enabled_effects[0].source_id, "physbone:hair");
+		assert!(!statuses[0].dynamics_enabled_effects[0].enabled);
 	}
 
 	#[test]
