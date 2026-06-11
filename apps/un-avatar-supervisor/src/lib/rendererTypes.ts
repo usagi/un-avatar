@@ -272,6 +272,23 @@ export type RendererRuntimeMenuWardrobeCandidateStatus = {
   inverted: boolean;
 };
 
+export type RendererRuntimeParameterDefinition = {
+  name: string;
+  owner_keys?: string[];
+  source_kinds?: string[];
+  value_samples?: number[];
+  current_value?: number;
+  transient?: boolean;
+};
+
+export type RendererRuntimeParameterConflict = {
+  name: string;
+  reason: string;
+  owner_keys?: string[];
+  source_kinds?: string[];
+  value_samples?: number[];
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -405,6 +422,8 @@ export type RendererRuntimeStatus = {
   runtime_action_restore_baseline_candidates: RendererRuntimeActionRestoreBaselineCandidate[];
   runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
   runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
+  runtime_parameter_definitions: RendererRuntimeParameterDefinition[];
+  runtime_parameter_conflicts: RendererRuntimeParameterConflict[];
   menu_wardrobe_candidates: RendererRuntimeMenuWardrobeCandidateStatus[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_parameter_emission_enabled: boolean;
@@ -466,6 +485,8 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "runtime_action_restore_baseline_candidates"
   | "runtime_action_restore_baseline_capture_plan"
   | "runtime_action_restore_apply_plan"
+  | "runtime_parameter_definitions"
+  | "runtime_parameter_conflicts"
   | "menu_wardrobe_candidates"
   | "dynamics_groups"
   | "dynamics_colliders"

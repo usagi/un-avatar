@@ -86,6 +86,7 @@ v2 初期では priority / lock は導入しない。
 - core は `runtime_action_restore_apply_plan` diagnostics で、現在の parameter state から inactive と判定された action の restore 書き戻し候補を read-only に列挙できる。active / missing / no-condition action は apply-ready にはしない。
 - core は ready な inactive action restore apply entry を node visibility、material color/scalar、material slot、dynamics enabled に書き戻せる。renderer は runtime action activation 後に現在 parameter state で inactive になった action の restore を適用する。
 - renderer `set_parameter` は condition metadata で active になった action を deterministic order で全件適用し、該当 action が無い parameter change でも inactive restore を走らせる。これは continuous evaluator の初期段階であり、アニメータ風の frame-by-frame blend / layer evaluation ではない。
+- core runtime model は action trigger / condition、contact receiver、runtime state から source-neutral runtime parameter definitions を作れる。contact transient parameter と action/menu parameter の同名共有は `runtime_parameter_conflicts` diagnostics で観測する。通常の 0/1 toggle のような同一 action parameter の値違いは衝突扱いしない。
 - この diagnostics / capture / restore は source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
 - `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
 

@@ -1557,6 +1557,8 @@ impl AvatarApp {
 			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
 			status.runtime_requires_fur = runtime_requirements.fur;
 			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
+			status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
+			status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
 			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
 			status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
@@ -3184,6 +3186,10 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	runtime_parameter_values: BTreeMap<String, f32>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_definitions: Vec<un_avatar_core::UnaRuntimeParameterDefinition>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_conflicts: Vec<un_avatar_core::UnaRuntimeParameterConflict>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	wardrobe_actions: Vec<gpu::RuntimeWardrobeActionStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_actions: Vec<gpu::RuntimeActionStatus>,
@@ -3388,6 +3394,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		resolver_cache_key: None,
 		last_action_id: None,
 		runtime_parameter_values: BTreeMap::new(),
+		runtime_parameter_definitions: Vec::new(),
+		runtime_parameter_conflicts: Vec::new(),
 		wardrobe_actions: Vec::new(),
 		runtime_actions: Vec::new(),
 		runtime_action_target_write_collisions: Vec::new(),
@@ -4710,6 +4718,21 @@ mod tests {
 				residency_gap_index_status_limit: 64,
 				..Default::default()
 			};
+			status.runtime_parameter_definitions = vec![un_avatar_core::UnaRuntimeParameterDefinition {
+				name: "Outfit".to_string(),
+				owner_keys: vec!["action:wardrobe:field_drape".to_string()],
+				source_kinds: vec!["action_condition".to_string(), "action_trigger".to_string()],
+				value_samples: vec![1.0],
+				current_value: Some(1.0),
+				transient: false,
+			}];
+			status.runtime_parameter_conflicts = vec![un_avatar_core::UnaRuntimeParameterConflict {
+				name: "ContactHand".to_string(),
+				reason: "contact_transient_overlaps_action_parameter".to_string(),
+				owner_keys: vec!["action:contact-react".to_string(), "contact:hand".to_string()],
+				source_kinds: vec!["action_condition".to_string(), "contact_receiver".to_string()],
+				value_samples: vec![0.0, 1.0],
+			}];
 			status.wardrobe_actions = vec![crate::gpu::RuntimeWardrobeActionStatus {
 				action_id: "wardrobe:field_drape".to_string(),
 				label: "Field Drape".to_string(),
@@ -5251,6 +5274,24 @@ mod tests {
 		assert_eq!(
 			upload.get("residency_gap_index_status_limit").and_then(|value| value.as_u64()),
 			Some(64)
+		);
+		let parameter_definitions = snapshot
+			.get("runtime_parameter_definitions")
+			.and_then(|value| value.as_array())
+			.expect("runtime parameter definitions");
+		assert_eq!(parameter_definitions.len(), 1);
+		assert_eq!(
+			parameter_definitions[0].get("name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		let parameter_conflicts = snapshot
+			.get("runtime_parameter_conflicts")
+			.and_then(|value| value.as_array())
+			.expect("runtime parameter conflicts");
+		assert_eq!(parameter_conflicts.len(), 1);
+		assert_eq!(
+			parameter_conflicts[0].get("reason").and_then(|value| value.as_str()),
+			Some("contact_transient_overlaps_action_parameter")
 		);
 		let wardrobe_actions = snapshot
 			.get("wardrobe_actions")

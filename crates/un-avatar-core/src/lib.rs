@@ -206,6 +206,33 @@ pub struct UnaRuntimeAction {
 	pub effects: Vec<UnaRuntimeActionEffect>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeParameterDefinition {
+	pub name: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub owner_keys: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub source_kinds: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub value_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub current_value: Option<f32>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub transient: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaRuntimeParameterConflict {
+	pub name: String,
+	pub reason: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub owner_keys: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub source_kinds: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub value_samples: Vec<f32>,
+}
+
 impl UnaRuntimeAction {
 	pub fn matches_query(&self, query: UnaRuntimeActionQuery<'_>) -> bool {
 		query.action_id.is_some_and(|id| self.id == id) || self.triggers.iter().any(|trigger| trigger.matches_query(query))
@@ -1859,6 +1886,42 @@ pub struct UnaRuntimeSceneDynamics<'a> {
 	pub dynamics: UnaRuntimeDynamics<'a>,
 }
 
+fn add_runtime_parameter_definition_source(
+	definitions: &mut BTreeMap<String, UnaRuntimeParameterDefinition>,
+	name: &str,
+	owner_key: &str,
+	source_kind: &str,
+	value_sample: Option<f32>,
+	transient: bool,
+) {
+	if name.is_empty() {
+		return;
+	}
+	let definition = definitions
+		.entry(name.to_string())
+		.or_insert_with(|| UnaRuntimeParameterDefinition {
+			name: name.to_string(),
+			..Default::default()
+		});
+	if !owner_key.is_empty() && !definition.owner_keys.iter().any(|existing| existing == owner_key) {
+		definition.owner_keys.push(owner_key.to_string());
+	}
+	if !source_kind.is_empty() && !definition.source_kinds.iter().any(|existing| existing == source_kind) {
+		definition.source_kinds.push(source_kind.to_string());
+	}
+	if let Some(value) = value_sample {
+		if value.is_finite()
+			&& !definition
+				.value_samples
+				.iter()
+				.any(|existing| (*existing - value).abs() <= f32::EPSILON)
+		{
+			definition.value_samples.push(value);
+		}
+	}
+	definition.transient |= transient;
+}
+
 impl<'a> UnaRuntimeSceneDynamics<'a> {
 	pub fn contact_probes(self) -> Vec<UnaEvaluationContactProbe> {
 		let world = scene_world_matrices(self.scene);
@@ -2043,6 +2106,87 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn runtime_parameter_values(self) -> &'a BTreeMap<String, f32> {
 		&self.runtime_state().parameter_values
+	}
+
+	pub fn runtime_parameter_definitions(self) -> Vec<UnaRuntimeParameterDefinition> {
+		let mut definitions = BTreeMap::<String, UnaRuntimeParameterDefinition>::new();
+		if let Some(actions) = self.runtime_actions() {
+			for action in &actions.actions {
+				let owner_key = runtime_action_owner_key(&action.id);
+				for trigger in &action.triggers {
+					if let UnaRuntimeActionTrigger::ParameterValue { name, value } = trigger {
+						add_runtime_parameter_definition_source(&mut definitions, name, &owner_key, "action_trigger", Some(*value), false);
+					}
+				}
+				for condition in &action.conditions {
+					if let Some(name) = condition.parameter_name.as_deref() {
+						add_runtime_parameter_definition_source(
+							&mut definitions,
+							name,
+							&owner_key,
+							"action_condition",
+							condition.parameter_value,
+							false,
+						);
+					}
+				}
+			}
+		}
+		for declaration in self.dynamics().contact_parameter_declarations() {
+			add_runtime_parameter_definition_source(
+				&mut definitions,
+				&declaration.parameter,
+				&declaration.owner_key,
+				"contact_receiver",
+				Some(1.0),
+				true,
+			);
+			add_runtime_parameter_definition_source(
+				&mut definitions,
+				&declaration.parameter,
+				&declaration.owner_key,
+				"contact_receiver",
+				Some(0.0),
+				true,
+			);
+		}
+		for (name, value) in self.runtime_parameter_values() {
+			add_runtime_parameter_definition_source(
+				&mut definitions,
+				name,
+				&format!("parameter:{name}"),
+				"runtime_state",
+				Some(*value),
+				false,
+			);
+		}
+		for definition in definitions.values_mut() {
+			definition.current_value = self.runtime_parameter_values().get(&definition.name).copied();
+			definition.owner_keys.sort();
+			definition.source_kinds.sort();
+			definition.value_samples.sort_by(|left, right| left.total_cmp(right));
+		}
+		definitions.into_values().collect()
+	}
+
+	pub fn runtime_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
+		self.runtime_parameter_definitions()
+			.into_iter()
+			.filter_map(|definition| {
+				let has_contact = definition.source_kinds.iter().any(|kind| kind == "contact_receiver");
+				let has_action = definition
+					.source_kinds
+					.iter()
+					.any(|kind| kind == "action_trigger" || kind == "action_condition");
+				(has_contact && has_action).then(|| UnaRuntimeParameterConflict {
+					name: definition.name,
+					reason: "contact_transient_overlaps_action_parameter".to_string(),
+					owner_keys: definition.owner_keys,
+					source_kinds: definition.source_kinds,
+					value_samples: definition.value_samples,
+				})
+			})
+			.collect()
 	}
 
 	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
@@ -6350,6 +6494,75 @@ mod tests {
 		let actions = decoded.runtime_model().runtime_actions().unwrap();
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].effects.len(), 2);
+	}
+
+	#[test]
+	fn runtime_parameter_definitions_merge_action_and_contact_sources() {
+		let mut document = UnaDocument {
+			runtime_actions: Some(UnaRuntimeActionSet {
+				actions: vec![
+					UnaRuntimeAction {
+						id: "hat:on".to_string(),
+						triggers: vec![UnaRuntimeActionTrigger::ParameterValue {
+							name: "Hat".to_string(),
+							value: 1.0,
+						}],
+						conditions: vec![UnaRuntimeActionCondition {
+							parameter_name: Some("Hat".to_string()),
+							parameter_value: Some(1.0),
+							..Default::default()
+						}],
+						..Default::default()
+					},
+					UnaRuntimeAction {
+						id: "hat:off".to_string(),
+						triggers: vec![UnaRuntimeActionTrigger::ParameterValue {
+							name: "Hat".to_string(),
+							value: 0.0,
+						}],
+						conditions: vec![UnaRuntimeActionCondition {
+							parameter_name: Some("Hat".to_string()),
+							parameter_value: Some(0.0),
+							..Default::default()
+						}],
+						..Default::default()
+					},
+				],
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				contacts: vec![UnaDynamicsContact {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "contact:hat".to_string(),
+					node: 1,
+					kind: UnaDynamicsContactKind::Receiver,
+					parameter: "Hat".to_string(),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().set_runtime_parameter_value("Hat", 1.0);
+
+		let definitions = document.runtime_model().runtime_parameter_definitions();
+		assert_eq!(definitions.len(), 1);
+		assert_eq!(definitions[0].name, "Hat");
+		assert_eq!(definitions[0].current_value, Some(1.0));
+		assert_eq!(
+			definitions[0].source_kinds,
+			vec![
+				"action_condition".to_string(),
+				"action_trigger".to_string(),
+				"contact_receiver".to_string(),
+				"runtime_state".to_string()
+			]
+		);
+		assert_eq!(definitions[0].value_samples, vec![0.0, 1.0]);
+		assert!(definitions[0].transient);
+		let conflicts = document.runtime_model().runtime_parameter_conflicts();
+		assert_eq!(conflicts.len(), 1);
+		assert_eq!(conflicts[0].name, "Hat");
+		assert_eq!(conflicts[0].reason, "contact_transient_overlaps_action_parameter");
 	}
 
 	#[test]

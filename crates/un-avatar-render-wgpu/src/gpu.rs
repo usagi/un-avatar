@@ -4250,6 +4250,26 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	pub(crate) fn runtime_parameter_definitions(&self) -> Vec<un_avatar_core::UnaRuntimeParameterDefinition> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model().runtime_parameter_definitions()
+	}
+
+	pub(crate) fn runtime_parameter_conflicts(&self) -> Vec<un_avatar_core::UnaRuntimeParameterConflict> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		doc.runtime_model().runtime_parameter_conflicts()
+	}
+
 	pub(crate) fn wardrobe_actions(&self) -> Vec<RuntimeWardrobeActionStatus> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();

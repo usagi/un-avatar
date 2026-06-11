@@ -114,6 +114,10 @@ struct DiagnoseRuntimeSummary {
 	last_action_id: Option<String>,
 	#[serde(skip_serializing_if = "BTreeMap::is_empty")]
 	parameter_values: BTreeMap<String, f32>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	parameter_definitions: Vec<un_avatar_core::UnaRuntimeParameterDefinition>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	parameter_conflicts: Vec<un_avatar_core::UnaRuntimeParameterConflict>,
 	resolver_cache_key: UnaRuntimeResolverCacheKey,
 }
 
@@ -3876,6 +3880,8 @@ fn build_diagnose_report(
 		active_asset_groups: runtime_model.active_asset_groups().to_vec(),
 		last_action_id: runtime_model.last_action_id().map(str::to_owned),
 		parameter_values: runtime_model.runtime_parameter_values().clone(),
+		parameter_definitions: runtime_model.runtime_parameter_definitions(),
+		parameter_conflicts: runtime_model.runtime_parameter_conflicts(),
 		resolver_cache_key: runtime_model.resolver_cache_key(),
 	};
 	let runtime_dynamics = runtime_model.dynamics();
@@ -4519,16 +4525,35 @@ fn run_diagnose(
 		report.import_report.lost_features.len()
 	);
 	println!(
-		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} active_asset_groups={:?} last_action_id={:?} parameter_values={}",
+		"runtime: source={:?} humanoid_basis={:?} active_wardrobe_set={:?} active_asset_groups={:?} last_action_id={:?} parameter_values={} parameter_definitions={} parameter_conflicts={}",
 		report.runtime.source_kind,
 		report.runtime.humanoid_basis,
 		report.runtime.active_wardrobe_set,
 		report.runtime.active_asset_groups,
 		report.runtime.last_action_id,
-		report.runtime.parameter_values.len()
+		report.runtime.parameter_values.len(),
+		report.runtime.parameter_definitions.len(),
+		report.runtime.parameter_conflicts.len()
 	);
 	if !report.runtime.parameter_values.is_empty() {
 		println!("runtime.parameters: {:?}", report.runtime.parameter_values);
+	}
+	for definition in report.runtime.parameter_definitions.iter().take(16) {
+		println!(
+			"runtime.parameter_definition[{}]: owners={:?} sources={:?} values={:?} current={:?} transient={}",
+			definition.name,
+			definition.owner_keys,
+			definition.source_kinds,
+			definition.value_samples,
+			definition.current_value,
+			definition.transient
+		);
+	}
+	for conflict in report.runtime.parameter_conflicts.iter().take(16) {
+		println!(
+			"runtime.parameter_conflict[{}]: reason={} owners={:?} sources={:?} values={:?}",
+			conflict.name, conflict.reason, conflict.owner_keys, conflict.source_kinds, conflict.value_samples
+		);
 	}
 	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {

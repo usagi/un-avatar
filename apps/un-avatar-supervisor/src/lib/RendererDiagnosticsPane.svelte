@@ -62,6 +62,19 @@
     return `${label}: ${state} [${parameters}]${targets}`;
   }
 
+  function runtimeParameterDefinitionLabel(
+    definition: RendererRuntimeDiagnosticsData["runtime_parameter_definitions"][number],
+  ): string {
+    const current = definition.current_value == null ? "-" : definition.current_value;
+    return `${definition.name}: sources=${definition.source_kinds?.join(",") ?? "-"} values=${definition.value_samples?.join(",") ?? "-"} current=${current}${definition.transient ? " transient" : ""}`;
+  }
+
+  function runtimeParameterConflictLabel(
+    conflict: RendererRuntimeDiagnosticsData["runtime_parameter_conflicts"][number],
+  ): string {
+    return `${conflict.name}: ${conflict.reason} owners=${conflict.owner_keys?.join(",") ?? "-"} sources=${conflict.source_kinds?.join(",") ?? "-"}`;
+  }
+
   function runtimeActionCollisionLabel(
     collision: RendererRuntimeDiagnosticsData["runtime_action_target_write_collisions"][number],
   ): string {
@@ -168,6 +181,18 @@
       {#if runtimeStatus.runtime_actions.length}
         <dt>{$_("renderers.details.diag_runtime_actions")}</dt>
         <dd class="stderr-block">{runtimeStatus.runtime_actions.slice(0, sampleLimit).map(runtimeActionLabel).join("\n")}</dd>
+      {/if}
+      {#if runtimeStatus.runtime_parameter_definitions.length}
+        <dt>{$_("renderers.details.diag_runtime_parameters")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_parameter_definitions.slice(0, sampleLimit).map(runtimeParameterDefinitionLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.runtime_parameter_conflicts.length}
+        <dt>{$_("renderers.details.diag_runtime_parameter_conflicts")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_parameter_conflicts.slice(0, sampleLimit).map(runtimeParameterConflictLabel).join("\n")}
+        </dd>
       {/if}
       {#if runtimeStatus.runtime_action_target_write_collisions.length}
         <dt>{$_("renderers.details.diag_runtime_action_collisions")}</dt>
