@@ -13,6 +13,7 @@ v2 の実装対象は、その中の bone dynamics layer である UNDynamics �
 
 Solver / renderer / wardrobe runtime の public boundary では、可能な限り `UNDynamics` の語彙を使う。
 `SpringBoneSimulator` など既存名は互換 shim として段階的に残してよいが、新しい behavior を SpringBone 固有 API に直接足さない。
+SpringBone を v2 physics model の基準にはしない。v1 solver は実装資産であり、UNDynamics runtime model の設計基準ではない。
 
 ## Design Boundary
 
@@ -24,13 +25,16 @@ UNDynamics の中核概念:
 - `UnaDynamicsGroup`: stable source id、enabled state、source provenance、solver parameters、chains、colliders、limits、interactions を束ねる runtime group。
 - `UnaDynamicsChain`: 親から子へ向かう node chain。PhysBone endpointPosition は synthetic endpoint chain node として lower できる。
 - `UnaDynamicsCollider`: sphere / capsule / inside bounds など source-neutral collider。
-- `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は angle cone を SpringBone-like solver へ近似反映し、stretch は metadata / diagnostics に留める。
+- `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は angle cone を現 solver backend が扱える拘束として近似反映し、stretch は metadata / diagnostics に留める。
 - `UnaDynamicsInteraction`: grabbing / posing など interaction capability metadata。v2 初期は runtime action / diagnostics のために保持する。
 - `UnaDynamicsContact`: VRC Contacts を source-neutral event / proximity metadata として保持する。
 - `UnaDynamicsConstraintRef`: VRC Constraints や Modular Avatar resolver が残す参照関係を、bone dynamics rebuild / reset の判断材料として保持する。v2 初期では solver 入力ではないが、dynamics reset 対象 node には含める。
 
 既存 v1 SpringBone solver / collider code は実装資産として再利用する。
-ただし v2 の設計上は、SpringBone solver に PhysBone feature を直接追加するのではなく、UNDynamics solver がまず SpringBone-like Verlet/PBD primitive を内包している、と扱う。
+ただし v2 の設計上は、SpringBone solver に PhysBone feature を直接追加するのではなく、UNDynamics が出す runtime terms を solver backend が解く、と扱う。
+UNDynamics は解く対象を定義する層であり、group / chain / collider / force / drag / pull / limit / interaction / contact / constraint intent を source-neutral に持つ。
+Solver backend は解き方を定義する層であり、Verlet、PBD / XPBD 的な拘束解法、反復回数、安定化、衝突解決順などのアルゴリズムを持つ。
+このため v2 初期で v1 solver 由来の backend を使っても、PhysBone source を SpringBone source へ変換したとは呼ばない。未対応 term は source metadata / normalized metadata / diagnostics に残し、SpringBone semantics へ丸めたことにしない。
 
 ## Source Data And Runtime State
 
@@ -52,6 +56,7 @@ Lowering:
 - VRM SpringBone source は UNDynamics group / chain / collider / parameter view へ lower する。
 - VRC PhysBone source も同じ UNDynamics view へ lower する。source-specific fields は `sourceParams` と normalized metadata の両方で保持してよい。
 - VRC PhysBone authored default は、現 solver で衣装を壊す可能性がある間は安全側で既定 OFF とし、wardrobe / action で runtime override できる。
+Source importer は authored fields を UNDynamics terms へ写像する責務を持つ。Solver backend は source kind を知らず、UNDynamics runtime view と評価済み runtime state だけを読む。
 
 ## Implementation Checklist
 
