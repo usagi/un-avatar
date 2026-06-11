@@ -145,7 +145,7 @@ MVP control command:
 - core runtime model は node visibility、material property、material slot、dynamics enabled の現在値を read-only に取得できる。inactive-state default restore はまだ実行せず、baseline/source-default の保持方針を固めてからこの API を使う。
 - core は runtime action restore readiness diagnostics を持つ。restore target は baseline 未保存なら `baseline_not_captured`、保存済みなら `ready=true` として観測できる。inactive-state default restore はまだ実行しない。
 - restore readiness から read-only restore baseline candidates も診断できる。これは capture 候補値の確認用であり、restore 実行はまだ行わない。
-- core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存でき、保存済み baseline がある action effect は restore readiness で `ready=true` として観測できる。inactive-state default restore の runtime scene 書き戻しはまだ実行しない。
+- core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存でき、保存済み baseline がある action effect は restore readiness で `ready=true` として観測できる。renderer は runtime action activation の effect 適用前に baseline を capture し、既存 baseline は上書きしない。inactive-state default restore の runtime scene 書き戻しはまだ実行しない。
 
 次の段階:
 

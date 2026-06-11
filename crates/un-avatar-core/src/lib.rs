@@ -2244,7 +2244,24 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		let runtime_state = self.runtime_state_mut();
 		for entry in &plan {
 			let owner_entries = runtime_state.restore_baselines.entry(entry.owner_key.clone()).or_default();
-			owner_entries.retain(|existing| existing.target_kind != entry.target_kind || existing.target_key != entry.target_key);
+			if let Some(existing) = owner_entries
+				.iter_mut()
+				.find(|existing| existing.target_kind == entry.target_kind && existing.target_key == entry.target_key)
+			{
+				for action_id in &entry.source_action_ids {
+					if !existing.source_action_ids.contains(action_id) {
+						existing.source_action_ids.push(action_id.clone());
+					}
+				}
+				for effect_kind in &entry.source_effect_kinds {
+					if !existing.source_effect_kinds.contains(effect_kind) {
+						existing.source_effect_kinds.push(effect_kind.clone());
+					}
+				}
+				existing.source_action_ids.sort();
+				existing.source_effect_kinds.sort();
+				continue;
+			}
 			owner_entries.push(entry.clone());
 			owner_entries.sort_by(|left, right| {
 				(&left.target_kind, &left.target_key, stable_json_key(&left.baseline_value)).cmp(&(
@@ -6291,6 +6308,23 @@ mod tests {
 		assert_eq!(captured_readiness[3].reason, "ready");
 		assert!(!captured_readiness[4].ready);
 		assert_eq!(captured_readiness[4].reason, "target_unresolved");
+
+		assert!(document.runtime_model_mut().set_node_visible(
+			&UnaRuntimeNodeTarget {
+				source_node_id: Some("node_renderer".to_string()),
+				..Default::default()
+			},
+			false
+		));
+		let recaptured = document.runtime_model_mut().capture_runtime_action_restore_baselines(&actions);
+		assert_eq!(recaptured.len(), 4);
+		assert_eq!(
+			document
+				.runtime_model()
+				.restore_baseline("action:variant:coat", &UnaEvaluationTargetKind::NodeVisibility, "node_renderer")
+				.map(|entry| &entry.baseline_value),
+			Some(&Value::from(true))
+		);
 	}
 
 	#[test]

@@ -4464,7 +4464,7 @@ impl GpuState {
 			return Err("document is not attached".to_string());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (resolved_action_id, parameter_values, effects) = {
+		let (resolved_action_id, parameter_values, action) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let Some(actions) = doc.runtime_model().runtime_actions() else {
 				return Err("document has no runtime actions".to_string());
@@ -4478,10 +4478,17 @@ impl GpuState {
 					parameter_value,
 				})
 				.ok_or_else(|| "runtime action not found".to_string())?;
-			(action.id.clone(), action.parameter_assignments(), action.effects.clone())
+			(action.id.clone(), action.parameter_assignments(), action.clone())
 		};
+		{
+			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+			doc.runtime_model_mut()
+				.capture_runtime_action_restore_baselines(&un_avatar_core::UnaRuntimeActionSet {
+					actions: vec![action.clone()],
+				});
+		}
 		let mut active_wardrobe_set = None;
-		for effect in effects {
+		for effect in action.effects {
 			match effect {
 				UnaRuntimeActionEffect::WardrobeSet { set_id } => {
 					self.apply_wardrobe_set(&set_id)?;
