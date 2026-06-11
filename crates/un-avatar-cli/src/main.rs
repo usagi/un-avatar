@@ -4145,6 +4145,12 @@ fn build_diagnose_report(
 		));
 	}
 	let dynamics_counts = runtime_dynamics.counts();
+	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
+		warnings.push(format!(
+			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={}",
+			dynamics_source_features.stretch_limit_count, dynamics_counts.stretch_limit_groups
+		));
+	}
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: dynamics_counts.groups,
 		vrm_spring_bone_group_count: dynamics_counts.vrm_spring_bone_groups,
@@ -6972,6 +6978,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("raw dynamics source colliders include 1 unknown shape collider")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
 	}
 
 	#[test]
@@ -7097,6 +7107,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics constraint_ref source_id \"constraint:parent\" lowers to 2 runtime constraint refs")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
