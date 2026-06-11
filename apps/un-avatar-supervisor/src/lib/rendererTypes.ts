@@ -303,7 +303,23 @@ export type RendererDiagnosticsData = Pick<
   "last_stderr" | "stderr_tail" | "exit_code"
 >;
 
-export type RendererRuntimeDiagnosticsData = Pick<RendererRuntimeStatus, "note">;
+export type RendererRuntimeDiagnosticsData = Pick<
+  RendererRuntimeStatus,
+  | "note"
+  | "dynamics_group_count"
+  | "dynamics_enabled_group_count"
+  | "dynamics_collider_count"
+  | "dynamics_contact_count"
+  | "dynamics_contact_parameter_declaration_count"
+  | "dynamics_contact_probe_count"
+  | "dynamics_contact_probe_would_emit_count"
+  | "dynamics_constraint_ref_count"
+  | "dynamics_groups"
+  | "dynamics_colliders"
+  | "contact_parameter_declarations"
+  | "contact_probes"
+  | "dynamics_constraint_refs"
+>;
 
 export type RendererStageActionData = Pick<
   RendererInstance,

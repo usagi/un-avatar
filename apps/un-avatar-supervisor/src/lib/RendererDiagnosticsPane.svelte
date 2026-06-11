@@ -7,6 +7,37 @@
 
   export let renderer: RendererDiagnosticsData;
   export let runtimeStatus: RendererRuntimeDiagnosticsData | null;
+
+  const sampleLimit = 4;
+
+  function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
+    const path = group.root_path ?? group.source_id ?? `#${group.index}`;
+    const state = group.effective_enabled ? "on" : "off";
+    return `${path} (${group.source_kind}, ${state}, bones=${group.bone_count})`;
+  }
+
+  function colliderLabel(collider: RendererRuntimeDiagnosticsData["dynamics_colliders"][number]): string {
+    const path = collider.node_path ?? `#${collider.node}`;
+    return `${path} (${collider.source_kind}, ${collider.shape}, r=${collider.radius})`;
+  }
+
+  function contactDeclarationLabel(
+    declaration: RendererRuntimeDiagnosticsData["contact_parameter_declarations"][number],
+  ): string {
+    const path = declaration.node_path ?? `#${declaration.node}`;
+    return `${declaration.parameter} @ ${path}`;
+  }
+
+  function contactProbeLabel(probe: RendererRuntimeDiagnosticsData["contact_probes"][number]): string {
+    const receiver = probe.receiver_node_path ?? `#${probe.receiver_node}`;
+    const sender = probe.sender_node_path ?? `#${probe.sender_node}`;
+    return `${probe.parameter}: ${receiver} <- ${sender} (${probe.would_emit ? "would emit" : "idle"})`;
+  }
+
+  function constraintRefLabel(ref: RendererRuntimeDiagnosticsData["dynamics_constraint_refs"][number]): string {
+    const target = ref.target_path ?? `#${ref.target_node}`;
+    return `${ref.constraint_type ?? "constraint"} @ ${target} (${ref.source_kind})`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -28,6 +59,46 @@
     {#if runtimeStatus?.note}
       <dt>{$_("renderers.details.diag_runtime_note")}</dt>
       <dd>{runtimeStatus.note}</dd>
+    {/if}
+    {#if runtimeStatus}
+      <dt>{$_("renderers.details.diag_dynamics_summary")}</dt>
+      <dd>
+        {$_("renderers.details.diag_dynamics_summary_value", {
+          values: {
+            groups: runtimeStatus.dynamics_group_count,
+            enabled: runtimeStatus.dynamics_enabled_group_count,
+            colliders: runtimeStatus.dynamics_collider_count,
+            contacts: runtimeStatus.dynamics_contact_count,
+            probes: runtimeStatus.dynamics_contact_probe_count,
+            wouldEmit: runtimeStatus.dynamics_contact_probe_would_emit_count,
+            constraints: runtimeStatus.dynamics_constraint_ref_count,
+          },
+        })}
+      </dd>
+      {#if runtimeStatus.dynamics_groups.length}
+        <dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
+        <dd class="stderr-block">{runtimeStatus.dynamics_groups.slice(0, sampleLimit).map(groupLabel).join("\n")}</dd>
+      {/if}
+      {#if runtimeStatus.dynamics_colliders.length}
+        <dt>{$_("renderers.details.diag_dynamics_colliders")}</dt>
+        <dd class="stderr-block">{runtimeStatus.dynamics_colliders.slice(0, sampleLimit).map(colliderLabel).join("\n")}</dd>
+      {/if}
+      {#if runtimeStatus.contact_parameter_declarations.length}
+        <dt>{$_("renderers.details.diag_contact_parameters")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.contact_parameter_declarations.slice(0, sampleLimit).map(contactDeclarationLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.contact_probes.length}
+        <dt>{$_("renderers.details.diag_contact_probes")}</dt>
+        <dd class="stderr-block">{runtimeStatus.contact_probes.slice(0, sampleLimit).map(contactProbeLabel).join("\n")}</dd>
+      {/if}
+      {#if runtimeStatus.dynamics_constraint_refs.length}
+        <dt>{$_("renderers.details.diag_dynamics_constraints")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.dynamics_constraint_refs.slice(0, sampleLimit).map(constraintRefLabel).join("\n")}
+        </dd>
+      {/if}
     {/if}
   </dl>
 </div>
