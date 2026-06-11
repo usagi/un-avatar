@@ -7731,6 +7731,71 @@ mod tests {
 	}
 
 	#[test]
+	fn contact_parameter_emission_tracks_current_scene_pose() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_node(vec![1, 2]),
+					test_translation_node(0.0, 0.0, 0.0),
+					test_translation_node(1.0, 0.0, 0.0),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"runtime": {"capabilities": ["contacts.parameter_emission"]}
+				}),
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				contacts: vec![
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:receiver".to_string(),
+						node: 1,
+						kind: UnaDynamicsContactKind::Receiver,
+						parameter: "ContactHand".to_string(),
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:sender".to_string(),
+						node: 2,
+						kind: UnaDynamicsContactKind::Sender,
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let initial = document.runtime_model_mut().apply_contact_parameter_emissions();
+		assert_eq!(initial.len(), 1);
+		assert!(!initial[0].emitted);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&0.0));
+
+		document.scene.as_mut().unwrap().nodes[2].transform[12] = 0.08;
+		let moved = document.runtime_model_mut().apply_contact_parameter_emissions();
+		assert_eq!(moved.len(), 1);
+		assert!(moved[0].emitted);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
+
+		document.scene.as_mut().unwrap().nodes[2].transform[12] = 1.0;
+		let separated = document.runtime_model_mut().apply_contact_parameter_emissions();
+		assert_eq!(separated.len(), 1);
+		assert!(!separated[0].emitted);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&0.0));
+	}
+
+	#[test]
 	fn runtime_resolver_cache_key_hashes_modular_avatar_components() {
 		let mut document = UnaDocument {
 			unavatar: Some(UnaUnavatarExtension {
