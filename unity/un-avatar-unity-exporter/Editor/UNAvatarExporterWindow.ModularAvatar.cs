@@ -89,19 +89,39 @@ namespace UNAvatar.UnityExporter
             Component component,
             List<UnavatarTextureAssetRecord> textureAssets)
         {
-            var fields = component.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance);
+            var fields = SerializableModularAvatarFields(component.GetType());
             var json = new Dictionary<string, object>(fields.Length);
             foreach (var field in fields)
             {
-                if (field.IsStatic)
-                {
-                    continue;
-                }
                 var value = SafeGetField(field, component);
-                json[field.Name] = ModularAvatarValueToJson(root, component, value, 0);
+                if (!json.ContainsKey(field.Name))
+                {
+                    json[field.Name] = ModularAvatarValueToJson(root, component, value, 0);
+                }
             }
             AddModularAvatarMaskTextureFields(root, component, textureAssets, json);
             return json;
+        }
+
+        private static FieldInfo[] SerializableModularAvatarFields(Type type)
+        {
+            var fields = new List<FieldInfo>();
+            for (var current = type; current != null && current != typeof(object); current = current.BaseType)
+            {
+                foreach (var field in current.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (field.IsStatic || field.IsNotSerialized)
+                    {
+                        continue;
+                    }
+                    if (!field.IsPublic && !Attribute.IsDefined(field, typeof(SerializeField), true))
+                    {
+                        continue;
+                    }
+                    fields.Add(field);
+                }
+            }
+            return fields.ToArray();
         }
 
         private static List<Texture> CollectModularAvatarMaskTextures(GameObject root)
