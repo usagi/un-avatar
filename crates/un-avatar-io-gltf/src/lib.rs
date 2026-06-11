@@ -4803,11 +4803,7 @@ fn apply_unavatar_replace_objects(
 }
 
 fn modular_avatar_remove_vertex_color_removes(component: &Value) -> bool {
-	let Some(mode) = component
-		.get("fields")
-		.and_then(|fields| fields.get("Mode").or_else(|| fields.get("mode")))
-		.or_else(|| component.get("Mode").or_else(|| component.get("mode")))
-	else {
+	let Some(mode) = modular_avatar_component_value(component, &["Mode", "mode", "m_Mode", "removeMode", "remove_mode"]) else {
 		return true;
 	};
 	match mode {
@@ -13139,7 +13135,7 @@ mod tests {
 				"shortType": "ModularAvatarRemoveVertexColor",
 				"enabled": true,
 				"target": {"nodeId": "node_keep", "path": "Root/Remove/Keep"},
-				"fields": {"Mode": 1}
+				"fields": {"m_Mode": 1}
 			}),
 		];
 		let node_ids = scene_node_ids(&scene);
