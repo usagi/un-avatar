@@ -80,6 +80,7 @@ v2 初期では priority / lock は導入しない。
 - core runtime model は node visibility、material property、material slot、dynamics enabled の現在値を read-only に取得できる。inactive-state default restore はこの現在値 API と別途保持する baseline/source-default を突き合わせて設計する。
 - core は `runtime_action_restore_readiness` diagnostics で、action effect ごとに restore target か、current value を読めるか、読めた current value、baseline が必要かを分類する。baseline/source-default はまだ保持していないため、restore target は current value が読めても `ready=false` / `baseline_not_captured` になる。
 - core は restore readiness から read-only の restore baseline candidate list も派生する。これは「今 capture するなら baseline として保存される値」の diagnostics であり、runtime state への保存や restore 実行はまだ行わない。
+- core は restore baseline candidates から deterministic capture plan を作れる。これは将来 `UnaRuntimeState` に保存する entry 形の事前検証であり、現段階では保存しない。
 - この view は runtime scene や source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
 - `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
 

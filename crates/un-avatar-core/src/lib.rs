@@ -340,6 +340,16 @@ pub struct UnaEvaluationRestoreBaselineCandidate {
 	pub baseline_value: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaEvaluationRestoreBaselineEntry {
+	pub owner_key: String,
+	pub target_kind: UnaEvaluationTargetKind,
+	pub target_key: String,
+	pub baseline_value: Value,
+	pub source_action_ids: Vec<String>,
+	pub source_effect_kinds: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaRuntimeActionCondition {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -901,6 +911,44 @@ pub fn runtime_action_owner_key(action_id: &str) -> String {
 	} else {
 		format!("action:{action_id}")
 	}
+}
+
+pub fn restore_baseline_capture_plan_from_candidates(
+	candidates: Vec<UnaEvaluationRestoreBaselineCandidate>,
+) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+	let mut entries: BTreeMap<(String, UnaEvaluationTargetKind, String, String), UnaEvaluationRestoreBaselineEntry> = BTreeMap::new();
+	for candidate in candidates {
+		let value_key = stable_json_key(&candidate.baseline_value);
+		let key = (
+			candidate.owner_key.clone(),
+			candidate.target_kind.clone(),
+			candidate.target_key.clone(),
+			value_key,
+		);
+		let entry = entries.entry(key).or_insert_with(|| UnaEvaluationRestoreBaselineEntry {
+			owner_key: candidate.owner_key.clone(),
+			target_kind: candidate.target_kind.clone(),
+			target_key: candidate.target_key.clone(),
+			baseline_value: candidate.baseline_value.clone(),
+			source_action_ids: Vec::new(),
+			source_effect_kinds: Vec::new(),
+		});
+		if !entry.source_action_ids.contains(&candidate.action_id) {
+			entry.source_action_ids.push(candidate.action_id);
+		}
+		if !entry.source_effect_kinds.contains(&candidate.effect_kind) {
+			entry.source_effect_kinds.push(candidate.effect_kind);
+		}
+	}
+	for entry in entries.values_mut() {
+		entry.source_action_ids.sort();
+		entry.source_effect_kinds.sort();
+	}
+	entries.into_values().collect()
+}
+
+fn stable_json_key(value: &Value) -> String {
+	serde_json::to_string(value).unwrap_or_else(|_| "null".to_string())
 }
 
 fn runtime_node_target_key(target: &UnaRuntimeNodeTarget) -> String {
@@ -1981,6 +2029,10 @@ impl<'a> UnaRuntimeModel<'a> {
 				})
 			})
 			.collect()
+	}
+
+	pub fn runtime_action_set_restore_baseline_capture_plan(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		restore_baseline_capture_plan_from_candidates(self.runtime_action_set_restore_baseline_candidates(actions))
 	}
 
 	fn resolve_material(self, target: &UnaRuntimeMaterialTarget) -> Option<&'a UnaMaterialPbr> {
@@ -6155,6 +6207,12 @@ mod tests {
 		assert_eq!(candidates[1].baseline_value, Value::from(0.0));
 		assert_eq!(candidates[2].baseline_value, Value::from(0_u64));
 		assert_eq!(candidates[3].baseline_value, Value::from(true));
+
+		let plan = restore_baseline_capture_plan_from_candidates(candidates);
+		assert_eq!(plan.len(), 4);
+		assert_eq!(plan[0].owner_key, "action:variant:coat");
+		assert_eq!(plan[0].source_action_ids, vec!["variant:coat"]);
+		assert_eq!(plan[0].source_effect_kinds, vec!["node_visibility"]);
 	}
 
 	#[test]
