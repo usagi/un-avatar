@@ -2022,168 +2022,34 @@ fn dynamics_contact_probe_summaries(doc: &UnaDocument) -> Vec<DiagnoseContactPro
 		return Vec::new();
 	};
 	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
-	let world = scene_world_matrices(runtime.scene);
-	let contacts = runtime.dynamics.contacts().collect::<Vec<_>>();
-	let mut probes = Vec::new();
-	for (receiver_index, receiver) in contacts.iter().enumerate() {
-		if receiver.kind != un_avatar_core::UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
-			continue;
-		}
-		let Some(receiver_sphere) = contact_probe_sphere(receiver, &world) else {
-			continue;
-		};
-		for (sender_index, sender) in contacts.iter().enumerate() {
-			if sender.kind != un_avatar_core::UnaDynamicsContactKind::Sender {
-				continue;
-			}
-			let Some(sender_sphere) = contact_probe_sphere(sender, &world) else {
-				continue;
-			};
-			let matched_tags = contact_matched_tags(&receiver.collision_tags, &sender.collision_tags);
-			let tag_match = !matched_tags.is_empty();
-			let distance = vec3_distance(receiver_sphere.center, sender_sphere.center);
-			let threshold = receiver_sphere.radius + sender_sphere.radius;
-			let overlap = distance <= threshold;
-			probes.push(DiagnoseContactProbeSummary {
-				index: probes.len(),
-				receiver_index,
-				sender_index,
-				receiver_source_id: receiver.source_id.clone(),
-				sender_source_id: sender.source_id.clone(),
-				receiver_node: receiver.node,
-				receiver_node_path: node_paths_by_index.get(receiver.node).cloned().flatten(),
-				sender_node: sender.node,
-				sender_node_path: node_paths_by_index.get(sender.node).cloned().flatten(),
-				parameter: receiver.parameter.clone(),
-				matched_tags,
-				tag_match,
-				overlap,
-				would_emit: tag_match && overlap,
-				distance,
-				threshold,
-				receiver_radius: receiver_sphere.radius,
-				sender_radius: sender_sphere.radius,
-				receiver_shape: receiver.shape.clone(),
-				sender_shape: sender.shape.clone(),
-				approximation: contact_probe_approximation(receiver, sender),
-			});
-		}
-	}
-	probes
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ContactProbeSphere {
-	center: [f32; 3],
-	radius: f32,
-}
-
-fn contact_probe_sphere(contact: &un_avatar_core::UnaDynamicsContact, world: &[[f32; 16]]) -> Option<ContactProbeSphere> {
-	let matrix = world.get(contact.node).copied()?;
-	let radius = contact_probe_local_radius(contact) * mat4_max_scale(matrix);
-	Some(ContactProbeSphere {
-		center: mat4_transform_point3(matrix, contact.position),
-		radius,
-	})
-}
-
-fn contact_probe_local_radius(contact: &un_avatar_core::UnaDynamicsContact) -> f32 {
-	let radius = contact.radius.max(0.0);
-	match contact.shape {
-		un_avatar_core::UnaDynamicsColliderShape::Capsule => radius + contact.height.max(0.0) * 0.5,
-		un_avatar_core::UnaDynamicsColliderShape::Sphere | un_avatar_core::UnaDynamicsColliderShape::Unknown => radius,
-	}
-}
-
-fn contact_probe_approximation(receiver: &un_avatar_core::UnaDynamicsContact, sender: &un_avatar_core::UnaDynamicsContact) -> String {
-	if receiver.shape == un_avatar_core::UnaDynamicsColliderShape::Sphere
-		&& sender.shape == un_avatar_core::UnaDynamicsColliderShape::Sphere
-	{
-		"sphere".to_string()
-	} else {
-		"bounding_sphere".to_string()
-	}
-}
-
-fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
-	let sender = sender_tags.iter().collect::<BTreeSet<_>>();
-	receiver_tags
-		.iter()
-		.filter(|tag| sender.contains(tag))
-		.cloned()
-		.collect::<BTreeSet<_>>()
+	runtime
+		.contact_probes()
 		.into_iter()
+		.enumerate()
+		.map(|(index, probe)| DiagnoseContactProbeSummary {
+			index,
+			receiver_index: probe.receiver_index,
+			sender_index: probe.sender_index,
+			receiver_source_id: probe.receiver_source_id,
+			sender_source_id: probe.sender_source_id,
+			receiver_node: probe.receiver_node,
+			receiver_node_path: node_paths_by_index.get(probe.receiver_node).cloned().flatten(),
+			sender_node: probe.sender_node,
+			sender_node_path: node_paths_by_index.get(probe.sender_node).cloned().flatten(),
+			parameter: probe.parameter,
+			matched_tags: probe.matched_tags,
+			tag_match: probe.tag_match,
+			overlap: probe.overlap,
+			would_emit: probe.would_emit,
+			distance: probe.distance,
+			threshold: probe.threshold,
+			receiver_radius: probe.receiver_radius,
+			sender_radius: probe.sender_radius,
+			receiver_shape: probe.receiver_shape,
+			sender_shape: probe.sender_shape,
+			approximation: probe.approximation,
+		})
 		.collect()
-}
-
-fn scene_world_matrices(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<[f32; 16]> {
-	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent: [f32; 16], world: &mut [[f32; 16]], seen: &mut [bool]) {
-		let Some(node) = scene.nodes.get(idx) else { return };
-		if idx >= world.len() {
-			return;
-		}
-		let current = mat4_mul(parent, node.transform);
-		world[idx] = current;
-		seen[idx] = true;
-		for &child in &node.children {
-			visit(scene, child, current, world, seen);
-		}
-	}
-
-	let mut world = vec![identity_mat4(); scene.nodes.len().max(1)];
-	let mut seen = vec![false; scene.nodes.len().max(1)];
-	for &root in scene.resolved_roots().iter() {
-		visit(scene, root, identity_mat4(), &mut world, &mut seen);
-	}
-	for index in 0..scene.nodes.len() {
-		if !seen[index] {
-			visit(scene, index, identity_mat4(), &mut world, &mut seen);
-		}
-	}
-	world
-}
-
-fn identity_mat4() -> [f32; 16] {
-	[
-		1.0, 0.0, 0.0, 0.0, //
-		0.0, 1.0, 0.0, 0.0, //
-		0.0, 0.0, 1.0, 0.0, //
-		0.0, 0.0, 0.0, 1.0,
-	]
-}
-
-fn mat4_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
-	let mut out = [0.0; 16];
-	for col in 0..4 {
-		for row in 0..4 {
-			out[col * 4 + row] =
-				a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
-		}
-	}
-	out
-}
-
-fn mat4_transform_point3(m: [f32; 16], p: [f32; 3]) -> [f32; 3] {
-	[
-		m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
-		m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
-		m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
-	]
-}
-
-fn mat4_max_scale(m: [f32; 16]) -> f32 {
-	let sx = vec3_len([m[0], m[1], m[2]]);
-	let sy = vec3_len([m[4], m[5], m[6]]);
-	let sz = vec3_len([m[8], m[9], m[10]]);
-	sx.max(sy).max(sz).max(0.0)
-}
-
-fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-	vec3_len([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
-}
-
-fn vec3_len(v: [f32; 3]) -> f32 {
-	(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 fn dynamics_constraint_ref_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsConstraintRefSummary> {
@@ -5287,11 +5153,20 @@ mod tests {
 	}
 
 	fn translation_mat4(x: f32, y: f32, z: f32) -> [f32; 16] {
-		let mut m = identity_mat4();
+		let mut m = test_identity_mat4();
 		m[12] = x;
 		m[13] = y;
 		m[14] = z;
 		m
+	}
+
+	fn test_identity_mat4() -> [f32; 16] {
+		[
+			1.0, 0.0, 0.0, 0.0, //
+			0.0, 1.0, 0.0, 0.0, //
+			0.0, 0.0, 1.0, 0.0, //
+			0.0, 0.0, 0.0, 1.0,
+		]
 	}
 
 	#[test]
@@ -6184,7 +6059,7 @@ mod tests {
 		let doc = UnaDocument {
 			scene: Some(un_avatar_core::UnaSceneSnapshot {
 				nodes: vec![
-					test_scene_node("root", identity_mat4(), vec![1, 2]),
+					test_scene_node("root", test_identity_mat4(), vec![1, 2]),
 					test_scene_node("receiver", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
 					test_scene_node("sender", translation_mat4(0.07, 0.0, 0.0), Vec::new()),
 				],

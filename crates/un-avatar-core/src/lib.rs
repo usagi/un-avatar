@@ -925,6 +925,33 @@ pub struct UnaEvaluationContactParameterDeclaration {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnaEvaluationContactProbe {
+	pub receiver_index: usize,
+	pub sender_index: usize,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub receiver_source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub sender_source_id: String,
+	pub receiver_node: usize,
+	pub sender_node: usize,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub matched_tags: Vec<String>,
+	pub tag_match: bool,
+	pub overlap: bool,
+	pub would_emit: bool,
+	pub distance: f32,
+	pub threshold: f32,
+	pub receiver_radius: f32,
+	pub sender_radius: f32,
+	pub receiver_shape: UnaDynamicsColliderShape,
+	pub sender_shape: UnaDynamicsColliderShape,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub approximation: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaDynamicsConstraintRef {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1195,6 +1222,118 @@ fn contact_owner_key(source_id: &str, fallback_index: usize) -> String {
 	}
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ContactProbeSphere {
+	center: [f32; 3],
+	radius: f32,
+}
+
+fn contact_probe_sphere(contact: &UnaDynamicsContact, world: &[[f32; 16]]) -> Option<ContactProbeSphere> {
+	let matrix = world.get(contact.node).copied()?;
+	let radius = contact_probe_local_radius(contact) * mat4_max_scale(matrix);
+	Some(ContactProbeSphere {
+		center: mat4_transform_point3(matrix, contact.position),
+		radius,
+	})
+}
+
+fn contact_probe_local_radius(contact: &UnaDynamicsContact) -> f32 {
+	let radius = contact.radius.max(0.0);
+	match contact.shape {
+		UnaDynamicsColliderShape::Capsule => radius + contact.height.max(0.0) * 0.5,
+		UnaDynamicsColliderShape::Sphere | UnaDynamicsColliderShape::Unknown => radius,
+	}
+}
+
+fn contact_probe_approximation(receiver: &UnaDynamicsContact, sender: &UnaDynamicsContact) -> String {
+	if receiver.shape == UnaDynamicsColliderShape::Sphere && sender.shape == UnaDynamicsColliderShape::Sphere {
+		"sphere".to_string()
+	} else {
+		"bounding_sphere".to_string()
+	}
+}
+
+fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
+	let sender = sender_tags.iter().collect::<BTreeSet<_>>();
+	receiver_tags
+		.iter()
+		.filter(|tag| sender.contains(tag))
+		.cloned()
+		.collect::<BTreeSet<_>>()
+		.into_iter()
+		.collect()
+}
+
+fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<[f32; 16]> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent: [f32; 16], world: &mut [[f32; 16]], seen: &mut [bool]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		if idx >= world.len() {
+			return;
+		}
+		let current = mat4_mul(parent, node.transform);
+		world[idx] = current;
+		seen[idx] = true;
+		for &child in &node.children {
+			visit(scene, child, current, world, seen);
+		}
+	}
+
+	let mut world = vec![identity_mat4(); scene.nodes.len().max(1)];
+	let mut seen = vec![false; scene.nodes.len().max(1)];
+	for &root in scene.resolved_roots().iter() {
+		visit(scene, root, identity_mat4(), &mut world, &mut seen);
+	}
+	for index in 0..scene.nodes.len() {
+		if !seen[index] {
+			visit(scene, index, identity_mat4(), &mut world, &mut seen);
+		}
+	}
+	world
+}
+
+fn identity_mat4() -> [f32; 16] {
+	[
+		1.0, 0.0, 0.0, 0.0, //
+		0.0, 1.0, 0.0, 0.0, //
+		0.0, 0.0, 1.0, 0.0, //
+		0.0, 0.0, 0.0, 1.0,
+	]
+}
+
+fn mat4_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+	let mut out = [0.0; 16];
+	for col in 0..4 {
+		for row in 0..4 {
+			out[col * 4 + row] =
+				a[row] * b[col * 4] + a[4 + row] * b[col * 4 + 1] + a[8 + row] * b[col * 4 + 2] + a[12 + row] * b[col * 4 + 3];
+		}
+	}
+	out
+}
+
+fn mat4_transform_point3(m: [f32; 16], p: [f32; 3]) -> [f32; 3] {
+	[
+		m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+		m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+		m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
+	]
+}
+
+fn mat4_max_scale(m: [f32; 16]) -> f32 {
+	let sx = vec3_len([m[0], m[1], m[2]]);
+	let sy = vec3_len([m[4], m[5], m[6]]);
+	let sz = vec3_len([m[8], m[9], m[10]]);
+	sx.max(sy).max(sz).max(0.0)
+}
+
+fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+	vec3_len([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+}
+
+fn vec3_len(v: [f32; 3]) -> f32 {
+	(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
 impl<'a> UnaRuntimeDynamicsMut<'a> {
 	pub fn as_readonly(&self) -> UnaRuntimeDynamics<'_> {
 		UnaRuntimeDynamics {
@@ -1386,6 +1525,56 @@ pub struct UnaRuntimeSceneDynamics<'a> {
 	pub scene: &'a UnaSceneSnapshot,
 	pub humanoid_profile: Option<&'a HumanoidProfile>,
 	pub dynamics: UnaRuntimeDynamics<'a>,
+}
+
+impl<'a> UnaRuntimeSceneDynamics<'a> {
+	pub fn contact_probes(self) -> Vec<UnaEvaluationContactProbe> {
+		let world = scene_world_matrices(self.scene);
+		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
+		let mut probes = Vec::new();
+		for (receiver_index, receiver) in contacts.iter().enumerate() {
+			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
+				continue;
+			}
+			let Some(receiver_sphere) = contact_probe_sphere(receiver, &world) else {
+				continue;
+			};
+			for (sender_index, sender) in contacts.iter().enumerate() {
+				if sender.kind != UnaDynamicsContactKind::Sender {
+					continue;
+				}
+				let Some(sender_sphere) = contact_probe_sphere(sender, &world) else {
+					continue;
+				};
+				let matched_tags = contact_matched_tags(&receiver.collision_tags, &sender.collision_tags);
+				let tag_match = !matched_tags.is_empty();
+				let distance = vec3_distance(receiver_sphere.center, sender_sphere.center);
+				let threshold = receiver_sphere.radius + sender_sphere.radius;
+				let overlap = distance <= threshold;
+				probes.push(UnaEvaluationContactProbe {
+					receiver_index,
+					sender_index,
+					receiver_source_id: receiver.source_id.clone(),
+					sender_source_id: sender.source_id.clone(),
+					receiver_node: receiver.node,
+					sender_node: sender.node,
+					parameter: receiver.parameter.clone(),
+					matched_tags,
+					tag_match,
+					overlap,
+					would_emit: tag_match && overlap,
+					distance,
+					threshold,
+					receiver_radius: receiver_sphere.radius,
+					sender_radius: sender_sphere.radius,
+					receiver_shape: receiver.shape.clone(),
+					sender_shape: sender.shape.clone(),
+					approximation: contact_probe_approximation(receiver, sender),
+				});
+			}
+		}
+		probes
+	}
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4520,6 +4709,14 @@ mod tests {
 		}
 	}
 
+	fn test_translation_node(x: f32, y: f32, z: f32) -> UnaSceneNode {
+		let mut node = test_node(Vec::new());
+		node.transform[12] = x;
+		node.transform[13] = y;
+		node.transform[14] = z;
+		node
+	}
+
 	#[test]
 	fn resolved_roots_borrows_explicit_roots() {
 		let roots = vec![2usize];
@@ -5156,6 +5353,59 @@ mod tests {
 		assert_eq!(contact_parameters[0].node, 3);
 		assert_eq!(contact_parameters[0].parameter, "ContactHand");
 		assert_eq!(contact_parameters[0].collision_tags, vec!["Hand", "Interact"]);
+	}
+
+	#[test]
+	fn runtime_scene_dynamics_reports_diagnostics_only_contact_probes() {
+		let document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_node(vec![1, 2]),
+					test_translation_node(0.0, 0.0, 0.0),
+					test_translation_node(0.07, 0.0, 0.0),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(UnaSpringBoneSettings {
+				contacts: vec![
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:hand".to_string(),
+						node: 1,
+						kind: UnaDynamicsContactKind::Receiver,
+						parameter: "ContactHand".to_string(),
+						collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.05,
+						..Default::default()
+					},
+					UnaDynamicsContact {
+						source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+						source_id: "contact:sender".to_string(),
+						node: 2,
+						kind: UnaDynamicsContactKind::Sender,
+						collision_tags: vec!["Hand".to_string()],
+						shape: UnaDynamicsColliderShape::Sphere,
+						radius: 0.04,
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let probes = document.runtime_model().scene_profile_dynamics().unwrap().contact_probes();
+		assert_eq!(probes.len(), 1);
+		assert_eq!(probes[0].receiver_source_id, "contact:hand");
+		assert_eq!(probes[0].sender_source_id, "contact:sender");
+		assert_eq!(probes[0].parameter, "ContactHand");
+		assert_eq!(probes[0].matched_tags, vec!["Hand"]);
+		assert!(probes[0].tag_match);
+		assert!(probes[0].overlap);
+		assert!(probes[0].would_emit);
+		assert_eq!(probes[0].approximation, "sphere");
 	}
 
 	#[test]
