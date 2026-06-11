@@ -1939,15 +1939,7 @@ fn add_modular_avatar_parameter_definition(
 	component_index: usize,
 	parameter: &Value,
 ) {
-	const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
-
-	let Some(name) = parameter
-		.get("nameOrPrefix")
-		.or_else(|| parameter.get("name_or_prefix"))
-		.or_else(|| parameter.get("name"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-	else {
+	let Some(name) = modular_avatar_parameter_name(parameter) else {
 		return;
 	};
 	let owner_key = format!("modular_avatar_parameter:{component_index}:{name}");
@@ -1962,26 +1954,14 @@ fn add_modular_avatar_parameter_definition(
 		.filter(|value| !value.is_empty())
 		.map(str::to_string)
 		.or(definition.remap_to.take());
-	definition.sync_type = parameter
-		.get("syncType")
-		.or_else(|| parameter.get("sync_type"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())
-		.map(str::to_string)
-		.or_else(|| definition.sync_type.take())
-		.or_else(|| Some("NotSynced".to_string()));
+	definition.sync_type = Some(modular_avatar_parameter_sync_type(parameter));
 	let has_explicit_default_value = json_bool(
 		parameter
 			.get("hasExplicitDefaultValue")
 			.or_else(|| parameter.get("has_explicit_default_value")),
 	);
 	definition.has_explicit_default_value |= has_explicit_default_value;
-	if let Some(default_value) = parameter
-		.get("defaultValue")
-		.or_else(|| parameter.get("default_value"))
-		.and_then(json_number_f32)
-		.filter(|default_value| has_explicit_default_value || default_value.abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON)
-	{
+	if let Some(default_value) = modular_avatar_parameter_default_value(parameter) {
 		definition.default_value = Some(default_value);
 		if !definition
 			.value_samples
@@ -1995,6 +1975,40 @@ fn add_modular_avatar_parameter_definition(
 	definition.saved = Some(json_bool(parameter.get("saved")));
 	definition.internal_parameter |= json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter")));
 	definition.is_prefix |= json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix")));
+}
+
+fn modular_avatar_parameter_name(parameter: &Value) -> Option<&str> {
+	parameter
+		.get("nameOrPrefix")
+		.or_else(|| parameter.get("name_or_prefix"))
+		.or_else(|| parameter.get("name"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+}
+
+fn modular_avatar_parameter_sync_type(parameter: &Value) -> String {
+	parameter
+		.get("syncType")
+		.or_else(|| parameter.get("sync_type"))
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.unwrap_or("NotSynced")
+		.to_string()
+}
+
+fn modular_avatar_parameter_default_value(parameter: &Value) -> Option<f32> {
+	const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
+
+	let has_explicit_default_value = json_bool(
+		parameter
+			.get("hasExplicitDefaultValue")
+			.or_else(|| parameter.get("has_explicit_default_value")),
+	);
+	parameter
+		.get("defaultValue")
+		.or_else(|| parameter.get("default_value"))
+		.and_then(json_number_f32)
+		.filter(|default_value| has_explicit_default_value || default_value.abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON)
 }
 
 fn modular_avatar_parameter_values(component: &Value) -> impl Iterator<Item = &Value> {
@@ -2292,7 +2306,8 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn runtime_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
-		self.runtime_parameter_definitions()
+		let mut conflicts = self
+			.runtime_parameter_definitions()
 			.into_iter()
 			.filter_map(|definition| {
 				let has_contact = definition.source_kinds.iter().any(|kind| kind == "contact_receiver");
@@ -2308,7 +2323,77 @@ impl<'a> UnaRuntimeModel<'a> {
 					value_samples: definition.value_samples,
 				})
 			})
-			.collect()
+			.collect::<Vec<_>>();
+		conflicts.extend(self.modular_avatar_parameter_conflicts());
+		conflicts
+	}
+
+	fn modular_avatar_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
+		let mut parameters = BTreeMap::<String, Vec<(String, String, Option<f32>)>>::new();
+		let Some(components) = self
+			.document
+			.unavatar
+			.as_ref()
+			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
+			.and_then(|modular_avatar| modular_avatar.get("components"))
+			.and_then(Value::as_array)
+		else {
+			return Vec::new();
+		};
+		for (component_index, component) in components.iter().enumerate() {
+			let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
+			if short_type != "ModularAvatarParameters" {
+				continue;
+			}
+			for parameter in modular_avatar_parameter_values(component) {
+				let Some(name) = modular_avatar_parameter_name(parameter) else {
+					continue;
+				};
+				parameters.entry(name.to_string()).or_default().push((
+					format!("modular_avatar_parameter:{component_index}:{name}"),
+					modular_avatar_parameter_sync_type(parameter),
+					modular_avatar_parameter_default_value(parameter),
+				));
+			}
+		}
+		let mut conflicts = Vec::new();
+		for (name, entries) in parameters {
+			let owner_keys = entries.iter().map(|(owner_key, _, _)| owner_key.clone()).collect::<Vec<_>>();
+			let sync_types = entries
+				.iter()
+				.filter_map(|(_, sync_type, _)| (sync_type != "NotSynced").then_some(sync_type.clone()))
+				.collect::<BTreeSet<_>>();
+			if sync_types.len() > 1 {
+				conflicts.push(UnaRuntimeParameterConflict {
+					name: name.clone(),
+					reason: "modular_avatar_parameter_sync_type_conflict".to_string(),
+					owner_keys: owner_keys.clone(),
+					source_kinds: vec!["modular_avatar_parameter".to_string()],
+					value_samples: Vec::new(),
+				});
+			}
+			let mut default_values = Vec::<f32>::new();
+			for (_, _, default_value) in &entries {
+				let Some(default_value) = default_value else { continue };
+				if !default_values
+					.iter()
+					.any(|existing| (*existing - *default_value).abs() <= f32::EPSILON)
+				{
+					default_values.push(*default_value);
+				}
+			}
+			if default_values.len() > 1 {
+				default_values.sort_by(|left, right| left.total_cmp(right));
+				conflicts.push(UnaRuntimeParameterConflict {
+					name,
+					reason: "modular_avatar_parameter_default_value_conflict".to_string(),
+					owner_keys,
+					source_kinds: vec!["modular_avatar_parameter".to_string()],
+					value_samples: default_values,
+				});
+			}
+		}
+		conflicts
 	}
 
 	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
@@ -6810,6 +6895,64 @@ mod tests {
 		);
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("Existing"), Some(&4.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ExplicitZero"), Some(&0.0));
+	}
+
+	#[test]
+	fn runtime_parameter_conflicts_report_modular_avatar_type_and_default_conflicts() {
+		let document = UnaDocument {
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [
+							{
+								"shortType": "ModularAvatarParameters",
+								"fields": {
+									"parameters": [
+										{
+											"nameOrPrefix": "Shared",
+											"syncType": "Bool",
+											"defaultValue": 1.0
+										},
+										{
+											"nameOrPrefix": "LocalOnly",
+											"syncType": "NotSynced"
+										}
+									]
+								}
+							},
+							{
+								"shortType": "ModularAvatarParameters",
+								"fields": {
+									"parameters": [
+										{
+											"nameOrPrefix": "Shared",
+											"syncType": "Float",
+											"defaultValue": 0.0,
+											"hasExplicitDefaultValue": true
+										},
+										{
+											"nameOrPrefix": "LocalOnly",
+											"syncType": "Bool"
+										}
+									]
+								}
+							}
+						]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let conflicts = document.runtime_model().runtime_parameter_conflicts();
+
+		assert_eq!(conflicts.len(), 2);
+		assert_eq!(conflicts[0].name, "Shared");
+		assert_eq!(conflicts[0].reason, "modular_avatar_parameter_sync_type_conflict");
+		assert_eq!(conflicts[1].name, "Shared");
+		assert_eq!(conflicts[1].reason, "modular_avatar_parameter_default_value_conflict");
+		assert_eq!(conflicts[1].value_samples, vec![0.0, 1.0]);
 	}
 
 	#[test]
