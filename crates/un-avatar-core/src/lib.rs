@@ -198,6 +198,48 @@ impl UnaRuntimeAction {
 		}
 		saw_parameter_condition.then_some(true)
 	}
+
+	pub fn condition_parameter_names(&self) -> Vec<String> {
+		let mut names = BTreeSet::new();
+		for condition in &self.conditions {
+			if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
+				names.insert(name.to_string());
+			}
+		}
+		names.into_iter().collect()
+	}
+
+	pub fn current_parameter_condition_state(
+		&self,
+		scene: Option<&UnaSceneSnapshot>,
+		parameter_values: &BTreeMap<String, f32>,
+	) -> Option<&'static str> {
+		let mut saw_condition = false;
+		let mut saw_runtime_value = false;
+		let mut saw_inactive = false;
+		for condition in &self.conditions {
+			let Some(name) = condition.parameter_name.as_deref() else {
+				continue;
+			};
+			saw_condition = true;
+			let Some(value) = parameter_values.get(name).copied() else {
+				continue;
+			};
+			saw_runtime_value = true;
+			match self.parameter_condition_state_in_scene(scene, name, value) {
+				Some(true) => return Some("active"),
+				Some(false) => saw_inactive = true,
+				None => {}
+			}
+		}
+		if saw_inactive {
+			Some("inactive")
+		} else if saw_condition && !saw_runtime_value {
+			Some("missing_parameter")
+		} else {
+			None
+		}
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -5546,6 +5588,35 @@ mod tests {
 		assert_eq!(inverted.parameter_condition_state("Hat", 1.0), Some(false));
 		assert_eq!(inverted.parameter_condition_state("Hat", 0.0), Some(true));
 		assert_eq!(UnaRuntimeAction::default().parameter_condition_state("Hat", 1.0), None);
+	}
+
+	#[test]
+	fn runtime_action_reports_current_parameter_condition_state() {
+		let action = UnaRuntimeAction {
+			conditions: vec![UnaRuntimeActionCondition {
+				parameter_name: Some("Hat".to_string()),
+				parameter_value: Some(1.0),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		assert_eq!(action.condition_parameter_names(), vec!["Hat"]);
+		assert_eq!(
+			action.current_parameter_condition_state(None, &BTreeMap::from([("Hat".to_string(), 1.0)])),
+			Some("active")
+		);
+		assert_eq!(
+			action.current_parameter_condition_state(None, &BTreeMap::from([("Hat".to_string(), 0.0)])),
+			Some("inactive")
+		);
+		assert_eq!(
+			action.current_parameter_condition_state(None, &BTreeMap::new()),
+			Some("missing_parameter")
+		);
+		assert_eq!(
+			UnaRuntimeAction::default().current_parameter_condition_state(None, &BTreeMap::from([("Hat".to_string(), 1.0)])),
+			None
+		);
 	}
 
 	#[test]
