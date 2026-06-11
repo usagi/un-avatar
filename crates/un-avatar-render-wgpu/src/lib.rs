@@ -4833,6 +4833,7 @@ mod tests {
 			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 			authored_enabled: true,
 			effective_enabled: true,
+			runtime_enabled_override: None,
 			source_id: "physbone:hair".to_string(),
 			comment: String::new(),
 			category: String::new(),
@@ -5162,6 +5163,7 @@ mod tests {
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 				authored_enabled: false,
 				effective_enabled: true,
+				runtime_enabled_override: Some(true),
 				source_id: "physbone:hair".to_string(),
 				comment: "Hair".to_string(),
 				category: "secondary".to_string(),
@@ -5336,6 +5338,10 @@ mod tests {
 		);
 		assert_eq!(
 			dynamics_groups[0].get("effective_enabled").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("runtime_enabled_override").and_then(|value| value.as_bool()),
 			Some(true)
 		);
 		assert_eq!(

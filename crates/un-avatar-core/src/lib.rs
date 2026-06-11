@@ -1451,16 +1451,19 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn group_enabled(self, group: &UnaSpringBoneGroup) -> bool {
-		if !group.source_id.is_empty() {
-			if let Some(enabled) = self
-				.runtime_state
-				.and_then(|state| state.dynamics_enabled_overrides.get(&group.source_id))
-				.copied()
-			{
-				return enabled;
-			}
+		if let Some(enabled) = self.group_enabled_override(group) {
+			return enabled;
 		}
 		group.enabled
+	}
+
+	pub fn group_enabled_override(self, group: &UnaSpringBoneGroup) -> Option<bool> {
+		if group.source_id.is_empty() {
+			return None;
+		}
+		self.runtime_state
+			.and_then(|state| state.dynamics_enabled_overrides.get(&group.source_id))
+			.copied()
 	}
 
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
@@ -6750,6 +6753,9 @@ mod tests {
 			assert!(!readonly.group_enabled(&groups[0]));
 			assert!(!readonly.group_enabled(&groups[1]));
 			assert!(readonly.group_enabled(&groups[2]));
+			assert_eq!(readonly.group_enabled_override(&groups[0]), Some(false));
+			assert_eq!(readonly.group_enabled_override(&groups[1]), Some(false));
+			assert_eq!(readonly.group_enabled_override(&groups[2]), None);
 			assert!(groups.iter().all(|group| group.enabled));
 			let counts = readonly.counts();
 			assert_eq!(counts.enabled_groups, 1);

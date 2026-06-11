@@ -284,6 +284,8 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
 	pub(crate) authored_enabled: bool,
 	pub(crate) effective_enabled: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) runtime_enabled_override: Option<bool>,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) source_id: String,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1174,12 +1176,13 @@ fn contact_parameter_emission_status_summary(doc: &UnaDocument) -> RuntimeContac
 fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus> {
 	let runtime_model = doc.runtime_model();
 	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
-	runtime_model
-		.dynamics()
+	let dynamics = runtime_model.dynamics();
+	dynamics
 		.dynamics_groups()
 		.enumerate()
 		.take(DYNAMICS_GROUP_STATUS_LIMIT)
 		.map(|(index, group)| {
+			let source_group = dynamics.group(index);
 			let root_node = group.chain.bone_node_indices.first().copied();
 			let tip_node = group.chain.bone_node_indices.last().copied();
 			let center_node = group.parameters.center_node;
@@ -1193,6 +1196,7 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				source_kind: group.source_kind,
 				authored_enabled: group.authored_enabled,
 				effective_enabled: group.effective_enabled,
+				runtime_enabled_override: source_group.and_then(|source_group| dynamics.group_enabled_override(source_group)),
 				source_id: group.source_id.to_string(),
 				comment: group.comment.to_string(),
 				category: group.category.to_string(),

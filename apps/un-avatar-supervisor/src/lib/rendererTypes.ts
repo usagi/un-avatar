@@ -88,6 +88,7 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	source_kind: string;
 	authored_enabled: boolean;
 	effective_enabled: boolean;
+	runtime_enabled_override?: boolean;
 	source_id?: string;
 	comment?: string;
 	category?: string;
