@@ -4151,6 +4151,13 @@ fn build_diagnose_report(
 			dynamics_source_features.stretch_limit_count, dynamics_counts.stretch_limit_groups
 		));
 	}
+	let contact_probe_would_emit_count = dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count();
+	let contact_parameter_emission_enabled = doc.runtime_model().contact_parameter_emission_enabled();
+	if contact_probe_would_emit_count > 0 && !contact_parameter_emission_enabled {
+		warnings.push(format!(
+			"dynamics contact probes would emit {contact_probe_would_emit_count} parameter value(s), but contact parameter emission is disabled"
+		));
+	}
 	let dynamics = DiagnoseDynamicsSummary {
 		group_count: dynamics_counts.groups,
 		vrm_spring_bone_group_count: dynamics_counts.vrm_spring_bone_groups,
@@ -4169,9 +4176,9 @@ fn build_diagnose_report(
 		vrc_contact_sender_count: dynamics_counts.vrc_contact_senders,
 		vrc_contact_receiver_count: dynamics_counts.vrc_contact_receivers,
 		contact_parameter_declaration_count: dynamics_counts.contact_parameter_declarations,
-		contact_parameter_emission_enabled: doc.runtime_model().contact_parameter_emission_enabled(),
+		contact_parameter_emission_enabled,
 		contact_probe_count: dynamics_contact_probes.len(),
-		contact_probe_would_emit_count: dynamics_contact_probes.iter().filter(|probe| probe.would_emit).count(),
+		contact_probe_would_emit_count,
 		contact_parameter_emission_count: dynamics_contact_parameter_emissions.len(),
 		contact_parameter_emitted_count: dynamics_contact_parameter_emissions
 			.iter()
@@ -7111,6 +7118,10 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")));
+		assert!(report
+			.warnings
+			.iter()
+			.any(|w| w.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));

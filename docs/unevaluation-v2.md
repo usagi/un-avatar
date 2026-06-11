@@ -121,7 +121,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
 
 v2 初期リリース目標は Phase A + Phase B まで。
 Phase C は debug-only diagnostics として追加済み。
-Phase D は opt-in 時のみ current runtime scene pose probe から runtime parameter state へ 1/0 を書き、変更時に runtime action evaluator へ流す初期実装まで追加済み。既定 OFF は維持する。
+Phase D は opt-in 時のみ current runtime scene pose probe から runtime parameter state へ 1/0 を書き、変更時に runtime action evaluator へ流す初期実装まで追加済み。既定 OFF は維持する。CLI diagnose は probe が would_emit だが contact parameter emission が無効な場合、parameter が書かれない状態を warning として出す。
 
 ## Constraints And Interactions
 
