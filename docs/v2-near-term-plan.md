@@ -7,7 +7,7 @@
 - AudioLink は v2 初期範囲として十分に完了した扱いにする。
 - lilToon-like rendering は互換性優先を維持する。今後の見た目調整は、lilToon 本家実装または具体的な観測差分を根拠にする。
 - lilToon 互換が成立したので、MToon / lilToon を別 renderer として並べるのではなく、UNToon semantic material と dynamic variant planning へ整理する。正本は [`untoon-dynamic-variant-architecture.md`](untoon-dynamic-variant-architecture.md)。
-- 次の大きな価値は VRC model import / runtime behavior。具体的には wardrobe 高速切替、expression、animation-driven toggle、後続の SpringBone / PhysBone runtime dynamics。
+- 次の大きな価値は VRC model import / runtime behavior。Wardrobe 高速切替、expression、runtime action、parameter / contact diagnostics は v2 初回検証に十分な線まで進んだため、以後の主 blocker は UNDynamics / PhysBone behavior implementation とする。
 - これらを足す前に、runtime state が読みにくくならない程度のリファクタリングと最適化を行う。
 
 ## 近々の順序
@@ -18,7 +18,7 @@
 4. renderer 再起動なしの Wardrobe hot switch を実装する。
 5. VRC Expression Menu、toggle、hotkey、将来の ring menu emulation 向け runtime action model を作る。
 6. action model の上に imported animation / expression / material / visibility evaluation を足す。
-7. wardrobe と animation state の所有関係が明確になってから PhysBone behavior implementation を進める。
+7. Wardrobe / action / contact parameter の初期所有関係は固定済みとして扱い、PhysBone behavior implementation を UNDynamics runtime model 上で進める。
 8. instant switching が正しく安定してから、お着替え transition effect を足す。
 
 ## リファクタリング / 最適化範囲
@@ -68,9 +68,9 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 - `UnaDocument` / `.unavatar` / VRM source から dynamics source を読み、UNDynamics runtime view の最小形を決める。
 - Unity Exporter は現在有効な VRC PhysBone component を `.unavatar` `dynamics[]` へ source payload として出力し、Runtime importer が UNDynamics group / chain / collider / limit / interaction terms へ lower する。
 - 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `endpointPosition` / `radius` / `pull` / `spring` / `stiffness` / `gravity` / `allowCollision=false` / stable source id / limit metadata / interaction metadata の最小抽出と lower、source collider metadata 保存、sphere / capsule / insideBounds collider の初期 solver / debug draw 接続、VRC Contact Sender / Receiver metadata export / import と source id 一意化、VRC Constraints reference metadata 保存、angle limit の現 solver backend で扱える拘束への近似反映、branch root の複数 group 化、wardrobe `dynamicsEnable` による runtime group enable override、CLI diagnostics。VRC PhysBone は source metadata / action target として保持するが、現行 solver backend では衣装を壊す可能性があるため authored default は既定 OFF とする。
-- 残り: VRC PhysBone Collider の detailed behavior、stretch limit behavior、grabbing / posing action hooks、dynamic pose contact evaluation、VRC Constraints solver integration、animation state と連動した runtime enable state。
+- 残り: VRC PhysBone Collider の detailed behavior、stretch limit behavior、grabbing / posing action hooks、dynamic pose contact evaluation、VRC Constraints solver integration、animation state と連動した runtime enable state。これを v2 初回リリースの主要未完了領域として扱う。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
-- PhysBone behavior の詳細再現は Wardrobe hot switch と action model の後まで待つ。
+- PhysBone behavior の詳細再現は現在の主作業に移す。Wardrobe / Menu の UI polish、tray / global shortcut、broader eviction policy は UNDynamics の期待動作確認後に戻る。
 
 ## Wardrobe Hot Switch Target
 
@@ -105,6 +105,7 @@ MVP control command:
 後回し:
 
 - `Ambiguous group` の自動推論は `wardrobe` set の `assetGroupOwnershipHints`（`path` / `groupId`）で明示指定を受け付ける。これにより `wardrobe.assetGroupOwnership` は曖昧候補を誤る前提を避けつつ補助可能になる。なお broader eviction policy は未着手。
+- richer Supervisor wardrobe menu hierarchy / search、renderer tray icon / global shortcut からの wardrobe / menu access、full external menu UI parity は v2 初回の physics blocker 解消後に回す。現時点の runtime action / menu candidate / renderer status は初期 QA に十分な基盤とする。
 - crossfade、dissolve、sparkle などのお着替え effect。
 - set ごとの physics reset / blend。
 - user-facing ring-menu UI。
@@ -160,7 +161,8 @@ MVP control command:
 
 ## PhysBone Placement
 
-PhysBone behavior implementation は runtime state cleanup、UNDynamics normalization、Wardrobe hot switch の後に置く。
+PhysBone behavior implementation は runtime state cleanup、UNDynamics normalization、Wardrobe hot switch の後に置いていたが、これらの前提は v2 初回検証に十分な線まで到達した。
+以後は UNDynamics behavior を mainline とし、Wardrobe / Menu の残 polish は後段に送る。
 
 理由:
 
