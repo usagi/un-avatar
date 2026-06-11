@@ -2585,15 +2585,14 @@
 
   async function activateWardrobeMenuCandidate(
     renderer: RendererInstance | null,
-    menuPath: string[],
+    actionId: string,
     wardrobeSetId: string,
   ): Promise<void> {
     if (!renderer || !hasTauriRuntime()) return;
     try {
       await invoke("activate_renderer_runtime_action", {
         id: renderer.id,
-        menuPath: menuPath.join("/"),
-        wardrobeSetId,
+        actionId,
       });
       message = `Activated wardrobe ${wardrobeSetId} for ${renderer.name}`;
     } catch (error) {
@@ -3213,9 +3212,9 @@
               const renderer = selectedRendererById(rendererId);
               setExpressionOverride(renderer, preset, weight);
             }}
-            onActivateWardrobeMenuCandidate={(rendererId, menuPath, wardrobeSetId) => {
+            onActivateWardrobeMenuCandidate={(rendererId, actionId, wardrobeSetId) => {
               const renderer = selectedRendererById(rendererId);
-              return activateWardrobeMenuCandidate(renderer, menuPath, wardrobeSetId);
+              return activateWardrobeMenuCandidate(renderer, actionId, wardrobeSetId);
             }}
             onOpenProfile={() => {
               if (!launchTargetSetting) return;

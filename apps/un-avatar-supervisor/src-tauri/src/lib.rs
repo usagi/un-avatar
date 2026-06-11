@@ -10362,6 +10362,33 @@ id = "test"
 	}
 
 	#[test]
+	fn renderer_control_sends_activate_action_command_by_action_id() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::ActivateAction {
+				action_id: Some("wardrobe:field_drape".to_string()),
+				menu_path: None,
+				wardrobe_set_id: None,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#
+		);
+	}
+
+	#[test]
 	fn renderer_control_sends_bloom_command() {
 		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
 		let address = listener.local_addr().unwrap();

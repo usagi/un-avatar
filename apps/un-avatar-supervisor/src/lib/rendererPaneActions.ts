@@ -33,7 +33,7 @@ export type RendererPaneActions = {
   ) => void;
   onActivateWardrobeMenuCandidate: (
     rendererId: number,
-    menuPath: string[],
+    actionId: string,
     wardrobeSetId: string,
   ) => void | Promise<void>;
 };

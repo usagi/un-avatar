@@ -21,7 +21,7 @@
   }
 
   function activate(candidate: RendererRuntimeMenuWardrobeCandidateStatus): void {
-    void onActivateWardrobeMenuCandidate(renderer.id, candidate.menu_path ?? [], candidate.wardrobe_set_id);
+    void onActivateWardrobeMenuCandidate(renderer.id, candidate.action_id, candidate.wardrobe_set_id);
   }
 </script>
 
