@@ -389,6 +389,8 @@ struct DiagnoseActionSummary {
 	restore_baseline_candidates: Vec<un_avatar_core::UnaEvaluationRestoreBaselineCandidate>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	restore_baseline_capture_plan: Vec<un_avatar_core::UnaEvaluationRestoreBaselineEntry>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	restore_apply_plan: Vec<un_avatar_core::UnaEvaluationRestoreApplyEntry>,
 	actions: Vec<DiagnoseActionItemSummary>,
 }
 
@@ -3791,6 +3793,7 @@ fn build_diagnose_report(
 		restore_readiness: runtime_model.runtime_action_set_restore_readiness(actions),
 		restore_baseline_candidates: runtime_model.runtime_action_set_restore_baseline_candidates(actions),
 		restore_baseline_capture_plan: runtime_model.runtime_action_set_restore_baseline_capture_plan(actions),
+		restore_apply_plan: runtime_model.runtime_action_set_restore_apply_plan(actions),
 		actions: actions
 			.actions
 			.iter()
@@ -4470,7 +4473,7 @@ fn run_diagnose(
 	println!("runtime.resolver_cache_key: {:?}", report.runtime.resolver_cache_key);
 	if let Some(actions) = &report.actions {
 		println!(
-			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} restore_baseline_candidates={} restore_baseline_capture_plan={} trigger_kinds={:?} effect_kinds={:?}",
+			"actions: actions={} triggers={} effects={} target_write_collisions={} restore_readiness={} restore_baseline_candidates={} restore_baseline_capture_plan={} restore_apply_plan={} trigger_kinds={:?} effect_kinds={:?}",
 			actions.action_count,
 			actions.trigger_count,
 			actions.effect_count,
@@ -4478,6 +4481,7 @@ fn run_diagnose(
 			actions.restore_readiness.len(),
 			actions.restore_baseline_candidates.len(),
 			actions.restore_baseline_capture_plan.len(),
+			actions.restore_apply_plan.len(),
 			actions.trigger_kinds,
 			actions.effect_kinds
 		);
@@ -4516,6 +4520,19 @@ fn run_diagnose(
 				entry.baseline_value,
 				entry.source_action_ids,
 				entry.source_effect_kinds
+			);
+		}
+		for entry in actions.restore_apply_plan.iter().take(16) {
+			println!(
+				"action_restore_apply: {} state={:?} target={:?}:{} ready={} reason={} baseline={:?} current={:?}",
+				entry.owner_key,
+				entry.condition_state,
+				entry.target_kind,
+				entry.target_key,
+				entry.ready,
+				entry.reason,
+				entry.baseline_value,
+				entry.current_value
 			);
 		}
 		for action in actions.actions.iter().take(16) {

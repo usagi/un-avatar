@@ -237,6 +237,19 @@ export type RendererRuntimeActionRestoreBaselineEntry = {
   source_effect_kinds: string[];
 };
 
+export type RendererRuntimeActionRestoreApplyEntry = {
+  owner_key: string;
+  action_id: string;
+  condition_state?: string;
+  target_kind: string;
+  target_key: string;
+  baseline_value?: unknown;
+  current_value_available: boolean;
+  current_value?: unknown;
+  ready: boolean;
+  reason: string;
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -365,6 +378,7 @@ export type RendererRuntimeStatus = {
   runtime_action_restore_readiness: RendererRuntimeActionRestoreReadiness[];
   runtime_action_restore_baseline_candidates: RendererRuntimeActionRestoreBaselineCandidate[];
   runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
+  runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
@@ -419,6 +433,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "runtime_action_restore_readiness"
   | "runtime_action_restore_baseline_candidates"
   | "runtime_action_restore_baseline_capture_plan"
+  | "runtime_action_restore_apply_plan"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

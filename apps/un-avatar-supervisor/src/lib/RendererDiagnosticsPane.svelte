@@ -78,6 +78,12 @@
   ): string {
     return `${entry.owner_key} ${entry.target_kind}:${entry.target_key} value=${JSON.stringify(entry.baseline_value)} actions=${entry.source_action_ids.join(",")}`;
   }
+
+  function runtimeActionRestoreApplyLabel(
+    entry: RendererRuntimeDiagnosticsData["runtime_action_restore_apply_plan"][number],
+  ): string {
+    return `${entry.owner_key} state=${entry.condition_state ?? "none"} ${entry.target_kind}:${entry.target_key} ready=${entry.ready} reason=${entry.reason} baseline=${JSON.stringify(entry.baseline_value)} current=${JSON.stringify(entry.current_value)}`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -165,6 +171,12 @@
         <dt>{$_("renderers.details.diag_runtime_action_restore_capture")}</dt>
         <dd class="stderr-block">
           {runtimeStatus.runtime_action_restore_baseline_capture_plan.slice(0, sampleLimit).map(runtimeActionRestoreCaptureLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.runtime_action_restore_apply_plan.length}
+        <dt>{$_("renderers.details.diag_runtime_action_restore_apply")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_action_restore_apply_plan.slice(0, sampleLimit).map(runtimeActionRestoreApplyLabel).join("\n")}
         </dd>
       {/if}
     {/if}
