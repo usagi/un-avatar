@@ -571,6 +571,10 @@ struct DiagnoseDynamicsSummary {
 	source_limit_count: usize,
 	source_angle_limit_count: usize,
 	source_stretch_limit_count: usize,
+	source_curve_count: usize,
+	source_radius_curve_count: usize,
+	source_angle_limit_curve_count: usize,
+	source_stretch_limit_curve_count: usize,
 	source_collision_disabled_count: usize,
 	source_inside_bounds_collider_count: usize,
 	source_grabbing_enabled_count: usize,
@@ -594,6 +598,10 @@ struct DynamicsSourceFeatureCounts {
 	limit_count: usize,
 	angle_limit_count: usize,
 	stretch_limit_count: usize,
+	curve_count: usize,
+	radius_curve_count: usize,
+	angle_limit_curve_count: usize,
+	stretch_limit_curve_count: usize,
 	collision_disabled_count: usize,
 	inside_bounds_collider_count: usize,
 	grabbing_enabled_count: usize,
@@ -2262,6 +2270,30 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		if max_stretch.abs() > 0.0 {
 			counts.stretch_limit_count += 1;
 		}
+		let radius_curve = dynamics_source_curve_key_count(item, source_params, "radiusCurve", "radius_curve") > 0;
+		let angle_limit_curve = dynamics_source_curve_key_count(item, source_params, "maxAngleXCurve", "max_angle_x_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "maxAngleZCurve", "max_angle_z_curve") > 0;
+		let stretch_limit_curve = dynamics_source_curve_key_count(item, source_params, "maxStretchCurve", "max_stretch_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "maxSquishCurve", "max_squish_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "stretchMotionCurve", "stretch_motion_curve") > 0;
+		let force_curve = dynamics_source_curve_key_count(item, source_params, "pullCurve", "pull_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "springCurve", "spring_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "stiffnessCurve", "stiffness_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "gravityCurve", "gravity_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "gravityFalloffCurve", "gravity_falloff_curve") > 0
+			|| dynamics_source_curve_key_count(item, source_params, "immobileCurve", "immobile_curve") > 0;
+		if radius_curve || angle_limit_curve || stretch_limit_curve || force_curve {
+			counts.curve_count += 1;
+		}
+		if radius_curve {
+			counts.radius_curve_count += 1;
+		}
+		if angle_limit_curve {
+			counts.angle_limit_curve_count += 1;
+		}
+		if stretch_limit_curve {
+			counts.stretch_limit_curve_count += 1;
+		}
 		if dynamics_source_value(item, source_params, "allowCollision", "allow_collision").and_then(|value| value.as_bool()) == Some(false)
 		{
 			counts.collision_disabled_count += 1;
@@ -2371,6 +2403,23 @@ fn dynamics_source_value<'a>(
 	source_params
 		.and_then(|params| params.get(camel_key).or_else(|| params.get(snake_key)))
 		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
+}
+
+fn dynamics_source_curve_key_count(
+	value: &serde_json::Value,
+	source_params: Option<&serde_json::Value>,
+	camel_key: &str,
+	snake_key: &str,
+) -> usize {
+	let Some(curve) = dynamics_source_value(value, source_params, camel_key, snake_key) else {
+		return 0;
+	};
+	curve
+		.get("keyCount")
+		.or_else(|| curve.get("key_count"))
+		.and_then(|value| value.as_u64())
+		.or_else(|| curve.get("keys").and_then(|value| value.as_array()).map(|keys| keys.len() as u64))
+		.unwrap_or_default() as usize
 }
 
 fn json_number_f64(value: &serde_json::Value) -> Option<f64> {
@@ -4089,6 +4138,10 @@ fn build_diagnose_report(
 		source_limit_count: dynamics_source_features.limit_count,
 		source_angle_limit_count: dynamics_source_features.angle_limit_count,
 		source_stretch_limit_count: dynamics_source_features.stretch_limit_count,
+		source_curve_count: dynamics_source_features.curve_count,
+		source_radius_curve_count: dynamics_source_features.radius_curve_count,
+		source_angle_limit_curve_count: dynamics_source_features.angle_limit_curve_count,
+		source_stretch_limit_curve_count: dynamics_source_features.stretch_limit_curve_count,
 		source_collision_disabled_count: dynamics_source_features.collision_disabled_count,
 		source_inside_bounds_collider_count: dynamics_source_features.inside_bounds_collider_count,
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
@@ -4961,7 +5014,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -4990,6 +5043,10 @@ fn run_diagnose(
 		report.dynamics.source_limit_count,
 		report.dynamics.source_angle_limit_count,
 		report.dynamics.source_stretch_limit_count,
+		report.dynamics.source_curve_count,
+		report.dynamics.source_radius_curve_count,
+		report.dynamics.source_angle_limit_curve_count,
+		report.dynamics.source_stretch_limit_curve_count,
 		report.dynamics.source_collision_disabled_count,
 		report.dynamics.source_inside_bounds_collider_count,
 		report.dynamics.source_grabbing_enabled_count,
@@ -6811,6 +6868,9 @@ mod tests {
 							"allowCollision": false,
 							"sourceParams": {
 								"maxStretch": 0.25,
+								"radiusCurve": {"keyCount": 2, "keys": []},
+								"maxAngleXCurve": {"keys": [{"time": 0.0, "value": 1.0}]},
+								"maxStretchCurve": {"keyCount": 3},
 								"colliders": [
 									{"insideBounds": true}
 								]
@@ -6842,6 +6902,10 @@ mod tests {
 		assert_eq!(report.dynamics.source_limit_count, 1);
 		assert_eq!(report.dynamics.source_angle_limit_count, 0);
 		assert_eq!(report.dynamics.source_stretch_limit_count, 1);
+		assert_eq!(report.dynamics.source_curve_count, 1);
+		assert_eq!(report.dynamics.source_radius_curve_count, 1);
+		assert_eq!(report.dynamics.source_angle_limit_curve_count, 1);
+		assert_eq!(report.dynamics.source_stretch_limit_curve_count, 1);
 		assert_eq!(report.dynamics.source_collision_disabled_count, 1);
 		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
 		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
