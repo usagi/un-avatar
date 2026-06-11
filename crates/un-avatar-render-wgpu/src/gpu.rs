@@ -53,6 +53,7 @@ pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE: u32 = 56;
 pub(crate) const HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE: u32 = 19;
 const WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT: usize = 64;
 const CONTACT_PARAMETER_DECLARATION_STATUS_LIMIT: usize = 64;
+const CONTACT_PROBE_STATUS_LIMIT: usize = 64;
 const WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED: &str = "draw-scoped-resource-scoped";
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
@@ -145,6 +146,39 @@ pub(crate) struct RuntimeContactParameterDeclarationStatus {
 	pub(crate) parameter: String,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) collision_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeContactProbeStatus {
+	pub(crate) index: usize,
+	pub(crate) receiver_index: usize,
+	pub(crate) sender_index: usize,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) receiver_source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) sender_source_id: String,
+	pub(crate) receiver_node: usize,
+	pub(crate) sender_node: usize,
+	pub(crate) parameter: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) matched_tags: Vec<String>,
+	pub(crate) tag_match: bool,
+	pub(crate) overlap: bool,
+	pub(crate) would_emit: bool,
+	pub(crate) distance: f32,
+	pub(crate) threshold: f32,
+	pub(crate) receiver_radius: f32,
+	pub(crate) sender_radius: f32,
+	pub(crate) receiver_shape: un_avatar_core::UnaDynamicsColliderShape,
+	pub(crate) sender_shape: un_avatar_core::UnaDynamicsColliderShape,
+	pub(crate) approximation: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RuntimeContactProbeStatusSummary {
+	pub(crate) count: u32,
+	pub(crate) would_emit_count: u32,
+	pub(crate) probes: Vec<RuntimeContactProbeStatus>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -689,6 +723,46 @@ fn contact_parameter_declaration_statuses(doc: &UnaDocument) -> Vec<RuntimeConta
 			collision_tags: declaration.collision_tags,
 		})
 		.collect()
+}
+
+fn contact_probe_status_summary(doc: &UnaDocument) -> RuntimeContactProbeStatusSummary {
+	let Some(runtime) = doc.runtime_model().scene_profile_dynamics() else {
+		return RuntimeContactProbeStatusSummary::default();
+	};
+	let probes = runtime.contact_probes();
+	let count = probes.len() as u32;
+	let would_emit_count = probes.iter().filter(|probe| probe.would_emit).count() as u32;
+	let probes = probes
+		.into_iter()
+		.enumerate()
+		.take(CONTACT_PROBE_STATUS_LIMIT)
+		.map(|(index, probe)| RuntimeContactProbeStatus {
+			index,
+			receiver_index: probe.receiver_index,
+			sender_index: probe.sender_index,
+			receiver_source_id: probe.receiver_source_id,
+			sender_source_id: probe.sender_source_id,
+			receiver_node: probe.receiver_node,
+			sender_node: probe.sender_node,
+			parameter: probe.parameter,
+			matched_tags: probe.matched_tags,
+			tag_match: probe.tag_match,
+			overlap: probe.overlap,
+			would_emit: probe.would_emit,
+			distance: probe.distance,
+			threshold: probe.threshold,
+			receiver_radius: probe.receiver_radius,
+			sender_radius: probe.sender_radius,
+			receiver_shape: probe.receiver_shape,
+			sender_shape: probe.sender_shape,
+			approximation: probe.approximation,
+		})
+		.collect();
+	RuntimeContactProbeStatusSummary {
+		count,
+		would_emit_count,
+		probes,
+	}
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {
@@ -3789,6 +3863,16 @@ impl GpuState {
 			return Vec::new();
 		};
 		contact_parameter_declaration_statuses(&doc)
+	}
+
+	pub(crate) fn contact_probe_status(&self) -> RuntimeContactProbeStatusSummary {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return RuntimeContactProbeStatusSummary::default();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return RuntimeContactProbeStatusSummary::default();
+		};
+		contact_probe_status_summary(&doc)
 	}
 
 	pub(crate) fn set_runtime_parameter(&mut self, name: &str, value: f32) -> Result<Option<RuntimeActionActivation>, String> {

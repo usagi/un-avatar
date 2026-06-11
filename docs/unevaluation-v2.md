@@ -92,7 +92,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - overlap 計算はするが parameter state へは書かない。
    - `would_emit parameter=X value=1` を diagnose / debug status に出す。
    - 座標系、tag match、shape overlap、誤爆を検証する。
-   - CLI diagnose の static scene pose probe は実装済み。Sphere は sphere、Capsule / Unknown は bounding sphere 近似で扱い、runtime parameter state は変更しない。
+   - core runtime view、CLI diagnose、renderer runtime status の static scene pose probe は実装済み。Sphere は sphere、Capsule / Unknown は bounding sphere 近似で扱い、runtime parameter state は変更しない。
 4. Phase D: Opt-in parameter emission
    - profile flag または `.unavatar` capability で明示有効化する。
    - contact 切断時は 0。

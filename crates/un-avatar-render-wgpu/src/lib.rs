@@ -1562,6 +1562,10 @@ impl AvatarApp {
 			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
 			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
+			let contact_probe_status = gpu.map(|g| g.contact_probe_status()).unwrap_or_default();
+			status.contact_probes = contact_probe_status.probes;
+			status.dynamics_contact_probe_count = contact_probe_status.count;
+			status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -3161,6 +3165,8 @@ struct RendererRuntimeSnapshot {
 	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<gpu::RuntimeContactParameterDeclarationStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -3259,6 +3265,10 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_contact_parameter_declaration_count: u32,
 	#[serde(default)]
+	dynamics_contact_probe_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_would_emit_count: u32,
+	#[serde(default)]
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
@@ -3329,6 +3339,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		menu_action_candidates: Vec::new(),
 		menu_wardrobe_candidates: Vec::new(),
 		contact_parameter_declarations: Vec::new(),
+		contact_probes: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -3382,6 +3393,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrc_contact_sender_count: 0,
 		dynamics_vrc_contact_receiver_count: 0,
 		dynamics_contact_parameter_declaration_count: 0,
+		dynamics_contact_probe_count: 0,
+		dynamics_contact_probe_would_emit_count: 0,
 		dynamics_constraint_ref_count: 0,
 		dynamics_vrc_constraint_ref_count: 0,
 		camera_locked: opts.camera_locked,
@@ -4693,10 +4706,33 @@ mod tests {
 				parameter: "ContactHand".to_string(),
 				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
 			}];
+			status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
+				index: 0,
+				receiver_index: 0,
+				sender_index: 1,
+				receiver_source_id: "contact:hand".to_string(),
+				sender_source_id: "contact:sender".to_string(),
+				receiver_node: 1,
+				sender_node: 2,
+				parameter: "ContactHand".to_string(),
+				matched_tags: vec!["Hand".to_string()],
+				tag_match: true,
+				overlap: true,
+				would_emit: true,
+				distance: 0.07,
+				threshold: 0.09,
+				receiver_radius: 0.05,
+				sender_radius: 0.04,
+				receiver_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+				sender_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+				approximation: "sphere".to_string(),
+			}];
 			status.dynamics_contact_count = 2;
 			status.dynamics_vrc_contact_sender_count = 1;
 			status.dynamics_vrc_contact_receiver_count = 1;
 			status.dynamics_contact_parameter_declaration_count = 1;
+			status.dynamics_contact_probe_count = 1;
+			status.dynamics_contact_probe_would_emit_count = 1;
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
 			status.dynamics_limit_group_count = 4;
@@ -4748,6 +4784,23 @@ mod tests {
 			declarations[0].get("parameter").and_then(|value| value.as_str()),
 			Some("ContactHand")
 		);
+		assert_eq!(
+			snapshot.get("dynamics_contact_probe_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_probe_would_emit_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let probes = snapshot
+			.get("contact_probes")
+			.and_then(|value| value.as_array())
+			.expect("contact probes");
+		assert_eq!(probes.len(), 1);
+		assert_eq!(probes[0].get("parameter").and_then(|value| value.as_str()), Some("ContactHand"));
+		assert_eq!(probes[0].get("would_emit").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(
 			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),
 			Some(3)
