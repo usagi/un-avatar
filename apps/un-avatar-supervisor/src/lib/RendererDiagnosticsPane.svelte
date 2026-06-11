@@ -60,6 +60,12 @@
   ): string {
     return `${collision.target_kind}:${collision.target_key} owners=${collision.owner_keys.length} actions=${collision.action_ids.join(",")}`;
   }
+
+  function runtimeActionRestoreReadinessLabel(
+    readiness: RendererRuntimeDiagnosticsData["runtime_action_restore_readiness"][number],
+  ): string {
+    return `${readiness.owner_key}:${readiness.effect_kind} ${readiness.target_kind}:${readiness.target_key} ready=${readiness.ready} reason=${readiness.reason}`;
+  }
 </script>
 
 <div class="renderer-pane-scroll">
@@ -129,6 +135,12 @@
         <dt>{$_("renderers.details.diag_runtime_action_collisions")}</dt>
         <dd class="stderr-block">
           {runtimeStatus.runtime_action_target_write_collisions.slice(0, sampleLimit).map(runtimeActionCollisionLabel).join("\n")}
+        </dd>
+      {/if}
+      {#if runtimeStatus.runtime_action_restore_readiness.length}
+        <dt>{$_("renderers.details.diag_runtime_action_restore")}</dt>
+        <dd class="stderr-block">
+          {runtimeStatus.runtime_action_restore_readiness.slice(0, sampleLimit).map(runtimeActionRestoreReadinessLabel).join("\n")}
         </dd>
       {/if}
     {/if}

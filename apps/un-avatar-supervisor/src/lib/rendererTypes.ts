@@ -205,6 +205,19 @@ export type RendererRuntimeActionTargetWriteCollision = {
   writes: RendererRuntimeActionTargetWrite[];
 };
 
+export type RendererRuntimeActionRestoreReadiness = {
+  owner_key: string;
+  action_id: string;
+  effect_kind: string;
+  target_kind: string;
+  target_key: string;
+  restore_target: boolean;
+  current_value_available: boolean;
+  baseline_required: boolean;
+  ready: boolean;
+  reason: string;
+};
+
 export type RendererRuntimeActionStatus = {
   action_id: string;
   label?: string;
@@ -330,6 +343,7 @@ export type RendererRuntimeStatus = {
   dynamics_vrc_constraint_ref_count: number;
   runtime_actions: RendererRuntimeActionStatus[];
   runtime_action_target_write_collisions: RendererRuntimeActionTargetWriteCollision[];
+  runtime_action_restore_readiness: RendererRuntimeActionRestoreReadiness[];
   contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
   contact_probes: RendererRuntimeContactProbeStatus[];
   dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
@@ -381,6 +395,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
   | "dynamics_constraint_ref_count"
   | "runtime_actions"
   | "runtime_action_target_write_collisions"
+  | "runtime_action_restore_readiness"
   | "dynamics_groups"
   | "dynamics_colliders"
   | "contact_parameter_declarations"

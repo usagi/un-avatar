@@ -4219,6 +4219,20 @@ impl GpuState {
 			.unwrap_or_default()
 	}
 
+	pub(crate) fn runtime_action_restore_readiness(&self) -> Vec<un_avatar_core::UnaEvaluationRestoreReadiness> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		let runtime = doc.runtime_model();
+		runtime
+			.runtime_actions()
+			.map(|actions| runtime.runtime_action_set_restore_readiness(actions))
+			.unwrap_or_default()
+	}
+
 	pub(crate) fn menu_action_candidates(&self) -> Vec<RuntimeMenuActionCandidateStatus> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();
