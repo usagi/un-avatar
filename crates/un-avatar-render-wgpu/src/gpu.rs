@@ -2179,6 +2179,16 @@ fn reset_runtime_dynamics_nodes_to_rest_for_source_id(
 	changed
 }
 
+fn restored_dynamics_source_ids(restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) -> Vec<String> {
+	let mut source_ids = BTreeSet::new();
+	for entry in restored {
+		if entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled && !entry.target_key.is_empty() {
+			source_ids.insert(entry.target_key.clone());
+		}
+	}
+	source_ids.into_iter().collect()
+}
+
 pub(crate) struct GpuSceneBuildContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
@@ -2905,6 +2915,65 @@ mod motion_buffer_tests {
 		assert_eq!(scene.nodes[1].transform, rest);
 		assert_eq!(scene.nodes[2].transform, rest);
 		assert_eq!(scene.nodes[3].transform, other_current);
+	}
+
+	#[test]
+	fn restored_dynamics_source_ids_are_unique_and_source_scoped() {
+		let restored = vec![
+			un_avatar_core::UnaEvaluationRestoreApplyEntry {
+				owner_key: "action:hair:on".to_string(),
+				action_id: "hair:on".to_string(),
+				condition_state: Some("inactive".to_string()),
+				target_kind: UnaEvaluationTargetKind::DynamicsEnabled,
+				target_key: "physbone:hair".to_string(),
+				baseline_value: Some(Value::Bool(true)),
+				current_value_available: true,
+				current_value: Some(Value::Bool(false)),
+				ready: true,
+				reason: "ready".to_string(),
+			},
+			un_avatar_core::UnaEvaluationRestoreApplyEntry {
+				owner_key: "action:hair:off".to_string(),
+				action_id: "hair:off".to_string(),
+				condition_state: Some("inactive".to_string()),
+				target_kind: UnaEvaluationTargetKind::DynamicsEnabled,
+				target_key: "physbone:hair".to_string(),
+				baseline_value: Some(Value::Bool(false)),
+				current_value_available: true,
+				current_value: Some(Value::Bool(true)),
+				ready: true,
+				reason: "ready".to_string(),
+			},
+			un_avatar_core::UnaEvaluationRestoreApplyEntry {
+				owner_key: "action:hat:on".to_string(),
+				action_id: "hat:on".to_string(),
+				condition_state: Some("inactive".to_string()),
+				target_kind: UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "node:hat".to_string(),
+				baseline_value: Some(Value::Bool(true)),
+				current_value_available: true,
+				current_value: Some(Value::Bool(false)),
+				ready: true,
+				reason: "ready".to_string(),
+			},
+			un_avatar_core::UnaEvaluationRestoreApplyEntry {
+				owner_key: "action:tail:on".to_string(),
+				action_id: "tail:on".to_string(),
+				condition_state: Some("inactive".to_string()),
+				target_kind: UnaEvaluationTargetKind::DynamicsEnabled,
+				target_key: "physbone:tail".to_string(),
+				baseline_value: Some(Value::Bool(true)),
+				current_value_available: true,
+				current_value: Some(Value::Bool(false)),
+				ready: true,
+				reason: "ready".to_string(),
+			},
+		];
+
+		assert_eq!(
+			restored_dynamics_source_ids(&restored),
+			vec!["physbone:hair".to_string(), "physbone:tail".to_string()]
+		);
 	}
 }
 
@@ -4804,11 +4873,22 @@ impl GpuState {
 		if restored.is_empty() {
 			return;
 		}
-		if restored
-			.iter()
-			.any(|entry| entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled)
-		{
-			self.reset_dynamics_nodes_to_rest();
+		let dynamics_source_ids = restored_dynamics_source_ids(restored);
+		if !dynamics_source_ids.is_empty() {
+			if let (Some(doc_arc), Some(rest_nodes)) = (self.document.as_ref(), self.rest_nodes.as_ref()) {
+				if let Ok(mut doc) = doc_arc.write() {
+					if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
+						for source_id in &dynamics_source_ids {
+							reset_runtime_dynamics_nodes_to_rest_for_source_id(
+								runtime.scene,
+								runtime.dynamics.as_readonly(),
+								rest_nodes,
+								source_id,
+							);
+						}
+					}
+				}
+			}
 			self.rebuild_runtime_dynamics();
 		}
 		self.invalidate_applied_document_state();
