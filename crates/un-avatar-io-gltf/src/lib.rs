@@ -14,13 +14,13 @@ use serde_json::Value;
 use un_avatar_core::{
 	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
 	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
-	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaExpressionCatalog,
-	UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode,
-	UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind,
-	UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect,
-	UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget,
-	UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaDynamicsWritebackMode,
+	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
+	UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey,
+	UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionCondition,
+	UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget,
+	UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
+	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2022,6 +2022,18 @@ fn unavatar_dynamics_source_value<'a>(
 		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
 }
 
+fn unavatar_dynamics_writeback_mode(value: &Value) -> UnaDynamicsWritebackMode {
+	let source_params = unavatar_dynamics_source_params(value);
+	let Some(value) = unavatar_dynamics_source_value(value, source_params, "writebackMode", "writeback_mode").and_then(Value::as_str)
+	else {
+		return UnaDynamicsWritebackMode::RotationOnly;
+	};
+	match value.trim().to_ascii_lowercase().as_str() {
+		"rotation_translation" | "rotationtranslation" | "rotation-translation" => UnaDynamicsWritebackMode::RotationTranslation,
+		_ => UnaDynamicsWritebackMode::RotationOnly,
+	}
+}
+
 fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 	let source_params = unavatar_dynamics_source_params(value);
 	let limit_type = unavatar_dynamics_source_value(value, source_params, "limitType", "limit_type")
@@ -2161,6 +2173,7 @@ fn unavatar_dynamics_settings(
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
 		let limit = unavatar_dynamics_limit(item);
 		let interaction = unavatar_dynamics_interaction(item);
+		let writeback_mode = unavatar_dynamics_writeback_mode(item);
 		let source_params = unavatar_dynamics_source_params(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
 			unavatar_dynamics_source_value(item, source_params, "ignoreTransforms", "ignore_transforms")
@@ -2235,7 +2248,7 @@ fn unavatar_dynamics_settings(
 					center_node: None,
 					hit_radius,
 					hit_radius_samples,
-					writeback_mode: Default::default(),
+					writeback_mode,
 					limit: limit.clone(),
 					interaction: interaction.clone(),
 					bone_node_indices: chain,
@@ -9632,6 +9645,7 @@ mod tests {
 					"radius": 0.03,
 					"sourceParams": {
 						"allowCollision": true,
+						"writebackMode": "rotation_translation",
 						"allowGrabbing": true,
 						"allowPosing": false,
 						"parameter": "HairPB",
@@ -9697,6 +9711,7 @@ mod tests {
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert_eq!(settings.groups[0].hit_radius_samples.len(), 1);
 		assert!((settings.groups[0].hit_radius_samples[0] - 0.015).abs() < 1e-6);
+		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
 		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
 		let limit = settings.groups[0].limit.as_ref().expect("limit");
 		assert_eq!(limit.limit_type, "Angle");
