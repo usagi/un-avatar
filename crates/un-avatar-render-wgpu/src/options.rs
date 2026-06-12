@@ -579,6 +579,8 @@ pub struct AvatarWindowOptions {
 	/// VRM SpringBone を毎フレームシミュレーションする（既定 ON。揺れもの表現は VRM アバターの基本機能のため）。
 	/// 静止画として表示したいときだけ manifest `[spring_bones] enable = false` で OFF にする。
 	pub enable_spring_bones: bool,
+	/// 起動直後にすべての runtime dynamics group を明示 ON にする。VRC PhysBone 既定 OFF モデル向けの opt-in。
+	pub dynamics_enable_all_on_launch: bool,
 	/// SpringBone めり込み抑制用のボーンベースコライダー設定。
 	pub bone_colliders: BoneColliderConfig,
 	/// SpringBone 物理 solver / time model / category override 設定。
@@ -698,6 +700,7 @@ impl Default for AvatarWindowOptions {
 			runtime_control_address: None,
 			runtime_bus_key: None,
 			enable_spring_bones: true,
+			dynamics_enable_all_on_launch: false,
 			bone_colliders: BoneColliderConfig::default(),
 			spring_bone_physics: SpringBonePhysicsConfig::default(),
 			debug: WindowDebugOptions::default(),

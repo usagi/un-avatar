@@ -1554,7 +1554,12 @@ impl AvatarApp {
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
 			status.cpu_ms = Some(timings.cpu_record_ms);
+			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
+			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
+			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
+			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
+			let refresh_runtime_metadata = runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(30);
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(30) {
 				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
 			}
@@ -1577,22 +1582,24 @@ impl AvatarApp {
 			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
 			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
 			status.runtime_requires_fur = runtime_requirements.fur;
-			status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
-			status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
-			status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
-			status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
-			status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
-			status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
-			status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
-			status.runtime_action_restore_baseline_candidates =
-				gpu.map(|g| g.runtime_action_restore_baseline_candidates()).unwrap_or_default();
-			status.runtime_action_restore_baseline_capture_plan =
-				gpu.map(|g| g.runtime_action_restore_baseline_capture_plan()).unwrap_or_default();
-			status.runtime_action_restore_apply_plan = gpu.map(|g| g.runtime_action_restore_apply_plan()).unwrap_or_default();
-			status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
-			status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
-			status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
-			status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
+			if refresh_runtime_metadata {
+				status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
+				status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
+				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
+				status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
+				status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
+				status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
+				status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
+				status.runtime_action_restore_baseline_candidates =
+					gpu.map(|g| g.runtime_action_restore_baseline_candidates()).unwrap_or_default();
+				status.runtime_action_restore_baseline_capture_plan =
+					gpu.map(|g| g.runtime_action_restore_baseline_capture_plan()).unwrap_or_default();
+				status.runtime_action_restore_apply_plan = gpu.map(|g| g.runtime_action_restore_apply_plan()).unwrap_or_default();
+				status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
+				status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
+				status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
+				status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
+			}
 			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
 			status.show_axes = gpu.is_some_and(|g| g.show_axes());
 			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
@@ -1601,7 +1608,7 @@ impl AvatarApp {
 			if status.bone_collider_source != bone_collider_source {
 				status.bone_collider_source = bone_collider_source.to_string();
 			}
-			if runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(30) {
+			if refresh_runtime_metadata {
 				let dynamics = gpu.map_or(Default::default(), |g| g.dynamics_counts());
 				status.dynamics_group_count = dynamics.groups;
 				status.dynamics_enabled_group_count = dynamics.enabled_groups;
@@ -2053,6 +2060,7 @@ impl AvatarApp {
 			texture_compression_etc2_supported: false,
 			processed_texture_cache: self.opts.processed_texture_cache,
 			enable_spring_bones: self.opts.enable_spring_bones,
+			dynamics_enable_all_on_launch: self.opts.dynamics_enable_all_on_launch,
 			bone_colliders: self.opts.bone_colliders,
 			spring_bone_physics: self.opts.spring_bone_physics.clone(),
 			debug_material_dump: self.opts.debug_material_dump,
@@ -2220,11 +2228,12 @@ impl AvatarApp {
 				phase: 9.0,
 			})
 		};
-		let Some(timings) = gpu.render_frame(win.as_ref(), self.opts.clear_color, wall_clamped, startup_splash) else {
+		let Some(mut timings) = gpu.render_frame(win.as_ref(), self.opts.clear_color, wall_clamped, startup_splash) else {
 			win.request_redraw();
 			return;
 		};
 		let (parameter_updates, runtime_parameter_activations) = {
+			let t_contact0 = Instant::now();
 			let parameter_updates = match gpu.apply_contact_parameter_emissions() {
 				Ok(parameter_updates) => parameter_updates,
 				Err(err) => {
@@ -2232,6 +2241,8 @@ impl AvatarApp {
 					BTreeMap::new()
 				}
 			};
+			timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
+			let t_action0 = Instant::now();
 			let activations = match gpu.evaluate_runtime_parameter_actions() {
 				Ok(activations) => activations,
 				Err(err) => {
@@ -2239,8 +2250,10 @@ impl AvatarApp {
 					Vec::new()
 				}
 			};
+			timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
 			(parameter_updates, activations)
 		};
+		timings.cpu_total_ms = now.elapsed().as_secs_f32() * 1000.0;
 		if !parameter_updates.is_empty() {
 			self.update_runtime_parameters(parameter_updates);
 		}
@@ -3520,6 +3533,10 @@ struct RendererRuntimeSnapshot {
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_cpu_total_ms: Option<f32>,
+	frame_dynamics_step_ms: Option<f32>,
+	frame_contact_eval_ms: Option<f32>,
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -3752,6 +3769,10 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		uptime_secs: 0,
 		fps: None,
 		cpu_ms: None,
+		frame_cpu_total_ms: None,
+		frame_dynamics_step_ms: None,
+		frame_contact_eval_ms: None,
+		frame_runtime_action_eval_ms: None,
 		gpu_ms: None,
 		ram_mb: None,
 		surface_width: opts.spout.width,
@@ -4704,6 +4725,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			a: cli.ca,
 		},
 		enable_spring_bones: !cli.no_spring_bones,
+		dynamics_enable_all_on_launch: false,
 		bone_colliders: Default::default(),
 		spring_bone_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {

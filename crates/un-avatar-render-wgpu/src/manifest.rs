@@ -294,7 +294,14 @@ pub(crate) struct AudioLinkManifest {
 pub(crate) struct PhysicsManifest {
 	pub bone_colliders: Option<BoneCollidersManifest>,
 	pub contacts: Option<ContactsPhysicsManifest>,
+	pub dynamics: Option<DynamicsPhysicsManifest>,
 	pub spring_bone: Option<SpringBonePhysicsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct DynamicsPhysicsManifest {
+	pub enable_all_on_launch: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1029,8 +1036,19 @@ impl PhysicsManifest {
 		if let Some(contacts) = self.contacts {
 			contacts.apply_to(opts);
 		}
+		if let Some(dynamics) = self.dynamics {
+			dynamics.apply_to(opts);
+		}
 		if let Some(spring_bone) = self.spring_bone {
 			opts.spring_bone_physics = spring_bone.normalized();
+		}
+	}
+}
+
+impl DynamicsPhysicsManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(enabled) = self.enable_all_on_launch {
+			opts.dynamics_enable_all_on_launch = enabled;
 		}
 	}
 }
@@ -1361,6 +1379,9 @@ hands = 70
 [physics.contacts]
 parameter_emission = true
 
+[physics.dynamics]
+enable_all_on_launch = true
+
 [physics.spring_bone]
 simulation_hz = 240
 substeps = 2
@@ -1457,6 +1478,7 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.hands, 70.0);
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
+		assert!(opts.dynamics_enable_all_on_launch);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);
 		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");

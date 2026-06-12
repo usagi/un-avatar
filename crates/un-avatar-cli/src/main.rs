@@ -309,7 +309,7 @@ struct DiagnoseMaterialSummary {
 	mtoon: Option<DiagnoseMToonSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct DiagnoseTextureAlphaSummary {
 	image: usize,
 	width: u32,
@@ -1588,6 +1588,7 @@ fn write_validate_stdout(report: &ValidateReport) -> Result<(), String> {
 fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<String>, json: bool) -> Result<(), String> {
 	let path_str = path.to_string_lossy().to_string();
 	let reg = io_registry_for_cli(plugin_dirs)?;
+	let cached_bytes = cached_binary_import_bytes(&path);
 
 	let importer: &dyn AvatarImporter = if let Some(ref s) = input_format {
 		let id = FormatId::new(s.as_str());
@@ -1608,7 +1609,7 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 			}
 		}
 	} else {
-		let probe = import_probe_for_path(&path, cached_binary_import_bytes(&path));
+		let probe = import_probe_for_path(&path, cached_bytes.clone());
 		match reg.best_importer_for(&probe) {
 			Some(i) => i,
 			None => {
@@ -1637,7 +1638,7 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 		temp_dir: std::env::temp_dir(),
 	};
 	let path_display = path.display().to_string();
-	let import_input = import_input_for_path(&path, &desc.id, cached_binary_import_bytes(&path));
+	let import_input = import_input_for_path(&path, &desc.id, cached_bytes);
 	let import_result = importer.import(&mut ictx, import_input, ImportOptions);
 	match import_result {
 		Ok(_) if json => {
@@ -1778,6 +1779,20 @@ fn texture_alpha_summary(scene: &UnaSceneSnapshot, image_index: Option<usize>) -
 		opaque_pixels,
 		coverage,
 	})
+}
+
+fn texture_alpha_summary_cached(
+	scene: &UnaSceneSnapshot,
+	cache: &mut BTreeMap<usize, Option<DiagnoseTextureAlphaSummary>>,
+	image_index: Option<usize>,
+) -> Option<DiagnoseTextureAlphaSummary> {
+	let image_index = image_index?;
+	if let Some(summary) = cache.get(&image_index) {
+		return summary.clone();
+	}
+	let summary = texture_alpha_summary(scene, Some(image_index));
+	cache.insert(image_index, summary.clone());
+	summary
 }
 
 fn material_source_shader_is_liltoon(material: &UnaMaterialPbr) -> bool {
@@ -1954,7 +1969,12 @@ fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f
 		.collect()
 }
 
-fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSnapshot) -> DiagnoseMaterialSummary {
+fn material_summary(
+	index: usize,
+	material: &UnaMaterialPbr,
+	scene: &UnaSceneSnapshot,
+	alpha_cache: &mut BTreeMap<usize, Option<DiagnoseTextureAlphaSummary>>,
+) -> DiagnoseMaterialSummary {
 	let source_shader = material
 		.unavatar_material
 		.as_ref()
@@ -2011,7 +2031,7 @@ fn material_summary(index: usize, material: &UnaMaterialPbr, scene: &UnaSceneSna
 		cull_mode: material.cull_mode,
 		base_color_factor: material.base_color_factor,
 		base_color_texture_index: material.base_color_texture_index,
-		base_color_texture_alpha: texture_alpha_summary(scene, material.base_color_texture_index),
+		base_color_texture_alpha: texture_alpha_summary_cached(scene, alpha_cache, material.base_color_texture_index),
 		normal_texture_index: material.normal_texture_index,
 		normal_texture_scale: material.normal_texture_scale,
 		eye_like_name: eye_like_material_name(material.name.as_deref()),
@@ -2738,7 +2758,11 @@ fn json_number_f64(value: &serde_json::Value) -> Option<f64> {
 	value.as_f64().or_else(|| value.as_i64().map(|value| value as f64))
 }
 
-fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: usize) -> Vec<DiagnoseVisibleMaterialSummary> {
+fn visible_mesh_materials(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	mesh_index: usize,
+	alpha_cache: &mut BTreeMap<usize, Option<DiagnoseTextureAlphaSummary>>,
+) -> Vec<DiagnoseVisibleMaterialSummary> {
 	let Some(primitives) = scene.meshes.get(mesh_index) else {
 		return Vec::new();
 	};
@@ -2750,7 +2774,8 @@ fn visible_mesh_materials(scene: &un_avatar_core::UnaSceneSnapshot, mesh_index: 
 			let material = scene.materials.get(material_index)?;
 			let draw_skipped_fully_transparent = matches!(material.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
 				&& material.base_color_factor[3] <= 0.001
-				&& texture_alpha_summary(scene, material.base_color_texture_index).is_some_and(|alpha| alpha.max_alpha == 0);
+				&& texture_alpha_summary_cached(scene, alpha_cache, material.base_color_texture_index)
+					.is_some_and(|alpha| alpha.max_alpha == 0);
 			let nonzero_morph_weights = primitive
 				.default_morph_weights
 				.iter()
@@ -3974,6 +3999,7 @@ fn build_diagnose_report(
 		let mut alpha_counts = BTreeMap::new();
 		let mut eye_like_material_indices = Vec::new();
 		let mut materials = Vec::new();
+		let mut texture_alpha_cache = BTreeMap::new();
 		let mut liltoon_material_count = 0usize;
 		let mut liltoon_missing_render_queue = 0usize;
 		let mut liltoon_missing_source_params = 0usize;
@@ -4005,7 +4031,8 @@ fn build_diagnose_report(
 			}
 			if matches!(material.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
 				&& material.base_color_factor[3] <= 0.001
-				&& texture_alpha_summary(sc, material.base_color_texture_index).is_some_and(|alpha| alpha.max_alpha == 0)
+				&& texture_alpha_summary_cached(sc, &mut texture_alpha_cache, material.base_color_texture_index)
+					.is_some_and(|alpha| alpha.max_alpha == 0)
 			{
 				fully_transparent_visible_materials.push(i);
 			}
@@ -4017,7 +4044,7 @@ fn build_diagnose_report(
 					));
 				}
 			}
-			materials.push(material_summary(i, material, sc));
+			materials.push(material_summary(i, material, sc, &mut texture_alpha_cache));
 		}
 		if liltoon_material_count > 0 && liltoon_missing_render_queue > 0 {
 			warnings.push(format!(
@@ -4157,7 +4184,7 @@ fn build_diagnose_report(
 					resolved_node_id: node.resolved_node_id.clone(),
 					mesh,
 					skin: node.skin,
-					materials: visible_mesh_materials(sc, mesh),
+					materials: visible_mesh_materials(sc, mesh, &mut texture_alpha_cache),
 				})
 			})
 			.collect();
@@ -4629,8 +4656,8 @@ fn build_diagnose_report(
 }
 
 fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyProbe> {
-	let mut doc = doc.clone();
 	doc.runtime_model().expression_catalog()?;
+	let mut doc = expression_probe_document(doc);
 	let mut frame = un_motion_frame::UNMotionFrame::new(0);
 	frame.face = Some(un_motion_frame::FaceMotion {
 		tracking_state: un_motion_frame::TrackingState::Valid,
@@ -4705,6 +4732,31 @@ fn expression_apply_probe(doc: &UnaDocument) -> Option<DiagnoseExpressionApplyPr
 		weights,
 		active_morph_slots,
 	})
+}
+
+fn expression_probe_document(doc: &UnaDocument) -> UnaDocument {
+	let scene = doc.scene.as_ref().map(|scene| UnaSceneSnapshot {
+		meshes: scene.meshes.clone(),
+		materials: scene.materials.clone(),
+		images: Vec::new(),
+		image_sources: Vec::new(),
+		skins: scene.skins.clone(),
+		nodes: scene.nodes.clone(),
+		roots: scene.roots.clone(),
+		node_constraints: scene.node_constraints.clone(),
+		asset_group_ownership: scene.asset_group_ownership.clone(),
+	});
+	UnaDocument {
+		scene,
+		unavatar: None,
+		vrm: None,
+		humanoid_profile: doc.humanoid_profile.clone(),
+		expression_catalog: doc.expression_catalog.clone(),
+		expression_weights: doc.expression_weights.clone(),
+		runtime_actions: None,
+		runtime_state: doc.runtime_state.clone(),
+		spring_bones: None,
+	}
 }
 
 fn runtime_action_effect_kind(effect: &UnaRuntimeActionEffect) -> &'static str {
@@ -5069,12 +5121,13 @@ fn run_diagnose(
 	json: bool,
 ) -> Result<(), String> {
 	let reg = io_registry_for_cli(plugin_dirs)?;
+	let cached_bytes = cached_binary_import_bytes(&path);
 	let importer: &dyn AvatarImporter = if let Some(ref s) = input_format {
 		let id = FormatId::new(s.as_str());
 		reg.importer_by_id(&id)
 			.ok_or_else(|| format!("指定の importer が登録されていません: {s}"))?
 	} else {
-		let probe = import_probe_for_path(&path, cached_binary_import_bytes(&path));
+		let probe = import_probe_for_path(&path, cached_bytes.clone());
 		reg.best_importer_for(&probe)
 			.ok_or_else(|| "入力に合う importer が見つかりません".to_string())?
 	};
@@ -5085,11 +5138,7 @@ fn run_diagnose(
 	};
 	let import_started = Instant::now();
 	let mut imported = importer
-		.import(
-			&mut ictx,
-			import_input_for_path(&path, &desc.id, cached_binary_import_bytes(&path)),
-			ImportOptions,
-		)
+		.import(&mut ictx, import_input_for_path(&path, &desc.id, cached_bytes), ImportOptions)
 		.map_err(|e| e.to_string())?;
 	let import_ms = import_started.elapsed().as_millis();
 	let base_document_for_probes = imported.document.clone();

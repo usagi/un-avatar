@@ -230,6 +230,10 @@ struct RendererRuntimeStatus {
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_cpu_total_ms: Option<f32>,
+	frame_dynamics_step_ms: Option<f32>,
+	frame_contact_eval_ms: Option<f32>,
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -539,6 +543,14 @@ struct RendererRuntimeTelemetry {
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	#[serde(default)]
+	frame_cpu_total_ms: Option<f32>,
+	#[serde(default)]
+	frame_dynamics_step_ms: Option<f32>,
+	#[serde(default)]
+	frame_contact_eval_ms: Option<f32>,
+	#[serde(default)]
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -5763,6 +5775,10 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		uptime_secs: telemetry.as_ref().map_or(info.uptime_secs, |telemetry| telemetry.uptime_secs),
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
+		frame_cpu_total_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_cpu_total_ms),
+		frame_dynamics_step_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_dynamics_step_ms),
+		frame_contact_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_contact_eval_ms),
+		frame_runtime_action_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_runtime_action_eval_ms),
 		gpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.gpu_ms),
 		ram_mb: telemetry.as_ref().and_then(|telemetry| telemetry.ram_mb),
 		surface_width: telemetry
@@ -9106,6 +9122,10 @@ mod tests {
 			uptime_secs: 1,
 			fps: Some(60.0),
 			cpu_ms: Some(1.0),
+			frame_cpu_total_ms: Some(1.4),
+			frame_dynamics_step_ms: Some(0.2),
+			frame_contact_eval_ms: Some(0.1),
+			frame_runtime_action_eval_ms: Some(0.1),
 			gpu_ms: Some(2.0),
 			ram_mb: None,
 			surface_width: Some(1280),
@@ -9709,7 +9729,7 @@ id = "test"
 	#[test]
 	fn dynamics_enable_all_on_launch_setting_round_trips_manifest_value() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		assert!(!setting.dynamics_enable_all_on_launch);
+		assert!(setting.dynamics_enable_all_on_launch);
 		let mut manifest = parse_manifest_value(
 			r#"title = "Test"
 
@@ -9795,6 +9815,7 @@ id = "test"
 	#[test]
 	fn launch_control_commands_enable_all_dynamics_only_when_opted_in() {
 		let mut setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		setting.dynamics_enable_all_on_launch = false;
 		assert!(renderer_launch_control_commands(&setting).is_empty());
 
 		setting.dynamics_enable_all_on_launch = true;

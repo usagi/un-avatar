@@ -2043,6 +2043,7 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) texture_compression_etc2_supported: bool,
 	pub(crate) processed_texture_cache: bool,
 	pub(crate) enable_spring_bones: bool,
+	pub(crate) dynamics_enable_all_on_launch: bool,
 	pub(crate) bone_colliders: BoneColliderConfig,
 	pub(crate) spring_bone_physics: DynamicsPhysicsConfig,
 	pub(crate) debug_material_dump: bool,
@@ -2214,6 +2215,10 @@ fn vertical_fov_from_diagonal(diagonal_rad: f32, aspect_wh: f32) -> f32 {
 pub struct FrameTimings {
 	pub wall_since_last_ms: f32,
 	pub cpu_record_ms: f32,
+	pub cpu_total_ms: f32,
+	pub dynamics_step_ms: f32,
+	pub contact_eval_ms: f32,
+	pub runtime_action_eval_ms: f32,
 	pub gpu_ms: f32,
 }
 
@@ -5385,6 +5390,7 @@ impl GpuState {
 			audio_link,
 			debug_vmc,
 			enable_spring_bones,
+			dynamics_enable_all_on_launch,
 			bone_colliders,
 			spring_bone_physics,
 			..
@@ -5409,6 +5415,11 @@ impl GpuState {
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
 		self.apply_runtime_requirements(prepared.runtime_requirements, audio_link);
+		if dynamics_enable_all_on_launch {
+			if let Err(e) = self.set_all_runtime_dynamics_enabled(true) {
+				eprintln!("un-avatar-renderer: enable all dynamics on launch skipped: {e}");
+			}
+		}
 		self.reconfigure_motion_receivers(vmc_address, unmotion_zenoh, debug_vmc)?;
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
@@ -5996,6 +6007,7 @@ impl GpuState {
 		}
 		let dt = wall_since_last.as_secs_f32();
 		self.apply_pending_motion_frames();
+		let t_dynamics0 = Instant::now();
 		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
 				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
@@ -6003,11 +6015,7 @@ impl GpuState {
 				}
 			}
 		}
-		if matches!(self.apply_contact_parameter_emissions(), Ok(changed) if !changed.is_empty()) {
-			if let Err(e) = self.evaluate_runtime_parameter_actions() {
-				eprintln!("un-avatar-renderer: contact parameter action evaluation failed: {e}");
-			}
-		}
+		let dynamics_step_ms = t_dynamics0.elapsed().as_secs_f32() * 1000.0;
 		let (gw, gh) = self.render_pixel_dims();
 		self.write_frame_globals(gw, gh, true);
 
@@ -6485,6 +6493,10 @@ impl GpuState {
 		Some(FrameTimings {
 			wall_since_last_ms: wall_since_last.as_secs_f32() * 1000.0,
 			cpu_record_ms: (t_before_submit - t_cpu0).as_secs_f32() * 1000.0,
+			cpu_total_ms: t_cpu0.elapsed().as_secs_f32() * 1000.0,
+			dynamics_step_ms,
+			contact_eval_ms: 0.0,
+			runtime_action_eval_ms: 0.0,
 			gpu_ms: self.gpu_timestamps.as_ref().and_then(|ts| ts.last_gpu_ms()).unwrap_or(0.0),
 		})
 	}

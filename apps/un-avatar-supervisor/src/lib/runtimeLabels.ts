@@ -80,6 +80,10 @@ export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 	RendererHealthStatusData & {
 		fps: number | null;
 		cpu_ms: number | null;
+		frame_cpu_total_ms?: number | null;
+		frame_dynamics_step_ms?: number | null;
+		frame_contact_eval_ms?: number | null;
+		frame_runtime_action_eval_ms?: number | null;
 		gpu_ms: number | null;
 		ram_mb: number | null;
 	};
