@@ -4475,6 +4475,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		#[arg(long, hide = true)]
 		bench_gpu_scene: bool,
 		#[arg(long, hide = true)]
+		prewarm_shaders: bool,
+		#[arg(long, hide = true)]
 		dump_skin_tone_matching: bool,
 		#[arg(long, default_value = "UN Avatar")]
 		title: String,
@@ -4878,6 +4880,10 @@ pub fn run_cli() -> Result<(), RunError> {
 	}
 	if cli.bench_gpu_scene {
 		gpu::benchmark_gpu_scene_startup(&opts).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
+	if cli.prewarm_shaders {
+		gpu::prewarm_shader_pipelines(&opts).map_err(RunError::EventLoop)?;
 		return Ok(());
 	}
 	if cli.dump_skin_tone_matching {

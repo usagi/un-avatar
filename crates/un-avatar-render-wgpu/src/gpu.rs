@@ -2423,6 +2423,64 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 	Ok(())
 }
 
+pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(), String> {
+	let started = Instant::now();
+	let requested_render_backend = opts.render_backend;
+	let render_backend = effective_window_backend(requested_render_backend, opts.transparent);
+	log_effective_window_backend(requested_render_backend, render_backend, opts.transparent);
+	let instance = wgpu::Instance::new(instance_descriptor_for_backend(render_backend));
+	let adapter_started = Instant::now();
+	let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+		power_preference: wgpu::PowerPreference::HighPerformance,
+		compatible_surface: None,
+		force_fallback_adapter: false,
+	}))
+	.map_err(|e| format!("shader prewarm: request_adapter: {e}"))?;
+	let adapter_limits = adapter.limits();
+	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+	let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+		label: Some("un-avatar-renderer-shader-prewarm"),
+		required_features: wgpu::Features::empty(),
+		required_limits: mesh_shader_plan.required_limits,
+		memory_hints: Default::default(),
+		..Default::default()
+	}))
+	.map_err(|e| format!("shader prewarm: request_device: {e}"))?;
+	device.on_uncaptured_error(Arc::new(|error| {
+		eprintln!("un-avatar-renderer: uncaptured wgpu error during shader prewarm: {error}");
+	}));
+	eprintln!(
+		"un-avatar-renderer: shader prewarm adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
+		mesh_shader_plan.tier,
+		adapter_started.elapsed().as_secs_f64() * 1000.0
+	);
+	let sample_count = aa_sample_count(opts.aa);
+	let pipeline_started = Instant::now();
+	let summary = SceneMeshes::prewarm_standard_pipelines(
+		&device,
+		wgpu::TextureFormat::Bgra8UnormSrgb,
+		sample_count,
+		mesh_shader_plan.tier,
+		|label| {
+			eprintln!(
+				"un-avatar-renderer: shader prewarm compiling {label} ({:.1}ms)",
+				pipeline_started.elapsed().as_secs_f64() * 1000.0
+			);
+		},
+	);
+	queue.submit([]);
+	device.poll(wgpu::PollType::wait_indefinitely()).ok();
+	eprintln!(
+		"un-avatar-renderer: shader prewarm complete shader_modules={} render_pipelines={} compute_pipelines={} pipeline_elapsed={:.1}ms total={:.1}ms",
+		summary.shader_modules,
+		summary.render_pipelines,
+		summary.compute_pipelines,
+		pipeline_started.elapsed().as_secs_f64() * 1000.0,
+		started.elapsed().as_secs_f64() * 1000.0
+	);
+	Ok(())
+}
+
 struct TimestampRingSlot {
 	buf: wgpu::Buffer,
 	state: Arc<AtomicU8>,

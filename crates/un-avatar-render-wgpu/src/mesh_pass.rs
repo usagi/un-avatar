@@ -1184,6 +1184,56 @@ impl UntoonShaderFeatures {
 	}
 }
 
+fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
+	UntoonShaderFeatures {
+		profile_extensions: true,
+		main_layers: true,
+		alpha_mask: true,
+		dissolve: true,
+		parallax: true,
+		id_mask: true,
+		udim_discard: true,
+		audio_link: true,
+		shadow_layers: true,
+		matcap: true,
+		matcap_second: true,
+		matcap_custom_normal: true,
+		reflection: true,
+		reflection_cube: true,
+		anisotropy: true,
+		rim: true,
+		rim_shade: true,
+		backlight: true,
+		glitter: true,
+		emission: true,
+		emission_second: true,
+		distance_fade: true,
+		fur: true,
+		gem: true,
+		refraction: true,
+		normal_second: true,
+	}
+}
+
+fn mtoon_prewarm_features() -> UntoonShaderFeatures {
+	UntoonShaderFeatures {
+		shadow_layers: true,
+		matcap: true,
+		reflection: true,
+		reflection_cube: true,
+		rim: true,
+		emission: true,
+		..Default::default()
+	}
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MeshPipelinePrewarmSummary {
+	pub shader_modules: usize,
+	pub render_pipelines: usize,
+	pub compute_pipelines: usize,
+}
+
 #[derive(Clone, Debug)]
 struct DrawBatch {
 	pipeline: DrawPipelineKind,
@@ -6959,6 +7009,261 @@ impl SceneMeshes {
 			fragment_entry,
 			render_state,
 		)
+	}
+
+	pub(crate) fn prewarm_standard_pipelines(
+		device: &wgpu::Device,
+		format: wgpu::TextureFormat,
+		sample_count: u32,
+		shader_variant_tier: MeshShaderVariantTier,
+		mut progress: impl FnMut(&'static str),
+	) -> MeshPipelinePrewarmSummary {
+		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_prewarm_frame"),
+			entries: &[
+				wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+				texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
+				sampler_bind_group_layout_entry(2, wgpu::ShaderStages::FRAGMENT),
+				texture_bind_group_layout_entry(3, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
+			],
+		});
+		let material_entries = mesh_material_layout_entries(shader_variant_tier);
+		let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_prewarm_material"),
+			entries: &material_entries,
+		});
+		let outline_material_entries = mesh_outline_material_layout_entries();
+		let outline_material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_prewarm_outline_material"),
+			entries: &outline_material_entries,
+		});
+		let skin_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_prewarm_skin"),
+			entries: &[wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::VERTEX,
+				ty: wgpu::BindingType::Buffer {
+					ty: wgpu::BufferBindingType::Storage { read_only: true },
+					has_dynamic_offset: false,
+					min_binding_size: None,
+				},
+				count: None,
+			}],
+		});
+		let morph_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("mesh_prewarm_morph"),
+			entries: &[
+				uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
+				wgpu::BindGroupLayoutEntry {
+					binding: 1,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage { read_only: true },
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+				wgpu::BindGroupLayoutEntry {
+					binding: 2,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Storage { read_only: true },
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				},
+			],
+		});
+		let compute_fur_cards_layout = create_compute_fur_cards_bind_group_layout(device);
+		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("mesh_prewarm"),
+			bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&skin_layout), Some(&morph_layout)],
+			immediate_size: 0,
+		});
+		let outline_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("mesh_prewarm_outline"),
+			bind_group_layouts: &[
+				Some(&frame_layout),
+				Some(&outline_material_layout),
+				Some(&skin_layout),
+				Some(&morph_layout),
+			],
+			immediate_size: 0,
+		});
+		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 10] = [
+			wgpu::VertexAttribute {
+				offset: 0,
+				shader_location: 0,
+				format: wgpu::VertexFormat::Float32x3,
+			},
+			wgpu::VertexAttribute {
+				offset: 12,
+				shader_location: 1,
+				format: wgpu::VertexFormat::Float32x3,
+			},
+			wgpu::VertexAttribute {
+				offset: 24,
+				shader_location: 2,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 40,
+				shader_location: 3,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 72,
+				shader_location: 4,
+				format: wgpu::VertexFormat::Uint16x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 80,
+				shader_location: 5,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 96,
+				shader_location: 6,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
+				shader_location: 7,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 56,
+				shader_location: 8,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 9,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+		];
+		let vb_layout = wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<Vertex>() as u64,
+			step_mode: wgpu::VertexStepMode::Vertex,
+			attributes: &MESH_VTX_ATTRS,
+		};
+		const COMPUTE_FUR_CARDS_VTX_ATTRS: [wgpu::VertexAttribute; 6] = [
+			wgpu::VertexAttribute {
+				offset: 0,
+				shader_location: 0,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 16,
+				shader_location: 1,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 32,
+				shader_location: 2,
+				format: wgpu::VertexFormat::Float32x2,
+			},
+			wgpu::VertexAttribute {
+				offset: 40,
+				shader_location: 3,
+				format: wgpu::VertexFormat::Float32,
+			},
+			wgpu::VertexAttribute {
+				offset: 48,
+				shader_location: 4,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+			wgpu::VertexAttribute {
+				offset: 64,
+				shader_location: 5,
+				format: wgpu::VertexFormat::Float32x4,
+			},
+		];
+		let compute_fur_cards_vb_layout = wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<ComputeFurCardsGeneratedVertexGpu>() as u64,
+			step_mode: wgpu::VertexStepMode::Vertex,
+			attributes: &COMPUTE_FUR_CARDS_VTX_ATTRS,
+		};
+
+		let feature_sets = [
+			("mesh_prewarm_liltoon_full", full_liltoon_prewarm_features()),
+			("mesh_prewarm_mtoon", mtoon_prewarm_features()),
+		];
+		let pipeline_kinds = [
+			DrawPipelineKind::OpaqueToon,
+			DrawPipelineKind::BlendToon,
+			DrawPipelineKind::BlendToonZWrite,
+			DrawPipelineKind::BlendToonAdd,
+			DrawPipelineKind::BlendToonAddZWrite,
+			DrawPipelineKind::TransparentToonBackpass,
+			DrawPipelineKind::TransparentToonBackpassNoZWrite,
+			DrawPipelineKind::LilToonGemPre,
+		];
+		let mut summary = MeshPipelinePrewarmSummary::default();
+		for (shader_label, features) in feature_sets {
+			progress(shader_label);
+			let shader = create_mesh_shader_module_for_features(device, shader_variant_tier, features, shader_label);
+			summary.shader_modules += 1;
+			for kind in pipeline_kinds {
+				progress(kind.label());
+				let _pipeline = Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count);
+				summary.render_pipelines += 1;
+			}
+			progress("mesh_outline_toon");
+			let _outline_pipeline = Self::create_mesh_pipeline(
+				device,
+				&outline_pipeline_layout,
+				&shader,
+				format,
+				&vb_layout,
+				"mesh_outline_toon",
+				"vs_outline",
+				"fs_outline",
+				MeshPipelineRenderState::outline(sample_count),
+			);
+			summary.render_pipelines += 1;
+			progress("mesh_compute_fur_cards_pre_toon");
+			let _fur_pre = Self::create_mesh_pipeline(
+				device,
+				&pipeline_layout,
+				&shader,
+				format,
+				&compute_fur_cards_vb_layout,
+				"mesh_compute_fur_cards_pre_toon",
+				"vs_compute_fur_cards_pre",
+				"fs_fur_toon_pre",
+				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+			);
+			summary.render_pipelines += 1;
+			progress("mesh_compute_fur_cards_toon");
+			let _fur_toon = Self::create_mesh_pipeline(
+				device,
+				&pipeline_layout,
+				&shader,
+				format,
+				&compute_fur_cards_vb_layout,
+				"mesh_compute_fur_cards_toon",
+				"vs_compute_fur_cards",
+				"fs_fur_toon",
+				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
+			);
+			summary.render_pipelines += 1;
+		}
+		progress("compute_fur_cards");
+		let _compute = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_layout);
+		summary.compute_pipelines += 1;
+		summary
 	}
 
 	#[allow(clippy::too_many_arguments)]
