@@ -7608,18 +7608,18 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")
-				&& w.contains("writeback_target_groups=1")
+				&& w.contains("writeback_target_groups=0")
 				&& w.contains("physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
 			&& w.contains("candidate_joints=1")
-			&& w.contains("target_joints=1")
+			&& w.contains("target_joints=0")
 			&& w.contains("physbone:hair@root")));
 		assert_eq!(report.dynamics.rotation_translation_writeback_group_count, 1);
 		assert_eq!(report.dynamics.translation_writeback_candidate_count, 1);
-		assert_eq!(report.dynamics.translation_writeback_target_count, 1);
+		assert_eq!(report.dynamics.translation_writeback_target_count, 0);
 		assert_eq!(report.dynamics.stretch_translation_writeback_group_count, 1);
-		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 1);
+		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 0);
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
 			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));

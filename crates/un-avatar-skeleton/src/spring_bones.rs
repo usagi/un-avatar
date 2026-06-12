@@ -279,7 +279,6 @@ fn default_spring_bone_categories() -> Vec<SpringBoneCategoryDefinition> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TailTranslationWritebackTarget {
 	NextChainNode { node: usize },
-	TerminalChildNode { node: usize },
 }
 
 /// 1 joint 分の rest pose snapshot と動的状態（curr/prev tail）。
@@ -494,13 +493,6 @@ fn tail_translation_writeback_target(
 		}
 		return None;
 	}
-	if chain.len() == 2 && joint_index + 1 < chain.len() {
-		let anchor = chain[joint_index];
-		let target = chain[joint_index + 1];
-		if una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, &[anchor, target]) > 0 {
-			return Some(TailTranslationWritebackTarget::TerminalChildNode { node: target });
-		}
-	}
 	None
 }
 
@@ -629,6 +621,8 @@ impl SpringBoneSimulator {
 					.filter(|value| value.is_finite())
 					.unwrap_or(g.parameters.hit_radius)
 					.max(0.0);
+				let translation_writeback_allowed =
+					una_dynamics_translation_writeback_candidate_count(scene, g.writeback_mode, &[parent, child]) > 0;
 				let translation_writeback_target = tail_translation_writeback_target(scene, g, chain, i);
 				joints.push(JointRuntime {
 					parent_node: parent,
@@ -639,7 +633,7 @@ impl SpringBoneSimulator {
 					bone_axis,
 					length,
 					hit_radius,
-					translation_writeback_allowed: translation_writeback_target.is_some(),
+					translation_writeback_allowed,
 					translation_writeback_target,
 					curr_tail: curr,
 					prev_tail: curr,
@@ -1237,7 +1231,7 @@ mod tests {
 		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let runtime = sim.runtimes[0].as_ref().expect("runtime");
 
-		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_candidate_count(), 2);
 		assert_eq!(sim.translation_writeback_target_count(), 1);
 		assert_eq!(
 			runtime.joints[0].translation_writeback_target,
@@ -1247,7 +1241,7 @@ mod tests {
 	}
 
 	#[test]
-	fn translation_writeback_targets_leaf_child_for_two_node_chain() {
+	fn translation_writeback_targets_do_not_assign_imaginary_two_node_tail() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
 			roots: vec![0],
@@ -1270,11 +1264,8 @@ mod tests {
 		let runtime = sim.runtimes[0].as_ref().expect("runtime");
 
 		assert_eq!(sim.translation_writeback_candidate_count(), 1);
-		assert_eq!(sim.translation_writeback_target_count(), 1);
-		assert_eq!(
-			runtime.joints[0].translation_writeback_target,
-			Some(TailTranslationWritebackTarget::TerminalChildNode { node: 1 })
-		);
+		assert_eq!(sim.translation_writeback_target_count(), 0);
+		assert_eq!(runtime.joints[0].translation_writeback_target, None);
 	}
 
 	#[test]

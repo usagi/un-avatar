@@ -1185,10 +1185,6 @@ pub fn una_dynamics_translation_writeback_target_count(
 			let anchor = bone_node_indices[joint_index + 1];
 			let target = bone_node_indices[joint_index + 2];
 			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
-		} else if bone_node_indices.len() == 2 {
-			let anchor = bone_node_indices[joint_index];
-			let target = bone_node_indices[joint_index + 1];
-			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
 		}
 	}
 	count
@@ -8755,7 +8751,7 @@ mod tests {
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1],),
-			1
+			0
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 1, 2]),
