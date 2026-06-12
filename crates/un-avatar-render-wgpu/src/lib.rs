@@ -1462,6 +1462,7 @@ impl AvatarApp {
 		}
 		let size = window.inner_size();
 		status.window_inner_size = Some([size.width, size.height]);
+		status.minimized = window.is_minimized().unwrap_or(false);
 	}
 
 	fn update_runtime_focus_status(&self) {
@@ -2457,12 +2458,15 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 		}
 
-		win.focus_window();
+		if !self.opts.start_minimized {
+			win.focus_window();
+		}
 		self.last_wall = Instant::now();
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
 		win.request_redraw();
 		self.window = Some(win);
+		self.update_runtime_window_geometry();
 		self.start_async_model_load(self.event_proxy.clone());
 	}
 
