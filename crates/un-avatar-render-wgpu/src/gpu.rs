@@ -4300,34 +4300,6 @@ impl GpuState {
 		}
 	}
 
-	/// Avatar rim light effect を実行中 renderer に即時反映する。
-	pub fn set_avatar_rim(&mut self, rim: crate::AvatarRimOptions) {
-		if let Some(sm) = &mut self.scene_meshes {
-			sm.set_avatar_rim(&self.queue, rim);
-		}
-	}
-
-	/// Avatar matcap strength を実行中 renderer に即時反映する。
-	pub fn set_avatar_matcap(&mut self, matcap: crate::AvatarMatcapOptions) {
-		if let Some(sm) = &mut self.scene_meshes {
-			sm.set_avatar_matcap(&self.queue, matcap);
-		}
-	}
-
-	/// Synthetic specular accent を実行中 renderer に即時反映する。
-	pub fn set_avatar_specular(&mut self, specular: crate::AvatarSpecularOptions) {
-		if let Some(sm) = &mut self.scene_meshes {
-			sm.set_avatar_specular(&self.queue, specular);
-		}
-	}
-
-	/// Authored ambient occlusion strength を実行中 renderer に即時反映する。
-	pub fn set_avatar_ambient_occlusion(&mut self, ambient_occlusion: crate::AvatarAmbientOcclusionOptions) {
-		if let Some(sm) = &mut self.scene_meshes {
-			sm.set_avatar_ambient_occlusion(&self.queue, ambient_occlusion);
-		}
-	}
-
 	/// Final post color adjustment を実行中 renderer に即時反映する。
 	pub fn set_environment_color(&mut self, color: EnvironmentColorOptions) {
 		self.environment_color = EnvironmentColorOptions {

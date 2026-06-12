@@ -9003,38 +9003,6 @@ impl SceneMeshes {
 		self.runtime_requirements = draw_state.runtime_requirements;
 	}
 
-	pub fn set_avatar_rim(&mut self, queue: &wgpu::Queue, rim: AvatarRimOptions) {
-		if self.opts.avatar_rim == rim {
-			return;
-		}
-		self.opts.avatar_rim = rim;
-		self.rewrite_avatar_materials(queue);
-	}
-
-	pub fn set_avatar_matcap(&mut self, queue: &wgpu::Queue, matcap: AvatarMatcapOptions) {
-		if self.opts.avatar_matcap == matcap {
-			return;
-		}
-		self.opts.avatar_matcap = matcap;
-		self.rewrite_avatar_materials(queue);
-	}
-
-	pub fn set_avatar_specular(&mut self, queue: &wgpu::Queue, specular: AvatarSpecularOptions) {
-		if self.opts.avatar_specular == specular {
-			return;
-		}
-		self.opts.avatar_specular = specular;
-		self.rewrite_avatar_materials(queue);
-	}
-
-	pub fn set_avatar_ambient_occlusion(&mut self, queue: &wgpu::Queue, ambient_occlusion: AvatarAmbientOcclusionOptions) {
-		if self.opts.avatar_ambient_occlusion == ambient_occlusion {
-			return;
-		}
-		self.opts.avatar_ambient_occlusion = ambient_occlusion;
-		self.rewrite_avatar_materials(queue);
-	}
-
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
 		let default_mtoon = UnaMtoonMaterial::default();
 		for draw in &self.draws {

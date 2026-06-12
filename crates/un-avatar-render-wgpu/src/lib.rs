@@ -121,10 +121,6 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_dynamics",
 	"set_spring_bones",
 	"set_avatar_outline",
-	"set_avatar_rim",
-	"set_avatar_matcap",
-	"set_avatar_specular",
-	"set_avatar_ambient_occlusion",
 	"set_lighting",
 	"set_environment_color",
 	"set_bloom",
@@ -324,25 +320,6 @@ enum RendererControlEvent {
 		color: Option<[f32; 3]>,
 		lighting_mix: Option<f32>,
 		roundness: Option<f32>,
-	},
-	SetAvatarRim {
-		policy: Option<String>,
-		color: Option<[f32; 3]>,
-		intensity: Option<f32>,
-		lighting_mix: Option<f32>,
-		fresnel_power: Option<f32>,
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		enabled: Option<bool>,
-		intensity: Option<f32>,
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		strength: Option<f32>,
 	},
 	SetLighting {
 		environment_enabled: Option<bool>,
@@ -564,36 +541,6 @@ enum RendererControlCommand {
 		#[serde(default)]
 		roundness: Option<f32>,
 	},
-	SetAvatarRim {
-		#[serde(default)]
-		policy: Option<String>,
-		#[serde(default)]
-		color: Option<[f32; 3]>,
-		#[serde(default)]
-		intensity: Option<f32>,
-		#[serde(default)]
-		lighting_mix: Option<f32>,
-		#[serde(default)]
-		fresnel_power: Option<f32>,
-		#[serde(default)]
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		#[serde(default)]
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		#[serde(default)]
-		enabled: Option<bool>,
-		#[serde(default)]
-		intensity: Option<f32>,
-		#[serde(default)]
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		#[serde(default)]
-		strength: Option<f32>,
-	},
 	SetLighting {
 		#[serde(default)]
 		environment_enabled: Option<bool>,
@@ -794,24 +741,6 @@ impl RendererControlCommand {
 				lighting_mix,
 				roundness,
 			},
-			Self::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			} => RendererControlEvent::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			},
-			Self::SetAvatarMatcap { scale } => RendererControlEvent::SetAvatarMatcap { scale },
-			Self::SetAvatarSpecular { enabled, intensity, power } => RendererControlEvent::SetAvatarSpecular { enabled, intensity, power },
-			Self::SetAvatarAmbientOcclusion { strength } => RendererControlEvent::SetAvatarAmbientOcclusion { strength },
 			Self::SetLighting {
 				environment_enabled,
 				environment_color,
@@ -990,15 +919,6 @@ fn parse_avatar_outline_kind(value: Option<&str>) -> Option<AvatarOutlineKind> {
 	}
 }
 
-fn parse_avatar_rim_policy(value: Option<&str>) -> Option<AvatarRimPolicy> {
-	match value?.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some(AvatarRimPolicy::Authored),
-		"off" | "none" | "disabled" => Some(AvatarRimPolicy::Off),
-		"override" | "custom" => Some(AvatarRimPolicy::Override),
-		_ => None,
-	}
-}
-
 fn avatar_outline_from_control(
 	current: AvatarOutlineOptions,
 	policy: Option<String>,
@@ -1017,52 +937,6 @@ fn avatar_outline_from_control(
 			.or(current.color),
 		lighting_mix: lighting_mix.map(|v| v.clamp(0.0, 1.0)).or(current.lighting_mix),
 		roundness: roundness.map(|v| v.clamp(0.0, 1.0)).or(current.roundness),
-	}
-}
-
-fn avatar_rim_from_control(
-	current: AvatarRimOptions,
-	policy: Option<String>,
-	color: Option<[f32; 3]>,
-	intensity: Option<f32>,
-	lighting_mix: Option<f32>,
-	fresnel_power: Option<f32>,
-	lift: Option<f32>,
-) -> AvatarRimOptions {
-	AvatarRimOptions {
-		policy: parse_avatar_rim_policy(policy.as_deref()).unwrap_or(current.policy),
-		color: color
-			.map(|rgb| [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)])
-			.or(current.color),
-		intensity: intensity.map(|v| v.clamp(0.0, 4.0)).or(current.intensity),
-		lighting_mix: lighting_mix.map(|v| v.clamp(0.0, 1.0)).or(current.lighting_mix),
-		fresnel_power: fresnel_power.map(|v| v.max(0.00001)).or(current.fresnel_power),
-		lift: lift.map(|v| v.clamp(-1.0, 1.0)).or(current.lift),
-	}
-}
-
-fn avatar_matcap_from_control(current: AvatarMatcapOptions, scale: Option<f32>) -> AvatarMatcapOptions {
-	AvatarMatcapOptions {
-		scale: scale.unwrap_or(current.scale).clamp(0.0, 2.0),
-	}
-}
-
-fn avatar_specular_from_control(
-	current: AvatarSpecularOptions,
-	enabled: Option<bool>,
-	intensity: Option<f32>,
-	power: Option<f32>,
-) -> AvatarSpecularOptions {
-	AvatarSpecularOptions {
-		enabled: enabled.unwrap_or(current.enabled),
-		intensity: intensity.unwrap_or(current.intensity).clamp(0.0, 2.0),
-		power: power.unwrap_or(current.power).clamp(1.0, 128.0),
-	}
-}
-
-fn avatar_ambient_occlusion_from_control(current: AvatarAmbientOcclusionOptions, strength: Option<f32>) -> AvatarAmbientOcclusionOptions {
-	AvatarAmbientOcclusionOptions {
-		strength: strength.unwrap_or(current.strength).clamp(0.0, 2.0),
 	}
 }
 
@@ -2983,53 +2857,6 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.opts.mesh_diagnostics.avatar_outline = next;
 				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_avatar_outline(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			} => {
-				let next = avatar_rim_from_control(
-					self.opts.mesh_diagnostics.avatar_rim,
-					policy,
-					color,
-					intensity,
-					lighting_mix,
-					fresnel_power,
-					lift,
-				);
-				self.opts.mesh_diagnostics.avatar_rim = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_rim(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarMatcap { scale } => {
-				let next = avatar_matcap_from_control(self.opts.mesh_diagnostics.avatar_matcap, scale);
-				self.opts.mesh_diagnostics.avatar_matcap = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_matcap(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarSpecular { enabled, intensity, power } => {
-				let next = avatar_specular_from_control(self.opts.mesh_diagnostics.avatar_specular, enabled, intensity, power);
-				self.opts.mesh_diagnostics.avatar_specular = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_specular(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarAmbientOcclusion { strength } => {
-				let next = avatar_ambient_occlusion_from_control(self.opts.mesh_diagnostics.avatar_ambient_occlusion, strength);
-				self.opts.mesh_diagnostics.avatar_ambient_occlusion = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_ambient_occlusion(next);
 				}
 				self.request_redraw();
 			}
@@ -6755,36 +6582,6 @@ mod tests {
 		assert_eq!(intensity, Some(0.45));
 		assert_eq!(temperature, Some(0.2));
 		assert_eq!(tint, Some(-0.15));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_matcap_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_avatar_matcap","scale":1.35}"#).unwrap();
-		let RendererControlCommand::SetAvatarMatcap { scale } = command else {
-			panic!("expected set_avatar_matcap command");
-		};
-		assert_eq!(scale, Some(1.35));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_specular_control_command() {
-		let command =
-			parse_renderer_control_command(r#"{"command":"set_avatar_specular","enabled":true,"intensity":0.5,"power":32.0}"#).unwrap();
-		let RendererControlCommand::SetAvatarSpecular { enabled, intensity, power } = command else {
-			panic!("expected set_avatar_specular command");
-		};
-		assert_eq!(enabled, Some(true));
-		assert_eq!(intensity, Some(0.5));
-		assert_eq!(power, Some(32.0));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_ambient_occlusion_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_avatar_ambient_occlusion","strength":1.4}"#).unwrap();
-		let RendererControlCommand::SetAvatarAmbientOcclusion { strength } = command else {
-			panic!("expected set_avatar_ambient_occlusion command");
-		};
-		assert_eq!(strength, Some(1.4));
 	}
 
 	#[test]
