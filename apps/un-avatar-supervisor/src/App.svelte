@@ -475,6 +475,7 @@
 			look_at_clamp_deg: 30,
 			primary_motion_source: "vmc",
 			spring_bones: true,
+			dynamics_enable_all_on_launch: false,
 			spring_bone_physics_configured: false,
 			spring_bone_simulation_hz: 60,
 			spring_bone_substeps: 1,
@@ -602,6 +603,7 @@
 			look_at_clamp_deg: 30,
 			primary_motion_source: "vmc",
 			spring_bones: true,
+			dynamics_enable_all_on_launch: false,
 			spring_bone_physics_configured: false,
 			spring_bone_simulation_hz: 60,
 			spring_bone_substeps: 1,
@@ -1905,6 +1907,11 @@
 		setting: AvatarSetting,
 		renderersToApply: RendererInstance[]
 	): Promise<void> {
+		if (fieldSetIncludes(fields, "physics.dynamics.enable_all_on_launch")) {
+			const applied = await applyRendererCommand(renderersToApply, "set_renderer_all_dynamics_launch_setting", () => ({ setting }));
+			await setAppliedMessage(applied, "Updated dynamics override", (count) => `Updated dynamics override on ${count} renderers`);
+			return;
+		}
 		if (
 			fieldSetIncludes(fields, "spring_bones") ||
 			fieldSetStartsWith(fields, "physics.spring_bone.") ||

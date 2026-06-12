@@ -859,6 +859,12 @@ struct RendererSpringBoneSetting {
 	bone_collider_hands: f32,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct RendererAllDynamicsSetting {
+	dynamics_enable_all_on_launch: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 struct RendererCameraTransition {
 	#[serde(alias = "durationMs")]
@@ -1094,6 +1100,9 @@ struct AvatarSetting {
 	/// VRM SpringBone（揺れもの）シミュレーションを有効化するか。manifest `spring_bones` に対応。
 	/// 既定 true（VRM アバターの基本機能）。
 	spring_bones: bool,
+	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
+	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
+	dynamics_enable_all_on_launch: bool,
 	spring_bone_physics_configured: bool,
 	spring_bone_simulation_hz: f32,
 	spring_bone_substeps: u32,
@@ -1310,6 +1319,7 @@ struct DebugSettings {
 }
 
 struct PhysicsSettings {
+	dynamics_enable_all_on_launch: bool,
 	spring_bone_physics_configured: bool,
 	spring_bone_simulation_hz: f32,
 	spring_bone_substeps: u32,
@@ -1605,7 +1615,14 @@ struct ManifestDebug {
 #[serde(default)]
 struct ManifestPhysics {
 	bone_colliders: Option<ManifestBoneColliders>,
+	dynamics: Option<ManifestDynamicsPhysics>,
 	spring_bone: Option<ManifestSpringBonePhysics>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsPhysics {
+	enable_all_on_launch: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1920,6 +1937,7 @@ pub fn run() {
 			set_renderer_apply_vmc_root_translation,
 			set_renderer_motion_receivers,
 			set_renderer_spring_bones,
+			set_renderer_all_dynamics_launch_setting,
 			set_renderer_dynamics_enabled,
 			set_renderer_all_dynamics_enabled,
 			set_renderer_primary_motion_source,
@@ -3928,7 +3946,7 @@ fn apply_avatar_setting_value(
 		field if field.starts_with("effects.post.") => {
 			apply_post_effect_setting_value(manifest, field, value)?;
 		}
-		"spring_bones" | "physics.spring_bone.simulation_hz" | "physics.spring_bone.substeps" => {
+		"spring_bones" | "physics.dynamics.enable_all_on_launch" | "physics.spring_bone.simulation_hz" | "physics.spring_bone.substeps" => {
 			apply_physics_setting_value(manifest, setting, field, value)?;
 		}
 		field if field.starts_with("physics.") => {
@@ -4465,6 +4483,9 @@ fn apply_physics_setting_value(
 ) -> Result<(), String> {
 	match field {
 		"spring_bones" => set_nested_json_bool(manifest, &["spring_bones"], &value, field),
+		"physics.dynamics.enable_all_on_launch" => {
+			set_nested_json_bool(manifest, &["physics", "dynamics", "enable_all_on_launch"], &value, field)
+		}
 		"physics.spring_bone.simulation_hz" => set_nested_ranged_float(
 			manifest,
 			&["physics", "spring_bone", "simulation_hz"],
@@ -4625,6 +4646,7 @@ fn launch_renderer_in_state(
 	let pid = child.id();
 	let (runtime_status_cache, runtime_status_stream_stop) =
 		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
+	let launch_control_commands = renderer_launch_control_commands(&setting);
 	let info = RendererInstance {
 		id,
 		name: setting.name,
@@ -4660,7 +4682,7 @@ fn launch_renderer_in_state(
 			info,
 			child,
 			started_at: Instant::now(),
-			runtime_bus_key,
+			runtime_bus_key: runtime_bus_key.clone(),
 			runtime_status_cache,
 			runtime_status_stream_stop,
 			stderr_tail,
@@ -4668,6 +4690,9 @@ fn launch_renderer_in_state(
 		},
 	);
 	prewarm_runtime_control_session();
+	for command in launch_control_commands {
+		spawn_renderer_launch_control(runtime_bus_key.clone(), command);
+	}
 	Ok(info_for_return)
 }
 
@@ -4976,6 +5001,24 @@ fn set_renderer_spring_bones(id: u32, setting: RendererSpringBoneSetting, state:
 			enabled: setting.spring_bones,
 			bone_colliders: renderer_bone_collider_config(&setting),
 			physics_config: renderer_spring_bone_physics_config(&setting),
+		},
+	)
+}
+
+#[tauri::command]
+fn set_renderer_all_dynamics_launch_setting(
+	id: u32,
+	setting: RendererAllDynamicsSetting,
+	state: State<'_, Mutex<SupervisorState>>,
+) -> Result<(), String> {
+	if !setting.dynamics_enable_all_on_launch {
+		return Ok(());
+	}
+	send_renderer_command_by_id(
+		id,
+		state.inner(),
+		RendererControlCommand::SetAllDynamicsEnabled {
+			enabled: setting.dynamics_enable_all_on_launch,
 		},
 	)
 }
@@ -6111,6 +6154,27 @@ fn send_managed_renderer_control(renderer: &ManagedRenderer, command: &RendererC
 	send_renderer_control_bus(&renderer.runtime_bus_key, command)
 }
 
+fn renderer_launch_control_commands(setting: &AvatarSetting) -> Vec<RendererControlCommand> {
+	if setting.dynamics_enable_all_on_launch {
+		vec![RendererControlCommand::SetAllDynamicsEnabled { enabled: true }]
+	} else {
+		Vec::new()
+	}
+}
+
+fn spawn_renderer_launch_control(runtime_bus_key: String, command: RendererControlCommand) {
+	let _ = std::thread::Builder::new()
+		.name("un-avatar-renderer-launch-control".into())
+		.spawn(move || {
+			for _ in 0..40 {
+				if send_renderer_control_bus(&runtime_bus_key, &command).is_ok() {
+					return;
+				}
+				std::thread::sleep(Duration::from_millis(250));
+			}
+		});
+}
+
 fn send_managed_renderer_shutdown(renderer: &ManagedRenderer) -> Result<(), String> {
 	let runtime_bus_key = renderer.runtime_bus_key.clone();
 	std::thread::Builder::new()
@@ -6732,6 +6796,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		primary_motion_source: motion.primary_motion_source,
 		// 既定 true（VRM 揺れもの表現は基本機能）。manifest で明示的に false を書いたときだけ OFF。
 		spring_bones: manifest.spring_bones.unwrap_or(true),
+		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		spring_bone_physics_configured: physics.spring_bone_physics_configured,
 		spring_bone_simulation_hz: physics.spring_bone_simulation_hz,
 		spring_bone_substeps: physics.spring_bone_substeps,
@@ -7904,9 +7969,11 @@ fn debug_settings(debug: Option<&ManifestDebug>) -> DebugSettings {
 
 fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&PathBuf>, manifest_path: &Path) -> PhysicsSettings {
 	let bone_colliders = physics.and_then(|physics| physics.bone_colliders.as_ref());
+	let dynamics = physics.and_then(|physics| physics.dynamics.as_ref());
 	let spring_bone_physics = physics.and_then(|physics| physics.spring_bone.as_ref());
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
+		dynamics_enable_all_on_launch: dynamics.and_then(|dynamics| dynamics.enable_all_on_launch).unwrap_or(false),
 		spring_bone_physics_configured: spring_bone_physics.is_some(),
 		spring_bone_simulation_hz: spring_bone_physics
 			.and_then(|physics| physics.simulation_hz)
@@ -8999,11 +9066,11 @@ mod tests {
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, data_image_base64_parts, diagnostics_archive_path,
 		diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
-		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, AvatarSetting, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
-		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
+		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
+		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
+		spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting,
+		ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -9613,6 +9680,63 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn dynamics_enable_all_on_launch_setting_round_trips_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		assert!(!setting.dynamics_enable_all_on_launch);
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.enable_all_on_launch",
+			serde_json::json!(true),
+		)
+		.unwrap();
+		assert_eq!(
+			manifest
+				.get("physics")
+				.and_then(toml::Value::as_table)
+				.and_then(|physics| physics.get("dynamics"))
+				.and_then(toml::Value::as_table)
+				.and_then(|dynamics| dynamics.get("enable_all_on_launch"))
+				.and_then(toml::Value::as_bool),
+			Some(true)
+		);
+
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-dynamics-enable-all-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(&path, toml::to_string(&manifest).unwrap()).unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.dynamics_enable_all_on_launch);
+	}
+
+	#[test]
+	fn launch_control_commands_enable_all_dynamics_only_when_opted_in() {
+		let mut setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		assert!(renderer_launch_control_commands(&setting).is_empty());
+
+		setting.dynamics_enable_all_on_launch = true;
+		let commands = renderer_launch_control_commands(&setting);
+		assert_eq!(commands.len(), 1);
+		assert_eq!(
+			serde_json::to_string(&commands[0]).unwrap(),
+			r#"{"command":"set_all_dynamics_enabled","enabled":true}"#
+		);
 	}
 
 	#[test]

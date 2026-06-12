@@ -283,6 +283,7 @@ look_at = "LookAt"
 look_at_clamp_deg = "Clamp angle (deg)"
 spring_bone = "SpringBone"
 spring_bone_hint = "Run VRM SpringBone physics every frame. Keep this on unless you need a completely static avatar."
+dynamics_enable_all_on_launch = "Enable all dynamics on launch"
 spring_bone_mode = "SpringBone mode"
 spring_bone_mode_hint = "Choose whether this part uses model-authored SpringBone values or a per-part Verlet / XPBD override."
 spring_bone_mode_authored_verlet = "Authored: Verlet/PBD"
@@ -463,6 +464,7 @@ vmc_address = "Listen address: VMC/UDP receive address. For sender apps on the s
 look_at = "LookAt: simple VRM 1.0 LookAt clamp. Limits eye bone yaw/pitch to the configured angle."
 look_at_clamp_deg = "Clamp angle (deg): upper limit for eye yaw/pitch. Specify 0 to 90 degrees. It is saved while off and used when LookAt is enabled."
 spring_bone = "SpringBone: simulate VRM secondary motion. Keep it on when you want hair and clothing to move naturally."
+dynamics_enable_all_on_launch = "Enable all dynamics on launch: explicitly turns on every UNAvatar dynamics group after the Renderer starts. Use this for trusted avatars whose PhysBone-style groups are exported OFF by default."
 vmc_root_translation = "VMC Root translation: apply VMC root translation to the scene root. Use it only for full-body setups that need root movement."
 
 [profiles.hints.output]

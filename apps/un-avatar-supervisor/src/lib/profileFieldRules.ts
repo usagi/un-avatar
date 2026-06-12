@@ -22,6 +22,7 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field === "icon_path" ||
 		field.startsWith("motion.") ||
 		field === "spring_bones" ||
+		field === "physics.dynamics.enable_all_on_launch" ||
 		field.startsWith("physics.spring_bone.") ||
 		field.startsWith("physics.bone_colliders.") ||
 		field.startsWith("effects.avatar.outline.") ||
@@ -48,6 +49,7 @@ export function profileFieldLabel(field: string): string {
 	if (field.startsWith("expression.")) return "Expression settings";
 	if (field.startsWith("window.")) return "Window settings";
 	if (field.startsWith("motion.")) return "Motion settings";
+	if (field.startsWith("physics.dynamics.")) return "Dynamics settings";
 	if (field.startsWith("output.")) return "Output settings";
 	return "This setting";
 }

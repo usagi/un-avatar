@@ -56,6 +56,7 @@ let avatarSettings = [
 		audio_link_input_device_name_hint: null,
 		primary_motion_source: "unmotion_zenoh",
 		spring_bones: true,
+		dynamics_enable_all_on_launch: false,
 		spring_bone_physics_configured: false,
 		spring_bone_simulation_hz: 60,
 		spring_bone_substeps: 1,
@@ -179,6 +180,7 @@ let avatarSettings = [
 		audio_link_input_device_name_hint: null,
 		primary_motion_source: "vmc",
 		spring_bones: true,
+		dynamics_enable_all_on_launch: false,
 		spring_bone_physics_configured: false,
 		spring_bone_simulation_hz: 60,
 		spring_bone_substeps: 1,
@@ -523,6 +525,7 @@ export function installDevIpcMock(): void {
 			case "set_renderer_show_bone_colliders":
 			case "set_renderer_motion_receivers":
 			case "set_renderer_spring_bones":
+			case "set_renderer_all_dynamics_launch_setting":
 			case "set_renderer_dynamics_enabled":
 			case "set_renderer_all_dynamics_enabled":
 			case "reveal_profiles_dir":
