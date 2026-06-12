@@ -5042,13 +5042,6 @@ fn material_has_fur(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &
 		&& material_fur_layer_count(material, shading) > 0
 }
 
-fn startup_texture_compression_mode_for_cache_miss(mode: TextureCompressionMode) -> TextureCompressionMode {
-	match mode {
-		TextureCompressionMode::Balanced => TextureCompressionMode::Source,
-		TextureCompressionMode::Source | TextureCompressionMode::Memory | TextureCompressionMode::Compat => mode,
-	}
-}
-
 fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts) -> bool {
 	if opts.force_simple_basecolor || opts.debug_primitive_colors {
 		return false;
@@ -7361,12 +7354,11 @@ impl SceneMeshes {
 					);
 					let processed_w = processed.width;
 					let processed_h = processed.height;
-					let runtime_texture_compression = startup_texture_compression_mode_for_cache_miss(texture_compression);
 					if gpu_texture_compression_enabled
 						&& gpu_texture_compression.is_none()
 						&& compressed_upload_kind_for_texture(
 							&processed,
-							runtime_texture_compression,
+							texture_compression,
 							texture_compression_advanced,
 							role,
 							texture_compression_bc_supported,
@@ -7378,7 +7370,7 @@ impl SceneMeshes {
 					}
 					let (payload, compressed_cache_event) = texture_upload_payload(
 						processed,
-						runtime_texture_compression,
+						texture_compression,
 						texture_compression_advanced,
 						role,
 						texture_compression_bc_supported,
@@ -10572,18 +10564,6 @@ mod tests {
 		assert_eq!(liltoon_fur_sample_count_for_layer_num(2.0), 7);
 		assert_eq!(liltoon_fur_sample_count_for_layer_num(3.0), 13);
 		assert_eq!(liltoon_fur_sample_count_for_layer_num(12.0), 13);
-	}
-
-	#[test]
-	fn balanced_texture_compression_defers_cache_miss_encoding() {
-		assert_eq!(
-			startup_texture_compression_mode_for_cache_miss(TextureCompressionMode::Balanced),
-			TextureCompressionMode::Source
-		);
-		assert_eq!(
-			startup_texture_compression_mode_for_cache_miss(TextureCompressionMode::Memory),
-			TextureCompressionMode::Memory
-		);
 	}
 
 	#[test]
