@@ -2754,7 +2754,7 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 			("texture_resolution_limit".to_string(), toml::Value::String("off".to_string())),
 			("texture_compression".to_string(), toml::Value::String("balanced".to_string())),
 			("mipmap_filter".to_string(), toml::Value::String("mitchell".to_string())),
-			("render_backend".to_string(), toml::Value::String("dx12".to_string())),
+			("render_backend".to_string(), toml::Value::String("vulkan".to_string())),
 			("block_compression_encoder".to_string(), toml::Value::String("gpu".to_string())),
 			("block_compression_cpu_threads".to_string(), toml::Value::Integer(4)),
 			("processed_texture_cache".to_string(), toml::Value::Boolean(true)),
@@ -4695,15 +4695,21 @@ fn launch_renderer_in_state(
 	let setting = resolve_avatar_setting(setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let manifest_path_text = manifest_path.display().to_string();
-	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-	if !setting.allow_multiple_renderers {
-		if let Some(renderer) = state.renderers.values().find(|renderer| {
-			!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
-				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text.as_str())
-		}) {
-			return Ok(renderer.info.clone());
+	{
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+			return Ok(info);
 		}
 	}
+	let prewarm_warning = prewarm_renderer_shaders_for_setting(&setting, &manifest_path).err();
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+		return Ok(info);
+	}
+	if let Some(warning) = prewarm_warning {
+		push_notification(&mut state, NotificationLevel::Warning, "Shader prewarm failed".to_string(), warning);
+	}
+	push_transparent_window_backend_warning(&mut state, &setting);
 	state.next_id = state.next_id.saturating_add(1);
 	let id = state.next_id;
 	let runtime_bus_key = renderer_runtime_bus_key(id);
@@ -4772,6 +4778,61 @@ fn launch_renderer_in_state(
 		spawn_renderer_launch_control(runtime_bus_key.clone(), command);
 	}
 	Ok(info_for_return)
+}
+
+fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSetting, manifest_path_text: &str) -> Option<RendererInstance> {
+	if setting.allow_multiple_renderers {
+		return None;
+	}
+	state
+		.renderers
+		.values()
+		.find(|renderer| {
+			!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
+				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text)
+		})
+		.map(|renderer| renderer.info.clone())
+}
+
+fn prewarm_renderer_shaders_for_setting(setting: &AvatarSetting, manifest_path: &Path) -> Result<(), String> {
+	if setting.transparent {
+		return Ok(());
+	}
+	if setting.render_backend != "vulkan" {
+		return Ok(());
+	}
+	let mut command = renderer_prewarm_command(manifest_path)?;
+	configure_hidden_child(&mut command);
+	let started = Instant::now();
+	let output = command
+		.stdin(Stdio::null())
+		.output()
+		.map_err(|e| format!("shader prewarm launch failed: {e}"))?;
+	if output.status.success() {
+		return Ok(());
+	}
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let last_line = stderr
+		.lines()
+		.rev()
+		.find(|line| !line.trim().is_empty())
+		.unwrap_or("no stderr output");
+	Err(format!(
+		"Shader prewarm failed after {:.1}s: {last_line}",
+		started.elapsed().as_secs_f64()
+	))
+}
+
+fn push_transparent_window_backend_warning(state: &mut SupervisorState, setting: &AvatarSetting) {
+	if !(cfg!(windows) && setting.transparent && setting.render_backend == "vulkan") {
+		return;
+	}
+	push_notification(
+		state,
+		NotificationLevel::Warning,
+		"Transparent Window uses DX12".to_string(),
+		"透明 Window は Windows で DX12 バックエンドを使います。Vulkan shader prewarm/cache は効かず、起動時間が長くなります。".to_string(),
+	);
 }
 
 #[tauri::command]
@@ -7084,6 +7145,26 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 	Ok(command)
 }
 
+fn renderer_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
+	let repo = repo_root();
+	let exe = renderer_executable_path();
+	if exe.is_file() {
+		let mut command = Command::new(exe);
+		command.arg("--manifest").arg(manifest_path).arg("--prewarm-shaders");
+		prepend_spout2_runtime_path(&mut command);
+		return Ok(command);
+	}
+	let mut command = Command::new("cargo");
+	command
+		.current_dir(repo)
+		.args(["run", "-q", "-p", "un-avatar-render-wgpu", "--bin", "un-avatar-renderer", "--"])
+		.arg("--manifest")
+		.arg(manifest_path)
+		.arg("--prewarm-shaders");
+	prepend_spout2_runtime_path(&mut command);
+	Ok(command)
+}
+
 fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf> {
 	setting
 		.icon_path
@@ -9186,7 +9267,23 @@ mod tests {
 			fps: Some(60.0),
 			cpu_ms: Some(1.0),
 			frame_cpu_total_ms: Some(1.4),
+			frame_motion_apply_ms: None,
 			frame_dynamics_step_ms: Some(0.2),
+			frame_globals_ms: None,
+			frame_surface_acquire_ms: None,
+			frame_target_prepare_ms: None,
+			frame_draw_state_refresh_ms: None,
+			frame_scene_world_ms: None,
+			frame_draw_skin_palette_ms: None,
+			frame_draw_skin_palette_write_ms: None,
+			frame_draw_fur_source_vertices_ms: None,
+			frame_draw_expression_values_ms: None,
+			frame_draw_morph_weights_ms: None,
+			frame_draw_transform_loop_ms: None,
+			frame_bone_collider_debug_ms: None,
+			frame_command_encode_ms: None,
+			frame_submit_present_ms: None,
+			frame_spout_cpu_ms: None,
 			frame_contact_eval_ms: Some(0.1),
 			frame_runtime_action_eval_ms: Some(0.1),
 			gpu_ms: Some(2.0),
