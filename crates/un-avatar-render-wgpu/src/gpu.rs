@@ -6328,7 +6328,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				self.spout.is_some() && draw_scene
+				self.spout.is_some()
 			}
 			#[cfg(not(windows))]
 			{
