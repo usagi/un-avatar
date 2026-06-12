@@ -9686,6 +9686,14 @@ fn log_scene_snapshot_profile_step(step: &str, started: Instant) {
 	);
 }
 
+fn record_scene_snapshot_profile_step(report: &mut ImportReport, profile: bool, step: &str, started: Instant) {
+	let elapsed_ms = started.elapsed().as_millis();
+	report.push_info(format!("glTF scene profile: {step}_ms={elapsed_ms}"));
+	if profile {
+		log_scene_snapshot_profile_step(step, started);
+	}
+}
+
 fn scene_snapshot_from_gltf_inner(
 	document: &gltf::Document,
 	buffers: &[gltf::buffer::Data],
@@ -9698,31 +9706,21 @@ fn scene_snapshot_from_gltf_inner(
 	if materials.is_empty() {
 		materials.push(UnaMaterialPbr::default());
 	}
-	if profile {
-		log_scene_snapshot_profile_step("build_materials", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "build_materials", step_started);
 
 	let step_started = Instant::now();
 	let image_sources = collect_image_source_metadata(document, buffers);
-	if profile {
-		log_scene_snapshot_profile_step("collect_image_source_metadata", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "collect_image_source_metadata", step_started);
 	let step_started = Instant::now();
 	let images = collect_images(image_data, report).map_err(ImportError::Message)?;
-	if profile {
-		log_scene_snapshot_profile_step("collect_images", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "collect_images", step_started);
 	let step_started = Instant::now();
 	refine_liltoon_alpha_from_images(&mut materials, &images);
-	if profile {
-		log_scene_snapshot_profile_step("refine_liltoon_alpha_from_images", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "refine_liltoon_alpha_from_images", step_started);
 
 	let step_started = Instant::now();
 	let skins = build_skins(document, buffers)?;
-	if profile {
-		log_scene_snapshot_profile_step("build_skins", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "build_skins", step_started);
 
 	let step_started = Instant::now();
 	let mut meshes: Vec<Vec<UnaMeshBuffers>> = document.meshes().map(|mesh| Vec::with_capacity(mesh.primitives().len())).collect();
@@ -9782,9 +9780,7 @@ fn scene_snapshot_from_gltf_inner(
 			}
 		}
 	}
-	if profile {
-		log_scene_snapshot_profile_step("read_meshes", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "read_meshes", step_started);
 
 	let step_started = Instant::now();
 	let mut nodes = Vec::with_capacity(document.nodes().len());
@@ -9803,9 +9799,7 @@ fn scene_snapshot_from_gltf_inner(
 			local_bounds: None,
 		});
 	}
-	if profile {
-		log_scene_snapshot_profile_step("read_nodes", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "read_nodes", step_started);
 
 	let step_started = Instant::now();
 	let roots: Vec<usize> = document
@@ -9813,9 +9807,7 @@ fn scene_snapshot_from_gltf_inner(
 		.or_else(|| document.scenes().next())
 		.map(|s| s.nodes().map(|n| n.index()).collect())
 		.unwrap_or_default();
-	if profile {
-		log_scene_snapshot_profile_step("read_roots", step_started);
-	}
+	record_scene_snapshot_profile_step(report, profile, "read_roots", step_started);
 
 	let scene = UnaSceneSnapshot {
 		meshes,
