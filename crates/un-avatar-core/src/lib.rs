@@ -3990,6 +3990,8 @@ pub struct UnaImageSourceMetadata {
 	pub sampler: Option<UnaTextureSampler>,
 	pub byte_length: u64,
 	pub source_hash: u64,
+	/// Encoded source payload retained for runtime lazy decode. This is intentionally
+	/// not serialized; package formats remain the durable source of truth.
 	#[serde(default, skip_serializing, skip_deserializing)]
 	pub encoded_bytes: Option<Vec<u8>>,
 }

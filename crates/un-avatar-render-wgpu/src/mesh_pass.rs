@@ -2163,16 +2163,7 @@ impl SceneImageTextureSlot {
 		}
 		if let SceneImageTextureUpload::Lazy(lazy) = &self.upload {
 			let scene = scene?;
-			let image = scene.images.get(lazy.image_index)?;
-			let source_metadata = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
-			let decoded_source;
-			let upload_image = if let Some(decoded) = source_metadata.and_then(decode_encoded_source_image) {
-				decoded_source = decoded;
-				&decoded_source
-			} else {
-				image
-			};
-			let upload = build_scene_image_texture_upload(upload_image, source_metadata, lazy, gpu_texture_compression)?;
+			let upload = build_lazy_scene_image_texture_upload(scene, lazy, gpu_texture_compression)?;
 			self.upload = upload;
 		}
 		let texture = match &self.upload {
@@ -2197,6 +2188,23 @@ impl SceneImageTextureSlot {
 		self.texture = None;
 		had_resource
 	}
+}
+
+fn build_lazy_scene_image_texture_upload(
+	scene: &UnaSceneSnapshot,
+	lazy: &SceneImageTextureLazyUpload,
+	gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+) -> Option<SceneImageTextureUpload> {
+	let image = scene.images.get(lazy.image_index)?;
+	let source_metadata = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
+	let decoded_source;
+	let upload_image = if let Some(decoded) = source_metadata.and_then(decode_encoded_source_image) {
+		decoded_source = decoded;
+		&decoded_source
+	} else {
+		image
+	};
+	build_scene_image_texture_upload(upload_image, source_metadata, lazy, gpu_texture_compression)
 }
 
 fn decode_encoded_source_image(source: &UnaImageSourceMetadata) -> Option<UnaImageRgba> {

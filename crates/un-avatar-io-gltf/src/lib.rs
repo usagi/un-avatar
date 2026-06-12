@@ -87,7 +87,10 @@ fn placeholder_deferred_image() -> UnaImageRgba {
 	}
 }
 
-fn collect_images(images_data: Vec<Option<gltf::image::Data>>, report: &mut ImportReport) -> Result<Vec<UnaImageRgba>, String> {
+fn collect_scene_images_from_imported_data(
+	images_data: Vec<Option<gltf::image::Data>>,
+	report: &mut ImportReport,
+) -> Result<Vec<UnaImageRgba>, String> {
 	let mut out = Vec::with_capacity(images_data.len());
 	let mut deferred = 0usize;
 	for (index, d) in images_data.into_iter().enumerate() {
@@ -10087,7 +10090,7 @@ fn scene_snapshot_from_gltf_inner(
 		image_sources
 	};
 	let step_started = Instant::now();
-	let images = collect_images(image_data, report).map_err(ImportError::Message)?;
+	let images = collect_scene_images_from_imported_data(image_data, report).map_err(ImportError::Message)?;
 	record_scene_snapshot_profile_step(report, profile, "collect_images", step_started);
 	let step_started = Instant::now();
 	refine_liltoon_alpha_from_images(&mut materials, &images);
