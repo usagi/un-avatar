@@ -28,7 +28,7 @@
 //! - dt 可変だと Verlet 速度 `curr - prev` が前フレームの dt 分の変位を表すため発散していた
 //!   → `accumulator` で固定 dt サブステップ化 (`FIXED_DT = 1/60s`)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -289,6 +289,8 @@ struct JointRuntime {
 	length: f32,
 	/// Collider radius used for this joint tail.
 	hit_radius: f32,
+	/// Whether this joint may later use translation writeback without moving a skinned deformation joint.
+	translation_writeback_allowed: bool,
 	/// 動的: 現在フレームの tail (world)。
 	curr_tail: Vec3,
 	/// 動的: 前フレームの tail (world)。`curr - prev` が Verlet 速度。
@@ -385,6 +387,10 @@ fn write_world_from_snapshot(scene: &UnaSceneSnapshot, world: &mut Vec<Mat4>) {
 			propagate_world_subtree(&scene.nodes, world, r, Mat4::IDENTITY);
 		}
 	}
+}
+
+fn skinned_joint_nodes(scene: &UnaSceneSnapshot) -> BTreeSet<usize> {
+	scene.skins.iter().flat_map(|skin| skin.joint_nodes.iter().copied()).collect()
 }
 
 fn normalize_category_id(value: &str) -> String {
@@ -513,6 +519,7 @@ impl SpringBoneSimulator {
 		}
 		let physics = physics.normalized();
 		let world0 = world_from_snapshot(scene);
+		let skinned_joint_nodes = skinned_joint_nodes(scene);
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
@@ -589,6 +596,8 @@ impl SpringBoneSimulator {
 					.filter(|value| value.is_finite())
 					.unwrap_or(g.parameters.hit_radius)
 					.max(0.0);
+				let translation_writeback_allowed = g.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+					&& !skinned_joint_nodes.contains(&child);
 				joints.push(JointRuntime {
 					parent_node: parent,
 					child_node: child,
@@ -598,6 +607,7 @@ impl SpringBoneSimulator {
 					bone_axis,
 					length,
 					hit_radius,
+					translation_writeback_allowed,
 					curr_tail: curr,
 					prev_tail: curr,
 					rest_lambda: 0.0,
@@ -674,6 +684,15 @@ impl SpringBoneSimulator {
 
 	pub fn bone_colliders(&self) -> &[BoneColliderPrimitive] {
 		&self.bone_colliders
+	}
+
+	pub fn translation_writeback_candidate_count(&self) -> usize {
+		self.runtimes
+			.iter()
+			.filter_map(Option::as_ref)
+			.flat_map(|runtime| runtime.joints.iter())
+			.filter(|joint| joint.translation_writeback_allowed)
+			.count()
 	}
 }
 
@@ -893,7 +912,7 @@ fn solve_xpbd_rest_constraint(curr_tail: Vec3, target_tail: Vec3, compliance: f3
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::{UnaSceneSnapshot, UnaSpringBoneGroup};
+	use un_avatar_core::{UnaDynamicsWritebackMode, UnaSceneSnapshot, UnaSkin, UnaSpringBoneGroup};
 
 	fn node(rot_y_deg: f32, trans: Vec3, children: Vec<usize>) -> UnaSceneNode {
 		let r = Quat::from_rotation_y(rot_y_deg.to_radians());
@@ -1098,6 +1117,48 @@ mod tests {
 		assert_eq!(runtime.joints.len(), 2);
 		assert!((runtime.joints[0].hit_radius - 0.015).abs() < 1e-6);
 		assert!((runtime.joints[1].hit_radius - 0.006).abs() < 1e-6);
+	}
+
+	#[test]
+	fn translation_writeback_candidates_exclude_skinned_joints() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 1);
 	}
 
 	#[test]
