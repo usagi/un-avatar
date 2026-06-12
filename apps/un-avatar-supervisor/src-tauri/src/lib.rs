@@ -4590,13 +4590,9 @@ fn launch_renderer_in_state(
 			return Ok(info);
 		}
 	}
-	let prewarm_warning = prewarm_renderer_shaders_for_setting(&setting, &manifest_path).err();
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
 		return Ok(info);
-	}
-	if let Some(warning) = prewarm_warning {
-		push_notification(&mut state, NotificationLevel::Warning, "Shader prewarm failed".to_string(), warning);
 	}
 	push_transparent_window_backend_warning(&mut state, &setting);
 	state.next_id = state.next_id.saturating_add(1);
@@ -4720,35 +4716,6 @@ fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSettin
 				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text)
 		})
 		.map(|renderer| renderer.info.clone())
-}
-
-fn prewarm_renderer_shaders_for_setting(setting: &AvatarSetting, manifest_path: &Path) -> Result<(), String> {
-	if setting.transparent {
-		return Ok(());
-	}
-	if setting.render_backend != "vulkan" {
-		return Ok(());
-	}
-	let mut command = renderer_prewarm_command(manifest_path)?;
-	configure_hidden_child(&mut command);
-	let started = Instant::now();
-	let output = command
-		.stdin(Stdio::null())
-		.output()
-		.map_err(|e| format!("shader prewarm launch failed: {e}"))?;
-	if output.status.success() {
-		return Ok(());
-	}
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let last_line = stderr
-		.lines()
-		.rev()
-		.find(|line| !line.trim().is_empty())
-		.unwrap_or("no stderr output");
-	Err(format!(
-		"Shader prewarm failed after {:.1}s: {last_line}",
-		started.elapsed().as_secs_f64()
-	))
 }
 
 fn push_transparent_window_backend_warning(state: &mut SupervisorState, setting: &AvatarSetting) {
@@ -6956,26 +6923,6 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 	if let Some(icon_path) = icon_path {
 		command.arg("--icon").arg(icon_path);
 	}
-	prepend_spout2_runtime_path(&mut command);
-	Ok(command)
-}
-
-fn renderer_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
-	let repo = repo_root();
-	let exe = renderer_executable_path();
-	if exe.is_file() {
-		let mut command = Command::new(exe);
-		command.arg("--manifest").arg(manifest_path).arg("--prewarm-shaders");
-		prepend_spout2_runtime_path(&mut command);
-		return Ok(command);
-	}
-	let mut command = Command::new("cargo");
-	command
-		.current_dir(repo)
-		.args(["run", "-q", "-p", "un-avatar-render-wgpu", "--bin", "un-avatar-renderer", "--"])
-		.arg("--manifest")
-		.arg(manifest_path)
-		.arg("--prewarm-shaders");
 	prepend_spout2_runtime_path(&mut command);
 	Ok(command)
 }
