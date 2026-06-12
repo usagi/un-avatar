@@ -2860,6 +2860,52 @@ mod motion_buffer_tests {
 		assert_eq!(scene.nodes[1].transform, tail_current);
 		assert_eq!(scene.nodes[2].transform, rest);
 	}
+
+	#[test]
+	fn reset_runtime_dynamics_nodes_to_rest_for_source_id_restores_translation_writeback_target() {
+		let root_current = [1.0; 16];
+		let mid_current = [2.0; 16];
+		let stretched_tip = [3.0; 16];
+		let other_current = [4.0; 16];
+		let rest = [5.0; 16];
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_node(root_current),
+				test_node(mid_current),
+				test_node(stretched_tip),
+				test_node(other_current),
+			],
+			..Default::default()
+		};
+		let rest_nodes = vec![test_node(rest), test_node(rest), test_node(rest), test_node(rest)];
+		let settings = un_avatar_core::UnaSpringBoneSettings {
+			groups: vec![
+				un_avatar_core::UnaSpringBoneGroup {
+					source_id: "physbone:hair".to_string(),
+					bone_node_indices: vec![0, 1, 2],
+					writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
+					..Default::default()
+				},
+				un_avatar_core::UnaSpringBoneGroup {
+					source_id: "physbone:tail".to_string(),
+					bone_node_indices: vec![3],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+
+		assert!(reset_runtime_dynamics_nodes_to_rest_for_source_id(
+			&mut scene,
+			settings.runtime_dynamics(),
+			&rest_nodes,
+			"physbone:hair",
+		));
+		assert_eq!(scene.nodes[0].transform, rest);
+		assert_eq!(scene.nodes[1].transform, rest);
+		assert_eq!(scene.nodes[2].transform, rest);
+		assert_eq!(scene.nodes[3].transform, other_current);
+	}
 }
 
 /// IPC / status snapshot 用のカメラ状態（profile 保存・UI 表示用）。
