@@ -1413,6 +1413,25 @@
 		}
 	}
 
+	async function prewarmSceneCache(settingId: string): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = "Browser preview: cache warmup requires Tauri";
+			return;
+		}
+		busy = true;
+		try {
+			message = "Warming renderer cache...";
+			const result = await invoke<string>("prewarm_renderer_scene_cache", { settingId });
+			message = result;
+			notifications = await invoke<AppNotification[]>("list_app_notifications");
+		} catch (error) {
+			message = String(error);
+			notifications = await invoke<AppNotification[]>("list_app_notifications");
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function maybeAutoLaunchSelectedOnStartup(): Promise<void> {
 		if (startupAutoLaunchAttempted) return;
 		startupAutoLaunchAttempted = true;
@@ -2898,6 +2917,7 @@
 							if (renderer) return captureRendererScreenshot(renderer);
 						}}
 						onLaunchProfile={(settingId) => launchSetting(settingId, false)}
+						onPrewarmSceneCache={(settingId) => prewarmSceneCache(settingId)}
 						onScrollSection={(section) => scrollProfileSection(section)}
 					/>
 				{/if}

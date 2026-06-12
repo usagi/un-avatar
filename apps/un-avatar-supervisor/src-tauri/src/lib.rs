@@ -1969,6 +1969,7 @@ pub fn run() {
 			list_renderers,
 			launch_renderer,
 			new_avatar_setting,
+			prewarm_renderer_scene_cache,
 			pick_file_path,
 			read_vrm_metadata,
 			save_avatar_thumbnail_icon,
@@ -4668,6 +4669,45 @@ fn launch_renderer_in_state(
 	Ok(info_for_return)
 }
 
+#[tauri::command]
+fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<String, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let started = Instant::now();
+	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
+	configure_hidden_child(&mut command);
+	let output = command
+		.stdin(Stdio::null())
+		.output()
+		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
+	let elapsed = started.elapsed().as_secs_f64();
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	if output.status.success() {
+		let message = format!("Scene cache prewarm finished for {} in {:.1}s", setting.name, elapsed);
+		push_notification(
+			&mut state,
+			NotificationLevel::Info,
+			"Scene cache ready".to_string(),
+			message.clone(),
+		);
+		return Ok(message);
+	}
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let last_line = stderr
+		.lines()
+		.rev()
+		.find(|line| !line.trim().is_empty())
+		.unwrap_or("no stderr output");
+	let message = format!("Scene cache prewarm failed for {} after {:.1}s: {last_line}", setting.name, elapsed);
+	push_notification(
+		&mut state,
+		NotificationLevel::Warning,
+		"Scene cache prewarm failed".to_string(),
+		message.clone(),
+	);
+	Err(message)
+}
+
 fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSetting, manifest_path_text: &str) -> Option<RendererInstance> {
 	if setting.allow_multiple_renderers {
 		return None;
@@ -6936,6 +6976,26 @@ fn renderer_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
 		.arg("--manifest")
 		.arg(manifest_path)
 		.arg("--prewarm-shaders");
+	prepend_spout2_runtime_path(&mut command);
+	Ok(command)
+}
+
+fn renderer_scene_cache_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
+	let repo = repo_root();
+	let exe = renderer_executable_path();
+	if exe.is_file() {
+		let mut command = Command::new(exe);
+		command.arg("--manifest").arg(manifest_path).arg("--prewarm-scene-cache");
+		prepend_spout2_runtime_path(&mut command);
+		return Ok(command);
+	}
+	let mut command = Command::new("cargo");
+	command
+		.current_dir(repo)
+		.args(["run", "-q", "-p", "un-avatar-render-wgpu", "--bin", "un-avatar-renderer", "--"])
+		.arg("--manifest")
+		.arg(manifest_path)
+		.arg("--prewarm-scene-cache");
 	prepend_spout2_runtime_path(&mut command);
 	Ok(command)
 }

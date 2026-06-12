@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { Camera, ExternalLink, Monitor, Play, RefreshCw } from "lucide-svelte";
+	import { Camera, DatabaseZap, ExternalLink, Monitor, Play, RefreshCw } from "lucide-svelte";
 	import type { ProfilePendingRestart } from "./profileStageTypes";
 	import type { RendererRef } from "./rendererTypes";
 
@@ -13,6 +13,7 @@
 	export let onActivateRenderer: (rendererId: number) => void | Promise<void>;
 	export let onCaptureRendererScreenshot: (rendererId: number) => void | Promise<void>;
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
+	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
 </script>
 
 <div class="profile-stage-actions">
@@ -43,6 +44,9 @@
 			><Camera size={14} />{$_("renderers.toolbar.screenshot")}</button
 		>
 	{:else}
+		<button type="button" disabled={busy} onclick={() => onPrewarmSceneCache(settingId)}
+			><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
+		>
 		<button type="button" disabled={busy} onclick={() => onLaunchProfile(settingId)}
 			><Play size={14} />{$_("profiles.actions.quick_run")}</button
 		>

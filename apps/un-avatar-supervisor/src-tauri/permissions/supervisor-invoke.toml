@@ -19,6 +19,7 @@ commands.allow = [
 	"list_renderers",
 	"launch_renderer",
 	"new_avatar_setting",
+	"prewarm_renderer_scene_cache",
 	"pick_file_path",
 	"read_unavatar_wardrobe_options",
 	"read_vrm_metadata",

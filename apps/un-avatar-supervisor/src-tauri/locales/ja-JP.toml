@@ -115,6 +115,7 @@ default = "設定項目にカーソルを合わせると、この領域に短い
 new = "新規"
 quick_run = "Quick Launch"
 quick_run_hint = "選択中のプロファイルで Renderer を起動"
+warm_cache = "キャッシュ準備"
 duplicate = "複製"
 delete = "削除"
 delete_hold_hint = "長押しで削除"

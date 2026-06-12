@@ -107,6 +107,7 @@ default = "Hover a setting to show a short hint here. Keep defaults first, then 
 new = "New"
 quick_run = "Quick Launch"
 quick_run_hint = "Launch a Renderer using the selected profile"
+warm_cache = "Warm Cache"
 duplicate = "Duplicate"
 delete = "Delete"
 delete_hold_hint = "Hold to delete"
