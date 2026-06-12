@@ -4102,9 +4102,26 @@ impl GpuState {
 				.copied()
 				.filter(|index| !image_load_set.contains(index))
 				.collect::<Vec<_>>();
+			let cube_load_indices = self.last_asset_residency_refresh.cube_texture_load_indices.clone();
+			let cube_load_set = cube_load_indices.iter().copied().collect::<BTreeSet<_>>();
+			let cube_unload_indices = self
+				.last_asset_residency_refresh
+				.cube_texture_unload_indices
+				.iter()
+				.copied()
+				.filter(|index| !cube_load_set.contains(index))
+				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
-			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) =
-				sm.apply_image_texture_view_residency(&self.device, &self.queue, runtime.scene, &image_load_indices, &image_unload_indices);
+			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) = sm
+				.apply_image_texture_view_residency(
+					&self.device,
+					&self.queue,
+					runtime.scene,
+					&image_load_indices,
+					&image_unload_indices,
+					&cube_load_indices,
+					&cube_unload_indices,
+				);
 			self.last_image_texture_scoped_load_count = image_texture_bind_load_count;
 			self.last_image_texture_scoped_unload_count = image_texture_bind_unload_count;
 			self.last_cubemap_scoped_load_count = cubemap_load_count;

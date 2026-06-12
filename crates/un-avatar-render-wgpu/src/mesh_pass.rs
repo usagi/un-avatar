@@ -821,6 +821,50 @@ impl TextureUploadSummary {
 	}
 }
 
+#[derive(Default)]
+struct TexturePrepareSummary {
+	images: u32,
+	resident_images: u32,
+	deferred_images: u32,
+	resident_elapsed: Duration,
+	deferred_elapsed: Duration,
+}
+
+impl TexturePrepareSummary {
+	fn record(&mut self, image_index: usize, role: TextureRole, resident: bool, elapsed: Duration) {
+		self.images += 1;
+		if resident {
+			self.resident_images += 1;
+			self.resident_elapsed += elapsed;
+		} else {
+			self.deferred_images += 1;
+			self.deferred_elapsed += elapsed;
+		}
+		let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+		if elapsed_ms >= 50.0 {
+			eprintln!(
+				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms",
+				image_index, resident
+			);
+		}
+	}
+
+	fn log(&self, total: Duration) {
+		let total_ms = total.as_secs_f64() * 1000.0;
+		if total_ms < 50.0 && self.images == 0 {
+			return;
+		}
+		eprintln!(
+			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms",
+			self.images,
+			self.resident_images,
+			self.deferred_images,
+			self.resident_elapsed.as_secs_f64() * 1000.0,
+			self.deferred_elapsed.as_secs_f64() * 1000.0,
+		);
+	}
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SceneMeshBuildProgress {
 	pub phase: &'static str,
@@ -864,6 +908,94 @@ fn log_slow_gpu_scene_primitive(
 	eprintln!(
 		"un-avatar-renderer: gpu scene primitive mesh={mesh_index} primitive={primitive_index} vertices={vertex_count} indices={index_count} morphs={morph_target_count} resident={asset_resident} total={total_ms:.1}ms {details}"
 	);
+}
+
+#[derive(Default)]
+struct MeshPrepareSummary {
+	prepared_primitives: u32,
+	resident_primitives: u32,
+	deferred_primitives: u32,
+	skipped_invisible_primitives: u32,
+	skipped_empty_primitives: u32,
+	expanded_cache_hits: u32,
+	expanded_cache_misses: u32,
+	expanded_uncacheable: u32,
+	vertices: u64,
+	indices: u64,
+	resident_vertex_bytes: u64,
+	resident_index_bytes: u64,
+	deferred_vertex_bytes: u64,
+	deferred_index_bytes: u64,
+	material_elapsed: Duration,
+	dynamic_morph_elapsed: Duration,
+	expand_elapsed: Duration,
+	skinning_elapsed: Duration,
+	skin_palette_elapsed: Duration,
+	buffer_upload_elapsed: Duration,
+	material_bind_elapsed: Duration,
+	morph_resource_elapsed: Duration,
+	fur_resource_elapsed: Duration,
+	draw_push_elapsed: Duration,
+}
+
+impl MeshPrepareSummary {
+	fn record_timings(&mut self, timings: MeshPrepareTimings) {
+		self.material_elapsed += timings.material;
+		self.dynamic_morph_elapsed += timings.dynamic_morphs;
+		self.expand_elapsed += timings.expand;
+		self.skinning_elapsed += timings.skinning;
+		self.skin_palette_elapsed += timings.skin_palette;
+		self.buffer_upload_elapsed += timings.buffer_upload;
+		self.material_bind_elapsed += timings.material_bind;
+		self.morph_resource_elapsed += timings.morph_resources;
+		self.fur_resource_elapsed += timings.fur_resources;
+		self.draw_push_elapsed += timings.draw_push;
+	}
+
+	fn log(&self, total: Duration) {
+		let total_ms = total.as_secs_f64() * 1000.0;
+		if total_ms < 50.0 && self.prepared_primitives == 0 {
+			return;
+		}
+		eprintln!(
+			"un-avatar-renderer: gpu scene mesh prepare summary: total={total_ms:.1}ms prepared={} resident={} deferred={} skipped_invisible={} skipped_empty={} vertices={} indices={} resident_bytes={} deferred_bytes={} cache_hits={} cache_misses={} uncacheable={} material={:.1}ms dynamic_morphs={:.1}ms expand={:.1}ms skinning={:.1}ms skin_palette={:.1}ms buffers={:.1}ms material_bind={:.1}ms morph_resources={:.1}ms fur_resources={:.1}ms draw_push={:.1}ms",
+			self.prepared_primitives,
+			self.resident_primitives,
+			self.deferred_primitives,
+			self.skipped_invisible_primitives,
+			self.skipped_empty_primitives,
+			self.vertices,
+			self.indices,
+			self.resident_vertex_bytes + self.resident_index_bytes,
+			self.deferred_vertex_bytes + self.deferred_index_bytes,
+			self.expanded_cache_hits,
+			self.expanded_cache_misses,
+			self.expanded_uncacheable,
+			self.material_elapsed.as_secs_f64() * 1000.0,
+			self.dynamic_morph_elapsed.as_secs_f64() * 1000.0,
+			self.expand_elapsed.as_secs_f64() * 1000.0,
+			self.skinning_elapsed.as_secs_f64() * 1000.0,
+			self.skin_palette_elapsed.as_secs_f64() * 1000.0,
+			self.buffer_upload_elapsed.as_secs_f64() * 1000.0,
+			self.material_bind_elapsed.as_secs_f64() * 1000.0,
+			self.morph_resource_elapsed.as_secs_f64() * 1000.0,
+			self.fur_resource_elapsed.as_secs_f64() * 1000.0,
+			self.draw_push_elapsed.as_secs_f64() * 1000.0,
+		);
+	}
+}
+
+struct MeshPrepareTimings {
+	material: Duration,
+	dynamic_morphs: Duration,
+	expand: Duration,
+	skinning: Duration,
+	skin_palette: Duration,
+	buffer_upload: Duration,
+	material_bind: Duration,
+	morph_resources: Duration,
+	fur_resources: Duration,
+	draw_push: Duration,
 }
 
 fn scene_primitive_count(scene: &UnaSceneSnapshot) -> u32 {
@@ -1263,7 +1395,6 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 		push_texture_index(&mut indices, mtoon.rim_multiply_texture_index);
 		push_texture_index(&mut indices, mtoon.outline_width_multiply_texture_index);
 		push_texture_index(&mut indices, mtoon.uv_animation_mask_texture_index);
-		push_texture_index(&mut indices, mtoon.reflection_cube_texture_index);
 	}
 	if let Some(liltoon) = material.liltoon_like_runtime() {
 		push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
@@ -1291,7 +1422,6 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 		push_texture_index(&mut indices, liltoon.matcap.second_blend_mask_texture_index);
 		push_texture_index(&mut indices, liltoon.matcap.second_bump_texture_index);
 		push_texture_index(&mut indices, liltoon.reflection.metallic_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.cube_texture_index);
 		push_texture_index(&mut indices, liltoon.reflection.color_texture_index);
 		push_texture_index(&mut indices, liltoon.reflection.smoothness_texture_index);
 		push_texture_index(&mut indices, liltoon.reflection.anisotropy_tangent_texture_index);
@@ -1324,7 +1454,58 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	indices.into_iter().collect()
 }
 
+fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
+	let mut indices = BTreeSet::new();
+	if let Some(mtoon) = material.mtoon_like_runtime() {
+		push_texture_index(&mut indices, mtoon.reflection_cube_texture_index);
+	}
+	if let Some(liltoon) = material.liltoon_like_runtime() {
+		push_texture_index(&mut indices, liltoon_reflection_texture_index(liltoon));
+	}
+	indices.into_iter().collect()
+}
+
+fn material_resident_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
+	let mut indices = BTreeSet::new();
+	indices.extend(material_texture_indices(material));
+	indices.extend(material_cube_texture_indices(material));
+	indices.into_iter().collect()
+}
+
 fn initial_active_texture_indices_for_scene(
+	scene: &UnaSceneSnapshot,
+	effective_visibility: &[bool],
+	asset_residency: &SceneAssetResidencySets,
+	opts: &SceneMeshLoadOpts,
+) -> BTreeSet<usize> {
+	let default_material = UnaMaterialPbr::default();
+	let mut indices = BTreeSet::new();
+	for (node_index, node) in scene.nodes.iter().enumerate() {
+		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
+			continue;
+		}
+		let Some(mesh_index) = node.mesh else { continue };
+		let Some(mesh_primitives) = scene.meshes.get(mesh_index) else {
+			continue;
+		};
+		for (primitive_index, primitive) in mesh_primitives.iter().enumerate() {
+			if !asset_residency.mesh_primitive_resident(mesh_index, primitive_index) {
+				continue;
+			}
+			let material = primitive
+				.material_index
+				.and_then(|material_index| scene.materials.get(material_index))
+				.unwrap_or(&default_material);
+			if material_is_fully_invisible_for_draw(material, opts) {
+				continue;
+			}
+			indices.extend(material_resident_texture_indices(material));
+		}
+	}
+	indices
+}
+
+fn initial_active_2d_texture_indices_for_scene(
 	scene: &UnaSceneSnapshot,
 	effective_visibility: &[bool],
 	asset_residency: &SceneAssetResidencySets,
@@ -1610,6 +1791,8 @@ pub(crate) struct SceneMeshAssetResidencyRefresh {
 	pub(crate) mesh_buffer_unload_indices: Vec<usize>,
 	pub(crate) image_texture_load_indices: Vec<usize>,
 	pub(crate) image_texture_unload_indices: Vec<usize>,
+	pub(crate) cube_texture_load_indices: Vec<usize>,
+	pub(crate) cube_texture_unload_indices: Vec<usize>,
 	pub(crate) material_slot_load_indices: Vec<usize>,
 	pub(crate) material_slot_unload_indices: Vec<usize>,
 }
@@ -1620,6 +1803,8 @@ impl SceneMeshAssetResidencyRefresh {
 			|| !self.mesh_buffer_unload_indices.is_empty()
 			|| !self.image_texture_load_indices.is_empty()
 			|| !self.image_texture_unload_indices.is_empty()
+			|| !self.cube_texture_load_indices.is_empty()
+			|| !self.cube_texture_unload_indices.is_empty()
 			|| !self.material_slot_load_indices.is_empty()
 			|| !self.material_slot_unload_indices.is_empty()
 	}
@@ -2264,6 +2449,7 @@ pub(crate) struct SceneMeshes {
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	image_texture_residency: Vec<bool>,
+	cube_texture_residency: Vec<bool>,
 	material_slot_residency: Vec<bool>,
 	lazy_gpu_texture_compression: Option<GpuTextureCompressionContext>,
 	texture_summary: TextureUploadSummary,
@@ -7296,12 +7482,14 @@ impl SceneMeshes {
 		let effective_visibility = scene_effective_visibility(scene);
 		let initial_active_texture_indices =
 			initial_active_texture_indices_for_scene(scene, &effective_visibility, &asset_residency, &opts);
+		let initial_active_2d_texture_indices =
+			initial_active_2d_texture_indices_for_scene(scene, &effective_visibility, &asset_residency, &opts);
 		let mut total_steps = 4u32
 			.saturating_add(scene_texture_upload_step_count(
 				scene,
 				&texture_roles,
 				texture_max_dimension,
-				Some(&initial_active_texture_indices),
+				Some(&initial_active_2d_texture_indices),
 			))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
@@ -7688,6 +7876,7 @@ impl SceneMeshes {
 		let mut image_views: Vec<wgpu::TextureView> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_slots: Vec<SceneImageTextureSlot> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
+		let mut cube_texture_residency = Vec::with_capacity(scene.images.len());
 		let mut gpu_texture_compression = None;
 		let material_slot_residency = scene
 			.materials
@@ -7695,12 +7884,18 @@ impl SceneMeshes {
 			.enumerate()
 			.map(|(material_index, _)| asset_residency.material_resident(material_index))
 			.collect::<Vec<_>>();
+		let texture_prepare_start = Instant::now();
+		let mut texture_prepare_summary = TexturePrepareSummary::default();
 		for (image_index, im) in scene.images.iter().enumerate() {
+			let image_prepare_start = Instant::now();
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			let image_resident = asset_residency.image_resident(image_index) && initial_active_texture_indices.contains(&image_index);
+			let image_resident = asset_residency.image_resident(image_index) && initial_active_2d_texture_indices.contains(&image_index);
+			let cube_resident = asset_residency.image_resident(image_index) && initial_active_texture_indices.contains(&image_index);
 			image_texture_residency.push(image_resident);
+			cube_texture_residency
+				.push(cube_resident && texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref)));
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
 			if texture_source_is_cube(source_metadata) {
@@ -7710,7 +7905,7 @@ impl SceneMeshes {
 				texture_summary.cubemap_converted_count += 1;
 				let cube_bytes = cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
 				let mut slot = SceneCubeTextureSlot::new(cube_upload);
-				if image_resident {
+				if cube_resident {
 					report(
 						"gpu-upload",
 						total_steps,
@@ -7804,8 +7999,43 @@ impl SceneMeshes {
 						image_views.push(transparent_black_view.clone());
 					}
 					image_texture_slots.push(slot);
+					texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
 					continue;
 				}
+			}
+			if !image_resident && skin_tone_override.is_none() && texture_source_is_cube(source_metadata) {
+				let estimated_mip_bytes = (src_w as u64)
+					.saturating_mul(src_h as u64)
+					.saturating_mul(4)
+					.saturating_mul(estimated_processed_mip_count(src_w, src_h, texture_max_dimension, role) as u64);
+				texture_summary.record_image(src_w, src_h, src_w, src_h, estimated_mip_bytes, false);
+				report(
+					"gpu-upload",
+					total_steps,
+					format!(
+						"Deferring 2D upload for cubemap texture {}/{} ({role:?})",
+						image_index + 1,
+						scene.images.len()
+					),
+				);
+				image_views.push(transparent_black_view.clone());
+				image_texture_slots.push(SceneImageTextureSlot::new(SceneImageTextureUpload::Lazy(
+					SceneImageTextureLazyUpload {
+						image_index,
+						role,
+						mipmap_filter,
+						texture_max_dimension,
+						texture_compression,
+						block_compression_encoder,
+						block_compression_cpu_threads,
+						processed_texture_cache,
+						texture_compression_advanced: texture_compression_advanced.clone(),
+						texture_compression_bc_supported,
+						gpu_texture_compression_enabled,
+					},
+				)));
+				texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
+				continue;
 			}
 			if !image_resident && skin_tone_override.is_none() && !texture_source_is_cube(source_metadata) {
 				let processed_w = texture_max_dimension.map_or(src_w, |max_dimension| src_w.min(max_dimension));
@@ -7836,6 +8066,7 @@ impl SceneMeshes {
 						gpu_texture_compression_enabled,
 					},
 				)));
+				texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
 				continue;
 			}
 			let rgba_compat = im.rgba8_compat_pixels();
@@ -8012,7 +8243,9 @@ impl SceneMeshes {
 				image_views.push(transparent_black_view.clone());
 			}
 			image_texture_slots.push(slot);
+			texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
 		}
+		texture_prepare_summary.log(texture_prepare_start.elapsed());
 
 		assert_eq!(
 			image_views.len(),
@@ -8063,6 +8296,8 @@ impl SceneMeshes {
 		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
 		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
+		let mesh_prepare_start = Instant::now();
+		let mut mesh_prepare_summary = MeshPrepareSummary::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
 			let active = effective_visibility.get(ni).copied().unwrap_or(false);
 			let Some(mesh_i) = node.mesh else { continue };
@@ -8082,6 +8317,7 @@ impl SceneMeshes {
 						format!("primitive mesh={mesh_i} primitive={prim_i} skipped invisible material"),
 						primitive_start.elapsed(),
 					);
+					mesh_prepare_summary.skipped_invisible_primitives += 1;
 					report(
 						"gpu-upload",
 						total_steps,
@@ -8106,10 +8342,12 @@ impl SceneMeshes {
 				});
 				let exp = if let Some(cache_key) = expanded_cache_key.as_ref() {
 					if let Some(exp) = expanded_primitive_cache.get(cache_key).cloned() {
+						mesh_prepare_summary.expanded_cache_hits += 1;
 						let mut exp = exp;
 						exp.indices = primitive_indices(buf);
 						Some(exp)
 					} else {
+						mesh_prepare_summary.expanded_cache_misses += 1;
 						let exp = expand_primitive_with_cached_morph(
 							buf,
 							Some(&dynamic_morph_targets),
@@ -8133,6 +8371,7 @@ impl SceneMeshes {
 						exp
 					}
 				} else {
+					mesh_prepare_summary.expanded_uncacheable += 1;
 					let exp = expand_primitive_with_cached_morph(
 						buf,
 						Some(&dynamic_morph_targets),
@@ -8157,6 +8396,7 @@ impl SceneMeshes {
 						format!("primitive mesh={mesh_i} primitive={prim_i} expand skipped"),
 						primitive_start.elapsed(),
 					);
+					mesh_prepare_summary.skipped_empty_primitives += 1;
 					continue;
 				};
 				let expand_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
@@ -8189,6 +8429,18 @@ impl SceneMeshes {
 				let index_buffer_bytes = buffer_upload.index_buffer_bytes(index_format);
 				let index_count = buffer_upload.indices.len() as u32;
 				let asset_resident = asset_residency.mesh_primitive_resident(mesh_i, prim_i);
+				mesh_prepare_summary.prepared_primitives += 1;
+				mesh_prepare_summary.vertices += buffer_upload.vertices.len() as u64;
+				mesh_prepare_summary.indices += buffer_upload.indices.len() as u64;
+				if asset_resident {
+					mesh_prepare_summary.resident_primitives += 1;
+					mesh_prepare_summary.resident_vertex_bytes += vertex_buffer_bytes;
+					mesh_prepare_summary.resident_index_bytes += index_buffer_bytes;
+				} else {
+					mesh_prepare_summary.deferred_primitives += 1;
+					mesh_prepare_summary.deferred_vertex_bytes += vertex_buffer_bytes;
+					mesh_prepare_summary.deferred_index_bytes += index_buffer_bytes;
+				}
 				let (vertex_buffer, index_buffer) = if asset_resident {
 					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue, index_format);
 					(Some(vertex_buffer), Some(index_buffer))
@@ -8349,6 +8601,18 @@ impl SceneMeshes {
 					world_origin: Vec3::ZERO,
 				});
 				let draw_push_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
+				mesh_prepare_summary.record_timings(MeshPrepareTimings {
+					material: material_elapsed,
+					dynamic_morphs: dynamic_morph_elapsed,
+					expand: expand_elapsed,
+					skinning: skinning_elapsed,
+					skin_palette: skin_palette_elapsed,
+					buffer_upload: buffer_upload_elapsed,
+					material_bind: material_bind_elapsed,
+					morph_resources: morph_resource_elapsed,
+					fur_resources: fur_resource_elapsed,
+					draw_push: draw_push_elapsed,
+				});
 				log_slow_gpu_scene_primitive(
 					mesh_i,
 					prim_i,
@@ -8372,6 +8636,7 @@ impl SceneMeshes {
 				);
 			}
 		}
+		mesh_prepare_summary.log(mesh_prepare_start.elapsed());
 
 		let draw_state = build_draw_order(&draws, &opts);
 		let mut required_pipeline_kinds = BTreeSet::new();
@@ -8622,6 +8887,7 @@ impl SceneMeshes {
 			needs_screen_refraction: draw_state.needs_screen_refraction,
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			image_texture_residency,
+			cube_texture_residency,
 			material_slot_residency,
 			lazy_gpu_texture_compression: gpu_texture_compression,
 			texture_summary,
@@ -8647,7 +8913,15 @@ impl SceneMeshes {
 				),
 			);
 			let texture_residency_start = Instant::now();
-			scene_meshes.apply_image_texture_view_residency(device, queue, scene, &active_gaps.inactive_image_texture_indices, &[]);
+			scene_meshes.apply_image_texture_view_residency(
+				device,
+				queue,
+				scene,
+				&active_gaps.inactive_image_texture_indices,
+				&[],
+				&[],
+				&[],
+			);
 			log_slow_gpu_scene_step("active image texture residency upload", texture_residency_start.elapsed());
 			report(
 				"gpu-upload",
@@ -9400,11 +9674,34 @@ impl SceneMeshes {
 				.enumerate()
 				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
 		);
+		refresh.cube_texture_load_indices = residency_load_indices(
+			self.cube_texture_residency.iter().copied(),
+			scene.images.iter().enumerate().map(|(image_index, _)| {
+				asset_residency.image_resident(image_index)
+					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
+			}),
+		);
+		refresh.cube_texture_unload_indices = residency_unload_indices(
+			self.cube_texture_residency.iter().copied(),
+			scene.images.iter().enumerate().map(|(image_index, _)| {
+				asset_residency.image_resident(image_index)
+					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
+			}),
+		);
 		self.image_texture_residency = scene
 			.images
 			.iter()
 			.enumerate()
 			.map(|(image_index, _)| asset_residency.image_resident(image_index))
+			.collect();
+		self.cube_texture_residency = scene
+			.images
+			.iter()
+			.enumerate()
+			.map(|(image_index, _)| {
+				asset_residency.image_resident(image_index)
+					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
+			})
 			.collect();
 		refresh.material_slot_load_indices = residency_load_indices(
 			self.material_slot_residency.iter().copied(),
@@ -9638,9 +9935,10 @@ impl SceneMeshes {
 		scene: &UnaSceneSnapshot,
 		load_indices: &[usize],
 		unload_indices: &[usize],
+		cube_load_indices: &[usize],
+		cube_unload_indices: &[usize],
 	) -> (usize, usize, usize, usize) {
 		let mut loaded = 0;
-		let mut cube_loaded = 0;
 		for index in load_indices {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
 				continue;
@@ -9653,13 +9951,8 @@ impl SceneMeshes {
 			};
 			*current_view = source_view;
 			loaded += 1;
-			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
-				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue);
-				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
-			}
 		}
 		let mut unloaded = 0;
-		let mut cube_unloaded = 0;
 		for index in unload_indices {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
 				continue;
@@ -9671,6 +9964,16 @@ impl SceneMeshes {
 			if slot.unload() {
 				unloaded += 1;
 			}
+		}
+		let mut cube_loaded = 0;
+		for index in cube_load_indices {
+			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
+				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue);
+				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
+			}
+		}
+		let mut cube_unloaded = 0;
+		for index in cube_unload_indices {
 			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
 				if let Some(current_cube_view) = self.texture_views.cubes.get_mut(*index) {
 					*current_cube_view = None;
@@ -9929,6 +10232,23 @@ mod tests {
 		};
 
 		assert_eq!(material_texture_indices(&mat), vec![3, 4, 7]);
+	}
+
+	#[test]
+	fn material_texture_indices_keep_reflection_cube_separate() {
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			base_color_texture_index: Some(3),
+			mtoon: Some(UnaMtoonMaterial {
+				reflection_cube_texture_index: Some(9),
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(material_texture_indices(&mat), vec![3]);
+		assert_eq!(material_cube_texture_indices(&mat), vec![9]);
+		assert_eq!(material_resident_texture_indices(&mat), vec![3, 9]);
 	}
 
 	#[test]
