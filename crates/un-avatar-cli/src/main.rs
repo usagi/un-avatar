@@ -15,9 +15,10 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
-	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count, UnaAlphaMode,
-	UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger,
-	UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count,
+	una_dynamics_translation_writeback_target_count, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat,
+	UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel,
+	UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -555,7 +556,9 @@ struct DiagnoseDynamicsSummary {
 	stretch_limit_group_count: usize,
 	rotation_translation_writeback_group_count: usize,
 	translation_writeback_candidate_count: usize,
+	translation_writeback_target_count: usize,
 	stretch_translation_writeback_group_count: usize,
+	stretch_translation_writeback_target_group_count: usize,
 	grabbing_enabled_group_count: usize,
 	posing_enabled_group_count: usize,
 	collider_count: usize,
@@ -659,6 +662,7 @@ struct DiagnoseDynamicsGroupSummary {
 	max_stretch: Option<f32>,
 	writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
 	translation_writeback_candidate_count: usize,
+	translation_writeback_target_count: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	allow_grabbing: Option<bool>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -2109,6 +2113,11 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 					group.writeback_mode,
 					&group.bone_node_indices,
 				),
+				translation_writeback_target_count: una_dynamics_translation_writeback_target_count(
+					runtime.scene,
+					group.writeback_mode,
+					&group.bone_node_indices,
+				),
 				allow_grabbing: group.interaction.as_ref().and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.as_ref().and_then(|interaction| interaction.allow_posing),
 				interaction_parameter: group
@@ -2218,6 +2227,10 @@ fn dynamics_translation_writeback_candidate_total(groups: &[&DiagnoseDynamicsGro
 	groups.iter().map(|group| group.translation_writeback_candidate_count).sum()
 }
 
+fn dynamics_translation_writeback_target_total(groups: &[&DiagnoseDynamicsGroupSummary]) -> usize {
+	groups.iter().map(|group| group.translation_writeback_target_count).sum()
+}
+
 fn dynamics_stretch_translation_writeback_group_count(groups: &[DiagnoseDynamicsGroupSummary]) -> usize {
 	groups
 		.iter()
@@ -2227,6 +2240,18 @@ fn dynamics_stretch_translation_writeback_group_count(groups: &[DiagnoseDynamics
 				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
 				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
 				&& group.translation_writeback_candidate_count > 0
+		})
+		.count()
+}
+
+fn dynamics_stretch_translation_writeback_target_group_count(groups: &[DiagnoseDynamicsGroupSummary]) -> usize {
+	groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+				&& group.translation_writeback_target_count > 0
 		})
 		.count()
 }
@@ -4413,13 +4438,16 @@ fn build_diagnose_report(
 	let unsupported_writeback_groups = dynamics_unsupported_writeback_groups(&dynamics_groups);
 	let rotation_translation_writeback_group_count = unsupported_writeback_groups.len();
 	let translation_writeback_candidate_count = dynamics_translation_writeback_candidate_total(&unsupported_writeback_groups);
+	let translation_writeback_target_count = dynamics_translation_writeback_target_total(&unsupported_writeback_groups);
 	let stretch_translation_writeback_group_count = dynamics_stretch_translation_writeback_group_count(&dynamics_groups);
+	let stretch_translation_writeback_target_group_count = dynamics_stretch_translation_writeback_target_group_count(&dynamics_groups);
 	if !unsupported_writeback_groups.is_empty() {
 		let samples = dynamics_unsupported_writeback_samples(&dynamics_groups);
 		warnings.push(format!(
-			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={}{}",
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={} target_joints={}{}",
 			rotation_translation_writeback_group_count,
 			translation_writeback_candidate_count,
+			translation_writeback_target_count,
 			format_warning_samples(&samples)
 		));
 	}
@@ -4478,7 +4506,9 @@ fn build_diagnose_report(
 		stretch_limit_group_count: dynamics_counts.stretch_limit_groups,
 		rotation_translation_writeback_group_count,
 		translation_writeback_candidate_count,
+		translation_writeback_target_count,
 		stretch_translation_writeback_group_count,
+		stretch_translation_writeback_target_group_count,
 		grabbing_enabled_group_count: dynamics_counts.grabbing_enabled_groups,
 		posing_enabled_group_count: dynamics_counts.posing_enabled_groups,
 		collider_count: dynamics_counts.colliders,
@@ -5392,7 +5422,7 @@ fn run_diagnose(
 		println!("vrm: none");
 	}
 	println!(
-		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} rotation_translation_writeback_groups={} translation_writeback_candidates={} stretch_translation_writeback_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_colliders={} source_unknown_shape_colliders={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={} source_interaction_parameters={}",
+		"dynamics: groups={} vrm_spring={} vrc_physbone={} unknown={} limit_groups={} angle_limit_groups={} stretch_limit_groups={} rotation_translation_writeback_groups={} translation_writeback_candidates={} translation_writeback_targets={} stretch_translation_writeback_groups={} stretch_translation_writeback_target_groups={} grabbing_groups={} posing_groups={} colliders={} collider_vrm_spring={} collider_vrc_physbone={} collider_unknown={} contacts={} contact_senders={} contact_receivers={} contact_parameter_declarations={} contact_parameter_emission={} contact_probes={} contact_probe_would_emit={} contact_parameter_emissions={} contact_parameter_emitted={} contact_parameter_reset_to_zero={} constraint_refs={} vrc_constraint_refs={} source_limits={} source_angle_limits={} source_stretch_limits={} source_curves={} source_radius_curves={} source_angle_limit_curves={} source_stretch_limit_curves={} source_colliders={} source_unknown_shape_colliders={} source_collision_disabled={} source_inside_bounds_colliders={} source_grabbing={} source_posing={} source_interaction_parameters={}",
 		report.dynamics.group_count,
 		report.dynamics.vrm_spring_bone_group_count,
 		report.dynamics.vrc_physbone_group_count,
@@ -5402,7 +5432,9 @@ fn run_diagnose(
 		report.dynamics.stretch_limit_group_count,
 		report.dynamics.rotation_translation_writeback_group_count,
 		report.dynamics.translation_writeback_candidate_count,
+		report.dynamics.translation_writeback_target_count,
 		report.dynamics.stretch_translation_writeback_group_count,
+		report.dynamics.stretch_translation_writeback_target_group_count,
 		report.dynamics.grabbing_enabled_group_count,
 		report.dynamics.posing_enabled_group_count,
 		report.dynamics.collider_count,
@@ -5452,7 +5484,7 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} runtime_override={:?} id={:?} bones={} root={:?} tip={:?} writeback={:?} translation_candidates={} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} runtime_override={:?} id={:?} bones={} root={:?} tip={:?} writeback={:?} translation_candidates={} translation_targets={} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.enabled,
@@ -5464,6 +5496,7 @@ fn run_diagnose(
 			group.tip_path.as_deref().or(group.tip_node.map(|_| "#")),
 			group.writeback_mode,
 			group.translation_writeback_candidate_count,
+			group.translation_writeback_target_count,
 			group.stiffness,
 			group.drag_force,
 			group.gravity_power,
@@ -7577,10 +7610,13 @@ mod tests {
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
 			&& w.contains("candidate_joints=1")
+			&& w.contains("target_joints=1")
 			&& w.contains("physbone:hair@root")));
 		assert_eq!(report.dynamics.rotation_translation_writeback_group_count, 1);
 		assert_eq!(report.dynamics.translation_writeback_candidate_count, 1);
+		assert_eq!(report.dynamics.translation_writeback_target_count, 1);
 		assert_eq!(report.dynamics.stretch_translation_writeback_group_count, 1);
+		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 1);
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
 			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));

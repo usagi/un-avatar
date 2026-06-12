@@ -1639,8 +1639,11 @@ impl AvatarApp {
 					runtime_dynamics_unsupported_writeback_group_count(&status) as u32;
 				status.dynamics_translation_writeback_candidate_count =
 					runtime_dynamics_unsupported_writeback_candidate_count(&status) as u32;
+				status.dynamics_translation_writeback_target_count = runtime_dynamics_unsupported_writeback_target_count(&status) as u32;
 				status.dynamics_stretch_translation_writeback_group_count =
 					runtime_dynamics_stretch_translation_writeback_group_count(&status) as u32;
+				status.dynamics_stretch_translation_writeback_target_group_count =
+					runtime_dynamics_stretch_translation_writeback_target_group_count(&status) as u32;
 				status.dynamics_interaction_hooks = gpu.map(|g| g.dynamics_interaction_hooks()).unwrap_or_default();
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
@@ -3259,9 +3262,10 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	if unsupported_writeback_groups > 0 {
 		let samples = runtime_dynamics_unsupported_writeback_samples(status);
 		warnings.push(format!(
-			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={}{}",
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={} target_joints={}{}",
 			unsupported_writeback_groups,
 			status.dynamics_translation_writeback_candidate_count,
+			status.dynamics_translation_writeback_target_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -3343,6 +3347,15 @@ fn runtime_dynamics_unsupported_writeback_candidate_count(status: &RendererRunti
 		.sum()
 }
 
+fn runtime_dynamics_unsupported_writeback_target_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.map(|group| group.translation_writeback_target_count)
+		.sum()
+}
+
 fn runtime_dynamics_stretch_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
 	status
 		.dynamics_groups
@@ -3353,6 +3366,19 @@ fn runtime_dynamics_stretch_translation_writeback_group_count(status: &RendererR
 				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
 				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
 				&& group.translation_writeback_candidate_count > 0
+		})
+		.count()
+}
+
+fn runtime_dynamics_stretch_translation_writeback_target_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+				&& group.translation_writeback_target_count > 0
 		})
 		.count()
 }
@@ -3602,7 +3628,11 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_translation_writeback_candidate_count: u32,
 	#[serde(default)]
+	dynamics_translation_writeback_target_count: u32,
+	#[serde(default)]
 	dynamics_stretch_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_target_group_count: u32,
 	#[serde(default)]
 	dynamics_grabbing_enabled_group_count: u32,
 	#[serde(default)]
@@ -3764,7 +3794,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_stretch_limit_group_count: 0,
 		dynamics_rotation_translation_writeback_group_count: 0,
 		dynamics_translation_writeback_candidate_count: 0,
+		dynamics_translation_writeback_target_count: 0,
 		dynamics_stretch_translation_writeback_group_count: 0,
+		dynamics_stretch_translation_writeback_target_group_count: 0,
 		dynamics_grabbing_enabled_group_count: 0,
 		dynamics_posing_enabled_group_count: 0,
 		dynamics_collider_count: 0,
@@ -5016,7 +5048,9 @@ mod tests {
 		status.dynamics_stretch_limit_group_count = 2;
 		status.dynamics_rotation_translation_writeback_group_count = 1;
 		status.dynamics_translation_writeback_candidate_count = 1;
+		status.dynamics_translation_writeback_target_count = 1;
 		status.dynamics_stretch_translation_writeback_group_count = 1;
+		status.dynamics_stretch_translation_writeback_target_group_count = 1;
 		status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
 			index: 0,
 			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
@@ -5047,6 +5081,7 @@ mod tests {
 			max_stretch: Some(0.25),
 			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 			translation_writeback_candidate_count: 1,
+			translation_writeback_target_count: 1,
 			allow_grabbing: None,
 			allow_posing: None,
 			interaction_parameter: String::new(),
@@ -5117,6 +5152,7 @@ mod tests {
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
 			&& warning.contains("candidate_joints=1")
+			&& warning.contains("target_joints=1")
 			&& warning.contains("physbone:hair@root/hair")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
@@ -5435,6 +5471,7 @@ mod tests {
 				max_stretch: Some(0.0),
 				writeback_mode: Default::default(),
 				translation_writeback_candidate_count: 0,
+				translation_writeback_target_count: 0,
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
 				interaction_parameter: "HairPB".to_string(),
@@ -5604,6 +5641,12 @@ mod tests {
 			Some(0)
 		);
 		assert_eq!(
+			dynamics_groups[0]
+				.get("translation_writeback_target_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
 			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
 			Some(true)
 		);
@@ -5714,7 +5757,19 @@ mod tests {
 		);
 		assert_eq!(
 			snapshot
+				.get("dynamics_translation_writeback_target_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
 				.get("dynamics_stretch_translation_writeback_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_stretch_translation_writeback_target_group_count")
 				.and_then(|value| value.as_u64()),
 			Some(0)
 		);

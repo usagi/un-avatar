@@ -30,7 +30,9 @@
 			group.translation_writeback_candidate_count == null
 				? ""
 				: `, translationCandidates=${group.translation_writeback_candidate_count}`;
-		return `${path} (${group.source_kind}, ${state}, authored=${group.authored_enabled}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${parameter})`;
+		const translationTargets =
+			group.translation_writeback_target_count == null ? "" : `, translationTargets=${group.translation_writeback_target_count}`;
+		return `${path} (${group.source_kind}, ${state}, authored=${group.authored_enabled}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${translationTargets}${parameter})`;
 	}
 
 	function interactionHookLabel(hook: RendererRuntimeDiagnosticsData["dynamics_interaction_hooks"][number]): string {
@@ -168,7 +170,9 @@
 						constraints: runtimeStatus.dynamics_constraint_ref_count,
 						writeback: runtimeStatus.dynamics_rotation_translation_writeback_group_count,
 						writebackCandidates: runtimeStatus.dynamics_translation_writeback_candidate_count,
+						writebackTargets: runtimeStatus.dynamics_translation_writeback_target_count,
 						stretchWriteback: runtimeStatus.dynamics_stretch_translation_writeback_group_count,
+						stretchWritebackTargets: runtimeStatus.dynamics_stretch_translation_writeback_target_group_count,
 					},
 				})}
 			</dd>

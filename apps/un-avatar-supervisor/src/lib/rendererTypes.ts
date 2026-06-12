@@ -110,6 +110,7 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	max_stretch?: number;
 	writeback_mode?: string;
 	translation_writeback_candidate_count?: number;
+	translation_writeback_target_count?: number;
 	allow_grabbing?: boolean;
 	allow_posing?: boolean;
 	interaction_parameter?: string;
@@ -401,7 +402,9 @@ export type RendererRuntimeStatus = {
 	dynamics_stretch_limit_group_count: number;
 	dynamics_rotation_translation_writeback_group_count: number;
 	dynamics_translation_writeback_candidate_count: number;
+	dynamics_translation_writeback_target_count: number;
 	dynamics_stretch_translation_writeback_group_count: number;
+	dynamics_stretch_translation_writeback_target_group_count: number;
 	dynamics_grabbing_enabled_group_count: number;
 	dynamics_posing_enabled_group_count: number;
 	dynamics_collider_count: number;
@@ -489,7 +492,9 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "dynamics_constraint_ref_count"
 	| "dynamics_rotation_translation_writeback_group_count"
 	| "dynamics_translation_writeback_candidate_count"
+	| "dynamics_translation_writeback_target_count"
 	| "dynamics_stretch_translation_writeback_group_count"
+	| "dynamics_stretch_translation_writeback_target_group_count"
 	| "dynamics_warnings"
 	| "runtime_actions"
 	| "runtime_action_target_write_collisions"

@@ -15,8 +15,9 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
-	una_dynamics_translation_writeback_candidate_count, UnaDocument, UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect,
-	UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
+	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
+	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
+	UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
@@ -325,6 +326,7 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) max_stretch: Option<f32>,
 	pub(crate) writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
 	pub(crate) translation_writeback_candidate_count: usize,
+	pub(crate) translation_writeback_target_count: usize,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) allow_grabbing: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1226,6 +1228,11 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				translation_writeback_candidate_count: scene
 					.map(|scene| {
 						una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, group.chain.bone_node_indices)
+					})
+					.unwrap_or(0),
+				translation_writeback_target_count: scene
+					.map(|scene| {
+						una_dynamics_translation_writeback_target_count(scene, group.writeback_mode, group.chain.bone_node_indices)
 					})
 					.unwrap_or(0),
 				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),

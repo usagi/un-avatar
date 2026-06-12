@@ -1171,6 +1171,29 @@ pub fn una_dynamics_translation_writeback_candidate_count(
 		.count()
 }
 
+pub fn una_dynamics_translation_writeback_target_count(
+	scene: &UnaSceneSnapshot,
+	writeback_mode: UnaDynamicsWritebackMode,
+	bone_node_indices: &[usize],
+) -> usize {
+	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation || bone_node_indices.len() < 2 {
+		return 0;
+	}
+	let mut count = 0;
+	for joint_index in 0..bone_node_indices.len() - 1 {
+		if joint_index + 2 < bone_node_indices.len() {
+			let anchor = bone_node_indices[joint_index + 1];
+			let target = bone_node_indices[joint_index + 2];
+			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+		} else if bone_node_indices.len() == 2 {
+			let anchor = bone_node_indices[joint_index];
+			let target = bone_node_indices[joint_index + 1];
+			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+		}
+	}
+	count
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnaDynamicsGroup<'a> {
 	pub source_kind: UnaDynamicsSourceKind,
@@ -8719,6 +8742,39 @@ mod tests {
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_candidate_count(&scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 2, 4]),
+			0
+		);
+	}
+
+	#[test]
+	fn dynamics_translation_writeback_targets_follow_tail_mapping() {
+		let unskinned_scene = UnaSceneSnapshot::default();
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1, 2],),
+			1
+		);
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1],),
+			1
+		);
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 1, 2]),
+			0
+		);
+
+		let skinned_target_scene = UnaSceneSnapshot {
+			skins: vec![UnaSkin {
+				joint_nodes: vec![2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(
+				&skinned_target_scene,
+				UnaDynamicsWritebackMode::RotationTranslation,
+				&[0, 1, 2],
+			),
 			0
 		);
 	}
