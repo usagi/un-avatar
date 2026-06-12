@@ -237,6 +237,13 @@ struct RendererRuntimeStatus {
 	frame_surface_acquire_ms: Option<f32>,
 	frame_target_prepare_ms: Option<f32>,
 	frame_draw_state_refresh_ms: Option<f32>,
+	frame_scene_world_ms: Option<f32>,
+	frame_draw_skin_palette_ms: Option<f32>,
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	frame_draw_expression_values_ms: Option<f32>,
+	frame_draw_morph_weights_ms: Option<f32>,
+	frame_draw_transform_loop_ms: Option<f32>,
 	frame_bone_collider_debug_ms: Option<f32>,
 	frame_command_encode_ms: Option<f32>,
 	frame_submit_present_ms: Option<f32>,
@@ -566,6 +573,20 @@ struct RendererRuntimeTelemetry {
 	frame_target_prepare_ms: Option<f32>,
 	#[serde(default)]
 	frame_draw_state_refresh_ms: Option<f32>,
+	#[serde(default)]
+	frame_scene_world_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_skin_palette_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_expression_values_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_morph_weights_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_transform_loop_ms: Option<f32>,
 	#[serde(default)]
 	frame_bone_collider_debug_ms: Option<f32>,
 	#[serde(default)]
@@ -5808,6 +5829,13 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		frame_surface_acquire_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_surface_acquire_ms),
 		frame_target_prepare_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_target_prepare_ms),
 		frame_draw_state_refresh_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_state_refresh_ms),
+		frame_scene_world_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_scene_world_ms),
+		frame_draw_skin_palette_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_skin_palette_ms),
+		frame_draw_skin_palette_write_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_skin_palette_write_ms),
+		frame_draw_fur_source_vertices_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_fur_source_vertices_ms),
+		frame_draw_expression_values_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_expression_values_ms),
+		frame_draw_morph_weights_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_morph_weights_ms),
+		frame_draw_transform_loop_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_transform_loop_ms),
 		frame_bone_collider_debug_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_bone_collider_debug_ms),
 		frame_command_encode_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_command_encode_ms),
 		frame_submit_present_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_submit_present_ms),

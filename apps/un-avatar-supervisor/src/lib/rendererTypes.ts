@@ -354,6 +354,13 @@ export type RendererRuntimeStatus = {
 	frame_surface_acquire_ms?: number | null;
 	frame_target_prepare_ms?: number | null;
 	frame_draw_state_refresh_ms?: number | null;
+	frame_scene_world_ms?: number | null;
+	frame_draw_skin_palette_ms?: number | null;
+	frame_draw_skin_palette_write_ms?: number | null;
+	frame_draw_fur_source_vertices_ms?: number | null;
+	frame_draw_expression_values_ms?: number | null;
+	frame_draw_morph_weights_ms?: number | null;
+	frame_draw_transform_loop_ms?: number | null;
 	frame_bone_collider_debug_ms?: number | null;
 	frame_command_encode_ms?: number | null;
 	frame_submit_present_ms?: number | null;

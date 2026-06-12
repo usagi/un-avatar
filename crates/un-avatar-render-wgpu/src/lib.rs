@@ -1561,6 +1561,13 @@ impl AvatarApp {
 			status.frame_surface_acquire_ms = Some(timings.surface_acquire_ms);
 			status.frame_target_prepare_ms = Some(timings.target_prepare_ms);
 			status.frame_draw_state_refresh_ms = Some(timings.draw_state_refresh_ms);
+			status.frame_scene_world_ms = Some(timings.scene_world_ms);
+			status.frame_draw_skin_palette_ms = Some(timings.draw_skin_palette_ms);
+			status.frame_draw_skin_palette_write_ms = Some(timings.draw_skin_palette_write_ms);
+			status.frame_draw_fur_source_vertices_ms = Some(timings.draw_fur_source_vertices_ms);
+			status.frame_draw_expression_values_ms = Some(timings.draw_expression_values_ms);
+			status.frame_draw_morph_weights_ms = Some(timings.draw_morph_weights_ms);
+			status.frame_draw_transform_loop_ms = Some(timings.draw_transform_loop_ms);
 			status.frame_bone_collider_debug_ms = Some(timings.bone_collider_debug_ms);
 			status.frame_command_encode_ms = Some(timings.command_encode_ms);
 			status.frame_submit_present_ms = Some(timings.submit_present_ms);
@@ -3533,6 +3540,13 @@ struct RendererRuntimeSnapshot {
 	frame_surface_acquire_ms: Option<f32>,
 	frame_target_prepare_ms: Option<f32>,
 	frame_draw_state_refresh_ms: Option<f32>,
+	frame_scene_world_ms: Option<f32>,
+	frame_draw_skin_palette_ms: Option<f32>,
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	frame_draw_expression_values_ms: Option<f32>,
+	frame_draw_morph_weights_ms: Option<f32>,
+	frame_draw_transform_loop_ms: Option<f32>,
 	frame_bone_collider_debug_ms: Option<f32>,
 	frame_command_encode_ms: Option<f32>,
 	frame_submit_present_ms: Option<f32>,
@@ -3778,6 +3792,13 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		frame_surface_acquire_ms: None,
 		frame_target_prepare_ms: None,
 		frame_draw_state_refresh_ms: None,
+		frame_scene_world_ms: None,
+		frame_draw_skin_palette_ms: None,
+		frame_draw_skin_palette_write_ms: None,
+		frame_draw_fur_source_vertices_ms: None,
+		frame_draw_expression_values_ms: None,
+		frame_draw_morph_weights_ms: None,
+		frame_draw_transform_loop_ms: None,
 		frame_bone_collider_debug_ms: None,
 		frame_command_encode_ms: None,
 		frame_submit_present_ms: None,

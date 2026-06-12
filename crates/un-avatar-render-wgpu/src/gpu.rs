@@ -30,9 +30,9 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts,
-		SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes,
-		TextureUploadSummary,
+		AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier, SceneMeshActiveResidencyGaps,
+		SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts,
+		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
 	},
 	model_loader,
 	options::{
@@ -2224,6 +2224,13 @@ pub struct FrameTimings {
 	pub surface_acquire_ms: f32,
 	pub target_prepare_ms: f32,
 	pub draw_state_refresh_ms: f32,
+	pub scene_world_ms: f32,
+	pub draw_skin_palette_ms: f32,
+	pub draw_skin_palette_write_ms: f32,
+	pub draw_fur_source_vertices_ms: f32,
+	pub draw_expression_values_ms: f32,
+	pub draw_morph_weights_ms: f32,
+	pub draw_transform_loop_ms: f32,
 	pub bone_collider_debug_ms: f32,
 	pub command_encode_ms: f32,
 	pub submit_present_ms: f32,
@@ -3400,6 +3407,8 @@ pub(crate) struct GpuState {
 	last_cubemap_scoped_load_count: usize,
 	last_cubemap_scoped_unload_count: usize,
 	last_material_slot_scoped_upload_count: usize,
+	last_scene_world_ms: f32,
+	last_draw_transform_timings: DrawTransformUpdateTimings,
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	dynamics_sim: Option<DynamicsSimulator>,
@@ -3766,6 +3775,8 @@ impl GpuState {
 			last_cubemap_scoped_load_count: 0,
 			last_cubemap_scoped_unload_count: 0,
 			last_material_slot_scoped_upload_count: 0,
+			last_scene_world_ms: 0.0,
+			last_draw_transform_timings: DrawTransformUpdateTimings::default(),
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
 			dynamics_sim,
@@ -3914,7 +3925,9 @@ impl GpuState {
 		let Some(runtime) = runtime_model.scene_expression_catalog() else {
 			return false;
 		};
+		let t_world0 = Instant::now();
 		crate::scene_transform::write_world_from_nodes(runtime.scene, &mut self.world_scratch);
+		self.last_scene_world_ms = t_world0.elapsed().as_secs_f32() * 1000.0;
 		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
 		if document_changed && !expression_presets_match_catalog(&self.expression_presets, runtime.expression_catalog) {
 			self.expression_presets = expression_preset_names(runtime.expression_catalog);
@@ -4018,7 +4031,7 @@ impl GpuState {
 			}
 			sm.rebuild_material_bind_groups(&self.device);
 		}
-		sm.update_draw_transforms(
+		self.last_draw_transform_timings = sm.update_draw_transforms(
 			&self.queue,
 			runtime.scene,
 			&self.world_scratch,
@@ -5642,7 +5655,7 @@ impl GpuSceneBuildContext {
 				let world = crate::scene_transform::scene_world_matrices(runtime.scene);
 				let expression_weights = active_expression_weights_for_doc(false, &document);
 				sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
-				sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
+				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
@@ -6263,6 +6276,12 @@ impl GpuState {
 			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
 		}
 		let draw_state_refresh_ms = t_draw_state0.elapsed().as_secs_f32() * 1000.0;
+		let scene_world_ms = if world_scratch_current { self.last_scene_world_ms } else { 0.0 };
+		let draw_transform_timings = if world_scratch_current {
+			self.last_draw_transform_timings
+		} else {
+			DrawTransformUpdateTimings::default()
+		};
 		let t_collider_debug0 = Instant::now();
 		if self.show_bone_colliders && draw_scene {
 			if world_scratch_current {
@@ -6661,6 +6680,13 @@ impl GpuState {
 			surface_acquire_ms,
 			target_prepare_ms,
 			draw_state_refresh_ms,
+			scene_world_ms,
+			draw_skin_palette_ms: draw_transform_timings.skin_palette_ms,
+			draw_skin_palette_write_ms: draw_transform_timings.skin_palette_write_ms,
+			draw_fur_source_vertices_ms: draw_transform_timings.fur_source_vertices_ms,
+			draw_expression_values_ms: draw_transform_timings.expression_values_ms,
+			draw_morph_weights_ms: draw_transform_timings.morph_weights_ms,
+			draw_transform_loop_ms: draw_transform_timings.draw_transform_ms,
 			bone_collider_debug_ms,
 			command_encode_ms,
 			submit_present_ms,

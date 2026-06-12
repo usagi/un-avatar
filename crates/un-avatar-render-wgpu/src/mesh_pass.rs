@@ -1353,6 +1353,16 @@ struct SkinPalette {
 	uploaded_changed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DrawTransformUpdateTimings {
+	pub skin_palette_ms: f32,
+	pub skin_palette_write_ms: f32,
+	pub fur_source_vertices_ms: f32,
+	pub expression_values_ms: f32,
+	pub morph_weights_ms: f32,
+	pub draw_transform_ms: f32,
+}
+
 struct SceneMeshBufferUpload {
 	vertices: Vec<Vertex>,
 	indices: Vec<u32>,
@@ -8761,13 +8771,15 @@ impl SceneMeshes {
 		expr_weights: Option<&UnaExpressionWeights>,
 		expression_overrides: Option<&BTreeMap<String, f32>>,
 		refresh_scene_morph_defaults: bool,
-	) {
+	) -> DrawTransformUpdateTimings {
+		let mut timings = DrawTransformUpdateTimings::default();
 		let debug_skin_legacy_no_inv_mesh = self.opts.debug_skin_legacy_no_inv_mesh;
 		let debug_zero_morphs = self.opts.debug_zero_morphs;
 		if refresh_scene_morph_defaults {
 			self.refresh_morph_defaults_from_scene(scene);
 			self.refresh_draw_visibility_from_scene(scene);
 		}
+		let t_expression0 = Instant::now();
 		self.expression_value_scratch.clear();
 		if self.has_morph_draws && (expr_weights.is_some() || expression_overrides.is_some()) {
 			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
@@ -8779,20 +8791,33 @@ impl SceneMeshes {
 				self.expression_value_scratch[index] = value;
 			}
 		}
+		timings.expression_values_ms = t_expression0.elapsed().as_secs_f32() * 1000.0;
+		let t_skin0 = Instant::now();
+		let mut skin_palette_write_ms = 0.0;
 		if !self.active_skin_palette_indices.is_empty() {
 			for &palette_index in &self.active_skin_palette_indices {
 				let Some(palette) = self.skin_palettes.get_mut(palette_index) else {
 					continue;
 				};
 				let skin = palette.key.skin_index.and_then(|si| scene.skins.get(si));
+				let t_write0 = Instant::now();
 				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
+				if palette.uploaded_changed {
+					skin_palette_write_ms += t_write0.elapsed().as_secs_f32() * 1000.0;
+				}
 			}
+			timings.skin_palette_ms = t_skin0.elapsed().as_secs_f32() * 1000.0;
+			timings.skin_palette_write_ms = skin_palette_write_ms;
 			if !self.fur_draw_indices.is_empty() {
+				let t_fur0 = Instant::now();
 				self.update_compute_fur_cards_source_vertices(queue);
+				timings.fur_source_vertices_ms = t_fur0.elapsed().as_secs_f32() * 1000.0;
 			}
 		}
 		let expression_values = (!self.expression_value_scratch.is_empty()).then_some(self.expression_value_scratch.as_slice());
 
+		let t_draw0 = Instant::now();
+		let mut morph_weights_ms = 0.0;
 		for &draw_index in &self.active_draw_indices {
 			let Some(d) = self.draws.get_mut(draw_index) else {
 				continue;
@@ -8806,6 +8831,7 @@ impl SceneMeshes {
 			};
 
 			if d.morph_target_count > 0 {
+				let t_morph0 = Instant::now();
 				let Some(morph_resources) = d.morph_resources.as_ref() else {
 					continue;
 				};
@@ -8840,6 +8866,7 @@ impl SceneMeshes {
 						d.morph_weights.clear();
 					}
 				}
+				morph_weights_ms += t_morph0.elapsed().as_secs_f32() * 1000.0;
 			}
 
 			let transform = MeshDrawTransformGpu {
@@ -8859,6 +8886,9 @@ impl SceneMeshes {
 				}
 			}
 		}
+		timings.draw_transform_ms = t_draw0.elapsed().as_secs_f32() * 1000.0;
+		timings.morph_weights_ms = morph_weights_ms;
+		timings
 	}
 
 	pub fn refresh_morph_defaults_from_scene(&mut self, scene: &UnaSceneSnapshot) -> usize {
