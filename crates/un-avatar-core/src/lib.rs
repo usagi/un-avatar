@@ -2370,6 +2370,9 @@ fn add_modular_avatar_parameter_definition(
 	component_index: usize,
 	parameter: &Value,
 ) {
+	if modular_avatar_parameter_is_prefix(parameter) {
+		return;
+	}
 	let Some(name) = modular_avatar_parameter_name(parameter) else {
 		return;
 	};
@@ -2406,7 +2409,6 @@ fn add_modular_avatar_parameter_definition(
 	definition.local_only = Some(json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))));
 	definition.saved = Some(json_bool(parameter.get("saved")));
 	definition.internal_parameter |= json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter")));
-	definition.is_prefix |= json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix")));
 }
 
 fn modular_avatar_parameter_name(parameter: &Value) -> Option<&str> {
@@ -2457,6 +2459,10 @@ fn modular_avatar_parameter_override_animator_defaults(parameter: &Value) -> boo
 			.or_else(|| parameter.get("m_overrideAnimatorDefaults"))
 			.or_else(|| parameter.get("override_animator_defaults")),
 	) || modular_avatar_parameter_sync_type(parameter) == "NotSynced" && modular_avatar_parameter_has_default_value(parameter)
+}
+
+fn modular_avatar_parameter_is_prefix(parameter: &Value) -> bool {
+	json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix")))
 }
 
 fn modular_avatar_parameter_values(component: &Value) -> impl Iterator<Item = &Value> {
@@ -2828,6 +2834,9 @@ impl<'a> UnaRuntimeModel<'a> {
 				continue;
 			}
 			for parameter in modular_avatar_parameter_values(component) {
+				if modular_avatar_parameter_is_prefix(parameter) {
+					continue;
+				}
 				let Some(name) = modular_avatar_parameter_name(parameter) else {
 					continue;
 				};
@@ -7468,6 +7477,11 @@ mod tests {
 									"defaultValue": 1.0,
 									"localOnly": false,
 									"saved": true
+								}, {
+									"nameOrPrefix": "PB/",
+									"isPrefix": true,
+									"syncType": "NotSynced",
+									"defaultValue": 0.5
 								}]
 							}
 						}]
@@ -7592,6 +7606,12 @@ mod tests {
 										"nameOrPrefix": "LocalDefault",
 										"syncType": "NotSynced",
 										"defaultValue": 0.25
+									},
+									{
+										"nameOrPrefix": "PB/",
+										"isPrefix": true,
+										"syncType": "NotSynced",
+										"defaultValue": 0.5
 									}
 								]
 							}
