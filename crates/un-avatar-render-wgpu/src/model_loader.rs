@@ -210,6 +210,7 @@ fn load_document_inner(
 	let mut ctx = ImportContext {
 		asset_root: path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
 		temp_dir: std::env::temp_dir(),
+		initial_wardrobe_set: normalize_wardrobe_set_id(wardrobe_set).map(str::to_string),
 	};
 	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 	let result = if ext.eq_ignore_ascii_case("vrm") {

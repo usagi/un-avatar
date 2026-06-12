@@ -2165,7 +2165,14 @@ impl SceneImageTextureSlot {
 			let scene = scene?;
 			let image = scene.images.get(lazy.image_index)?;
 			let source_metadata = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
-			let upload = build_scene_image_texture_upload(image, source_metadata, lazy, gpu_texture_compression)?;
+			let decoded_source;
+			let upload_image = if let Some(decoded) = source_metadata.and_then(decode_encoded_source_image) {
+				decoded_source = decoded;
+				&decoded_source
+			} else {
+				image
+			};
+			let upload = build_scene_image_texture_upload(upload_image, source_metadata, lazy, gpu_texture_compression)?;
 			self.upload = upload;
 		}
 		let texture = match &self.upload {
@@ -2190,6 +2197,18 @@ impl SceneImageTextureSlot {
 		self.texture = None;
 		had_resource
 	}
+}
+
+fn decode_encoded_source_image(source: &UnaImageSourceMetadata) -> Option<UnaImageRgba> {
+	let bytes = source.encoded_bytes.as_deref()?;
+	let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
+	let (width, height) = decoded.dimensions();
+	Some(UnaImageRgba {
+		width,
+		height,
+		pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+		pixels: decoded.into_raw(),
+	})
 }
 
 struct SceneCubeTextureSlot {
@@ -9835,6 +9854,7 @@ mod tests {
 			sampler: None,
 			byte_length: 0,
 			source_hash: 0,
+			encoded_bytes: None,
 		}
 	}
 

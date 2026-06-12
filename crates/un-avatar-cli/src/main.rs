@@ -1637,6 +1637,7 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 	let mut ictx = ImportContext {
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
+		initial_wardrobe_set: None,
 	};
 	let path_display = path.display().to_string();
 	let import_input = import_input_for_path(&path, &desc.id, cached_bytes);
@@ -5136,6 +5137,7 @@ fn run_diagnose(
 	let mut ictx = ImportContext {
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
+		initial_wardrobe_set: None,
 	};
 	let import_started = Instant::now();
 	let mut imported = importer
@@ -6161,6 +6163,7 @@ fn run_convert(
 	let mut ictx = ImportContext {
 		asset_root: input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
+		initial_wardrobe_set: None,
 	};
 	let import_desc = importer.descriptor();
 	let imported = importer
@@ -6359,6 +6362,7 @@ mod tests {
 		let mut ctx = ImportContext {
 			asset_root: dir.clone(),
 			temp_dir: std::env::temp_dir(),
+			initial_wardrobe_set: None,
 		};
 		imp.import(&mut ctx, ImportInput::Path(path), ImportOptions).unwrap();
 		let _ = fs::remove_dir_all(&dir);
@@ -7866,6 +7870,7 @@ mod tests {
 		let mut ctx = ImportContext {
 			asset_root: dir.clone(),
 			temp_dir: std::env::temp_dir(),
+			initial_wardrobe_set: None,
 		};
 		imp.import(&mut ctx, ImportInput::Path(path), ImportOptions).unwrap();
 		let _ = fs::remove_dir_all(&dir);

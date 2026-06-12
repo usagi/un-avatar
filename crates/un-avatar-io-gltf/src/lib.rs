@@ -78,24 +78,43 @@ fn from_gltf_image(d: gltf::image::Data) -> Result<(UnaImageRgba, Option<String>
 	Ok((image, approximation))
 }
 
-fn collect_images(images_data: Vec<gltf::image::Data>, report: &mut ImportReport) -> Result<Vec<UnaImageRgba>, String> {
+fn placeholder_deferred_image() -> UnaImageRgba {
+	UnaImageRgba {
+		width: 0,
+		height: 0,
+		pixel_format: UnaImagePixelFormat::R8G8B8A8,
+		pixels: Vec::new(),
+	}
+}
+
+fn collect_images(images_data: Vec<Option<gltf::image::Data>>, report: &mut ImportReport) -> Result<Vec<UnaImageRgba>, String> {
 	let mut out = Vec::with_capacity(images_data.len());
+	let mut deferred = 0usize;
 	for (index, d) in images_data.into_iter().enumerate() {
-		let (image, approximation) = from_gltf_image(d)?;
-		if let Some(detail) = approximation {
-			report.approximations.push(Approximation {
-				feature: format!("image[{index}].pixel_format"),
-				detail: Some(detail),
-			});
+		if let Some(d) = d {
+			let (image, approximation) = from_gltf_image(d)?;
+			if let Some(detail) = approximation {
+				report.approximations.push(Approximation {
+					feature: format!("image[{index}].pixel_format"),
+					detail: Some(detail),
+				});
+			}
+			out.push(image);
+		} else {
+			deferred += 1;
+			out.push(placeholder_deferred_image());
 		}
-		out.push(image);
+	}
+	if deferred > 0 {
+		report.push_info(format!("glTF import profile: deferred_image_decode_count={deferred}"));
 	}
 	Ok(out)
 }
 
 fn import_gltf_slice_parallel_images(
 	slice: &[u8],
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), ImportError> {
+	decode_image_indices: Option<&BTreeSet<usize>>,
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<Option<gltf::image::Data>>), ImportError> {
 	let gltf = gltf::Gltf::from_slice(slice).map_err(|e| ImportError::Message(e.to_string()))?;
 	let document = gltf.document;
 	let buffers = gltf::import_buffers(&document, None, gltf.blob).map_err(|e| ImportError::Message(e.to_string()))?;
@@ -103,22 +122,32 @@ fn import_gltf_slice_parallel_images(
 	if image_count == 0 {
 		return Ok((document, buffers, Vec::new()));
 	}
+	let decode_count = decode_image_indices.map_or(image_count, BTreeSet::len).min(image_count);
+	if decode_count == 0 {
+		return Ok((document, buffers, vec![None; image_count]));
+	}
 
 	let worker_count = std::thread::available_parallelism()
 		.map(|n| n.get())
 		.unwrap_or(1)
 		.clamp(1, 8)
-		.min(image_count);
-	let chunk_size = image_count.div_ceil(worker_count);
+		.min(decode_count);
+	let decode_indices = decode_image_indices
+		.map(|indices| indices.iter().copied().filter(|index| *index < image_count).collect::<Vec<_>>())
+		.unwrap_or_else(|| (0..image_count).collect());
+	let chunk_size = decode_indices.len().div_ceil(worker_count);
 	let decoded_chunks = std::thread::scope(|scope| {
 		let mut handles = Vec::with_capacity(worker_count);
-		for start in (0..image_count).step_by(chunk_size) {
-			let end = (start + chunk_size).min(image_count);
+		for chunk in decode_indices.chunks(chunk_size) {
+			let indices = chunk.to_vec();
 			let document = &document;
 			let buffers = &buffers;
 			handles.push(scope.spawn(move || {
-				let mut decoded = Vec::with_capacity(end - start);
-				for (index, image) in document.images().enumerate().skip(start).take(end - start) {
+				let mut decoded = Vec::with_capacity(indices.len());
+				for index in indices {
+					let Some(image) = document.images().nth(index) else {
+						continue;
+					};
 					let data = gltf::image::Data::from_source(image.source(), None, buffers).map_err(|e| e.to_string())?;
 					decoded.push((index, data));
 				}
@@ -140,11 +169,6 @@ fn import_gltf_slice_parallel_images(
 			images[index] = Some(data);
 		}
 	}
-	let images = images
-		.into_iter()
-		.enumerate()
-		.map(|(index, data)| data.ok_or_else(|| ImportError::Message(format!("glTF image {index} was not decoded"))))
-		.collect::<Result<Vec<_>, _>>()?;
 	Ok((document, buffers, images))
 }
 
@@ -199,6 +223,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						sampler,
 						byte_length: bytes.len() as u64,
 						source_hash: fnv1a64(bytes),
+						encoded_bytes: Some(bytes.to_vec()),
 					})
 				}
 				gltf::image::Source::Uri { uri, mime_type } => Some(UnaImageSourceMetadata {
@@ -234,6 +259,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					sampler,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
+					encoded_bytes: None,
 				}),
 			}
 		})
@@ -333,6 +359,7 @@ fn glb_image_source_metadata_from_json_image(
 			sampler,
 			byte_length: 0,
 			source_hash: fnv1a64(uri.as_bytes()),
+			encoded_bytes: None,
 		});
 	}
 	let view_index = image.get("bufferView").and_then(Value::as_u64)? as usize;
@@ -373,6 +400,7 @@ fn glb_image_source_metadata_from_json_image(
 		sampler,
 		byte_length: bytes.len() as u64,
 		source_hash: fnv1a64(bytes),
+		encoded_bytes: Some(bytes.to_vec()),
 	})
 }
 
@@ -577,6 +605,7 @@ fn append_unavatar_texture_assets(
 			sampler: asset.get("sampler").map(sampler_from_root_json),
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
+			encoded_bytes: Some(bytes.to_vec()),
 		}));
 		map.insert(id.to_string(), image_index);
 	}
@@ -3064,6 +3093,59 @@ fn merged_wardrobe_asset_groups(base: &[String], selected: &[String]) -> Vec<Str
 		}
 	}
 	merged
+}
+
+fn initial_wardrobe_asset_groups(unavatar: &UnaUnavatarExtension, initial_wardrobe_set: Option<&str>) -> Vec<String> {
+	let base_id = unavatar_base_wardrobe_set(unavatar).map(|(id, _)| id.to_string());
+	let selected_id = initial_wardrobe_set.or(base_id.as_deref());
+	let base_asset_groups = if selected_id != base_id.as_deref() {
+		base_id
+			.as_deref()
+			.map(|base_set_id| unavatar_wardrobe_set_asset_groups(unavatar, base_set_id))
+			.unwrap_or_default()
+	} else {
+		Vec::new()
+	};
+	let selected_asset_groups = selected_id
+		.map(|set_id| unavatar_wardrobe_set_asset_groups(unavatar, set_id))
+		.unwrap_or_default();
+	if selected_id == base_id.as_deref() {
+		selected_asset_groups
+	} else {
+		merged_wardrobe_asset_groups(&base_asset_groups, &selected_asset_groups)
+	}
+}
+
+fn initial_resident_image_indices(root: Option<&Value>, initial_wardrobe_set: Option<&str>) -> Option<BTreeSet<usize>> {
+	let unavatar = root.and_then(unavatar_extension_from_root)?;
+	let ownership = unavatar_asset_group_ownership(&unavatar);
+	if ownership.is_empty() {
+		return None;
+	}
+	let image_count = root
+		.and_then(|root| root.get("images"))
+		.and_then(Value::as_array)
+		.map(Vec::len)
+		.unwrap_or(0);
+	let active_groups = initial_wardrobe_asset_groups(&unavatar, initial_wardrobe_set);
+	let active_groups = active_groups.into_iter().collect::<BTreeSet<_>>();
+	let mut owned_images = BTreeSet::new();
+	let mut resident_images = BTreeSet::new();
+	for group in ownership {
+		let is_active = active_groups.contains(&group.group_id);
+		for image in group.images {
+			owned_images.insert(image);
+			if is_active {
+				resident_images.insert(image);
+			}
+		}
+	}
+	for image in 0..image_count {
+		if !owned_images.contains(&image) {
+			resident_images.insert(image);
+		}
+	}
+	Some(resident_images)
 }
 
 fn apply_unavatar_asset_group_ownership(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
@@ -7809,6 +7891,9 @@ fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[
 		let Some(image) = images.get(image_index) else {
 			continue;
 		};
+		if image.width == 0 || image.height == 0 {
+			continue;
+		}
 		let (has_transparent_alpha, has_translucent_alpha) = if let Some(cached) = alpha_cache.get(image_index).copied().flatten() {
 			cached
 		} else {
@@ -9926,7 +10011,7 @@ pub fn scene_snapshot_from_gltf(
 	image_data: Vec<gltf::image::Data>,
 	report: &mut ImportReport,
 ) -> Result<UnaSceneSnapshot, ImportError> {
-	scene_snapshot_from_gltf_inner(document, buffers, image_data, None, report, false)
+	scene_snapshot_from_gltf_inner(document, buffers, image_data.into_iter().map(Some).collect(), None, report, false)
 }
 
 pub fn scene_snapshot_from_gltf_profiled(
@@ -9935,7 +10020,7 @@ pub fn scene_snapshot_from_gltf_profiled(
 	image_data: Vec<gltf::image::Data>,
 	report: &mut ImportReport,
 ) -> Result<UnaSceneSnapshot, ImportError> {
-	scene_snapshot_from_gltf_inner(document, buffers, image_data, None, report, true)
+	scene_snapshot_from_gltf_inner(document, buffers, image_data.into_iter().map(Some).collect(), None, report, true)
 }
 
 fn log_scene_snapshot_profile_step(step: &str, started: Instant) {
@@ -9967,7 +10052,7 @@ fn record_modular_avatar_profile_step(report: &mut ImportReport, step: &str, sta
 fn scene_snapshot_from_gltf_inner(
 	document: &gltf::Document,
 	buffers: &[gltf::buffer::Data],
-	image_data: Vec<gltf::image::Data>,
+	image_data: Vec<Option<gltf::image::Data>>,
 	precomputed_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>>,
 	report: &mut ImportReport,
 	profile: bool,
@@ -10146,7 +10231,7 @@ impl AvatarImporter for GltfImporter {
 		ImportProbeResult { confidence: 0 }
 	}
 
-	fn import(&self, _ctx: &mut ImportContext, input: ImportInput, _options: ImportOptions) -> Result<ImportResult, ImportError> {
+	fn import(&self, ctx: &mut ImportContext, input: ImportInput, _options: ImportOptions) -> Result<ImportResult, ImportError> {
 		let mut root_json: Option<Value> = None;
 		let mut original_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>> = None;
 		let mut original_glb_bin: Option<Vec<u8>> = None;
@@ -10196,8 +10281,15 @@ impl AvatarImporter for GltfImporter {
 						normalize_started.elapsed().as_millis(),
 						normalized_owned
 					));
+					let decode_image_indices = initial_resident_image_indices(root_json.as_ref(), ctx.initial_wardrobe_set.as_deref());
+					if let Some(indices) = &decode_image_indices {
+						import_profile_messages.push(format!(
+							"glTF import profile: selective_image_decode_count={}",
+							indices.len()
+						));
+					}
 					let import_slice_started = Instant::now();
-					let imported = import_gltf_slice_parallel_images(import_bytes.as_ref())?;
+					let imported = import_gltf_slice_parallel_images(import_bytes.as_ref(), decode_image_indices.as_ref())?;
 					import_profile_messages.push(format!(
 						"glTF import profile: gltf_import_slice_ms={}",
 						import_slice_started.elapsed().as_millis()
@@ -10224,7 +10316,7 @@ impl AvatarImporter for GltfImporter {
 						"glTF import profile: gltf_import_path_ms={}",
 						import_started.elapsed().as_millis()
 					));
-					(Some(path), imported.0, imported.1, imported.2)
+					(Some(path), imported.0, imported.1, imported.2.into_iter().map(Some).collect())
 				} else {
 					let import_started = Instant::now();
 					let imported = gltf::import(&path).map_err(|e| ImportError::Message(e.to_string()))?;
@@ -10232,7 +10324,7 @@ impl AvatarImporter for GltfImporter {
 						"glTF import profile: gltf_import_path_ms={}",
 						import_started.elapsed().as_millis()
 					));
-					(Some(path), imported.0, imported.1, imported.2)
+					(Some(path), imported.0, imported.1, imported.2.into_iter().map(Some).collect())
 				}
 			}
 			ImportInput::Bytes { bytes, path_hint } => {
@@ -10275,8 +10367,15 @@ impl AvatarImporter for GltfImporter {
 					normalize_started.elapsed().as_millis(),
 					normalized_owned
 				));
+				let decode_image_indices = initial_resident_image_indices(root_json.as_ref(), ctx.initial_wardrobe_set.as_deref());
+				if let Some(indices) = &decode_image_indices {
+					import_profile_messages.push(format!(
+						"glTF import profile: selective_image_decode_count={}",
+						indices.len()
+					));
+				}
 				let import_slice_started = Instant::now();
-				let imported = import_gltf_slice_parallel_images(import_bytes.as_ref())?;
+				let imported = import_gltf_slice_parallel_images(import_bytes.as_ref(), decode_image_indices.as_ref())?;
 				import_profile_messages.push(format!(
 					"glTF import profile: gltf_import_slice_ms={}",
 					import_slice_started.elapsed().as_millis()

@@ -3990,6 +3990,8 @@ pub struct UnaImageSourceMetadata {
 	pub sampler: Option<UnaTextureSampler>,
 	pub byte_length: u64,
 	pub source_hash: u64,
+	#[serde(default, skip_serializing, skip_deserializing)]
+	pub encoded_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

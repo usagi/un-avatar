@@ -1839,6 +1839,7 @@ mod tests {
 			sampler: None,
 			byte_length: 3,
 			source_hash: 0x1234,
+			encoded_bytes: None,
 		};
 		let key_a = texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &source);
 		let mut changed_source = source.clone();
