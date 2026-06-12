@@ -9932,6 +9932,70 @@ mod tests {
 	}
 
 	#[test]
+	fn unavatar_dynamics_infers_writeback_mode_from_stretch_curve_keys() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_tip", "path": "Root/Tip"}
+				],
+				"dynamics": [{
+					"id": "curve_stretch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"maxStretchCurve": {
+							"keyCount": 1,
+							"keys": [{"time": 0.0, "value": 0.25}]
+						}
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
+	}
+
+	#[test]
+	fn unavatar_dynamics_explicit_rotation_only_overrides_stretch_source_params() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_tip", "path": "Root/Tip"}
+				],
+				"dynamics": [{
+					"id": "rotation_only_stretch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"writebackMode": "rotation_only",
+					"sourceParams": {
+						"maxStretch": 0.25
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationOnly);
+	}
+
+	#[test]
 	fn unavatar_dynamics_respects_ignored_transforms_and_multi_child_ignore() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![
