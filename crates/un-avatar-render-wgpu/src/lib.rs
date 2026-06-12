@@ -1317,8 +1317,7 @@ impl FrameBenchState {
 		self.frames = self.frames.saturating_add(1);
 		self.wall_ms.push(timings.wall_since_last_ms);
 		self.cpu_record_ms.push(timings.cpu_record_ms);
-		self.cpu_record_no_surface_ms
-			.push((timings.cpu_record_ms - timings.surface_acquire_ms).max(0.0));
+		self.cpu_record_no_surface_ms.push(frame_cpu_busy_ms(timings));
 		self.cpu_total_ms.push(timings.cpu_total_ms);
 		self.motion_apply_ms.push(timings.motion_apply_ms);
 		self.dynamics_step_ms.push(timings.dynamics_step_ms);
@@ -1417,6 +1416,10 @@ impl FrameBenchState {
 			self.runtime_action_eval_ms.max,
 		);
 	}
+}
+
+fn frame_cpu_busy_ms(timings: &FrameTimings) -> f32 {
+	(timings.cpu_record_ms - timings.surface_acquire_ms).max(0.0)
 }
 
 impl AvatarApp {
@@ -1644,7 +1647,7 @@ impl AvatarApp {
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
-			status.cpu_ms = Some(timings.cpu_record_ms);
+			status.cpu_ms = Some(frame_cpu_busy_ms(timings));
 			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
 			status.frame_motion_apply_ms = Some(timings.motion_apply_ms);
 			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
@@ -2423,11 +2426,12 @@ impl AvatarApp {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
 				win.set_title(&format!(
-					"{}{} — {:.0} FPS  cpu {:.2} ms  gpu~ {:.2} ms",
+					"{}{} — {:.0} FPS  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
 					self.title_base,
 					self.title_diagnostic_suffix(),
 					self.fps_smooth,
-					timings.cpu_record_ms,
+					frame_cpu_busy_ms(&timings),
+					timings.surface_acquire_ms,
 					timings.gpu_ms
 				));
 			}
