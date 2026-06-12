@@ -21,6 +21,7 @@ export type RuntimeQualityStatusLabelData = {
 	surface_width: number | null;
 	surface_height: number | null;
 	window_inner_size?: [number, number] | null;
+	minimized?: boolean | null;
 	aa: string | null;
 	texture_resolution_limit: string | null;
 	texture_compression: string | null;
@@ -112,11 +113,12 @@ export type RuntimeStatusLabels = {
 };
 
 export function runtimeResolution(status: RuntimeQualityStatusLabelData | null): string {
+	const prefix = status?.minimized ? "Minimized / " : "";
 	if (status?.window_inner_size?.[0] && status.window_inner_size[1]) {
-		return `${status.window_inner_size[0]} x ${status.window_inner_size[1]}`;
+		return `${prefix}${status.window_inner_size[0]} x ${status.window_inner_size[1]}`;
 	}
 	if (!status?.surface_width || !status.surface_height) return "--";
-	return `${status.surface_width} x ${status.surface_height}`;
+	return `${prefix}${status.surface_width} x ${status.surface_height}`;
 }
 
 export function runtimeAaLabel(status: RuntimeQualityStatusLabelData | null): string {
