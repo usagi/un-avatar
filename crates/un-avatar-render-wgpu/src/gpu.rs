@@ -6324,42 +6324,6 @@ impl GpuState {
 		self.write_frame_globals(gw, gh, true);
 		let frame_globals_ms = t_globals0.elapsed().as_secs_f32() * 1000.0;
 
-		let t_surface0 = Instant::now();
-		let frame = match self.surface.get_current_texture() {
-			wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-			wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-				let s = window.inner_size();
-				self.resize(s.width, s.height);
-				return None;
-			}
-			wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return None,
-			wgpu::CurrentSurfaceTexture::Validation => {
-				eprintln!("un-avatar-renderer: get_current_texture: validation error");
-				return None;
-			}
-		};
-		let surface_acquire_ms = t_surface0.elapsed().as_secs_f32() * 1000.0;
-		let frame_width = frame.texture.width();
-		let frame_height = frame.texture.height();
-		if frame_width == 0 || frame_height == 0 {
-			return None;
-		}
-		if frame_width != self.config.width || frame_height != self.config.height {
-			let s = window.inner_size();
-			let width = if s.width == 0 { frame_width } else { s.width };
-			let height = if s.height == 0 { frame_height } else { s.height };
-			drop(frame);
-			self.resize(width, height);
-			return None;
-		}
-
-		let swap_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-		#[cfg(windows)]
-		if let (Some(ref mut sp), Some(ref lc)) = (&mut self.spout, &self.spout_launch) {
-			sp.resize_to(&self.device, self.config.width, self.config.height, lc, self.config.format);
-		}
-
 		let draw_scene = self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
 		let use_spout = {
 			#[cfg(windows)]
@@ -6371,6 +6335,57 @@ impl GpuState {
 				false
 			}
 		};
+		let t_surface0 = Instant::now();
+		let frame = match self.surface.get_current_texture() {
+			wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+			wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+				let s = window.inner_size();
+				self.resize(s.width, s.height);
+				if use_spout {
+					None
+				} else {
+					return None;
+				}
+			}
+			wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+				if use_spout {
+					None
+				} else {
+					return None;
+				}
+			}
+			wgpu::CurrentSurfaceTexture::Validation => {
+				eprintln!("un-avatar-renderer: get_current_texture: validation error");
+				if use_spout {
+					None
+				} else {
+					return None;
+				}
+			}
+		};
+		let surface_acquire_ms = t_surface0.elapsed().as_secs_f32() * 1000.0;
+		let swap_view = if let Some(frame) = frame.as_ref() {
+			let frame_width = frame.texture.width();
+			let frame_height = frame.texture.height();
+			if frame_width == 0 || frame_height == 0 {
+				return None;
+			}
+			if frame_width != self.config.width || frame_height != self.config.height {
+				let s = window.inner_size();
+				let width = if s.width == 0 { frame_width } else { s.width };
+				let height = if s.height == 0 { frame_height } else { s.height };
+				self.resize(width, height);
+				return None;
+			}
+			Some(frame.texture.create_view(&wgpu::TextureViewDescriptor::default()))
+		} else {
+			None
+		};
+
+		#[cfg(windows)]
+		if let (Some(ref mut sp), Some(ref lc)) = (&mut self.spout, &self.spout_launch) {
+			sp.resize_to(&self.device, self.config.width, self.config.height, lc, self.config.format);
+		}
 		let use_post_aa = matches!(self.aa, AaMode::Fxaa | AaMode::Smaa);
 		let use_avatar_outline =
 			self.avatar_outline.policy == AvatarOutlinePolicy::Override && self.avatar_outline.width.unwrap_or(0.003) > 0.0;
@@ -6461,10 +6476,10 @@ impl GpuState {
 		let final_target_view = if use_spout {
 			self.spout.as_ref().unwrap().color_view()
 		} else {
-			&swap_view
+			swap_view.as_ref().expect("surface view is available for window output")
 		};
 		#[cfg(not(windows))]
-		let final_target_view = &swap_view;
+		let final_target_view = swap_view.as_ref().expect("surface view is available for window output");
 
 		let mut main_resolve_target: Option<&wgpu::TextureView> = None;
 		let (main_color, main_depth): (&wgpu::TextureView, &wgpu::TextureView) = if use_post {
@@ -6491,7 +6506,10 @@ impl GpuState {
 				unreachable!()
 			}
 		} else {
-			(&swap_view, &self.depth_view)
+			(
+				swap_view.as_ref().expect("surface view is available for window output"),
+				&self.depth_view,
+			)
 		};
 
 		let t_encode0 = Instant::now();
@@ -6820,18 +6838,22 @@ impl GpuState {
 			if let Some(idx) = staged_slot {
 				sp.after_submit_request_map(idx);
 			}
-			// 3) swap chain にプレビュー用にコピー。
-			let mut enc3 = self
-				.device
-				.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("spout-blit") });
-			sp.encode_blit(&mut enc3, &swap_view, clear_color);
-			self.queue.submit(std::iter::once(enc3.finish()));
+			// 3) swap chain が取れている時だけプレビュー用にコピー。最小化 / occluded 中でも Spout 送信は続ける。
+			if let Some(swap_view) = swap_view.as_ref() {
+				let mut enc3 = self
+					.device
+					.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("spout-blit") });
+				sp.encode_blit(&mut enc3, swap_view, clear_color);
+				self.queue.submit(std::iter::once(enc3.finish()));
+			}
 			spout_cpu_ms = t_spout0.elapsed().as_secs_f32() * 1000.0;
 		}
 
-		let t_present0 = Instant::now();
-		frame.present();
-		submit_present_ms += t_present0.elapsed().as_secs_f32() * 1000.0;
+		if let Some(frame) = frame {
+			let t_present0 = Instant::now();
+			frame.present();
+			submit_present_ms += t_present0.elapsed().as_secs_f32() * 1000.0;
+		}
 
 		Some(FrameTimings {
 			wall_since_last_ms: wall_since_last.as_secs_f32() * 1000.0,
