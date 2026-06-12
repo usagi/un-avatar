@@ -2290,7 +2290,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 	};
 	let started = Instant::now();
 	let import_started = Instant::now();
-	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref(), opts.contact_parameter_emission)
+	let document = model_loader::load_document_profiled(path, opts.wardrobe_set.as_deref(), opts.contact_parameter_emission)
 		.map_err(|e| format!("gpu scene benchmark: model import failed: {}: {e}", path.display()))?;
 	eprintln!(
 		"un-avatar-renderer: gpu scene benchmark import path={} elapsed={:.1}ms",

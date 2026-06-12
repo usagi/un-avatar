@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, time::Instant};
 
 use glam::Mat4;
 use serde_json::Value;
@@ -18,7 +18,7 @@ use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
 	ImportOptions, ImportProbe, ImportProbeResult, ImportReport, ImportResult, IoRegistry, PluginStability,
 };
-use un_avatar_io_gltf::scene_snapshot_from_gltf;
+use un_avatar_io_gltf::{scene_snapshot_from_gltf, scene_snapshot_from_gltf_profiled};
 use un_avatar_types::HumanoidProfile;
 
 pub fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
@@ -1114,22 +1114,57 @@ fn extract_spring_bones(root: &Value, vrm: &Value, flavor: VrmFlavor) -> Option<
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VrmImporter;
 
-fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
+fn log_vrm_import_profile_step(path_hint: Option<&Path>, step: &str, started: Instant) {
+	let path = path_hint
+		.map(|path| path.display().to_string())
+		.unwrap_or_else(|| "<memory>".to_string());
+	eprintln!(
+		"un-avatar-renderer: vrm import profile path={path} step={step} elapsed={:.1}ms",
+		started.elapsed().as_secs_f64() * 1000.0
+	);
+}
+
+fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>, profile: bool) -> Result<ImportResult, ImportError> {
+	let step_started = Instant::now();
 	let root = match root {
 		Some(root) => root,
 		None => gltf_root_json_from_bytes(bytes)?,
 	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "root_json", step_started);
+	}
+	let step_started = Instant::now();
 	let (flavor, vrm_raw) = take_vrm_extension(&root)?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "take_vrm_extension", step_started);
+	}
+	let step_started = Instant::now();
 	let vrm_ext = build_vrm_extension(&root, flavor, vrm_raw)?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "build_vrm_extension", step_started);
+	}
 
+	let step_started = Instant::now();
 	let (document, buffers, image_data) = gltf::import_slice(bytes).map_err(|e| ImportError::Message(e.to_string()))?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "gltf_import_slice", step_started);
+	}
 
 	let mut report = ImportReport {
 		source_format: Some(VrmImporter.descriptor().id.clone()),
 		..Default::default()
 	};
 
-	let mut scene = scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?;
+	let step_started = Instant::now();
+	let mut scene = if profile {
+		scene_snapshot_from_gltf_profiled(&document, &buffers, image_data, &mut report)?
+	} else {
+		scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?
+	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "scene_snapshot_from_gltf", step_started);
+	}
+	let step_started = Instant::now();
 	normalize_scene_basis_for_vrm(&mut scene, flavor);
 	scene.node_constraints = node_constraints_from_root(&root);
 	tag_mtoon_materials(&mut scene, &vrm_ext);
@@ -1138,6 +1173,10 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	// Unlit のままだと relax 対象外だった MASK 瞳を、MToon 化後にもう一度緩和する。
 	relax_mtoon_mask_for_likely_eye_materials(&mut scene);
 	drop_flat_neutral_normal_textures(&mut scene);
+	if profile {
+		log_vrm_import_profile_step(path_hint, "apply_vrm_scene_metadata", step_started);
+	}
+	let step_started = Instant::now();
 	let node_mesh: Vec<Option<usize>> = scene.nodes.iter().map(|n| n.mesh).collect();
 	let mut expr_cat = build_expression_catalog(&vrm_ext.source, flavor, &node_mesh);
 	if !expr_cat.presets.is_empty() {
@@ -1148,7 +1187,11 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	} else {
 		(Some(expr_cat), Some(UnaExpressionWeights::default()))
 	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "build_expression_catalog", step_started);
+	}
 
+	let step_started = Instant::now();
 	let humanoid_profile = if vrm_ext.humanoid_bones.is_empty() {
 		None
 	} else {
@@ -1158,6 +1201,9 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	};
 
 	let spring_bones = extract_spring_bones(&root, &vrm_ext.source, flavor);
+	if profile {
+		log_vrm_import_profile_step(path_hint, "humanoid_and_spring_bones", step_started);
+	}
 
 	report.status = if report.lost_features.is_empty() && report.approximations.is_empty() {
 		ReportStatus::Success
@@ -1198,7 +1244,11 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 }
 
 pub fn import_vrm_bytes(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
-	import_vrm_from_parts(path_hint, bytes, root)
+	import_vrm_from_parts(path_hint, bytes, root, false)
+}
+
+pub fn import_vrm_bytes_profiled(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
+	import_vrm_from_parts(path_hint, bytes, root, true)
 }
 
 impl AvatarImporter for VrmImporter {
@@ -1261,9 +1311,9 @@ impl AvatarImporter for VrmImporter {
 		match input {
 			ImportInput::Path(path) => {
 				let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("読み込み: {e}")))?;
-				import_vrm_from_parts(Some(&path), &bytes, None)
+				import_vrm_from_parts(Some(&path), &bytes, None, false)
 			}
-			ImportInput::Bytes { bytes, path_hint } => import_vrm_from_parts(path_hint.as_deref(), bytes.as_ref(), None),
+			ImportInput::Bytes { bytes, path_hint } => import_vrm_from_parts(path_hint.as_deref(), bytes.as_ref(), None, false),
 		}
 	}
 }

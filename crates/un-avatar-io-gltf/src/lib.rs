@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
+use std::time::Instant;
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
@@ -9295,11 +9296,101 @@ fn mesh_target_names(mesh: gltf::Mesh<'_>) -> Vec<String> {
 		.unwrap_or_default()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PrimitiveVertexPayloadKey {
+	positions: Option<usize>,
+	normals: Option<usize>,
+	tangents: Option<usize>,
+	tex_coords_0: Option<usize>,
+	tex_coords_1: Option<usize>,
+	tex_coords_2: Option<usize>,
+	tex_coords_3: Option<usize>,
+	colors_0: Option<usize>,
+	joints_0: Option<usize>,
+	weights_0: Option<usize>,
+	morph_targets: Vec<(Option<usize>, Option<usize>)>,
+	mesh_weights: Vec<u32>,
+	mesh_target_names: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PrimitiveVertexPayload {
+	positions: Vec<[f32; 3]>,
+	normals: Option<Vec<[f32; 3]>>,
+	tangents: Option<Vec<[f32; 4]>>,
+	tex_coords_0: Option<Vec<[f32; 2]>>,
+	tex_coords_1: Option<Vec<[f32; 2]>>,
+	tex_coords_2: Option<Vec<[f32; 2]>>,
+	tex_coords_3: Option<Vec<[f32; 2]>>,
+	colors_0: Option<Vec<[f32; 4]>>,
+	joints: Option<Vec<[u16; 4]>>,
+	weights: Option<Vec<[f32; 4]>>,
+	morph_targets: Vec<UnaMorphTargetDeltas>,
+	morph_target_names: Vec<String>,
+	default_morph_weights: Vec<f32>,
+}
+
+fn accessor_index(accessor: Option<gltf::Accessor<'_>>) -> Option<usize> {
+	accessor.map(|accessor| accessor.index())
+}
+
+fn primitive_vertex_payload_key(
+	prim: &gltf::Primitive<'_>,
+	mesh_weights: Option<&[f32]>,
+	mesh_target_names: &[String],
+) -> PrimitiveVertexPayloadKey {
+	PrimitiveVertexPayloadKey {
+		positions: accessor_index(prim.get(&gltf::Semantic::Positions)),
+		normals: accessor_index(prim.get(&gltf::Semantic::Normals)),
+		tangents: accessor_index(prim.get(&gltf::Semantic::Tangents)),
+		tex_coords_0: accessor_index(prim.get(&gltf::Semantic::TexCoords(0))),
+		tex_coords_1: accessor_index(prim.get(&gltf::Semantic::TexCoords(1))),
+		tex_coords_2: accessor_index(prim.get(&gltf::Semantic::TexCoords(2))),
+		tex_coords_3: accessor_index(prim.get(&gltf::Semantic::TexCoords(3))),
+		colors_0: accessor_index(prim.get(&gltf::Semantic::Colors(0))),
+		joints_0: accessor_index(prim.get(&gltf::Semantic::Joints(0))),
+		weights_0: accessor_index(prim.get(&gltf::Semantic::Weights(0))),
+		morph_targets: prim
+			.morph_targets()
+			.map(|target| (accessor_index(target.positions()), accessor_index(target.normals())))
+			.collect(),
+		mesh_weights: mesh_weights.unwrap_or_default().iter().map(|weight| weight.to_bits()).collect(),
+		mesh_target_names: mesh_target_names.to_vec(),
+	}
+}
+
+fn mesh_buffers_from_vertex_payload(
+	payload: PrimitiveVertexPayload,
+	indices: Option<Vec<u32>>,
+	material_index: Option<usize>,
+) -> UnaMeshBuffers {
+	UnaMeshBuffers {
+		name: None,
+		positions: payload.positions,
+		normals: payload.normals,
+		tangents: payload.tangents,
+		tex_coords_0: payload.tex_coords_0,
+		tex_coords_1: payload.tex_coords_1,
+		tex_coords_2: payload.tex_coords_2,
+		tex_coords_3: payload.tex_coords_3,
+		colors_0: payload.colors_0,
+		joints: payload.joints,
+		weights: payload.weights,
+		indices,
+		material_index,
+		morph_targets: payload.morph_targets,
+		morph_target_names: payload.morph_target_names,
+		default_morph_weights: payload.default_morph_weights,
+	}
+}
+
 fn read_primitive(
 	prim: gltf::Primitive<'_>,
 	buffers: &[gltf::buffer::Data],
 	mesh_weights: Option<&[f32]>,
 	mesh_target_names: &[String],
+	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
+	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	_report: &mut ImportReport,
 ) -> Result<Option<UnaMeshBuffers>, ImportError> {
 	if prim.mode() != gltf::mesh::Mode::Triangles {
@@ -9310,7 +9401,16 @@ fn read_primitive(
 		return Ok(None);
 	}
 
+	let payload_key = primitive_vertex_payload_key(&prim, mesh_weights, mesh_target_names);
+	let cache_reusable = vertex_payload_key_counts.get(&payload_key).copied().unwrap_or(0) > 1;
 	let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.as_ref()));
+	if cache_reusable {
+		if let Some(payload) = vertex_payload_cache.get(&payload_key).cloned() {
+			let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
+			let material_index = prim.material().index();
+			return Ok(Some(mesh_buffers_from_vertex_payload(payload, indices, material_index)));
+		}
+	}
 	let Some(iter_pos) = reader.read_positions() else {
 		return Err(ImportError::Message("POSITION アクセサがありません".into()));
 	};
@@ -9419,8 +9519,7 @@ fn read_primitive(
 		Vec::new()
 	};
 
-	Ok(Some(UnaMeshBuffers {
-		name: None,
+	let payload = PrimitiveVertexPayload {
 		positions,
 		normals,
 		tangents,
@@ -9431,12 +9530,15 @@ fn read_primitive(
 		colors_0,
 		joints,
 		weights,
-		indices,
-		material_index,
 		morph_targets,
 		morph_target_names,
 		default_morph_weights,
-	}))
+	};
+	if cache_reusable {
+		vertex_payload_cache.insert(payload_key, payload.clone());
+	}
+
+	Ok(Some(mesh_buffers_from_vertex_payload(payload, indices, material_index)))
 }
 
 /// glTF [`Document`] から [`UnaSceneSnapshot`] を構築（メッシュ・材質・スキン・ノード階層）。
@@ -9446,31 +9548,114 @@ pub fn scene_snapshot_from_gltf(
 	image_data: Vec<gltf::image::Data>,
 	report: &mut ImportReport,
 ) -> Result<UnaSceneSnapshot, ImportError> {
+	scene_snapshot_from_gltf_inner(document, buffers, image_data, report, false)
+}
+
+pub fn scene_snapshot_from_gltf_profiled(
+	document: &gltf::Document,
+	buffers: &[gltf::buffer::Data],
+	image_data: Vec<gltf::image::Data>,
+	report: &mut ImportReport,
+) -> Result<UnaSceneSnapshot, ImportError> {
+	scene_snapshot_from_gltf_inner(document, buffers, image_data, report, true)
+}
+
+fn log_scene_snapshot_profile_step(step: &str, started: Instant) {
+	eprintln!(
+		"un-avatar-renderer: gltf scene profile step={step} elapsed={:.1}ms",
+		started.elapsed().as_secs_f64() * 1000.0
+	);
+}
+
+fn scene_snapshot_from_gltf_inner(
+	document: &gltf::Document,
+	buffers: &[gltf::buffer::Data],
+	image_data: Vec<gltf::image::Data>,
+	report: &mut ImportReport,
+	profile: bool,
+) -> Result<UnaSceneSnapshot, ImportError> {
+	let step_started = Instant::now();
 	let mut materials = build_materials(document);
 	if materials.is_empty() {
 		materials.push(UnaMaterialPbr::default());
 	}
+	if profile {
+		log_scene_snapshot_profile_step("build_materials", step_started);
+	}
 
+	let step_started = Instant::now();
 	let image_sources = collect_image_source_metadata(document, buffers);
+	if profile {
+		log_scene_snapshot_profile_step("collect_image_source_metadata", step_started);
+	}
+	let step_started = Instant::now();
 	let images = collect_images(image_data, report).map_err(ImportError::Message)?;
+	if profile {
+		log_scene_snapshot_profile_step("collect_images", step_started);
+	}
+	let step_started = Instant::now();
 	refine_liltoon_alpha_from_images(&mut materials, &images);
+	if profile {
+		log_scene_snapshot_profile_step("refine_liltoon_alpha_from_images", step_started);
+	}
 
+	let step_started = Instant::now();
 	let skins = build_skins(document, buffers)?;
+	if profile {
+		log_scene_snapshot_profile_step("build_skins", step_started);
+	}
 
+	let step_started = Instant::now();
 	let mut meshes: Vec<Vec<UnaMeshBuffers>> = document.meshes().map(|mesh| Vec::with_capacity(mesh.primitives().len())).collect();
+	let mut vertex_payload_key_counts = BTreeMap::<PrimitiveVertexPayloadKey, usize>::new();
+	for mesh in document.meshes() {
+		let mw = mesh.weights();
+		let target_names = mesh_target_names(mesh.clone());
+		for prim in mesh.primitives() {
+			if prim.mode() == gltf::mesh::Mode::Triangles {
+				*vertex_payload_key_counts
+					.entry(primitive_vertex_payload_key(&prim, mw, &target_names))
+					.or_default() += 1;
+			}
+		}
+	}
+	let mut vertex_payload_cache = BTreeMap::new();
 	for mesh in document.meshes() {
 		let mid = mesh.index();
 		let mw = mesh.weights();
 		let target_names = mesh_target_names(mesh.clone());
 		for prim in mesh.primitives() {
-			if let Some(buf) = read_primitive(prim, buffers, mw, &target_names, report)? {
+			let primitive_started = Instant::now();
+			let primitive_index = prim.index();
+			if let Some(buf) = read_primitive(
+				prim,
+				buffers,
+				mw,
+				&target_names,
+				&mut vertex_payload_cache,
+				&vertex_payload_key_counts,
+				report,
+			)? {
+				let vertex_count = buf.positions.len();
+				let index_count = buf.indices.as_ref().map(Vec::len).unwrap_or(0);
+				let morph_count = buf.morph_targets.len();
+				if profile {
+					eprintln!(
+						"un-avatar-renderer: gltf scene primitive profile mesh={mid} primitive={primitive_index} vertices={vertex_count} indices={index_count} morphs={morph_count} elapsed={:.1}ms",
+						primitive_started.elapsed().as_secs_f64() * 1000.0
+					);
+				}
 				if mid < meshes.len() {
 					meshes[mid].push(buf);
 				}
 			}
 		}
 	}
+	if profile {
+		log_scene_snapshot_profile_step("read_meshes", step_started);
+	}
 
+	let step_started = Instant::now();
 	let mut nodes = Vec::with_capacity(document.nodes().len());
 	for node in document.nodes() {
 		let children: Vec<usize> = node.children().map(|c| c.index()).collect();
@@ -9487,12 +9672,19 @@ pub fn scene_snapshot_from_gltf(
 			local_bounds: None,
 		});
 	}
+	if profile {
+		log_scene_snapshot_profile_step("read_nodes", step_started);
+	}
 
+	let step_started = Instant::now();
 	let roots: Vec<usize> = document
 		.default_scene()
 		.or_else(|| document.scenes().next())
 		.map(|s| s.nodes().map(|n| n.index()).collect())
 		.unwrap_or_default();
+	if profile {
+		log_scene_snapshot_profile_step("read_roots", step_started);
+	}
 
 	let scene = UnaSceneSnapshot {
 		meshes,
