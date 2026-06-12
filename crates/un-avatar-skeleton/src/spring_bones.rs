@@ -33,8 +33,8 @@ use std::collections::BTreeMap;
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use un_avatar_core::{
-	una_dynamics_translation_writeback_candidate_count, UnaDynamicsGroup, UnaDynamicsLimit, UnaRuntimeDynamics, UnaSceneNode,
-	UnaSceneSnapshot, UnaSpringBoneSettings,
+	una_dynamics_translation_writeback_candidate_count, UnaDynamicsGroup, UnaDynamicsLimit, UnaDynamicsWritebackMode, UnaRuntimeDynamics,
+	UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings,
 };
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
@@ -276,6 +276,12 @@ fn default_spring_bone_categories() -> Vec<SpringBoneCategoryDefinition> {
 	]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TailTranslationWritebackTarget {
+	NextChainNode { node: usize },
+	TerminalChildNode { node: usize },
+}
+
 /// 1 joint 分の rest pose snapshot と動的状態（curr/prev tail）。
 struct JointRuntime {
 	parent_node: usize,
@@ -294,6 +300,8 @@ struct JointRuntime {
 	hit_radius: f32,
 	/// Whether this joint may later use translation writeback without moving a skinned deformation joint.
 	translation_writeback_allowed: bool,
+	/// The local translation target represented by this tail particle, if stretch writeback is safe.
+	translation_writeback_target: Option<TailTranslationWritebackTarget>,
 	/// 動的: 現在フレームの tail (world)。
 	curr_tail: Vec3,
 	/// 動的: 前フレームの tail (world)。`curr - prev` が Verlet 速度。
@@ -469,6 +477,33 @@ fn resolve_group_params(
 	}
 }
 
+fn tail_translation_writeback_target(
+	scene: &UnaSceneSnapshot,
+	group: UnaDynamicsGroup<'_>,
+	chain: &[usize],
+	joint_index: usize,
+) -> Option<TailTranslationWritebackTarget> {
+	if group.writeback_mode != UnaDynamicsWritebackMode::RotationTranslation {
+		return None;
+	}
+	if joint_index + 2 < chain.len() {
+		let anchor = chain[joint_index + 1];
+		let target = chain[joint_index + 2];
+		if una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, &[anchor, target]) > 0 {
+			return Some(TailTranslationWritebackTarget::NextChainNode { node: target });
+		}
+		return None;
+	}
+	if chain.len() == 2 && joint_index + 1 < chain.len() {
+		let anchor = chain[joint_index];
+		let target = chain[joint_index + 1];
+		if una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, &[anchor, target]) > 0 {
+			return Some(TailTranslationWritebackTarget::TerminalChildNode { node: target });
+		}
+	}
+	None
+}
+
 /// `root_idx` の local を起点に親世界行列を畳み込み、子孫の世界行列を `world` に書き込む。
 fn propagate_world_subtree(nodes: &[UnaSceneNode], world: &mut [Mat4], root_idx: usize, parent_world: Mat4) {
 	if root_idx >= nodes.len() || root_idx >= world.len() {
@@ -594,8 +629,7 @@ impl SpringBoneSimulator {
 					.filter(|value| value.is_finite())
 					.unwrap_or(g.parameters.hit_radius)
 					.max(0.0);
-				let translation_writeback_allowed =
-					una_dynamics_translation_writeback_candidate_count(scene, g.writeback_mode, &[parent, child]) > 0;
+				let translation_writeback_target = tail_translation_writeback_target(scene, g, chain, i);
 				joints.push(JointRuntime {
 					parent_node: parent,
 					child_node: child,
@@ -605,7 +639,8 @@ impl SpringBoneSimulator {
 					bone_axis,
 					length,
 					hit_radius,
-					translation_writeback_allowed,
+					translation_writeback_allowed: translation_writeback_target.is_some(),
+					translation_writeback_target,
 					curr_tail: curr,
 					prev_tail: curr,
 					rest_lambda: 0.0,
@@ -690,6 +725,15 @@ impl SpringBoneSimulator {
 			.filter_map(Option::as_ref)
 			.flat_map(|runtime| runtime.joints.iter())
 			.filter(|joint| joint.translation_writeback_allowed)
+			.count()
+	}
+
+	pub fn translation_writeback_target_count(&self) -> usize {
+		self.runtimes
+			.iter()
+			.filter_map(Option::as_ref)
+			.flat_map(|runtime| runtime.joints.iter())
+			.filter(|joint| joint.translation_writeback_target.is_some())
 			.count()
 	}
 }
@@ -1157,6 +1201,80 @@ mod tests {
 		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 
 		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_target_count(), 1);
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(
+			runtime.joints[0].translation_writeback_target,
+			Some(TailTranslationWritebackTarget::NextChainNode { node: 2 })
+		);
+		assert_eq!(runtime.joints[1].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn translation_writeback_targets_do_not_duplicate_terminal_tail() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				bone_node_indices: vec![0, 1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_target_count(), 1);
+		assert_eq!(
+			runtime.joints[0].translation_writeback_target,
+			Some(TailTranslationWritebackTarget::NextChainNode { node: 2 })
+		);
+		assert_eq!(runtime.joints[1].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn translation_writeback_targets_leaf_child_for_two_node_chain() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				bone_node_indices: vec![0, 1],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_target_count(), 1);
+		assert_eq!(
+			runtime.joints[0].translation_writeback_target,
+			Some(TailTranslationWritebackTarget::TerminalChildNode { node: 1 })
+		);
 	}
 
 	#[test]
