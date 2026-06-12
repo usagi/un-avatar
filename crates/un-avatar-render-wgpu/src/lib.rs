@@ -5004,6 +5004,7 @@ mod tests {
 			max_angle_z: Some(45.0),
 			max_stretch: Some(0.25),
 			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
+			translation_writeback_candidate_count: 1,
 			allow_grabbing: None,
 			allow_posing: None,
 			interaction_parameter: String::new(),
@@ -5390,6 +5391,7 @@ mod tests {
 				max_angle_z: Some(30.0),
 				max_stretch: Some(0.0),
 				writeback_mode: Default::default(),
+				translation_writeback_candidate_count: 0,
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
 				interaction_parameter: "HairPB".to_string(),
@@ -5551,6 +5553,12 @@ mod tests {
 		assert_eq!(
 			dynamics_groups[0].get("writeback_mode").and_then(|value| value.as_str()),
 			Some("rotation_only")
+		);
+		assert_eq!(
+			dynamics_groups[0]
+				.get("translation_writeback_candidate_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
 		);
 		assert_eq!(
 			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),

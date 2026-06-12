@@ -26,7 +26,11 @@
 		const override = group.runtime_enabled_override == null ? "" : `, override=${group.runtime_enabled_override}`;
 		const parameter = group.interaction_parameter ? `, param=${group.interaction_parameter}` : "";
 		const writeback = group.writeback_mode ? `, writeback=${group.writeback_mode}` : "";
-		return `${path} (${group.source_kind}, ${state}, authored=${group.authored_enabled}${override}, bones=${group.bone_count}${writeback}${parameter})`;
+		const translationCandidates =
+			group.translation_writeback_candidate_count == null
+				? ""
+				: `, translationCandidates=${group.translation_writeback_candidate_count}`;
+		return `${path} (${group.source_kind}, ${state}, authored=${group.authored_enabled}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${parameter})`;
 	}
 
 	function interactionHookLabel(hook: RendererRuntimeDiagnosticsData["dynamics_interaction_hooks"][number]): string {

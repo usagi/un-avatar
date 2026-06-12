@@ -109,6 +109,7 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	max_angle_z?: number;
 	max_stretch?: number;
 	writeback_mode?: string;
+	translation_writeback_candidate_count?: number;
 	allow_grabbing?: boolean;
 	allow_posing?: boolean;
 	interaction_parameter?: string;

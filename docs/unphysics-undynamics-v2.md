@@ -55,7 +55,7 @@ Stretch / writeback policy:
 
 - Stretch は source-specific PhysBone feature ではなく、UNDynamics chain limit と solver writeback の能力として扱う。
 - 現 solver backend は tail position を解いた後、ボーン local transform へ主に rotation を書き戻す。`rest_local_translation` と `rest_local_scale` は保持されるため、tail 解に stretch を許しても実ボーン長へ反映できない。
-- v2 初期で stretch を実装する場合、まず solver output を `rotation_only` と `rotation_translation` のどちらで書き戻すかを group / joint 単位で明示する。実ボーンを伸縮させる対象は synthetic endpoint child、または skinned mesh を壊さない leaf / accessory chain に限定し、Humanoid / skinned deformation の基準ボーンには既定で translation stretch を書かない。solver は scene skin joint set を見て、`rotation_translation` group でも skinned joint child は translation writeback candidate から除外する。
+- v2 初期で stretch を実装する場合、まず solver output を `rotation_only` と `rotation_translation` のどちらで書き戻すかを group / joint 単位で明示する。実ボーンを伸縮させる対象は synthetic endpoint child、または skinned mesh を壊さない leaf / accessory chain に限定し、Humanoid / skinned deformation の基準ボーンには既定で translation stretch を書かない。solver は scene skin joint set を見て、`rotation_translation` group でも skinned joint child は translation writeback candidate から除外する。CLI diagnose / renderer runtime status / Supervisor diagnostics は group ごとの `translation_writeback_candidate_count` を公開する。
 - `max_stretch` は rest tail length に対する上限倍率として正規化する。値は solver constraint の許容長に使うが、writeback mode が `rotation_only` の group では diagnostics metadata に留める。`.unavatar` importer は `writebackMode` / `writeback_mode` を runtime group の `writeback_mode` へ lower するが、現 solver backend では `rotation_translation` をまだ実装せず、CLI diagnose / renderer runtime status warning で unsupported として扱う。
 - SpringBone 的な固定長拘束を単に緩めるだけの実装は不可とする。視覚上の伸縮、collider 判定、次 joint の parent pose、reset 時の rest pose 復帰が同じ policy で説明できる必要がある。
 
