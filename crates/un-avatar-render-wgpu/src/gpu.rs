@@ -506,7 +506,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 						.and_then(|groups| groups.as_array())
 						.into_iter()
 						.flatten()
-						.filter_map(|group| group.as_str().filter(|group| !group.is_empty()).map(str::to_owned))
+						.filter_map(|group| group.as_str().map(str::to_owned))
 				})
 				.collect::<Vec<_>>()
 		})
@@ -7723,6 +7723,49 @@ mod tests {
 		assert!(plan
 			.reason
 			.contains("mesh/texture/material assets do not yet carry group ownership metadata"));
+	}
+
+	#[test]
+	fn wardrobe_asset_upload_plan_preserves_empty_base_asset_group() {
+		let mut document = un_avatar_core::UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: String::new(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 0,
+						primitive_index: 0,
+					}],
+					materials: vec![0],
+					images: vec![0],
+					dynamics_source_ids: Vec::new(),
+				}],
+				..Default::default()
+			}),
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().set_active_asset_groups(vec![String::new()]);
+
+		let plan = wardrobe_asset_upload_plan_for_document(&document);
+		assert_eq!(plan.declared_asset_groups, vec![String::new()]);
+		assert_eq!(plan.active_asset_groups, vec![String::new()]);
+		assert_eq!(plan.mode, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED);
+		assert!(!plan.all_resident);
+		assert!(plan.scoped_upload_supported);
+		assert!(plan.missing_active_asset_groups.is_empty());
+		assert_eq!(plan.resident_mesh_primitive_count, 1);
+		assert_eq!(plan.resident_material_count, 1);
+		assert_eq!(plan.resident_image_count, 1);
 	}
 
 	#[test]
