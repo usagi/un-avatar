@@ -217,6 +217,8 @@ pub struct UnaRuntimeParameterDefinition {
 	pub default_value: Option<f32>,
 	#[serde(default, skip_serializing_if = "is_false")]
 	pub has_explicit_default_value: bool,
+	#[serde(default, skip_serializing_if = "is_false")]
+	pub override_animator_defaults: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub local_only: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2400,6 +2402,7 @@ fn add_modular_avatar_parameter_definition(
 			definition.value_samples.push(default_value);
 		}
 	}
+	definition.override_animator_defaults |= modular_avatar_parameter_override_animator_defaults(parameter);
 	definition.local_only = Some(json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))));
 	definition.saved = Some(json_bool(parameter.get("saved")));
 	definition.internal_parameter |= json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter")));
@@ -2426,18 +2429,34 @@ fn modular_avatar_parameter_sync_type(parameter: &Value) -> String {
 }
 
 fn modular_avatar_parameter_default_value(parameter: &Value) -> Option<f32> {
-	const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
+	modular_avatar_parameter_has_default_value(parameter).then(|| modular_avatar_parameter_raw_default_value(parameter))
+}
 
+fn modular_avatar_parameter_raw_default_value(parameter: &Value) -> f32 {
+	parameter
+		.get("defaultValue")
+		.or_else(|| parameter.get("default_value"))
+		.and_then(json_number_f32)
+		.unwrap_or(0.0)
+}
+
+fn modular_avatar_parameter_has_default_value(parameter: &Value) -> bool {
+	const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
 	let has_explicit_default_value = json_bool(
 		parameter
 			.get("hasExplicitDefaultValue")
 			.or_else(|| parameter.get("has_explicit_default_value")),
 	);
-	parameter
-		.get("defaultValue")
-		.or_else(|| parameter.get("default_value"))
-		.and_then(json_number_f32)
-		.filter(|default_value| has_explicit_default_value || default_value.abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON)
+	has_explicit_default_value || modular_avatar_parameter_raw_default_value(parameter).abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON
+}
+
+fn modular_avatar_parameter_override_animator_defaults(parameter: &Value) -> bool {
+	json_bool(
+		parameter
+			.get("overrideAnimatorDefaults")
+			.or_else(|| parameter.get("m_overrideAnimatorDefaults"))
+			.or_else(|| parameter.get("override_animator_defaults")),
+	) || modular_avatar_parameter_sync_type(parameter) == "NotSynced" && modular_avatar_parameter_has_default_value(parameter)
 }
 
 fn modular_avatar_parameter_values(component: &Value) -> impl Iterator<Item = &Value> {
@@ -7568,6 +7587,11 @@ mod tests {
 										"syncType": "Float",
 										"defaultValue": 0.0,
 										"hasExplicitDefaultValue": true
+									},
+									{
+										"nameOrPrefix": "LocalDefault",
+										"syncType": "NotSynced",
+										"defaultValue": 0.25
 									}
 								]
 							}
@@ -7580,14 +7604,26 @@ mod tests {
 
 		assert_eq!(
 			document.runtime_model().runtime_parameter_initial_values(),
-			BTreeMap::from([("Existing".to_string(), 2.0), ("ExplicitZero".to_string(), 0.0)])
+			BTreeMap::from([
+				("Existing".to_string(), 2.0),
+				("ExplicitZero".to_string(), 0.0),
+				("LocalDefault".to_string(), 0.25)
+			])
 		);
 		assert_eq!(
 			document.runtime_model_mut().apply_runtime_parameter_initial_values(),
-			BTreeMap::from([("ExplicitZero".to_string(), 0.0)])
+			BTreeMap::from([("ExplicitZero".to_string(), 0.0), ("LocalDefault".to_string(), 0.25)])
 		);
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("Existing"), Some(&4.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ExplicitZero"), Some(&0.0));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("LocalDefault"), Some(&0.25));
+		let local_default = document
+			.runtime_model()
+			.runtime_parameter_definitions()
+			.into_iter()
+			.find(|definition| definition.name == "LocalDefault")
+			.expect("LocalDefault runtime parameter definition");
+		assert!(local_default.override_animator_defaults);
 	}
 
 	#[test]

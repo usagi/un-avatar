@@ -3374,6 +3374,19 @@ fn modular_avatar_parameter_summary(
 		.filter(|value| !value.is_empty())
 		.unwrap_or("NotSynced")
 		.to_string();
+	let default_value = modular_avatar_parameter_default_value(parameter);
+	let has_explicit_default_value = json_bool(
+		parameter
+			.get("hasExplicitDefaultValue")
+			.or_else(|| parameter.get("has_explicit_default_value")),
+	);
+	let has_default_value = has_explicit_default_value || default_value.abs() > MODULAR_AVATAR_PARAMETER_VALUE_EPSILON;
+	let override_animator_defaults = json_bool(
+		parameter
+			.get("overrideAnimatorDefaults")
+			.or_else(|| parameter.get("m_overrideAnimatorDefaults"))
+			.or_else(|| parameter.get("override_animator_defaults")),
+	) || sync_type == "NotSynced" && has_default_value;
 	Some(DiagnoseModularAvatarParameterSummary {
 		component_index,
 		name_or_prefix,
@@ -3382,24 +3395,21 @@ fn modular_avatar_parameter_summary(
 		is_prefix: json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix"))),
 		sync_type,
 		local_only: json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))),
-		default_value: parameter
-			.get("defaultValue")
-			.or_else(|| parameter.get("default_value"))
-			.and_then(json_number_f64)
-			.unwrap_or(0.0) as f32,
+		default_value,
 		saved: json_bool(parameter.get("saved")),
-		has_explicit_default_value: json_bool(
-			parameter
-				.get("hasExplicitDefaultValue")
-				.or_else(|| parameter.get("has_explicit_default_value")),
-		),
-		override_animator_defaults: json_bool(
-			parameter
-				.get("overrideAnimatorDefaults")
-				.or_else(|| parameter.get("m_overrideAnimatorDefaults"))
-				.or_else(|| parameter.get("override_animator_defaults")),
-		),
+		has_explicit_default_value,
+		override_animator_defaults,
 	})
+}
+
+const MODULAR_AVATAR_PARAMETER_VALUE_EPSILON: f32 = 0.000001;
+
+fn modular_avatar_parameter_default_value(parameter: &serde_json::Value) -> f32 {
+	parameter
+		.get("defaultValue")
+		.or_else(|| parameter.get("default_value"))
+		.and_then(json_number_f64)
+		.unwrap_or(0.0) as f32
 }
 
 fn json_bool(value: Option<&serde_json::Value>) -> bool {
@@ -6472,8 +6482,7 @@ mod tests {
 									"internalParameter": true,
 									"syncType": "NotSynced",
 									"localOnly": true,
-									"defaultValue": 0.25,
-									"m_overrideAnimatorDefaults": true
+									"defaultValue": 0.25
 								}]
 							}
 						}, {
