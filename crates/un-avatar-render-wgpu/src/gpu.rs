@@ -39,6 +39,7 @@ use crate::{
 		AudioLinkOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, ColorGradingLook, ContactShadowOptions,
 		EnvironmentColorOptions, LightingOptions,
 	},
+	pipeline_cache::PersistentPipelineCache,
 	post_process::PostProcess,
 	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
 	WindowDebugOptions,
@@ -2198,6 +2199,7 @@ pub(crate) struct GpuSceneBuildContext {
 	format: wgpu::TextureFormat,
 	aa: AaMode,
 	shader_variant_tier: MeshShaderVariantTier,
+	pipeline_cache: PersistentPipelineCache,
 }
 
 /// `Mat4::perspective_rh` 用の縦方向 FOV（ラジアン）を、対角画角と幅÷高さから求める。
@@ -2351,7 +2353,9 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		adapter_features
 			& (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ASTC | wgpu::Features::TEXTURE_COMPRESSION_ETC2)
 	};
-	let required_features = texture_compression_features | (adapter_features & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+	let pipeline_cache_features = adapter_features & wgpu::Features::PIPELINE_CACHE;
+	let required_features =
+		texture_compression_features | (adapter_features & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) | pipeline_cache_features;
 	let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 		label: Some("un-avatar-renderer-gpu-scene-benchmark"),
 		required_features,
@@ -2363,6 +2367,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 	device.on_uncaptured_error(Arc::new(|error| {
 		eprintln!("un-avatar-renderer: uncaptured wgpu error: {error}");
 	}));
+	let pipeline_cache = PersistentPipelineCache::load(&device, &adapter.get_info());
 	eprintln!(
 		"un-avatar-renderer: gpu scene benchmark adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
 		mesh_shader_plan.tier,
@@ -2403,6 +2408,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		format: wgpu::TextureFormat::Bgra8UnormSrgb,
 		aa: opts.aa,
 		shader_variant_tier: mesh_shader_plan.tier,
+		pipeline_cache,
 	};
 	let prepared = context.prepare_document_scene(document, &options, |progress| {
 		eprintln!(
@@ -2438,9 +2444,11 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 	.map_err(|e| format!("shader prewarm: request_adapter: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+	let adapter_features = adapter.features();
+	let pipeline_cache_features = adapter_features & wgpu::Features::PIPELINE_CACHE;
 	let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 		label: Some("un-avatar-renderer-shader-prewarm"),
-		required_features: wgpu::Features::empty(),
+		required_features: pipeline_cache_features,
 		required_limits: mesh_shader_plan.required_limits,
 		memory_hints: Default::default(),
 		..Default::default()
@@ -2449,6 +2457,7 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 	device.on_uncaptured_error(Arc::new(|error| {
 		eprintln!("un-avatar-renderer: uncaptured wgpu error during shader prewarm: {error}");
 	}));
+	let pipeline_cache = PersistentPipelineCache::load(&device, &adapter.get_info());
 	eprintln!(
 		"un-avatar-renderer: shader prewarm adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
 		mesh_shader_plan.tier,
@@ -2461,6 +2470,7 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 		wgpu::TextureFormat::Bgra8UnormSrgb,
 		sample_count,
 		mesh_shader_plan.tier,
+		pipeline_cache.cache(),
 		|label| {
 			eprintln!(
 				"un-avatar-renderer: shader prewarm compiling {label} ({:.1}ms)",
@@ -2470,6 +2480,7 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 	);
 	queue.submit([]);
 	device.poll(wgpu::PollType::wait_indefinitely()).ok();
+	pipeline_cache.store();
 	eprintln!(
 		"un-avatar-renderer: shader prewarm complete shader_modules={} render_pipelines={} compute_pipelines={} pipeline_elapsed={:.1}ms total={:.1}ms",
 		summary.shader_modules,
@@ -3439,6 +3450,7 @@ pub(crate) struct GpuState {
 	pub(crate) device: wgpu::Device,
 	pub(crate) queue: wgpu::Queue,
 	pub(crate) config: wgpu::SurfaceConfiguration,
+	pipeline_cache: PersistentPipelineCache,
 	alpha_modes: Vec<wgpu::CompositeAlphaMode>,
 	depth_texture: wgpu::Texture,
 	depth_view: wgpu::TextureView,
@@ -3623,7 +3635,8 @@ impl GpuState {
 		};
 		let timestamp_features = adapter_features & wgpu::Features::TIMESTAMP_QUERY;
 		let texture_format_features = adapter_features & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
-		let required_features = texture_compression_features | timestamp_features | texture_format_features;
+		let pipeline_cache_features = adapter_features & wgpu::Features::PIPELINE_CACHE;
+		let required_features = texture_compression_features | timestamp_features | texture_format_features | pipeline_cache_features;
 
 		let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
 			label: Some("un-avatar-renderer"),
@@ -3636,6 +3649,7 @@ impl GpuState {
 		device.on_uncaptured_error(Arc::new(|error| {
 			eprintln!("un-avatar-renderer: uncaptured wgpu error: {error}");
 		}));
+		let pipeline_cache = PersistentPipelineCache::load(&device, &adapter.get_info());
 
 		let caps = surface.get_capabilities(&adapter);
 		let format = *caps
@@ -3814,6 +3828,7 @@ impl GpuState {
 			device,
 			queue,
 			config,
+			pipeline_cache,
 			alpha_modes: caps.alpha_modes,
 			depth_texture,
 			depth_view,
@@ -5625,6 +5640,7 @@ impl GpuState {
 			format: self.config.format,
 			aa: self.aa,
 			shader_variant_tier: self.shader_variant_tier,
+			pipeline_cache: self.pipeline_cache.clone(),
 		}
 	}
 
@@ -5690,6 +5706,7 @@ impl GpuSceneBuildContext {
 			format,
 			aa,
 			shader_variant_tier,
+			pipeline_cache,
 		} = self;
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
 		let runtime_model = document.runtime_model();
@@ -5724,6 +5741,7 @@ impl GpuSceneBuildContext {
 				format,
 				aa_sample_count(aa),
 				shader_variant_tier,
+				pipeline_cache.cache(),
 				runtime.scene,
 				runtime.expression_catalog,
 				runtime_model.active_asset_groups(),
@@ -5754,6 +5772,7 @@ impl GpuSceneBuildContext {
 				scene_meshes = Some(sm);
 			}
 		}
+		pipeline_cache.store();
 		let document_wrapped = Arc::new(RwLock::new(document));
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,

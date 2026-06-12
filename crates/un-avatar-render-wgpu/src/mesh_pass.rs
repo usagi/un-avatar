@@ -5094,6 +5094,7 @@ fn create_compute_fur_cards_bind_group_layout(device: &wgpu::Device) -> wgpu::Bi
 fn create_compute_fur_cards_compute_pipeline(
 	device: &wgpu::Device,
 	bind_group_layout: &wgpu::BindGroupLayout,
+	pipeline_cache: Option<&wgpu::PipelineCache>,
 ) -> ComputeFurCardsComputePipeline {
 	let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 		label: Some("compute_fur_cards"),
@@ -5110,7 +5111,7 @@ fn create_compute_fur_cards_compute_pipeline(
 		module: &shader,
 		entry_point: Some("compute_fur_cards_generate"),
 		compilation_options: wgpu::PipelineCompilationOptions::default(),
-		cache: None,
+		cache: pipeline_cache,
 	});
 	ComputeFurCardsComputePipeline {
 		_bind_group_layout: bind_group_layout.clone(),
@@ -6842,6 +6843,7 @@ impl SceneMeshes {
 		shader: &wgpu::ShaderModule,
 		format: wgpu::TextureFormat,
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
+		pipeline_cache: Option<&wgpu::PipelineCache>,
 		label: &'static str,
 		vertex_entry: &'static str,
 		fragment_entry: &'static str,
@@ -6851,7 +6853,7 @@ impl SceneMeshes {
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
-			cache: None,
+			cache: pipeline_cache,
 			vertex: wgpu::VertexState {
 				module: shader,
 				entry_point: Some(vertex_entry),
@@ -6895,6 +6897,7 @@ impl SceneMeshes {
 		shader: &wgpu::ShaderModule,
 		format: wgpu::TextureFormat,
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
+		pipeline_cache: Option<&wgpu::PipelineCache>,
 		kind: DrawPipelineKind,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
@@ -7004,6 +7007,7 @@ impl SceneMeshes {
 			shader,
 			format,
 			vb_layout,
+			pipeline_cache,
 			label,
 			vertex_entry,
 			fragment_entry,
@@ -7016,6 +7020,7 @@ impl SceneMeshes {
 		format: wgpu::TextureFormat,
 		sample_count: u32,
 		shader_variant_tier: MeshShaderVariantTier,
+		pipeline_cache: Option<&wgpu::PipelineCache>,
 		mut progress: impl FnMut(&'static str),
 	) -> MeshPipelinePrewarmSummary {
 		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -7217,7 +7222,16 @@ impl SceneMeshes {
 			summary.shader_modules += 1;
 			for kind in pipeline_kinds {
 				progress(kind.label());
-				let _pipeline = Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count);
+				let _pipeline = Self::create_draw_pipeline(
+					device,
+					&pipeline_layout,
+					&shader,
+					format,
+					&vb_layout,
+					pipeline_cache,
+					kind,
+					sample_count,
+				);
 				summary.render_pipelines += 1;
 			}
 			progress("mesh_outline_toon");
@@ -7227,6 +7241,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&vb_layout,
+				pipeline_cache,
 				"mesh_outline_toon",
 				"vs_outline",
 				"fs_outline",
@@ -7240,6 +7255,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
+				pipeline_cache,
 				"mesh_compute_fur_cards_pre_toon",
 				"vs_compute_fur_cards_pre",
 				"fs_fur_toon_pre",
@@ -7253,6 +7269,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
+				pipeline_cache,
 				"mesh_compute_fur_cards_toon",
 				"vs_compute_fur_cards",
 				"fs_fur_toon",
@@ -7261,7 +7278,7 @@ impl SceneMeshes {
 			summary.render_pipelines += 1;
 		}
 		progress("compute_fur_cards");
-		let _compute = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_layout);
+		let _compute = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_layout, pipeline_cache);
 		summary.compute_pipelines += 1;
 		summary
 	}
@@ -7273,6 +7290,7 @@ impl SceneMeshes {
 		format: wgpu::TextureFormat,
 		sample_count: u32,
 		shader_variant_tier: MeshShaderVariantTier,
+		pipeline_cache: Option<&wgpu::PipelineCache>,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
 		active_asset_groups: &[String],
@@ -8441,6 +8459,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&vb_layout,
+				pipeline_cache,
 				label,
 				"vs_outline",
 				"fs_outline",
@@ -8453,7 +8472,7 @@ impl SceneMeshes {
 			let label = "compute_fur_cards";
 			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
 			let start = Instant::now();
-			let pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout);
+			let pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout, pipeline_cache);
 			log_slow_gpu_scene_step(format!("compute pipeline {label}"), start.elapsed());
 			pipeline
 		});
@@ -8467,6 +8486,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
+				pipeline_cache,
 				label,
 				"vs_compute_fur_cards_pre",
 				"fs_fur_toon_pre",
@@ -8485,6 +8505,7 @@ impl SceneMeshes {
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
+				pipeline_cache,
 				label,
 				"vs_compute_fur_cards",
 				"fs_fur_toon",
@@ -8498,7 +8519,16 @@ impl SceneMeshes {
 			let label = kind.label();
 			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
 			let start = Instant::now();
-			let pipeline = Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count);
+			let pipeline = Self::create_draw_pipeline(
+				device,
+				&pipeline_layout,
+				&shader,
+				format,
+				&vb_layout,
+				pipeline_cache,
+				kind,
+				sample_count,
+			);
 			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
 			pipelines.insert(kind, pipeline);
 		}
@@ -9916,7 +9946,7 @@ mod tests {
 		};
 
 		let bind_group_layout = create_compute_fur_cards_bind_group_layout(&device);
-		let _pipeline = create_compute_fur_cards_compute_pipeline(&device, &bind_group_layout);
+		let _pipeline = create_compute_fur_cards_compute_pipeline(&device, &bind_group_layout, None);
 	}
 
 	#[test]
@@ -10177,6 +10207,7 @@ mod tests {
 			&outline_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&vb_layout,
+			None,
 			"mesh_outline_toon",
 			"vs_outline",
 			"fs_outline",
@@ -10193,6 +10224,7 @@ mod tests {
 			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&vb_layout,
+			None,
 			"mesh_opaque_toon",
 			"vs_main",
 			"fs_toon",
@@ -10204,6 +10236,7 @@ mod tests {
 			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&compute_fur_cards_vb_layout,
+			None,
 			"mesh_compute_fur_cards_pre_toon",
 			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
@@ -10215,6 +10248,7 @@ mod tests {
 			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&compute_fur_cards_vb_layout,
+			None,
 			"mesh_compute_fur_cards_toon",
 			"vs_compute_fur_cards",
 			"fs_fur_toon",

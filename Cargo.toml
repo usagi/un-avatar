@@ -30,7 +30,7 @@ license = "MIT"
 repository = "https://github.com/usagi/un-avatar"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.dependencies]
 # https://crates.io/crates/un-motion-frame / un-motion-frame-zenoh (registry で統一)

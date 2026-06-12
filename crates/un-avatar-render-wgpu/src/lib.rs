@@ -10,6 +10,7 @@ mod manifest;
 mod mesh_pass;
 mod model_loader;
 mod options;
+mod pipeline_cache;
 mod post_process;
 mod scene_transform;
 #[cfg(test)]
