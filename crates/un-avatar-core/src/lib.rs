@@ -3988,6 +3988,10 @@ pub struct UnaImageSourceMetadata {
 	pub srgb: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sampler: Option<UnaTextureSampler>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub width: Option<u32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub height: Option<u32>,
 	pub byte_length: u64,
 	pub source_hash: u64,
 	/// Encoded source payload retained for runtime lazy decode. This is intentionally

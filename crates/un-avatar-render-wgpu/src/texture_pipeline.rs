@@ -1503,6 +1503,58 @@ pub(crate) fn compressed_cache_lookup_from_source(
 	})
 }
 
+pub(crate) fn compressed_cache_lookup_from_source_metadata(
+	width: u32,
+	height: u32,
+	max_dimension: Option<u32>,
+	role: TextureRole,
+	mode: TextureCompressionMode,
+	advanced: &TextureCompressionAdvancedOptions,
+	bc_supported: bool,
+	source_key: u64,
+) -> Option<CompressedTextureCacheLookup> {
+	let kind = if should_try_bc5_normal(mode, advanced, role, bc_supported) {
+		TextureUploadKind::Bc5Unorm
+	} else if should_try_bc7_color(mode, advanced, role, bc_supported) {
+		TextureUploadKind::Bc7Srgb
+	} else if bc_supported
+		&& !matches!(mode, TextureCompressionMode::Source | TextureCompressionMode::Compat)
+		&& !matches!(
+			compression_preference_for_role(mode, advanced, role),
+			TextureCompressionPreference::Source | TextureCompressionPreference::HighQuality
+		) && matches!(role, TextureRole::Clothing | TextureRole::GenericColor | TextureRole::Emissive)
+	{
+		TextureUploadKind::Bc1Srgb
+	} else {
+		return None;
+	};
+	let preference = compression_preference_for_role(mode, advanced, role);
+	let (processed_width, processed_height) = resized_dimensions_to_max_dimension(width, height, max_dimension);
+	let processed_mip_count = if texture_role_uses_mips(role) {
+		mip_level_count(processed_width, processed_height)
+	} else {
+		1
+	};
+	let key = compressed_texture_cache_key(
+		source_key,
+		processed_width,
+		processed_height,
+		processed_mip_count,
+		mode,
+		preference,
+		role,
+		kind,
+	);
+	let path = compressed_cache_path(key, kind)?;
+	Some(CompressedTextureCacheLookup {
+		key,
+		kind,
+		path,
+		processed_width,
+		processed_height,
+	})
+}
+
 fn build_texture_upload_payload_cpu(
 	processed: ProcessedTexture,
 	kind: TextureUploadKind,
@@ -1855,6 +1907,8 @@ mod tests {
 			unity_generate_cubemap: None,
 			srgb: None,
 			sampler: None,
+			width: None,
+			height: None,
 			byte_length: 3,
 			source_hash: 0x1234,
 			encoded_bytes: None,

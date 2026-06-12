@@ -92,6 +92,29 @@ fn is_deferred_image_placeholder(image: &UnaImageRgba) -> bool {
 	image.width == 0 && image.height == 0 && image.pixels.is_empty()
 }
 
+fn image_format_from_mime_type(mime_type: Option<&str>) -> Option<image::ImageFormat> {
+	match mime_type {
+		Some("image/png") => Some(image::ImageFormat::Png),
+		Some("image/jpeg") | Some("image/jpg") => Some(image::ImageFormat::Jpeg),
+		Some("image/webp") => Some(image::ImageFormat::WebP),
+		Some("image/x-exr") | Some("image/exr") => Some(image::ImageFormat::OpenExr),
+		Some("image/vnd.radiance") | Some("image/hdr") => Some(image::ImageFormat::Hdr),
+		_ => None,
+	}
+}
+
+fn encoded_image_dimensions(bytes: &[u8], mime_type: Option<&str>) -> (Option<u32>, Option<u32>) {
+	let result = if let Some(format) = image_format_from_mime_type(mime_type) {
+		image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions()
+	} else {
+		match image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
+			Ok(reader) => reader.into_dimensions(),
+			Err(_) => return (None, None),
+		}
+	};
+	result.map(|(width, height)| (Some(width), Some(height))).unwrap_or((None, None))
+}
+
 fn retain_encoded_bytes_for_deferred_images(image_sources: &mut [Option<UnaImageSourceMetadata>], images: &[UnaImageRgba]) -> usize {
 	let mut retained = 0usize;
 	for (index, source) in image_sources.iter_mut().enumerate() {
@@ -269,6 +292,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					let start = view.offset();
 					let end = start.checked_add(view.length())?;
 					let bytes = buffer.0.get(start..end)?;
+					let (width, height) = encoded_image_dimensions(bytes, Some(mime_type));
 					Some(UnaImageSourceMetadata {
 						name,
 						mime_type: Some(mime_type.to_string()),
@@ -300,6 +324,8 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 							.as_ref()
 							.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 						sampler,
+						width,
+						height,
 						byte_length: bytes.len() as u64,
 						source_hash: fnv1a64(bytes),
 						encoded_bytes: None,
@@ -336,6 +362,8 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						.as_ref()
 						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 					sampler,
+					width: None,
+					height: None,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
 					encoded_bytes: None,
@@ -442,6 +470,8 @@ fn glb_image_source_metadata_from_json_image(
 				.as_ref()
 				.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 			sampler,
+			width: None,
+			height: None,
 			byte_length: 0,
 			source_hash: fnv1a64(uri.as_bytes()),
 			encoded_bytes: None,
@@ -452,6 +482,7 @@ fn glb_image_source_metadata_from_json_image(
 	let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
 	let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
 	let bytes = bin.get(offset..offset.checked_add(length)?)?;
+	let (width, height) = encoded_image_dimensions(bytes, mime_type.as_deref());
 	Some(UnaImageSourceMetadata {
 		name,
 		mime_type,
@@ -483,6 +514,8 @@ fn glb_image_source_metadata_from_json_image(
 			.as_ref()
 			.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
 		sampler,
+		width,
+		height,
 		byte_length: bytes.len() as u64,
 		source_hash: fnv1a64(bytes),
 		encoded_bytes: retain_encoded.then(|| bytes.to_vec()),
@@ -680,6 +713,8 @@ fn append_unavatar_texture_assets(
 		};
 		source_bytes += bytes.len() as u64;
 		decoded_pixels += u64::from(decoded.width) * u64::from(decoded.height);
+		let decoded_width = decoded.width;
+		let decoded_height = decoded.height;
 		let image_index = scene.images.len();
 		scene.images.push(decoded);
 		scene.image_sources.push(Some(UnaImageSourceMetadata {
@@ -695,6 +730,8 @@ fn append_unavatar_texture_assets(
 			unity_generate_cubemap: asset.get("unityGenerateCubemap").and_then(Value::as_str).map(str::to_string),
 			srgb: asset.get("sRGB").or_else(|| asset.get("srgb")).and_then(Value::as_bool),
 			sampler: asset.get("sampler").map(sampler_from_root_json),
+			width: Some(decoded_width),
+			height: Some(decoded_height),
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
 			encoded_bytes: Some(bytes.to_vec()),
@@ -10231,6 +10268,15 @@ fn initial_image_decode_indices_for_import(
 	import_profile_messages: &mut Vec<String>,
 ) -> Option<BTreeSet<usize>> {
 	let indices = initial_resident_image_indices(root_json, initial_wardrobe_set);
+	if std::env::var_os("UN_AVATAR_EAGER_INITIAL_IMAGE_DECODE").is_none() {
+		if let Some(indices) = &indices {
+			import_profile_messages.push(format!(
+				"glTF import profile: deferred_initial_image_decode_count={}",
+				indices.len()
+			));
+			return Some(BTreeSet::new());
+		}
+	}
 	if let Some(indices) = &indices {
 		import_profile_messages.push(format!("glTF import profile: selective_image_decode_count={}", indices.len()));
 	}
