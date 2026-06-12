@@ -2022,15 +2022,16 @@ fn unavatar_dynamics_source_value<'a>(
 		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
 }
 
-fn unavatar_dynamics_writeback_mode(value: &Value) -> UnaDynamicsWritebackMode {
+fn unavatar_dynamics_writeback_mode(value: &Value) -> (UnaDynamicsWritebackMode, Option<String>) {
 	let source_params = unavatar_dynamics_source_params(value);
 	let Some(value) = unavatar_dynamics_source_value(value, source_params, "writebackMode", "writeback_mode").and_then(Value::as_str)
 	else {
-		return UnaDynamicsWritebackMode::RotationOnly;
+		return (UnaDynamicsWritebackMode::RotationOnly, None);
 	};
 	match value.trim().to_ascii_lowercase().as_str() {
-		"rotation_translation" | "rotationtranslation" | "rotation-translation" => UnaDynamicsWritebackMode::RotationTranslation,
-		_ => UnaDynamicsWritebackMode::RotationOnly,
+		"rotation_only" | "rotationonly" | "rotation-only" => (UnaDynamicsWritebackMode::RotationOnly, None),
+		"rotation_translation" | "rotationtranslation" | "rotation-translation" => (UnaDynamicsWritebackMode::RotationTranslation, None),
+		_ => (UnaDynamicsWritebackMode::RotationOnly, Some(value.to_string())),
 	}
 }
 
@@ -2173,7 +2174,12 @@ fn unavatar_dynamics_settings(
 		let (gravity_power, gravity_dir) = unavatar_dynamics_gravity(item);
 		let limit = unavatar_dynamics_limit(item);
 		let interaction = unavatar_dynamics_interaction(item);
-		let writeback_mode = unavatar_dynamics_writeback_mode(item);
+		let (writeback_mode, unknown_writeback_mode) = unavatar_dynamics_writeback_mode(item);
+		if let Some(unknown_writeback_mode) = unknown_writeback_mode {
+			report.push_warning(format!(
+				".unavatar dynamics: unknown writebackMode {unknown_writeback_mode:?} for {source_id:?}; defaulting to rotation_only"
+			));
+		}
 		let source_params = unavatar_dynamics_source_params(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
 			unavatar_dynamics_source_value(item, source_params, "ignoreTransforms", "ignore_transforms")
@@ -10045,6 +10051,38 @@ mod tests {
 			.iter()
 			.any(|message| message.contains("synthesized_endpoint_children=1")));
 		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_warns_on_unknown_writeback_mode() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_tip", "path": "Root/Tip"}
+				],
+				"dynamics": [{
+					"id": "tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"writebackMode": "stretch_everything"
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationOnly);
+		assert!(report.messages.iter().any(|message| {
+			message.contains("unknown writebackMode \"stretch_everything\"") && message.contains("defaulting to rotation_only")
+		}));
 	}
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
