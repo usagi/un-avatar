@@ -118,7 +118,8 @@ fn import_gltf_slice_parallel_images(
 	let gltf = gltf::Gltf::from_slice(slice).map_err(|e| ImportError::Message(e.to_string()))?;
 	let document = gltf.document;
 	let buffers = gltf::import_buffers(&document, None, gltf.blob).map_err(|e| ImportError::Message(e.to_string()))?;
-	let image_count = document.images().count();
+	let document_images = document.images().collect::<Vec<_>>();
+	let image_count = document_images.len();
 	if image_count == 0 {
 		return Ok((document, buffers, Vec::new()));
 	}
@@ -140,12 +141,12 @@ fn import_gltf_slice_parallel_images(
 		let mut handles = Vec::with_capacity(worker_count);
 		for chunk in decode_indices.chunks(chunk_size) {
 			let indices = chunk.to_vec();
-			let document = &document;
+			let document_images = &document_images;
 			let buffers = &buffers;
 			handles.push(scope.spawn(move || {
 				let mut decoded = Vec::with_capacity(indices.len());
 				for index in indices {
-					let Some(image) = document.images().nth(index) else {
+					let Some(image) = document_images.get(index) else {
 						continue;
 					};
 					let data = gltf::image::Data::from_source(image.source(), None, buffers).map_err(|e| e.to_string())?;
@@ -10042,6 +10043,18 @@ fn record_gltf_import_profile_step(report: &mut ImportReport, step: &str, starte
 	report.push_info(format!("glTF import profile: {step}_ms={}", started.elapsed().as_millis()));
 }
 
+fn initial_image_decode_indices_for_import(
+	root_json: Option<&Value>,
+	initial_wardrobe_set: Option<&str>,
+	import_profile_messages: &mut Vec<String>,
+) -> Option<BTreeSet<usize>> {
+	let indices = initial_resident_image_indices(root_json, initial_wardrobe_set);
+	if let Some(indices) = &indices {
+		import_profile_messages.push(format!("glTF import profile: selective_image_decode_count={}", indices.len()));
+	}
+	indices
+}
+
 fn record_modular_avatar_profile_step(report: &mut ImportReport, step: &str, started: Instant) {
 	report.push_info(format!(
 		"glTF import profile: modular_avatar.{step}_ms={}",
@@ -10281,13 +10294,11 @@ impl AvatarImporter for GltfImporter {
 						normalize_started.elapsed().as_millis(),
 						normalized_owned
 					));
-					let decode_image_indices = initial_resident_image_indices(root_json.as_ref(), ctx.initial_wardrobe_set.as_deref());
-					if let Some(indices) = &decode_image_indices {
-						import_profile_messages.push(format!(
-							"glTF import profile: selective_image_decode_count={}",
-							indices.len()
-						));
-					}
+					let decode_image_indices = initial_image_decode_indices_for_import(
+						root_json.as_ref(),
+						ctx.initial_wardrobe_set.as_deref(),
+						&mut import_profile_messages,
+					);
 					let import_slice_started = Instant::now();
 					let imported = import_gltf_slice_parallel_images(import_bytes.as_ref(), decode_image_indices.as_ref())?;
 					import_profile_messages.push(format!(
@@ -10367,13 +10378,11 @@ impl AvatarImporter for GltfImporter {
 					normalize_started.elapsed().as_millis(),
 					normalized_owned
 				));
-				let decode_image_indices = initial_resident_image_indices(root_json.as_ref(), ctx.initial_wardrobe_set.as_deref());
-				if let Some(indices) = &decode_image_indices {
-					import_profile_messages.push(format!(
-						"glTF import profile: selective_image_decode_count={}",
-						indices.len()
-					));
-				}
+				let decode_image_indices = initial_image_decode_indices_for_import(
+					root_json.as_ref(),
+					ctx.initial_wardrobe_set.as_deref(),
+					&mut import_profile_messages,
+				);
 				let import_slice_started = Instant::now();
 				let imported = import_gltf_slice_parallel_images(import_bytes.as_ref(), decode_image_indices.as_ref())?;
 				import_profile_messages.push(format!(
@@ -17383,6 +17392,69 @@ mod tests {
 				&& diagnostic.text.contains("assetGroupOwnershipAmbiguities detected")
 		});
 		assert!(has_warning);
+	}
+
+	#[test]
+	fn initial_resident_image_indices_use_base_and_selected_wardrobe_groups() {
+		let root = serde_json::json!({
+			"images": [{}, {}, {}, {}, {}, {}],
+			"extensions": {
+				"UN_avatar": {
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}, {
+							"id": "hat",
+							"assetGroups": ["outfit:hat"],
+							"operations": []
+						}],
+						"assetGroupOwnership": [{
+							"groupId": "",
+							"images": [0]
+						}, {
+							"groupId": "outfit:coat",
+							"images": [1, 2]
+						}, {
+							"groupId": "outfit:hat",
+							"images": [3]
+						}]
+					}
+				}
+			}
+		});
+
+		let base = initial_resident_image_indices(Some(&root), None).expect("base selection");
+		assert_eq!(base, [0, 4, 5].into_iter().collect());
+
+		let coat = initial_resident_image_indices(Some(&root), Some("coat")).expect("coat selection");
+		assert_eq!(coat, [0, 1, 2, 4, 5].into_iter().collect());
+	}
+
+	#[test]
+	fn initial_resident_image_indices_disable_selective_decode_without_ownership() {
+		let root = serde_json::json!({
+			"images": [{}, {}],
+			"extensions": {
+				"UN_avatar": {
+					"wardrobe": {
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""],
+							"operations": []
+						}]
+					}
+				}
+			}
+		});
+
+		assert!(initial_resident_image_indices(Some(&root), None).is_none());
 	}
 
 	#[test]
