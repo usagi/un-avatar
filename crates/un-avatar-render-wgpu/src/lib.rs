@@ -5519,6 +5519,10 @@ mod tests {
 			Some(true)
 		);
 		assert_eq!(
+			dynamics_groups[0].get("writeback_mode").and_then(|value| value.as_str()),
+			Some("rotation_only")
+		);
+		assert_eq!(
 			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
 			Some(true)
 		);
