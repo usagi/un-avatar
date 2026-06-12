@@ -1,46 +1,11 @@
-use std::{
-	io::{Read, Seek, SeekFrom},
-	path::Path,
-	sync::Arc,
-	time::Instant,
-};
+use std::{path::Path, sync::Arc, time::Instant};
 
 use un_avatar_core::{ImportReport, ReportSeverity, UnaDocument};
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, GltfImporter, WardrobeApplyReport};
-use un_avatar_io_vrm::{gltf_root_json_from_bytes, has_vrm_extension, import_vrm_bytes, import_vrm_bytes_profiled};
-
-const GLB_MAGIC: u32 = 0x46546C67;
-const GLB_VERSION_2: u32 = 2;
-const JSON_CHUNK_TYPE: u32 = 0x4E4F534A;
-
-fn read_le_u32(bytes: &[u8; 4]) -> u32 {
-	u32::from_le_bytes(*bytes)
-}
-
-fn glb_root_json_from_path(path: &Path) -> Option<serde_json::Value> {
-	let mut file = std::fs::File::open(path).ok()?;
-	let mut header = [0u8; 12];
-	file.read_exact(&mut header).ok()?;
-	if read_le_u32(header[0..4].try_into().ok()?) != GLB_MAGIC || read_le_u32(header[4..8].try_into().ok()?) != GLB_VERSION_2 {
-		return None;
-	}
-	loop {
-		let mut chunk_header = [0u8; 8];
-		if file.read_exact(&mut chunk_header).is_err() {
-			return None;
-		}
-		let length = read_le_u32(chunk_header[0..4].try_into().ok()?) as usize;
-		let chunk_type = read_le_u32(chunk_header[4..8].try_into().ok()?);
-		if chunk_type == JSON_CHUNK_TYPE {
-			let mut json = vec![0u8; length];
-			file.read_exact(&mut json).ok()?;
-			let end = json.iter().position(|byte| *byte == 0).unwrap_or(json.len());
-			return serde_json::from_slice(&json[..end]).ok();
-		}
-		file.seek(SeekFrom::Current(length as i64)).ok()?;
-	}
-}
+use un_avatar_io_vrm::{
+	gltf_root_json_from_bytes, gltf_root_json_from_path, has_vrm_extension, import_vrm_bytes, import_vrm_bytes_profiled,
+};
 
 pub(crate) fn normalize_wardrobe_set_id(wardrobe_set: Option<&str>) -> Option<&str> {
 	wardrobe_set.map(str::trim).filter(|set_id| !set_id.is_empty())
@@ -251,7 +216,7 @@ fn load_document_inner(
 		result
 	} else if ext.eq_ignore_ascii_case("glb") {
 		let step_started = Instant::now();
-		let root = glb_root_json_from_path(path);
+		let root = gltf_root_json_from_path(path).ok();
 		if profile {
 			log_import_profile_step(path, "parse_glb_root_json", step_started);
 		}
