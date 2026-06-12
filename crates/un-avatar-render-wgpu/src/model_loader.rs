@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use un_avatar_core::UnaDocument;
+use un_avatar_core::{ImportReport, ReportSeverity, UnaDocument};
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, GltfImporter, WardrobeApplyReport};
 use un_avatar_io_vrm::{gltf_root_json_from_bytes, has_vrm_extension, import_vrm_bytes};
@@ -70,6 +70,50 @@ fn log_wardrobe_apply_report(set_id: &str, report: &WardrobeApplyReport) {
 	}
 }
 
+fn import_report_warning_lines(report: &ImportReport, sample_limit: usize) -> Vec<String> {
+	let mut lines = Vec::new();
+	for diagnostic in &report.diagnostics {
+		if diagnostic.severity == ReportSeverity::Warning {
+			lines.push(format!("import warning: {}", diagnostic.text));
+		}
+	}
+	for lost in &report.lost_features {
+		let detail = lost.detail.as_deref().unwrap_or("");
+		if detail.is_empty() {
+			lines.push(format!("import lost feature: {}", lost.feature));
+		} else {
+			lines.push(format!("import lost feature: {} ({detail})", lost.feature));
+		}
+	}
+	for approximation in &report.approximations {
+		let detail = approximation.detail.as_deref().unwrap_or("");
+		if detail.is_empty() {
+			lines.push(format!("import approximation: {}", approximation.feature));
+		} else {
+			lines.push(format!("import approximation: {} ({detail})", approximation.feature));
+		}
+	}
+	lines.truncate(sample_limit);
+	lines
+}
+
+fn log_import_report_warnings(report: &ImportReport) {
+	let total = report
+		.diagnostics
+		.iter()
+		.filter(|diagnostic| diagnostic.severity == ReportSeverity::Warning)
+		.count()
+		+ report.lost_features.len()
+		+ report.approximations.len();
+	if total == 0 {
+		return;
+	}
+	eprintln!("un-avatar-renderer: model import reported {total} warning/approximation/lost-feature item(s); showing up to 8");
+	for line in import_report_warning_lines(report, 8) {
+		eprintln!("un-avatar-renderer: {line}");
+	}
+}
+
 pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
 	let set_id = require_wardrobe_set_id(wardrobe_set)?;
 	let report =
@@ -122,6 +166,7 @@ pub(crate) fn load_document(path: &Path, wardrobe_set: Option<&str>, contact_par
 	};
 	match result {
 		Ok(res) => {
+			log_import_report_warnings(&res.report);
 			let mut document = res.document;
 			apply_requested_wardrobe_set(&mut document, wardrobe_set);
 			if contact_parameter_emission {
@@ -158,6 +203,29 @@ mod tests {
 		let mut document = UnaDocument::default();
 		assert!(apply_requested_wardrobe_set(&mut document, None).is_none());
 		assert!(apply_requested_wardrobe_set(&mut document, Some("")).is_none());
+	}
+
+	#[test]
+	fn import_report_warning_lines_include_approximations_and_lost_features() {
+		let mut report = ImportReport::default();
+		report
+			.diagnostics
+			.push(un_avatar_core::ReportMessage::warning("diagnostic warning"));
+		report.lost_features.push(un_avatar_core::LostFeature {
+			feature: "ModularAvatar.Unsupported".to_string(),
+			detail: Some("preserved only".to_string()),
+		});
+		report.approximations.push(un_avatar_core::Approximation {
+			feature: "ModularAvatar.ModularAvatarShapeChanger".to_string(),
+			detail: Some("enabled static set/delete payloads only".to_string()),
+		});
+
+		let lines = import_report_warning_lines(&report, 8);
+
+		assert_eq!(lines.len(), 3);
+		assert_eq!(lines[0], "import warning: diagnostic warning");
+		assert!(lines[1].contains("import lost feature: ModularAvatar.Unsupported"));
+		assert!(lines[2].contains("import approximation: ModularAvatar.ModularAvatarShapeChanger"));
 	}
 
 	#[test]
