@@ -286,6 +286,27 @@ fn mesh_shader_source_for_tier(variant_tier: MeshShaderVariantTier) -> Cow<'stat
 	}
 }
 
+fn mesh_shader_source_for_features(variant_tier: MeshShaderVariantTier, features: UntoonShaderFeatures) -> Cow<'static, str> {
+	let mut shader = mesh_shader_source_for_tier(variant_tier).into_owned();
+	for (name, enabled) in features.shader_feature_values() {
+		let value = if enabled { "1.0" } else { "0.0" };
+		shader = shader.replace(&format!("override {name}: f32 = 1.0;"), &format!("const {name}: f32 = {value};"));
+	}
+	Cow::Owned(shader)
+}
+
+fn create_mesh_shader_module_for_features(
+	device: &wgpu::Device,
+	variant_tier: MeshShaderVariantTier,
+	features: UntoonShaderFeatures,
+	label: &'static str,
+) -> wgpu::ShaderModule {
+	device.create_shader_module(wgpu::ShaderModuleDescriptor {
+		label: Some(label),
+		source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_features(variant_tier, features)),
+	})
+}
+
 fn baseline_fallback_mesh_shader_source() -> String {
 	let mut shader = SHADER_MESH.to_string();
 	for snippet in [
@@ -1082,7 +1103,7 @@ impl UntoonShaderFeatures {
 		self.normal_second |= other.normal_second;
 	}
 
-	fn shader_constants(self) -> Vec<(&'static str, f64)> {
+	fn shader_feature_values(self) -> [(&'static str, bool); 26] {
 		[
 			("UNTOON_FEATURE_LILTOON", self.liltoon),
 			("UNTOON_FEATURE_MAIN_LAYERS", self.main_layers),
@@ -1111,9 +1132,10 @@ impl UntoonShaderFeatures {
 			("UNTOON_FEATURE_REFRACTION", self.refraction),
 			("UNTOON_FEATURE_NORMAL_SECOND", self.normal_second),
 		]
-		.into_iter()
-		.map(|(name, enabled)| (name, if enabled { 1.0 } else { 0.0 }))
-		.collect()
+	}
+
+	fn enabled_count(self) -> usize {
+		self.shader_feature_values().into_iter().filter(|(_, enabled)| *enabled).count()
 	}
 }
 
@@ -6444,14 +6466,8 @@ impl SceneMeshes {
 		vertex_entry: &'static str,
 		fragment_entry: &'static str,
 		render_state: MeshPipelineRenderState,
-		shader_features: UntoonShaderFeatures,
 	) -> wgpu::RenderPipeline {
 		let alpha_to_coverage_enabled = render_state.alpha_coverage.enabled();
-		let shader_constants = shader_features.shader_constants();
-		let compilation_options = wgpu::PipelineCompilationOptions {
-			constants: &shader_constants,
-			..Default::default()
-		};
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -6459,13 +6475,13 @@ impl SceneMeshes {
 			vertex: wgpu::VertexState {
 				module: shader,
 				entry_point: Some(vertex_entry),
-				compilation_options: compilation_options.clone(),
+				compilation_options: Default::default(),
 				buffers: std::slice::from_ref(vb_layout),
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: shader,
 				entry_point: Some(fragment_entry),
-				compilation_options,
+				compilation_options: Default::default(),
 				targets: &[Some(wgpu::ColorTargetState {
 					format,
 					blend: render_state.color_blend,
@@ -6501,7 +6517,6 @@ impl SceneMeshes {
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
 		kind: DrawPipelineKind,
 		sample_count: u32,
-		shader_features: UntoonShaderFeatures,
 	) -> wgpu::RenderPipeline {
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
 		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
@@ -6613,7 +6628,6 @@ impl SceneMeshes {
 			vertex_entry,
 			fragment_entry,
 			render_state,
-			shader_features,
 		)
 	}
 
@@ -6798,11 +6812,6 @@ impl SceneMeshes {
 				Some(&morph_bind_group_layout),
 			],
 			immediate_size: 0,
-		});
-
-		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-			label: Some("mesh"),
-			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(shader_variant_tier)),
 		});
 
 		const MESH_VTX_ATTRS: [wgpu::VertexAttribute; 10] = [
@@ -7626,6 +7635,23 @@ impl SceneMeshes {
 			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
 		report("gpu-upload", format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let pipeline_start = Instant::now();
+		let mut scene_shader_features = UntoonShaderFeatures::default();
+		if needs_fur_pipelines {
+			scene_shader_features.include(fur_shader_features);
+		}
+		for shader_features in pipeline_shader_features.values().copied() {
+			scene_shader_features.include(shader_features);
+		}
+		let shader_module_start = Instant::now();
+		let shader = create_mesh_shader_module_for_features(device, shader_variant_tier, scene_shader_features, "mesh_scene_shader");
+		log_slow_gpu_scene_step(
+			format!(
+				"mesh shader module creation enabled_features={}",
+				scene_shader_features.enabled_count()
+			),
+			shader_module_start.elapsed(),
+		);
+		let render_pipeline_start = Instant::now();
 		let pipeline_outline_toon = needs_outline_pipeline.then(|| {
 			Self::create_mesh_pipeline(
 				device,
@@ -7637,7 +7663,6 @@ impl SceneMeshes {
 				"vs_outline",
 				"fs_outline",
 				MeshPipelineRenderState::outline(sample_count),
-				UntoonShaderFeatures::default(),
 			)
 		});
 		let compute_fur_cards_compute_pipeline =
@@ -7653,7 +7678,6 @@ impl SceneMeshes {
 				"vs_compute_fur_cards_pre",
 				"fs_fur_toon_pre",
 				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-				fur_shader_features,
 			)
 		});
 		let pipeline_compute_fur_cards_toon = needs_fur_pipelines.then(|| {
@@ -7667,28 +7691,21 @@ impl SceneMeshes {
 				"vs_compute_fur_cards",
 				"fs_fur_toon",
 				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
-				fur_shader_features,
 			)
 		});
 		let pipelines = required_pipeline_kinds
 			.into_iter()
 			.map(|kind| {
-				let shader_features = pipeline_shader_features.get(&kind).copied().unwrap_or_default();
 				(
 					kind,
-					Self::create_draw_pipeline(
-						device,
-						&pipeline_layout,
-						&shader,
-						format,
-						&vb_layout,
-						kind,
-						sample_count,
-						shader_features,
-					),
+					Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count),
 				)
 			})
 			.collect::<BTreeMap<_, _>>();
+		log_slow_gpu_scene_step(
+			format!("render pipeline creation count={pipeline_count}"),
+			render_pipeline_start.elapsed(),
+		);
 		log_slow_gpu_scene_step(
 			format!("pipeline creation count={pipeline_count} outline={needs_outline_pipeline} fur={needs_fur_pipelines}"),
 			pipeline_start.elapsed(),
@@ -9133,10 +9150,6 @@ mod tests {
 			],
 			immediate_size: 0,
 		});
-		let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-			label: Some("mesh_shader_test"),
-			source: wgpu::ShaderSource::Wgsl(mesh_shader_source_for_tier(shader_variant_tier)),
-		});
 		let attrs = [
 			wgpu::VertexAttribute {
 				offset: 0,
@@ -9232,57 +9245,57 @@ mod tests {
 			attributes: &compute_fur_cards_attrs,
 		};
 
+		let outline_features = UntoonShaderFeatures::default();
+		let outline_shader =
+			create_mesh_shader_module_for_features(&device, shader_variant_tier, outline_features, "mesh_outline_shader_test");
 		let _outline_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&outline_pipeline_layout,
-			&shader,
+			&outline_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&vb_layout,
 			"mesh_outline_toon",
 			"vs_outline",
 			"fs_outline",
 			MeshPipelineRenderState::outline(1),
-			UntoonShaderFeatures::default(),
 		);
 		let mut toon_features = UntoonShaderFeatures::default();
 		toon_features.liltoon = true;
 		toon_features.shadow_layers = true;
 		toon_features.fur = true;
+		let toon_shader = create_mesh_shader_module_for_features(&device, shader_variant_tier, toon_features, "mesh_toon_shader_test");
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
-			&shader,
+			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&vb_layout,
 			"mesh_opaque_toon",
 			"vs_main",
 			"fs_toon",
 			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-			toon_features,
 		);
 		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
-			&shader,
+			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&compute_fur_cards_vb_layout,
 			"mesh_compute_fur_cards_pre_toon",
 			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
 			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-			toon_features,
 		);
 		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
-			&shader,
+			&toon_shader,
 			wgpu::TextureFormat::Rgba8Unorm,
 			&compute_fur_cards_vb_layout,
 			"mesh_compute_fur_cards_toon",
 			"vs_compute_fur_cards",
 			"fs_fur_toon",
 			MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, 1),
-			toon_features,
 		);
 	}
 
