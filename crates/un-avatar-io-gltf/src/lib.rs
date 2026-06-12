@@ -6660,100 +6660,107 @@ fn apply_unavatar_vertex_filters_with_texture_assets(
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
 	texture_asset_map: &BTreeMap<String, usize>,
 ) -> (usize, usize, usize, usize, usize, usize) {
-	let images = scene.images.clone();
-	let image_sources = scene.image_sources.clone();
-	let context = ModularAvatarVertexFilterContext {
-		images: &images,
-		image_sources: &image_sources,
-		texture_asset_map,
-	};
-	let (groups, missing, skipped, unsupported) =
-		collect_modular_avatar_vertex_filter_delete_groups(components, node_ids, registry_paths, paths, normalized_paths, &context);
-	if groups.is_empty() {
-		return (0, 0, 0, missing, skipped, unsupported);
-	}
-	let world_matrices = scene_world_matrices(scene);
-	let mesh_user_counts = scene
-		.nodes
-		.iter()
-		.filter_map(|node| node.mesh)
-		.fold(BTreeMap::<usize, usize>::new(), |mut counts, mesh| {
-			*counts.entry(mesh).or_default() += 1;
-			counts
-		});
-	let mut mutated_nodes = 0usize;
-	let mut mutated_primitives = 0usize;
-	let mut removed_triangles = 0usize;
-	for group in groups {
-		let Some(mesh_idx) = scene.nodes.get(group.target).and_then(|node| node.mesh) else {
-			continue;
+	let images = std::mem::take(&mut scene.images);
+	let image_sources = std::mem::take(&mut scene.image_sources);
+	let result = {
+		let context = ModularAvatarVertexFilterContext {
+			images: &images,
+			image_sources: &image_sources,
+			texture_asset_map,
 		};
-		let skin_joint_nodes = scene
-			.nodes
-			.get(group.target)
-			.and_then(|node| node.skin)
-			.and_then(|skin_index| scene.skins.get(skin_index))
-			.map(|skin| skin.joint_nodes.clone());
-		let target_world_inv = world_matrices
-			.get(group.target)
-			.copied()
-			.map(inverse_finite_or_identity)
-			.unwrap_or(Mat4::IDENTITY);
-		let target_skin = scene
-			.nodes
-			.get(group.target)
-			.and_then(|node| node.skin)
-			.and_then(|skin_index| scene.skins.get(skin_index))
-			.cloned();
-		let target_mesh_idx = if mesh_user_counts.get(&mesh_idx).copied().unwrap_or(0) > 1 {
-			let Some(mesh) = scene.meshes.get(mesh_idx).cloned() else {
-				continue;
-			};
-			scene.meshes.push(mesh);
-			let cloned_idx = scene.meshes.len() - 1;
-			if let Some(node) = scene.nodes.get_mut(group.target) {
-				node.mesh = Some(cloned_idx);
-			}
-			cloned_idx
+		let (groups, missing, skipped, unsupported) =
+			collect_modular_avatar_vertex_filter_delete_groups(components, node_ids, registry_paths, paths, normalized_paths, &context);
+		if groups.is_empty() {
+			(0, 0, 0, missing, skipped, unsupported)
 		} else {
-			mesh_idx
-		};
-		let Some(mesh) = scene.meshes.get_mut(target_mesh_idx) else {
-			continue;
-		};
-		let skin_joint_nodes = skin_joint_nodes.as_deref();
-		let axis_context = ModularAvatarAxisBakeContext {
-			world_matrices: &world_matrices,
-			target_world_inv,
-			skin: target_skin.as_ref(),
-		};
-		let mut node_mutated = false;
-		let primitive_count = mesh.len();
-		for (primitive_index, primitive) in mesh.iter_mut().enumerate() {
-			let vertex_mask = modular_avatar_vertex_filter_mask(
-				primitive,
-				skin_joint_nodes,
-				Some(&axis_context),
-				primitive_index,
-				primitive_count,
-				&context,
-				&group,
-			);
-			if !vertex_mask.iter().any(|value| *value) {
-				continue;
+			let world_matrices = scene_world_matrices(scene);
+			let mesh_user_counts =
+				scene
+					.nodes
+					.iter()
+					.filter_map(|node| node.mesh)
+					.fold(BTreeMap::<usize, usize>::new(), |mut counts, mesh| {
+						*counts.entry(mesh).or_default() += 1;
+						counts
+					});
+			let mut mutated_nodes = 0usize;
+			let mut mutated_primitives = 0usize;
+			let mut removed_triangles = 0usize;
+			for group in groups {
+				let Some(mesh_idx) = scene.nodes.get(group.target).and_then(|node| node.mesh) else {
+					continue;
+				};
+				let skin_joint_nodes = scene
+					.nodes
+					.get(group.target)
+					.and_then(|node| node.skin)
+					.and_then(|skin_index| scene.skins.get(skin_index))
+					.map(|skin| skin.joint_nodes.clone());
+				let target_world_inv = world_matrices
+					.get(group.target)
+					.copied()
+					.map(inverse_finite_or_identity)
+					.unwrap_or(Mat4::IDENTITY);
+				let target_skin = scene
+					.nodes
+					.get(group.target)
+					.and_then(|node| node.skin)
+					.and_then(|skin_index| scene.skins.get(skin_index))
+					.cloned();
+				let target_mesh_idx = if mesh_user_counts.get(&mesh_idx).copied().unwrap_or(0) > 1 {
+					let Some(mesh) = scene.meshes.get(mesh_idx).cloned() else {
+						continue;
+					};
+					scene.meshes.push(mesh);
+					let cloned_idx = scene.meshes.len() - 1;
+					if let Some(node) = scene.nodes.get_mut(group.target) {
+						node.mesh = Some(cloned_idx);
+					}
+					cloned_idx
+				} else {
+					mesh_idx
+				};
+				let Some(mesh) = scene.meshes.get_mut(target_mesh_idx) else {
+					continue;
+				};
+				let skin_joint_nodes = skin_joint_nodes.as_deref();
+				let axis_context = ModularAvatarAxisBakeContext {
+					world_matrices: &world_matrices,
+					target_world_inv,
+					skin: target_skin.as_ref(),
+				};
+				let mut node_mutated = false;
+				let primitive_count = mesh.len();
+				for (primitive_index, primitive) in mesh.iter_mut().enumerate() {
+					let vertex_mask = modular_avatar_vertex_filter_mask(
+						primitive,
+						skin_joint_nodes,
+						Some(&axis_context),
+						primitive_index,
+						primitive_count,
+						&context,
+						&group,
+					);
+					if !vertex_mask.iter().any(|value| *value) {
+						continue;
+					}
+					let removed = filter_mesh_primitive_triangles_by_vertex_mask(primitive, &vertex_mask);
+					if removed > 0 {
+						mutated_primitives += 1;
+						removed_triangles += removed;
+						node_mutated = true;
+					}
+				}
+				if node_mutated {
+					mutated_nodes += 1;
+				}
 			}
-			let removed = filter_mesh_primitive_triangles_by_vertex_mask(primitive, &vertex_mask);
-			if removed > 0 {
-				mutated_primitives += 1;
-				removed_triangles += removed;
-				node_mutated = true;
-			}
+			(mutated_nodes, mutated_primitives, removed_triangles, missing, skipped, unsupported)
 		}
-		if node_mutated {
-			mutated_nodes += 1;
-		}
-	}
-	(mutated_nodes, mutated_primitives, removed_triangles, missing, skipped, unsupported)
+	};
+	scene.images = images;
+	scene.image_sources = image_sources;
+	result
 }
 
 fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report: &mut ImportReport) {
@@ -6917,20 +6924,25 @@ fn apply_unavatar_modular_avatar_with_context(
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
+	let step_started = Instant::now();
 	let (remove_vcol_nodes, remove_vcol_primitives, remove_vcol_missing, remove_vcol_skipped) =
 		apply_unavatar_remove_vertex_color(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "remove_vertex_color", step_started);
 	if remove_vcol_nodes > 0 || remove_vcol_primitives > 0 || remove_vcol_missing > 0 || remove_vcol_skipped > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: remove_vertex_color_nodes={remove_vcol_nodes}, remove_vertex_color_primitives={remove_vcol_primitives}, remove_vertex_color_missing={remove_vcol_missing}, remove_vertex_color_skipped={remove_vcol_skipped}"
 		));
 	}
+	let step_started = Instant::now();
 	let (shape_changer_set_applied, shape_changer_set_missing, shape_changer_set_skipped) =
 		apply_unavatar_shape_changer_sets(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "shape_changer_sets", step_started);
 	if shape_changer_set_applied > 0 || shape_changer_set_missing > 0 || shape_changer_set_skipped > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: shape_changer_set_applied={shape_changer_set_applied}, shape_changer_set_missing={shape_changer_set_missing}, shape_changer_set_skipped={shape_changer_set_skipped}"
 		));
 	}
+	let step_started = Instant::now();
 	let (
 		vertex_filter_nodes,
 		vertex_filter_primitives,
@@ -6947,6 +6959,7 @@ fn apply_unavatar_modular_avatar_with_context(
 		&normalized_paths,
 		texture_asset_map,
 	);
+	record_modular_avatar_profile_step(report, "vertex_filters", step_started);
 	if vertex_filter_nodes > 0
 		|| vertex_filter_primitives > 0
 		|| vertex_filter_triangles > 0
@@ -6958,15 +6971,19 @@ fn apply_unavatar_modular_avatar_with_context(
 			".unavatar Modular Avatar: vertex_filter_nodes={vertex_filter_nodes}, vertex_filter_primitives={vertex_filter_primitives}, vertex_filter_triangles={vertex_filter_triangles}, vertex_filter_missing={vertex_filter_missing}, vertex_filter_skipped={vertex_filter_skipped}, vertex_filter_unsupported={vertex_filter_unsupported}"
 		));
 	}
+	let step_started = Instant::now();
 	let (blendshape_sync_applied, blendshape_sync_missing, blendshape_sync_skipped, blendshape_sync_unsupported) =
 		apply_unavatar_blendshape_syncs(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "blendshape_syncs", step_started);
 	if blendshape_sync_applied > 0 || blendshape_sync_missing > 0 || blendshape_sync_skipped > 0 || blendshape_sync_unsupported > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: blendshape_sync_applied={blendshape_sync_applied}, blendshape_sync_missing={blendshape_sync_missing}, blendshape_sync_skipped={blendshape_sync_skipped}, blendshape_sync_unsupported={blendshape_sync_unsupported}"
 		));
 	}
+	let step_started = Instant::now();
 	let (mesh_settings_root_bones, mesh_settings_probe_anchors, mesh_settings_bounds, mesh_settings_missing) =
 		apply_unavatar_mesh_settings(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "mesh_settings", step_started);
 	if mesh_settings_root_bones > 0 || mesh_settings_probe_anchors > 0 || mesh_settings_bounds > 0 || mesh_settings_missing > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: mesh_settings_root_bones={}, mesh_settings_probe_anchors={}, mesh_settings_bounds={}, mesh_settings_missing={}",
@@ -6974,8 +6991,10 @@ fn apply_unavatar_modular_avatar_with_context(
 		));
 	}
 
+	let step_started = Instant::now();
 	let (scale_adjuster_proxies, scale_adjuster_skin_joints, scale_adjuster_missing, scale_adjuster_skipped) =
 		apply_unavatar_scale_adjusters(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "scale_adjusters", step_started);
 	if scale_adjuster_proxies > 0 || scale_adjuster_skin_joints > 0 || scale_adjuster_missing > 0 || scale_adjuster_skipped > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: scale_adjuster_proxies={}, scale_adjuster_skin_joints={}, scale_adjuster_missing={}, scale_adjuster_skipped={}",
@@ -6983,8 +7002,10 @@ fn apply_unavatar_modular_avatar_with_context(
 		));
 	}
 
+	let step_started = Instant::now();
 	let (replace_object_applied, replace_object_missing, replace_object_skipped, replace_object_invalid) =
 		apply_unavatar_replace_objects(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+	record_modular_avatar_profile_step(report, "replace_objects", step_started);
 	if replace_object_applied > 0 || replace_object_missing > 0 || replace_object_skipped > 0 || replace_object_invalid > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: replace_object_applied={replace_object_applied}, replace_object_missing={replace_object_missing}, replace_object_skipped={replace_object_skipped}, replace_object_invalid={replace_object_invalid}"
@@ -6993,6 +7014,7 @@ fn apply_unavatar_modular_avatar_with_context(
 
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
+	let step_started = Instant::now();
 	let (merge_mappings, merge_missing, merge_skipped) =
 		collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let merge_retain_nodes =
@@ -7011,6 +7033,7 @@ fn apply_unavatar_modular_avatar_with_context(
 		merge_auxiliary_reparented += reparent_merge_armature_auxiliary_bones(scene, component_mappings, &merge_retain_nodes);
 		merge_retargeted += retarget_merge_armature_skins(scene, component_mappings);
 	}
+	record_modular_avatar_profile_step(report, "merge_armature", step_started);
 	if merge_retargeted > 0 || merge_auxiliary_reparented > 0 || merge_missing > 0 || merge_skipped > 0 {
 		report.push_info(format!(
 			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_auxiliary_bones={}, merge_armature_missing={}, merge_armature_skipped={}, merge_armature_cycles={}, merge_armature_component_cycles={}",
@@ -7039,6 +7062,7 @@ fn apply_unavatar_modular_avatar_with_context(
 	let node_ids = scene_node_ids(scene);
 	let paths = scene_node_paths(scene);
 	let normalized_paths = scene_node_normalized_paths(scene);
+	let step_started = Instant::now();
 	let mut bone_proxy_applied = 0usize;
 	let mut bone_proxy_missing = 0usize;
 	let mut bone_proxy_skipped = 0usize;
@@ -7119,6 +7143,7 @@ fn apply_unavatar_modular_avatar_with_context(
 			node.transform = local.to_cols_array();
 		}
 	}
+	record_modular_avatar_profile_step(report, "bone_proxy", step_started);
 
 	if bone_proxy_applied > 0 || bone_proxy_missing > 0 || bone_proxy_skipped > 0 {
 		report.push_info(format!(
@@ -9854,6 +9879,17 @@ fn record_scene_snapshot_profile_step(report: &mut ImportReport, profile: bool, 
 	}
 }
 
+fn record_gltf_import_profile_step(report: &mut ImportReport, step: &str, started: Instant) {
+	report.push_info(format!("glTF import profile: {step}_ms={}", started.elapsed().as_millis()));
+}
+
+fn record_modular_avatar_profile_step(report: &mut ImportReport, step: &str, started: Instant) {
+	report.push_info(format!(
+		"glTF import profile: modular_avatar.{step}_ms={}",
+		started.elapsed().as_millis()
+	));
+}
+
 fn scene_snapshot_from_gltf_inner(
 	document: &gltf::Document,
 	buffers: &[gltf::buffer::Data],
@@ -10186,16 +10222,29 @@ impl AvatarImporter for GltfImporter {
 		));
 		let mut texture_asset_map = BTreeMap::new();
 		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin.as_deref()) {
+			let step_started = Instant::now();
 			texture_asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);
+			record_gltf_import_profile_step(&mut report, "append_texture_assets", step_started);
+			let step_started = Instant::now();
 			apply_unavatar_material_texture_asset_refs(&mut scene, root, &texture_asset_map);
+			record_gltf_import_profile_step(&mut report, "apply_texture_asset_refs", step_started);
 		}
+		let step_started = Instant::now();
 		let unavatar = root_json.as_ref().and_then(unavatar_extension_from_root);
+		record_gltf_import_profile_step(&mut report, "parse_unavatar_extension", step_started);
+		let step_started = Instant::now();
 		let humanoid_profile = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
+		record_gltf_import_profile_step(&mut report, "unavatar_humanoid_profile", step_started);
 		if let Some(unavatar) = &unavatar {
+			let step_started = Instant::now();
 			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
+			record_gltf_import_profile_step(&mut report, "path_diagnostics", step_started);
+			let step_started = Instant::now();
 			apply_unavatar_asset_group_ownership(&mut scene, unavatar, &mut report);
+			record_gltf_import_profile_step(&mut report, "asset_group_ownership", step_started);
+			let step_started = Instant::now();
 			apply_unavatar_modular_avatar_with_texture_assets(
 				&mut scene,
 				unavatar,
@@ -10203,7 +10252,9 @@ impl AvatarImporter for GltfImporter {
 				humanoid_profile.as_ref(),
 				&mut report,
 			);
+			record_gltf_import_profile_step(&mut report, "modular_avatar", step_started);
 			if let Some(humanoid_profile) = &humanoid_profile {
+				let step_started = Instant::now();
 				let (same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented) =
 					retarget_same_name_humanoid_armature_skins(&mut scene, humanoid_profile);
 				if same_name_mappings > 0 || same_name_retargeted > 0 || same_name_auxiliary_reparented > 0 {
@@ -10212,13 +10263,21 @@ impl AvatarImporter for GltfImporter {
 						same_name_mappings, same_name_retargeted, same_name_auxiliary_reparented
 					));
 				}
+				record_gltf_import_profile_step(&mut report, "retarget_same_name_humanoid_armature_skins", step_started);
 			}
+			let step_started = Instant::now();
 			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
+			record_gltf_import_profile_step(&mut report, "initial_variant_state", step_started);
+			let step_started = Instant::now();
 			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
+			record_gltf_import_profile_step(&mut report, "base_wardrobe", step_started);
 		}
+		let step_started = Instant::now();
 		let runtime_actions = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene)));
+		record_gltf_import_profile_step(&mut report, "runtime_actions", step_started);
+		let step_started = Instant::now();
 		let runtime_expression_names = expression_weight_names_from_runtime_actions(runtime_actions.as_ref());
 		let arkit_perfect_sync_names = arkit_perfect_sync_expression_name_set();
 		let mut expression_catalog = if unavatar.is_some() {
@@ -10230,12 +10289,17 @@ impl AvatarImporter for GltfImporter {
 		} else {
 			None
 		};
+		record_gltf_import_profile_step(&mut report, "expression_catalog", step_started);
 		if let (Some(unavatar), Some(catalog)) = (unavatar.as_ref(), expression_catalog.as_mut()) {
+			let step_started = Instant::now();
 			apply_unavatar_blendshape_sync_expression_binds(catalog, &scene, unavatar, &mut report);
+			record_gltf_import_profile_step(&mut report, "blendshape_sync_expression_binds", step_started);
 		}
+		let step_started = Instant::now();
 		let spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
+		record_gltf_import_profile_step(&mut report, "dynamics_settings", step_started);
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
 		}
