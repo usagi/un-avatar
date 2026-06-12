@@ -44,26 +44,26 @@ export function defaultTextureCompressionAdvanced(): TextureCompressionAdvanced 
 }
 
 export const TEXTURE_COMPRESSION_PREF_OPTIONS = [
-	["source", "Source (非圧縮)"],
-	["auto", "Auto (役割の既定)"],
-	["high_quality", "High Quality (BC7 等)"],
-	["small", "Small (BasisLZ 等)"],
-	["gpu_native", "GPU Native (BC5 等)"],
+	["source", "profiles.editor.options.texture_pref_source"],
+	["auto", "profiles.editor.options.texture_pref_auto"],
+	["high_quality", "profiles.editor.options.texture_pref_high_quality"],
+	["small", "profiles.editor.options.texture_pref_small"],
+	["gpu_native", "profiles.editor.options.texture_pref_gpu_native"],
 ] as const;
 
 export const TEXTURE_COMPRESSION_ROLES: Array<{
 	key: keyof TextureCompressionAdvanced;
-	label: string;
-	hint: string;
+	labelKey: string;
+	hintKey: string;
 }> = [
-	{ key: "face", label: "Face", hint: "顔系のメッシュ。既定 source（最高品質）" },
-	{ key: "eyes", label: "Eyes", hint: "瞳・白目など。既定 source（最高品質）" },
-	{ key: "clothing", label: "Clothing", hint: "服や髪の base color。既定 auto。" },
-	{ key: "normal", label: "Normal", hint: "法線マップ。既定 gpu_native (Windows なら BC5)" },
-	{ key: "occlusion", label: "Occlusion", hint: "AO マップ。既定 gpu_native (BC4)" },
-	{ key: "emissive", label: "Emissive", hint: "発光マップ。既定 high_quality (BC7)" },
-	{ key: "generic_color", label: "Generic Color", hint: "上記以外の色テクスチャ。既定 auto" },
-	{ key: "data", label: "Data", hint: "metallic-roughness など、品質劣化が表情に効くもの。既定 source" },
+	{ key: "face", labelKey: "profiles.editor.options.texture_role_face", hintKey: "profiles.hints.quality.texture_role_face" },
+	{ key: "eyes", labelKey: "profiles.editor.options.texture_role_eyes", hintKey: "profiles.hints.quality.texture_role_eyes" },
+	{ key: "clothing", labelKey: "profiles.editor.options.texture_role_clothing", hintKey: "profiles.hints.quality.texture_role_clothing" },
+	{ key: "normal", labelKey: "profiles.editor.options.texture_role_normal", hintKey: "profiles.hints.quality.texture_role_normal" },
+	{ key: "occlusion", labelKey: "profiles.editor.options.texture_role_occlusion", hintKey: "profiles.hints.quality.texture_role_occlusion" },
+	{ key: "emissive", labelKey: "profiles.editor.options.texture_role_emissive", hintKey: "profiles.hints.quality.texture_role_emissive" },
+	{ key: "generic_color", labelKey: "profiles.editor.options.texture_role_generic_color", hintKey: "profiles.hints.quality.texture_role_generic_color" },
+	{ key: "data", labelKey: "profiles.editor.options.texture_role_data", hintKey: "profiles.hints.quality.texture_role_data" },
 ];
 
 export const MIPMAP_FILTER_OPTIONS = [

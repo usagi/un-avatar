@@ -15,8 +15,8 @@
 		{#each TEXTURE_COMPRESSION_ROLES as role}
 			<ProfileSelectField
 				className="advanced-compression-row"
-				label={role.label}
-				hint={role.hint}
+				label={$_(role.labelKey)}
+				hint={$_(role.hintKey)}
 				value={value[role.key]}
 				disabled={busy}
 				options={TEXTURE_COMPRESSION_PREF_OPTIONS}
