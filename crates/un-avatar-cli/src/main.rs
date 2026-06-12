@@ -3393,8 +3393,8 @@ fn modular_avatar_parameter_summary(
 		remap_to,
 		internal_parameter: json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter"))),
 		is_prefix: json_bool(parameter.get("isPrefix").or_else(|| parameter.get("is_prefix"))),
+		local_only: json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))) || sync_type == "NotSynced",
 		sync_type,
-		local_only: json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))),
 		default_value,
 		saved: json_bool(parameter.get("saved")),
 		has_explicit_default_value,
@@ -6481,7 +6481,7 @@ mod tests {
 									"isPrefix": true,
 									"internalParameter": true,
 									"syncType": "NotSynced",
-									"localOnly": true,
+									"localOnly": false,
 									"defaultValue": 0.25
 								}]
 							}
