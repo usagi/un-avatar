@@ -2172,9 +2172,7 @@ fn unavatar_dynamics_settings(
 	let constraint_refs = unavatar_dynamics_constraint_refs(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 
 	for item in dynamics {
-		if item.get("enabled").and_then(Value::as_bool) == Some(false) {
-			continue;
-		}
+		let authored_enabled = item.get("enabled").and_then(Value::as_bool).unwrap_or(true);
 		let Some(roots) = item.get("roots").or_else(|| item.get("root")).or_else(|| item.get("rootNode")) else {
 			missing_roots += 1;
 			continue;
@@ -2275,10 +2273,7 @@ fn unavatar_dynamics_settings(
 				let hit_radius_samples = unavatar_dynamics_radius_samples(item, hit_radius, chain.len() - 1);
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
-					// VRC PhysBone is imported as source metadata and an action target, but the
-					// current SpringBone-like solver is not a faithful PhysBone implementation.
-					// Keep it opt-in to avoid visibly deforming authored VRC clothing at rest.
-					enabled: source_kind != UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: authored_enabled,
 					source_id: source_id.clone(),
 					comment: comment.clone(),
 					category: category.clone(),
@@ -10113,9 +10108,9 @@ mod tests {
 		let mut report = ImportReport::default();
 		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
-		assert_eq!(settings.groups.len(), 2);
+		assert_eq!(settings.groups.len(), 3);
 		assert_eq!(settings.groups[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
-		assert!(!settings.groups[0].enabled);
+		assert!(settings.groups[0].enabled);
 		assert_eq!(settings.groups[0].source_id, "hair_front");
 		assert_eq!(settings.groups[0].comment, "hair_front");
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
@@ -10165,6 +10160,9 @@ mod tests {
 		assert_eq!(settings.constraint_refs[0].source_nodes, vec![0]);
 		assert_eq!(settings.constraint_refs[0].constraint_type, "parent");
 		assert_eq!(settings.constraint_refs[0].weight, 0.75);
+		assert!(settings.groups[1].enabled);
+		assert_eq!(settings.groups[2].source_id, "disabled_tail");
+		assert!(!settings.groups[2].enabled);
 	}
 
 	#[test]

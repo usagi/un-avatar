@@ -47,7 +47,7 @@ Source data:
 Runtime state:
 
 - active wardrobe set、active asset groups、runtime action parameter、dynamics enabled override は runtime state に属する。
-- `dynamicsEnable` は authored default を書き換えず、stable dynamics id に対する runtime override として扱う。Renderer runtime control の `set_dynamics_enabled` command も同じ runtime override 経路を使い、`sourceId` / `enabled` で個別 group を切り替える。`set_all_dynamics_enabled` は QA 用に全 runtime dynamics group の override を一括設定する。Supervisor diagnostics の group toggle / all toggle はこれら command の QA 用 UI であり、source data や authored default は変更しない。Supervisor profile `[physics.dynamics] enable_all_on_launch = true` は同じ all-runtime-override を renderer 起動後に一度だけ送る明示 opt-in であり、VRC PhysBone authored default OFF の安全方針は変えない。
+- `dynamicsEnable` は authored default を書き換えず、stable dynamics id に対する runtime override として扱う。Renderer runtime control の `set_dynamics_enabled` command も同じ runtime override 経路を使い、`sourceId` / `enabled` で個別 group を切り替える。`set_all_dynamics_enabled` は QA 用に全 runtime dynamics group の override を一括設定する。Supervisor diagnostics の group toggle / all toggle はこれら command の QA 用 UI であり、source data や authored default は変更しない。Supervisor profile `[physics.dynamics] enable_all_on_launch = true` は同じ all-runtime-override を renderer 起動後に一度だけ送る明示 opt-in である。
 - solver state は source scene を直接 mutate せず、resolved scene / pose buffer / runtime dynamics view から構築する。
 - runtime state の owner policy と continuous evaluator は UNEvaluation が扱う。UNDynamics solver は評価済み enabled state / parameters / colliders を読むだけで、wardrobe / action / contact の優先順位を決めない。
 - UNMotion `signals` は UNEvaluation の animation-linked parameter input として扱い、宣言済み action / ModularAvatarParameters runtime parameter だけを更新する。UNDynamics group の enabled state はその parameter 変化から既存 runtime action evaluator を通って更新される。PhysBone interaction suffix は direct interaction evaluator 実装まで値を書かない。
@@ -64,7 +64,7 @@ Lowering:
 
 - VRM SpringBone source は UNDynamics group / chain / collider / parameter view へ lower する。
 - VRC PhysBone source も同じ UNDynamics view へ lower する。source-specific fields は `sourceParams` と normalized metadata の両方で保持してよい。
-- VRC PhysBone authored default は、現 solver で衣装を壊す可能性がある間は安全側で既定 OFF とし、wardrobe / action / Supervisor profile opt-in で runtime override できる。CLI diagnose / renderer runtime status は runtime dynamics group が存在するのに effective enabled group が 0 の場合、物理が source として保存されていても現在の runtime state では solver 対象が無いことを warning として出す。
+- VRC PhysBone authored default は source の `enabled` を尊重する。明示 `enabled:false` の group は authored default disabled として lower し、wardrobe / action / Supervisor profile opt-in で runtime override できる。CLI diagnose / renderer runtime status は runtime dynamics group が存在するのに effective enabled group が 0 の場合、物理が source として保存されていても現在の runtime state では solver 対象が無いことを warning として出す。
 Source importer は authored fields を UNDynamics terms へ写像する責務を持つ。Solver backend は source kind を知らず、UNDynamics runtime view と評価済み runtime state だけを読む。
 
 ## Implementation Checklist

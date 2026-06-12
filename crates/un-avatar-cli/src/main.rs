@@ -7315,6 +7315,7 @@ mod tests {
 		fn primitive(joints: Option<Vec<[u16; 4]>>, weights: Option<Vec<[f32; 4]>>) -> un_avatar_core::UnaMeshBuffers {
 			un_avatar_core::UnaMeshBuffers {
 				name: None,
+				vertex_payload_id: None,
 				positions: vec![[0.0, 0.0, 0.0]],
 				normals: None,
 				tangents: None,
