@@ -2026,6 +2026,9 @@ fn unavatar_dynamics_writeback_mode(value: &Value) -> (UnaDynamicsWritebackMode,
 	let source_params = unavatar_dynamics_source_params(value);
 	let Some(value) = unavatar_dynamics_source_value(value, source_params, "writebackMode", "writeback_mode").and_then(Value::as_str)
 	else {
+		if unavatar_dynamics_implies_translation_writeback(value, source_params) {
+			return (UnaDynamicsWritebackMode::RotationTranslation, None);
+		}
 		return (UnaDynamicsWritebackMode::RotationOnly, None);
 	};
 	match value.trim().to_ascii_lowercase().as_str() {
@@ -2033,6 +2036,37 @@ fn unavatar_dynamics_writeback_mode(value: &Value) -> (UnaDynamicsWritebackMode,
 		"rotation_translation" | "rotationtranslation" | "rotation-translation" => (UnaDynamicsWritebackMode::RotationTranslation, None),
 		_ => (UnaDynamicsWritebackMode::RotationOnly, Some(value.to_string())),
 	}
+}
+
+fn unavatar_dynamics_implies_translation_writeback(value: &Value, source_params: Option<&Value>) -> bool {
+	unavatar_dynamics_source_float_nonzero(value, source_params, "maxStretch", "max_stretch")
+		|| unavatar_dynamics_source_float_nonzero(value, source_params, "maxSquish", "max_squish")
+		|| unavatar_dynamics_source_float_nonzero(value, source_params, "stretchMotion", "stretch_motion")
+		|| unavatar_dynamics_source_curve_has_keys(value, source_params, "maxStretchCurve", "max_stretch_curve")
+		|| unavatar_dynamics_source_curve_has_keys(value, source_params, "maxSquishCurve", "max_squish_curve")
+		|| unavatar_dynamics_source_curve_has_keys(value, source_params, "stretchMotionCurve", "stretch_motion_curve")
+}
+
+fn unavatar_dynamics_source_float_nonzero(value: &Value, source_params: Option<&Value>, camel_key: &str, snake_key: &str) -> bool {
+	unavatar_dynamics_source_value(value, source_params, camel_key, snake_key)
+		.and_then(|value| json_f32(Some(value)))
+		.is_some_and(|value| value.is_finite() && value.abs() > 0.0)
+}
+
+fn unavatar_dynamics_source_curve_has_keys(value: &Value, source_params: Option<&Value>, camel_key: &str, snake_key: &str) -> bool {
+	let Some(curve) = unavatar_dynamics_source_value(value, source_params, camel_key, snake_key) else {
+		return false;
+	};
+	curve
+		.get("keyCount")
+		.or_else(|| curve.get("key_count"))
+		.and_then(Value::as_u64)
+		.is_some_and(|count| count > 0)
+		|| curve
+			.get("keys")
+			.or_else(|| curve.get("Keys"))
+			.and_then(Value::as_array)
+			.is_some_and(|keys| !keys.is_empty())
 }
 
 fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
@@ -9851,6 +9885,50 @@ mod tests {
 		counts.sort_by(|a, b| a.0.cmp(&b.0));
 
 		assert_eq!(counts, vec![(vec![0, 1, 2], 2, 1), (vec![0, 3], 1, 0)]);
+	}
+
+	#[test]
+	fn unavatar_dynamics_infers_writeback_mode_from_stretch_source_params() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1]),
+				test_scene_node("node_mid", vec![2]),
+				test_scene_node("node_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_mid", "path": "Root/Mid"},
+					{"nodeId": "node_tip", "path": "Root/Mid/Tip"}
+				],
+				"dynamics": [{
+					"id": "legacy_stretch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"maxStretch": 0.25
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(
+				&scene,
+				settings.groups[0].writeback_mode,
+				&settings.groups[0].bone_node_indices,
+			),
+			1
+		);
 	}
 
 	#[test]
