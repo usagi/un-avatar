@@ -1118,12 +1118,7 @@ fn normalize_webp_glb_for_gltf_import(bytes: &[u8]) -> Result<Cow<'_, [u8]>, Imp
 		return Ok(Cow::Borrowed(bytes));
 	}
 	let (mut root, bin) = read_glb_json_and_bin(bytes)?;
-	let has_webp = root.get("images").and_then(Value::as_array).is_some_and(|images| {
-		images
-			.iter()
-			.any(|image| image.get("mimeType").and_then(Value::as_str) == Some("image/webp"))
-	});
-	if !has_webp {
+	if !root_has_webp_image(&root) {
 		return Ok(Cow::Borrowed(bytes));
 	}
 
@@ -1153,6 +1148,14 @@ fn normalize_webp_glb_for_gltf_import(bytes: &[u8]) -> Result<Cow<'_, [u8]>, Imp
 		}
 	}
 	Ok(Cow::Owned(rebuild_glb(&mut root, &views)?))
+}
+
+fn root_has_webp_image(root: &Value) -> bool {
+	root.get("images").and_then(Value::as_array).is_some_and(|images| {
+		images
+			.iter()
+			.any(|image| image.get("mimeType").and_then(Value::as_str) == Some("image/webp"))
+	})
 }
 
 struct GltfBufferViewBytes {
@@ -10168,7 +10171,11 @@ impl AvatarImporter for GltfImporter {
 						import_profile_messages.push(format!("glTF import profile: root_json_ms={}", json_started.elapsed().as_millis()));
 					}
 					let normalize_started = Instant::now();
-					let import_bytes = normalize_webp_glb_for_gltf_import(&bytes)?;
+					let import_bytes = if bytes.starts_with(b"glTF") && root_json.as_ref().is_some_and(|root| !root_has_webp_image(root)) {
+						Cow::Borrowed(bytes.as_slice())
+					} else {
+						normalize_webp_glb_for_gltf_import(&bytes)?
+					};
 					let normalized_owned = matches!(&import_bytes, Cow::Owned(_));
 					import_profile_messages.push(format!(
 						"glTF import profile: webp_normalize_ms={} rebuilt_glb={}",
@@ -10242,7 +10249,12 @@ impl AvatarImporter for GltfImporter {
 					));
 				}
 				let normalize_started = Instant::now();
-				let import_bytes = normalize_webp_glb_for_gltf_import(bytes.as_ref())?;
+				let import_bytes =
+					if bytes.as_ref().starts_with(b"glTF") && root_json.as_ref().is_some_and(|root| !root_has_webp_image(root)) {
+						Cow::Borrowed(bytes.as_ref())
+					} else {
+						normalize_webp_glb_for_gltf_import(bytes.as_ref())?
+					};
 				let normalized_owned = matches!(&import_bytes, Cow::Owned(_));
 				import_profile_messages.push(format!(
 					"glTF import profile: webp_normalize_ms={} rebuilt_glb={}",
