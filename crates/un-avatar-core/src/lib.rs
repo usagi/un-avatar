@@ -2406,7 +2406,10 @@ fn add_modular_avatar_parameter_definition(
 		}
 	}
 	definition.override_animator_defaults |= modular_avatar_parameter_override_animator_defaults(parameter);
-	definition.local_only = Some(json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only"))));
+	definition.local_only = Some(
+		json_bool(parameter.get("localOnly").or_else(|| parameter.get("local_only")))
+			|| modular_avatar_parameter_sync_type(parameter) == "NotSynced",
+	);
 	definition.saved = Some(json_bool(parameter.get("saved")));
 	definition.internal_parameter |= json_bool(parameter.get("internalParameter").or_else(|| parameter.get("internal_parameter")));
 }
@@ -7643,6 +7646,7 @@ mod tests {
 			.into_iter()
 			.find(|definition| definition.name == "LocalDefault")
 			.expect("LocalDefault runtime parameter definition");
+		assert_eq!(local_default.local_only, Some(true));
 		assert!(local_default.override_animator_defaults);
 	}
 
