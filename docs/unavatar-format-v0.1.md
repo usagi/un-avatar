@@ -449,6 +449,8 @@ Runtime は base state 適用時、親 OFF に由来する子孫の `false` を�
 
 - mesh / texture / material / dynamics は `assetGroups` に所属できる。
 - wardrobe set は利用する `assetGroups` を宣言する。
+- `assetGroups` は資産 residency group の集合であり、ユーザーが選ぶ wardrobe set の複数適用を意味しない。`active_wardrobe_set` は常に単一の選択 set を表し、`active_asset_groups` はその set の解決結果として必要になる資産 group list である。
+- Base は空文字列 group `""` 相当として扱う。古い exporter が base set を `assetGroups: []` として保存した場合も、Runtime は base set の active asset groups を `[""]` に正規化する。`""` group は明示 ownership を持たない base / unowned assets を resident とするための sentinel であり、missing group ではない。
 - Runtime は選択 set に必要な group だけ GPU upload し、不要 group は unload 対象にできる。
 - 数百着規模の衣装を扱うユーザーを想定し、全衣装の GPU 常駐を前提にしない。
 

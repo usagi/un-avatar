@@ -889,6 +889,7 @@ namespace UNAvatar.UnityExporter
                     id = "base",
                     displayName = "Base",
                     source = hasExportBaseSnapshot ? "unity_baked_capture_base" : hasBaseSnapshot ? "unity_capture_base" : hasImportedBaseOperations ? "imported_unavatar_base" : "implicit_current_state",
+                    assetGroups = new List<string> { "" },
                     operations = baseOperations,
                     previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()
                 }.ToJson(true)

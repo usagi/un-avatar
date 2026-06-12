@@ -82,7 +82,7 @@ namespace UNAvatar.UnityExporter
                 foreach (var group in assetGroups)
                 {
                     var text = group as string;
-                    if (!string.IsNullOrWhiteSpace(text))
+                    if (text != null)
                     {
                         set.assetGroups.Add(text);
                     }
