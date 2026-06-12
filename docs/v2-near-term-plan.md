@@ -50,6 +50,33 @@
 - refactor 中も lilToon compatibility behavior を維持する。既知の mismatch 修正に必要でない semantic rewrite は避ける。
 - 広い snapshot churn より、state resolution、resource indexing、command application の focused test を優先する。
 
+## Performance Work Queue
+
+mizuki-split class の `.unavatar` でも起動体験は実用域に近づいたが、v2 初回リリースまで継続して loading / upload / shader / splash / runtime CPU を削る。速度最適化は必ずプロファイルかコード上の明確な不要 work を根拠にし、品質劣化やモデル固有 hack で代替しない。
+
+優先順:
+
+1. PostProcess pipeline lazy creation
+   - 現状は outline / bloom / FXAA / SMAA などの post pipeline を起動時にまとめて作る。実際に有効な AA、Bloom、avatar silhouette outline、SSAO / color adjust / screen refraction に必要な pipeline だけを作る。
+   - resize / runtime option change で後から必要になった pipeline はその時点で作る。起動時に未使用 shader を compile しない。
+2. Pipeline cache / prewarm
+   - Vulkan `PipelineCache` は既に導入済み。透明 window など backend 制約で Vulkan cache を使えない場合は UI / profile diagnostics に明示する。
+   - Supervisor / renderer warmup mode は、実用前に共有 pipeline cache を作る用途として扱う。warmup は通常起動の見た目品質を落とす代替ではない。
+3. Texture upload / source cache
+   - inactive wardrobe image decode は defer 済み。次は deferred cubemap conversion、source-native upload、processed texture cache の役割を分離する。
+   - decoded 済み画像の encoded source bytes は保持せず、deferred placeholder のみ lazy decode 用に保持する方針を維持する。
+4. Runtime CPU
+   - world matrix rebuild、UNPhysics / UNDynamics step、wardrobe residency refresh、fur card encode など、毎 frame 全体走査になっている箇所を dirty / active scope へ寄せる。
+   - full Animator graph、dynamic reactive mesh gating、VRC Constraints solver integration は未設計領域として、速度目的のついで実装はしない。
+5. Skin tone / optional analysis
+   - skin tone matching、diagnostic dump、debug summaries は active / resident texture と明示 option に限定し、通常起動 path へ重い解析を混ぜない。
+
+Outline policy:
+
+- lilToon-compatible authored outline は、本家 lilToon の `_UseOutline` / `FORWARD_OUTLINE` / `_OutlineWidth` / `_OutlineWidthMask` / `_OutlineVectorTex` 系に基づく geometry outline として扱う。
+- v1 の `AvatarOutlinePolicy::Override` による画面空間シルエット囲みは lilToon authored outline ではない。これは UN Avatar 独自の post effect / user override として残す場合も、lilToon compatibility path とは分離する。
+- PostProcess lazy creation では、authored geometry outline と avatar silhouette post outline を別機能として扱い、post outline が OFF なら avatar outline post pipelines を作らない。
+
 ## UNPhysics / UNDynamics Runtime Normalization
 
 SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。

@@ -672,6 +672,10 @@ Status legend:
 - `[~]` `_OutlineZBias`
   - done: v2 material parameter として保持し、outline vertex shader の clip-space depth bias へ接続する。
   - remaining: Unity/lilToon の offset 符号・係数・near/far 依存を reference で検証する。
+- `[note]` Authored outline vs UN Avatar silhouette outline
+  - 本家 lilToon は `_UseOutline` が有効な material で `FORWARD_OUTLINE` pass を使い、`lilCalcOutlinePosition` / `lilCalcOutlinePositionLite` により vertex を normal / `_OutlineVectorTex` / vertex color 由来 vector 方向へ押し出す geometry outline を描く。`_OutlineWidth` は `0.01` 倍され、`_OutlineWidthMask`、`_OutlineVertexR2Width`、`_OutlineFixWidth`、`_OutlineZBias` が幅や位置に影響する。
+  - したがって v2 lilToon-compatible authored outline の正本は geometry outline。v1 の `AvatarOutlinePolicy::Override` / `AvatarOutlineKind::{Ink,Brush,Double}` 系の画面空間シルエット囲みは lilToon 由来ではなく、UN Avatar 独自の post effect / user override として別扱いにする。
+  - PostProcess pipeline lazy creation では、authored geometry outline は mesh pipeline 側、silhouette post outline は post process 側として分離し、silhouette post outline が無効なら avatar-outline post pipelines を起動時に作らない。
 - `[defer]` outline validation: keep OFF during early lilToon-like material matching
 
 ### Advanced / Deferred
