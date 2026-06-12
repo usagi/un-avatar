@@ -135,21 +135,62 @@ fn collect_scene_images_from_imported_data(
 	Ok(out)
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct GltfSliceImportProfile {
+	parse_ms: u128,
+	buffers_ms: u128,
+	image_decode_ms: u128,
+	image_count: usize,
+	decoded_image_count: usize,
+	image_decode_workers: usize,
+}
+
 fn import_gltf_slice_parallel_images(
 	slice: &[u8],
 	decode_image_indices: Option<&BTreeSet<usize>>,
-) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<Option<gltf::image::Data>>), ImportError> {
+) -> Result<
+	(
+		gltf::Document,
+		Vec<gltf::buffer::Data>,
+		Vec<Option<gltf::image::Data>>,
+		GltfSliceImportProfile,
+	),
+	ImportError,
+> {
+	let parse_started = Instant::now();
 	let gltf = gltf::Gltf::from_slice(slice).map_err(|e| ImportError::Message(e.to_string()))?;
+	let parse_ms = parse_started.elapsed().as_millis();
 	let document = gltf.document;
+	let buffers_started = Instant::now();
 	let buffers = gltf::import_buffers(&document, None, gltf.blob).map_err(|e| ImportError::Message(e.to_string()))?;
+	let buffers_ms = buffers_started.elapsed().as_millis();
 	let document_images = document.images().collect::<Vec<_>>();
 	let image_count = document_images.len();
 	if image_count == 0 {
-		return Ok((document, buffers, Vec::new()));
+		return Ok((
+			document,
+			buffers,
+			Vec::new(),
+			GltfSliceImportProfile {
+				parse_ms,
+				buffers_ms,
+				..Default::default()
+			},
+		));
 	}
 	let decode_count = decode_image_indices.map_or(image_count, BTreeSet::len).min(image_count);
 	if decode_count == 0 {
-		return Ok((document, buffers, vec![None; image_count]));
+		return Ok((
+			document,
+			buffers,
+			vec![None; image_count],
+			GltfSliceImportProfile {
+				parse_ms,
+				buffers_ms,
+				image_count,
+				..Default::default()
+			},
+		));
 	}
 
 	let worker_count = std::thread::available_parallelism()
@@ -161,6 +202,7 @@ fn import_gltf_slice_parallel_images(
 		.map(|indices| indices.iter().copied().filter(|index| *index < image_count).collect::<Vec<_>>())
 		.unwrap_or_else(|| (0..image_count).collect());
 	let chunk_size = decode_indices.len().div_ceil(worker_count);
+	let image_decode_started = Instant::now();
 	let decoded_chunks = std::thread::scope(|scope| {
 		let mut handles = Vec::with_capacity(worker_count);
 		for chunk in decode_indices.chunks(chunk_size) {
@@ -194,7 +236,19 @@ fn import_gltf_slice_parallel_images(
 			images[index] = Some(data);
 		}
 	}
-	Ok((document, buffers, images))
+	Ok((
+		document,
+		buffers,
+		images,
+		GltfSliceImportProfile {
+			parse_ms,
+			buffers_ms,
+			image_decode_ms: image_decode_started.elapsed().as_millis(),
+			image_count,
+			decoded_image_count: decode_count,
+			image_decode_workers: worker_count,
+		},
+	))
 }
 
 fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Option<UnaImageSourceMetadata>> {
@@ -9976,7 +10030,7 @@ fn read_primitive(
 	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
 	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	_report: &mut ImportReport,
-) -> Result<Option<UnaMeshBuffers>, ImportError> {
+) -> Result<Option<(UnaMeshBuffers, bool, bool)>, ImportError> {
 	if prim.mode() != gltf::mesh::Mode::Triangles {
 		_report.approximations.push(Approximation {
 			feature: "primitive.mode".into(),
@@ -9992,11 +10046,10 @@ fn read_primitive(
 		if let Some(payload) = vertex_payload_cache.get(&payload_key).cloned() {
 			let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
 			let material_index = prim.material().index();
-			return Ok(Some(mesh_buffers_from_vertex_payload(
-				payload,
-				indices,
-				material_index,
-				vertex_payload_id,
+			return Ok(Some((
+				mesh_buffers_from_vertex_payload(payload, indices, material_index, vertex_payload_id),
+				true,
+				cache_reusable,
 			)));
 		}
 	}
@@ -10127,11 +10180,10 @@ fn read_primitive(
 		vertex_payload_cache.insert(payload_key, payload.clone());
 	}
 
-	Ok(Some(mesh_buffers_from_vertex_payload(
-		payload,
-		indices,
-		material_index,
-		vertex_payload_id,
+	Ok(Some((
+		mesh_buffers_from_vertex_payload(payload, indices, material_index, vertex_payload_id),
+		false,
+		cache_reusable,
 	)))
 }
 
@@ -10269,6 +10321,12 @@ fn scene_snapshot_from_gltf_inner(
 		}
 	}
 	let mut vertex_payload_cache = BTreeMap::new();
+	let mut mesh_primitive_count = 0usize;
+	let mut mesh_cacheable_primitive_count = 0usize;
+	let mut mesh_vertex_payload_cache_hits = 0usize;
+	let mut mesh_vertex_count = 0usize;
+	let mut mesh_index_count = 0usize;
+	let mut mesh_morph_target_count = 0usize;
 	for mesh in document.meshes() {
 		let mid = mesh.index();
 		let mw = mesh.weights();
@@ -10279,7 +10337,7 @@ fn scene_snapshot_from_gltf_inner(
 			let vertex_payload_id = vertex_payload_key_ids
 				.get(&primitive_vertex_payload_key(&prim, mw, &target_names))
 				.copied();
-			if let Some(buf) = read_primitive(
+			if let Some((buf, cache_hit, cacheable)) = read_primitive(
 				prim,
 				buffers,
 				mw,
@@ -10289,9 +10347,15 @@ fn scene_snapshot_from_gltf_inner(
 				&vertex_payload_key_counts,
 				report,
 			)? {
+				mesh_primitive_count += 1;
+				mesh_cacheable_primitive_count += usize::from(cacheable);
+				mesh_vertex_payload_cache_hits += usize::from(cache_hit);
 				let vertex_count = buf.positions.len();
 				let index_count = buf.indices.as_ref().map(Vec::len).unwrap_or(0);
 				let morph_count = buf.morph_targets.len();
+				mesh_vertex_count += vertex_count;
+				mesh_index_count += index_count;
+				mesh_morph_target_count += morph_count;
 				if profile {
 					eprintln!(
 						"un-avatar-renderer: gltf scene primitive profile mesh={mid} primitive={primitive_index} vertices={vertex_count} indices={index_count} morphs={morph_count} elapsed={:.1}ms",
@@ -10305,6 +10369,9 @@ fn scene_snapshot_from_gltf_inner(
 		}
 	}
 	record_scene_snapshot_profile_step(report, profile, "read_meshes", step_started);
+	report.push_info(format!(
+		"glTF scene profile: read_meshes.primitives={mesh_primitive_count} cacheable={mesh_cacheable_primitive_count} vertex_payload_cache_hits={mesh_vertex_payload_cache_hits} vertices={mesh_vertex_count} indices={mesh_index_count} morph_targets={mesh_morph_target_count}"
+	));
 
 	let step_started = Instant::now();
 	let mut nodes = Vec::with_capacity(document.nodes().len());
@@ -10468,6 +10535,15 @@ impl AvatarImporter for GltfImporter {
 						"glTF import profile: gltf_import_slice_ms={}",
 						import_slice_started.elapsed().as_millis()
 					));
+					import_profile_messages.push(format!(
+						"glTF import profile: gltf_import_slice.parse_ms={} buffers_ms={} image_decode_ms={} images={}/{} workers={}",
+						imported.3.parse_ms,
+						imported.3.buffers_ms,
+						imported.3.image_decode_ms,
+						imported.3.decoded_image_count,
+						imported.3.image_count,
+						imported.3.image_decode_workers
+					));
 					if bytes.starts_with(b"glTF") {
 						original_glb_bytes = Some(bytes);
 					}
@@ -10564,6 +10640,15 @@ impl AvatarImporter for GltfImporter {
 				import_profile_messages.push(format!(
 					"glTF import profile: gltf_import_slice_ms={}",
 					import_slice_started.elapsed().as_millis()
+				));
+				import_profile_messages.push(format!(
+					"glTF import profile: gltf_import_slice.parse_ms={} buffers_ms={} image_decode_ms={} images={}/{} workers={}",
+					imported.3.parse_ms,
+					imported.3.buffers_ms,
+					imported.3.image_decode_ms,
+					imported.3.decoded_image_count,
+					imported.3.image_count,
+					imported.3.image_decode_workers
 				));
 				(path_hint, imported.0, imported.1, imported.2)
 			}
