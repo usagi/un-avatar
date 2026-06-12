@@ -5453,6 +5453,12 @@ struct ModularAvatarVertexFilterContext<'a> {
 	texture_asset_map: &'a BTreeMap<String, usize>,
 }
 
+struct ModularAvatarAxisBakeContext<'a> {
+	world_matrices: &'a [Mat4],
+	target_world_inv: Mat4,
+	skin: Option<&'a UnaSkin>,
+}
+
 fn modular_avatar_component_value<'a>(component: &'a Value, names: &[&str]) -> Option<&'a Value> {
 	component
 		.get("fields")
@@ -6113,6 +6119,66 @@ fn modular_avatar_axis_filter_mask(primitive: &UnaMeshBuffers, center: [f32; 3],
 		.collect()
 }
 
+fn modular_avatar_skinned_rest_positions_for_axis(
+	primitive: &UnaMeshBuffers,
+	context: &ModularAvatarAxisBakeContext<'_>,
+) -> Option<Vec<[f32; 3]>> {
+	let skin = context.skin?;
+	let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+		return None;
+	};
+	if joints.len() != primitive.positions.len() || weights.len() != primitive.positions.len() {
+		return None;
+	}
+	let mut positions = Vec::with_capacity(primitive.positions.len());
+	for (position, (vertex_joints, vertex_weights)) in primitive.positions.iter().zip(joints.iter().zip(weights)) {
+		let source = Vec3::from(*position).extend(1.0);
+		let mut total_weight = 0.0f32;
+		let mut baked = Vec3::ZERO;
+		for slot in 0..4 {
+			let weight = vertex_weights[slot];
+			if weight <= 0.0 {
+				continue;
+			}
+			let joint_index = usize::from(vertex_joints[slot]);
+			let joint_node = skin.joint_nodes.get(joint_index).copied()?;
+			let joint_world = context.world_matrices.get(joint_node).copied().unwrap_or(Mat4::IDENTITY);
+			let inverse_bind = skin
+				.inverse_bind_matrices
+				.get(joint_index)
+				.map(|matrix| Mat4::from_cols_array(matrix))
+				.unwrap_or(Mat4::IDENTITY);
+			baked += (context.target_world_inv * joint_world * inverse_bind * source).truncate() * weight;
+			total_weight += weight;
+		}
+		if total_weight > 0.0 {
+			baked /= total_weight;
+		} else {
+			baked = Vec3::from(*position);
+		}
+		positions.push(baked.to_array());
+	}
+	Some(positions)
+}
+
+fn modular_avatar_axis_filter_mask_with_bake(
+	primitive: &UnaMeshBuffers,
+	center: [f32; 3],
+	axis: [f32; 3],
+	axis_context: Option<&ModularAvatarAxisBakeContext<'_>>,
+) -> Vec<bool> {
+	let Some(positions) = axis_context.and_then(|context| modular_avatar_skinned_rest_positions_for_axis(primitive, context)) else {
+		return modular_avatar_axis_filter_mask(primitive, center, axis);
+	};
+	positions
+		.iter()
+		.map(|position| {
+			let offset = [position[0] - center[0], position[1] - center[1], position[2] - center[2]];
+			axis[0] * offset[0] + axis[1] * offset[1] + axis[2] * offset[2] > 0.0
+		})
+		.collect()
+}
+
 fn modular_avatar_bone_filter_mask(
 	primitive: &UnaMeshBuffers,
 	skin_joint_nodes: Option<&[usize]>,
@@ -6216,6 +6282,7 @@ fn modular_avatar_mask_filter_mask(
 fn modular_avatar_single_vertex_filter_mask(
 	primitive: &UnaMeshBuffers,
 	skin_joint_nodes: Option<&[usize]>,
+	axis_context: Option<&ModularAvatarAxisBakeContext<'_>>,
 	primitive_index: usize,
 	primitive_count: usize,
 	context: &ModularAvatarVertexFilterContext<'_>,
@@ -6225,7 +6292,9 @@ fn modular_avatar_single_vertex_filter_mask(
 		ModularAvatarVertexFilter::BlendShape { shapes, threshold } => {
 			modular_avatar_blend_shape_filter_mask(primitive, shapes, *threshold)
 		}
-		ModularAvatarVertexFilter::Axis { center, axis } => modular_avatar_axis_filter_mask(primitive, *center, *axis),
+		ModularAvatarVertexFilter::Axis { center, axis } => {
+			modular_avatar_axis_filter_mask_with_bake(primitive, *center, *axis, axis_context)
+		}
 		ModularAvatarVertexFilter::Bone { bone_node, threshold } => {
 			modular_avatar_bone_filter_mask(primitive, skin_joint_nodes, *bone_node, *threshold)
 		}
@@ -6253,6 +6322,7 @@ fn modular_avatar_single_vertex_filter_mask(
 fn modular_avatar_vertex_filter_mask(
 	primitive: &UnaMeshBuffers,
 	skin_joint_nodes: Option<&[usize]>,
+	axis_context: Option<&ModularAvatarAxisBakeContext<'_>>,
 	primitive_index: usize,
 	primitive_count: usize,
 	context: &ModularAvatarVertexFilterContext<'_>,
@@ -6262,13 +6332,22 @@ fn modular_avatar_vertex_filter_mask(
 	let Some(first) = filters.next() else {
 		return vec![false; primitive.positions.len()];
 	};
-	let mut mask = modular_avatar_single_vertex_filter_mask(primitive, skin_joint_nodes, primitive_index, primitive_count, context, first);
+	let mut mask = modular_avatar_single_vertex_filter_mask(
+		primitive,
+		skin_joint_nodes,
+		axis_context,
+		primitive_index,
+		primitive_count,
+		context,
+		first,
+	);
 	match group.combine {
 		ModularAvatarVertexFilterCombine::Single | ModularAvatarVertexFilterCombine::Union => {
 			for filter in filters {
 				let next = modular_avatar_single_vertex_filter_mask(
 					primitive,
 					skin_joint_nodes,
+					axis_context,
 					primitive_index,
 					primitive_count,
 					context,
@@ -6284,6 +6363,7 @@ fn modular_avatar_vertex_filter_mask(
 				let next = modular_avatar_single_vertex_filter_mask(
 					primitive,
 					skin_joint_nodes,
+					axis_context,
 					primitive_index,
 					primitive_count,
 					context,
@@ -6368,6 +6448,7 @@ fn apply_unavatar_vertex_filters_with_texture_assets(
 	if groups.is_empty() {
 		return (0, 0, 0, missing, skipped, unsupported);
 	}
+	let world_matrices = scene_world_matrices(scene);
 	let mesh_user_counts = scene
 		.nodes
 		.iter()
@@ -6389,6 +6470,17 @@ fn apply_unavatar_vertex_filters_with_texture_assets(
 			.and_then(|node| node.skin)
 			.and_then(|skin_index| scene.skins.get(skin_index))
 			.map(|skin| skin.joint_nodes.clone());
+		let target_world_inv = world_matrices
+			.get(group.target)
+			.copied()
+			.map(inverse_finite_or_identity)
+			.unwrap_or(Mat4::IDENTITY);
+		let target_skin = scene
+			.nodes
+			.get(group.target)
+			.and_then(|node| node.skin)
+			.and_then(|skin_index| scene.skins.get(skin_index))
+			.cloned();
 		let target_mesh_idx = if mesh_user_counts.get(&mesh_idx).copied().unwrap_or(0) > 1 {
 			let Some(mesh) = scene.meshes.get(mesh_idx).cloned() else {
 				continue;
@@ -6406,11 +6498,23 @@ fn apply_unavatar_vertex_filters_with_texture_assets(
 			continue;
 		};
 		let skin_joint_nodes = skin_joint_nodes.as_deref();
+		let axis_context = ModularAvatarAxisBakeContext {
+			world_matrices: &world_matrices,
+			target_world_inv,
+			skin: target_skin.as_ref(),
+		};
 		let mut node_mutated = false;
 		let primitive_count = mesh.len();
 		for (primitive_index, primitive) in mesh.iter_mut().enumerate() {
-			let vertex_mask =
-				modular_avatar_vertex_filter_mask(primitive, skin_joint_nodes, primitive_index, primitive_count, &context, &group);
+			let vertex_mask = modular_avatar_vertex_filter_mask(
+				primitive,
+				skin_joint_nodes,
+				Some(&axis_context),
+				primitive_index,
+				primitive_count,
+				&context,
+				&group,
+			);
 			if !vertex_mask.iter().any(|value| *value) {
 				continue;
 			}
@@ -14216,6 +14320,83 @@ mod tests {
 
 		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 2, 0, 0, 0));
 		assert_eq!(scene.nodes[1].mesh, Some(0));
+		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[][..]));
+	}
+
+	#[test]
+	fn modular_avatar_vertex_filter_axis_uses_skinned_rest_pose() {
+		let mut primitive = UnaMeshBuffers {
+			name: None,
+			positions: vec![[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(vec![[0, 0, 0, 0]; 3]),
+			weights: Some(vec![[1.0, 0.0, 0.0, 0.0]; 3]),
+			indices: Some(vec![0, 1, 2]),
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		primitive.morph_targets.clear();
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("TargetRenderer".to_string()),
+					source_node_id: Some("node_target".to_string()),
+					mesh: Some(0),
+					skin: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Bone".to_string()),
+					source_node_id: Some("node_bone".to_string()),
+					transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![vec![primitive]],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![2],
+				inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array()],
+				skeleton_node: None,
+			}],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarMeshCutter",
+			"enabled": true,
+			"fields": {
+				"m_object": {"nodeId": "node_target", "path": "Root/TargetRenderer"},
+				"filters": [{
+					"shortType": "VertexFilterByAxisComponent",
+					"fields": {
+						"m_center": [0.5, 0.0, 0.0],
+						"m_axis": [1.0, 0.0, 0.0]
+					}
+				}]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let (nodes, primitives, triangles, missing, skipped, unsupported) =
+			apply_unavatar_vertex_filters(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+
+		assert_eq!((nodes, primitives, triangles, missing, skipped, unsupported), (1, 1, 1, 0, 0, 0));
 		assert_eq!(scene.meshes[0][0].indices.as_deref(), Some(&[][..]));
 	}
 
