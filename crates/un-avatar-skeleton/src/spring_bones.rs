@@ -312,7 +312,6 @@ struct JointRuntime {
 /// 1 チェーン分のランタイム状態。
 struct GroupRuntime {
 	joints: Vec<JointRuntime>,
-	world_scratch: Vec<Mat4>,
 	params: ResolvedSpringBonePhysicsParams,
 }
 
@@ -328,6 +327,7 @@ impl GroupRuntime {
 pub struct SpringBoneSimulator {
 	runtimes: Vec<Option<GroupRuntime>>,
 	active_runtime_indices: Vec<usize>,
+	world_scratch: Vec<Mat4>,
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
 	bone_colliders: Vec<BoneColliderPrimitive>,
@@ -351,6 +351,7 @@ impl Default for SpringBoneSimulator {
 		Self {
 			runtimes: Vec::new(),
 			active_runtime_indices: Vec::new(),
+			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
 			physics: SpringBonePhysicsConfig::default().normalized(),
@@ -646,11 +647,7 @@ impl SpringBoneSimulator {
 				let category_id = classify_group(scene, g, &physics.categories);
 				let params = resolve_group_params(&category_id, g, &override_params_by_category);
 				active_runtime_indices.push(runtimes.len());
-				runtimes.push(Some(GroupRuntime {
-					joints,
-					world_scratch: Vec::new(),
-					params,
-				}));
+				runtimes.push(Some(GroupRuntime { joints, params }));
 			}
 		}
 		if runtimes.iter().all(|r| r.is_none()) {
@@ -659,6 +656,7 @@ impl SpringBoneSimulator {
 			Some(Self {
 				runtimes,
 				active_runtime_indices,
+				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
 				physics,
@@ -686,6 +684,7 @@ impl SpringBoneSimulator {
 		self.accumulator = (self.accumulator + dt).min(MAX_ACCUM);
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
+			write_world_from_snapshot(scene, &mut self.world_scratch);
 			for &runtime_index in &self.active_runtime_indices {
 				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
@@ -697,7 +696,7 @@ impl SpringBoneSimulator {
 					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
 						rt.reset_xpbd_lambdas();
 					}
-					step_group(scene, g, rt, &self.bone_colliders, sub_dt);
+					step_group(scene, g, rt, &mut self.world_scratch, &self.bone_colliders, sub_dt);
 				}
 			}
 			self.accumulator -= fixed_dt;
@@ -747,6 +746,7 @@ fn step_group(
 	scene: &mut UnaSceneSnapshot,
 	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
+	world_scratch: &mut [Mat4],
 	bone_colliders: &[BoneColliderPrimitive],
 	dt: f32,
 ) {
@@ -769,13 +769,12 @@ fn step_group(
 		* group.parameters.gravity_power
 		* rt.params.gravity_scale;
 	let is_xpbd = matches!(rt.params.solver, SpringBoneSolver::Xpbd);
-	write_world_from_snapshot(scene, &mut rt.world_scratch);
 
 	for joint in &mut rt.joints {
-		if joint.parent_node >= rt.world_scratch.len() || joint.child_node >= scene.nodes.len() {
+		if joint.parent_node >= world_scratch.len() || joint.child_node >= scene.nodes.len() {
 			continue;
 		}
-		let parent_world = rt.world_scratch[joint.parent_node];
+		let parent_world = world_scratch[joint.parent_node];
 		let (_, parent_rot_raw, parent_pos) = parent_world.to_scale_rotation_translation();
 		let parent_rot = parent_rot_raw.normalize();
 		let local_child = Mat4::from_cols_array(&scene.nodes[joint.child_node].transform);
@@ -822,7 +821,7 @@ fn step_group(
 					child_pos,
 					target_axis_world,
 					constrained_length,
-					&rt.world_scratch,
+					world_scratch,
 					bone_colliders,
 					joint.hit_radius,
 				);
@@ -841,7 +840,7 @@ fn step_group(
 				child_pos,
 				target_axis_world,
 				constrained_length,
-				&rt.world_scratch,
+				world_scratch,
 				bone_colliders,
 				joint.hit_radius,
 			);
@@ -877,7 +876,7 @@ fn step_group(
 		}
 
 		// 子以下の world 行列を更新（次の joint の親回転計算で使う）。
-		propagate_world_subtree(&scene.nodes, &mut rt.world_scratch, joint.child_node, parent_world);
+		propagate_world_subtree(&scene.nodes, world_scratch, joint.child_node, parent_world);
 
 		joint.prev_tail = joint.curr_tail;
 		joint.curr_tail = next_tail;
