@@ -34,8 +34,10 @@ use crate::{
 		SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes,
 		TextureUploadSummary,
 	},
+	model_loader,
 	options::{
-		AudioLinkOptions, AudioLinkSource, BloomOptions, ColorGradingLook, ContactShadowOptions, EnvironmentColorOptions, LightingOptions,
+		AudioLinkOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, ColorGradingLook, ContactShadowOptions,
+		EnvironmentColorOptions, LightingOptions,
 	},
 	post_process::PostProcess,
 	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
@@ -2254,6 +2256,139 @@ fn effective_window_backend(backend: RenderBackend) -> RenderBackend {
 		}
 	}
 	backend
+}
+
+pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions) -> SceneMeshLoadOpts {
+	let mut mesh_diagnostics = opts.mesh_diagnostics.clone();
+	mesh_diagnostics.force_simple_basecolor |= opts.simple_basecolor_only;
+	mesh_diagnostics.disable_mtoon_outlines |= opts.disable_mtoon_outlines;
+	mesh_diagnostics.debug_disable_rim_lighting |= opts.debug_disable_rim_lighting;
+	mesh_diagnostics.debug_force_shading_shift_zero |= opts.debug_force_shading_shift_zero;
+	mesh_diagnostics.debug_disable_matcap |= opts.debug_disable_matcap;
+	mesh_diagnostics.debug_disable_emissive |= opts.debug_disable_emissive;
+	mesh_diagnostics.debug_disable_shade_color |= opts.debug_disable_shade_color;
+	mesh_diagnostics.debug_disable_normal_map |= opts.debug_disable_normal_map;
+	mesh_diagnostics.debug_base_texture_only |= opts.debug_base_texture_only;
+	mesh_diagnostics.skin_tone_matching |= opts.skin_tone_matching;
+	mesh_diagnostics
+}
+
+fn startup_texture_target_size_for_window_options(opts: &AvatarWindowOptions) -> (u32, u32) {
+	if opts.spout.enabled {
+		(
+			opts.spout.width.unwrap_or(opts.window_width).max(1),
+			opts.spout.height.unwrap_or(opts.window_height).max(1),
+		)
+	} else {
+		(opts.window_width.max(1), opts.window_height.max(1))
+	}
+}
+
+pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<(), String> {
+	let Some(path) = opts.gltf_path.as_deref() else {
+		return Err("gpu scene benchmark: --gltf or manifest avatar_path is required".to_string());
+	};
+	let started = Instant::now();
+	let import_started = Instant::now();
+	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref(), opts.contact_parameter_emission)
+		.map_err(|e| format!("gpu scene benchmark: model import failed: {}: {e}", path.display()))?;
+	eprintln!(
+		"un-avatar-renderer: gpu scene benchmark import path={} elapsed={:.1}ms",
+		path.display(),
+		import_started.elapsed().as_secs_f64() * 1000.0
+	);
+
+	let render_backend = effective_window_backend(opts.render_backend);
+	let instance = wgpu::Instance::new(instance_descriptor_for_backend(render_backend));
+	let adapter_started = Instant::now();
+	let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+		power_preference: wgpu::PowerPreference::HighPerformance,
+		compatible_surface: None,
+		force_fallback_adapter: false,
+	}))
+	.map_err(|e| format!("gpu scene benchmark: request_adapter: {e}"))?;
+	let adapter_limits = adapter.limits();
+	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+	let adapter_features = adapter.features();
+	let texture_compression_features = if matches!(
+		opts.texture_compression,
+		TextureCompressionMode::Source | TextureCompressionMode::Compat
+	) {
+		wgpu::Features::empty()
+	} else {
+		adapter_features
+			& (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ASTC | wgpu::Features::TEXTURE_COMPRESSION_ETC2)
+	};
+	let required_features = texture_compression_features | (adapter_features & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+	let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+		label: Some("un-avatar-renderer-gpu-scene-benchmark"),
+		required_features,
+		required_limits: mesh_shader_plan.required_limits,
+		memory_hints: Default::default(),
+		..Default::default()
+	}))
+	.map_err(|e| format!("gpu scene benchmark: request_device: {e}"))?;
+	device.on_uncaptured_error(Arc::new(|error| {
+		eprintln!("un-avatar-renderer: uncaptured wgpu error: {error}");
+	}));
+	eprintln!(
+		"un-avatar-renderer: gpu scene benchmark adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
+		mesh_shader_plan.tier,
+		adapter_started.elapsed().as_secs_f64() * 1000.0
+	);
+
+	let (target_width, target_height) = startup_texture_target_size_for_window_options(opts);
+	let options = DocumentAttachOptions {
+		mesh_diagnostics: scene_mesh_load_opts_for_window_options(opts),
+		texture_max_dimension: opts.texture_resolution_limit.max_dimension(target_width, target_height),
+		texture_compression: opts.texture_compression,
+		block_compression_encoder: opts.block_compression_encoder,
+		block_compression_cpu_threads: opts.block_compression_cpu_threads,
+		mipmap_filter: opts.mipmap_filter,
+		texture_compression_advanced: opts.texture_compression_advanced.clone(),
+		texture_compression_bc_supported: cfg!(windows)
+			&& !matches!(
+				opts.texture_compression,
+				TextureCompressionMode::Source | TextureCompressionMode::Compat
+			),
+		texture_compression_astc_supported: false,
+		texture_compression_etc2_supported: false,
+		processed_texture_cache: opts.processed_texture_cache,
+		enable_spring_bones: opts.enable_spring_bones,
+		dynamics_enable_all_on_launch: opts.dynamics_enable_all_on_launch,
+		bone_colliders: opts.bone_colliders,
+		spring_bone_physics: opts.spring_bone_physics.clone(),
+		debug_material_dump: opts.debug_material_dump,
+		vmc_address: opts.vmc_address,
+		unmotion_zenoh: opts.unmotion_zenoh.clone(),
+		audio_link: opts.audio_link.clone(),
+		debug_vmc: opts.debug.vmc,
+	};
+	let scene_started = Instant::now();
+	let context = GpuSceneBuildContext {
+		device,
+		queue,
+		format: wgpu::TextureFormat::Bgra8UnormSrgb,
+		aa: opts.aa,
+		shader_variant_tier: mesh_shader_plan.tier,
+	};
+	let prepared = context.prepare_document_scene(document, &options, |progress| {
+		eprintln!(
+			"un-avatar-renderer: gpu scene benchmark progress phase={} {}/{} {} ({:.1}ms)",
+			progress.phase,
+			progress.current,
+			progress.total,
+			progress.message,
+			scene_started.elapsed().as_secs_f64() * 1000.0
+		);
+	})?;
+	drop(prepared);
+	eprintln!(
+		"un-avatar-renderer: gpu scene benchmark scene elapsed={:.1}ms total={:.1}ms",
+		scene_started.elapsed().as_secs_f64() * 1000.0,
+		started.elapsed().as_secs_f64() * 1000.0
+	);
+	Ok(())
 }
 
 struct TimestampRingSlot {

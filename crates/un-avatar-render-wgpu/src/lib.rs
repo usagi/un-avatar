@@ -2006,22 +2006,7 @@ impl AvatarApp {
 	}
 
 	fn scene_mesh_load_opts(&self) -> SceneMeshLoadOpts {
-		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
-		self.apply_common_mesh_diagnostic_overrides(&mut mesh_diagnostics);
-		mesh_diagnostics.skin_tone_matching |= self.opts.skin_tone_matching;
-		mesh_diagnostics
-	}
-
-	fn apply_common_mesh_diagnostic_overrides(&self, mesh_diagnostics: &mut SceneMeshLoadOpts) {
-		mesh_diagnostics.force_simple_basecolor |= self.opts.simple_basecolor_only;
-		mesh_diagnostics.disable_mtoon_outlines |= self.opts.disable_mtoon_outlines;
-		mesh_diagnostics.debug_disable_rim_lighting |= self.opts.debug_disable_rim_lighting;
-		mesh_diagnostics.debug_force_shading_shift_zero |= self.opts.debug_force_shading_shift_zero;
-		mesh_diagnostics.debug_disable_matcap |= self.opts.debug_disable_matcap;
-		mesh_diagnostics.debug_disable_emissive |= self.opts.debug_disable_emissive;
-		mesh_diagnostics.debug_disable_shade_color |= self.opts.debug_disable_shade_color;
-		mesh_diagnostics.debug_disable_normal_map |= self.opts.debug_disable_normal_map;
-		mesh_diagnostics.debug_base_texture_only |= self.opts.debug_base_texture_only;
+		gpu::scene_mesh_load_opts_for_window_options(&self.opts)
 	}
 
 	fn startup_texture_target_size(&self) -> (u32, u32) {
@@ -2356,8 +2341,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		}
 		win.set_visible(true);
 
-		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
-		self.apply_common_mesh_diagnostic_overrides(&mut mesh_diagnostics);
+		let mesh_diagnostics = self.scene_mesh_load_opts();
 		match GpuState::new_shell(
 			win.clone(),
 			self.opts.transparent,
@@ -4432,6 +4416,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		#[arg(long, hide = true)]
 		validate_startup: bool,
 		#[arg(long, hide = true)]
+		bench_gpu_scene: bool,
+		#[arg(long, hide = true)]
 		dump_skin_tone_matching: bool,
 		#[arg(long, default_value = "UN Avatar")]
 		title: String,
@@ -4831,6 +4817,10 @@ pub fn run_cli() -> Result<(), RunError> {
 	}
 	if cli.validate_startup {
 		validate_startup_options(&opts).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
+	if cli.bench_gpu_scene {
+		gpu::benchmark_gpu_scene_startup(&opts).map_err(RunError::EventLoop)?;
 		return Ok(());
 	}
 	if cli.dump_skin_tone_matching {

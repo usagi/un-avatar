@@ -3,6 +3,7 @@
 use std::{
 	borrow::Cow,
 	collections::{BTreeMap, BTreeSet},
+	time::{Duration, Instant},
 };
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -861,6 +862,43 @@ pub(crate) struct SceneMeshBuildProgress {
 	pub message: String,
 }
 
+fn log_slow_gpu_scene_step(label: impl std::fmt::Display, elapsed: std::time::Duration) {
+	let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+	if elapsed_ms >= 50.0 {
+		eprintln!("un-avatar-renderer: gpu scene {label}: {elapsed_ms:.1}ms");
+	}
+}
+
+fn take_gpu_scene_step_elapsed(step_start: &mut Instant) -> Duration {
+	let elapsed = step_start.elapsed();
+	*step_start = Instant::now();
+	elapsed
+}
+
+fn log_slow_gpu_scene_primitive(
+	mesh_index: usize,
+	primitive_index: usize,
+	vertex_count: usize,
+	index_count: usize,
+	morph_target_count: usize,
+	asset_resident: bool,
+	total: Duration,
+	timings: &[(&str, Duration)],
+) {
+	let total_ms = total.as_secs_f64() * 1000.0;
+	if total_ms < 50.0 {
+		return;
+	}
+	let details = timings
+		.iter()
+		.map(|(label, elapsed)| format!("{label}={:.1}ms", elapsed.as_secs_f64() * 1000.0))
+		.collect::<Vec<_>>()
+		.join(" ");
+	eprintln!(
+		"un-avatar-renderer: gpu scene primitive mesh={mesh_index} primitive={primitive_index} vertices={vertex_count} indices={index_count} morphs={morph_target_count} resident={asset_resident} total={total_ms:.1}ms {details}"
+	);
+}
+
 fn scene_primitive_count(scene: &UnaSceneSnapshot) -> u32 {
 	let mut count = 0u32;
 	for node in &scene.nodes {
@@ -956,7 +994,7 @@ struct ExpressionBinding {
 	weight_scale: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum DrawPipelineKind {
 	OpaqueLit,
 	OpaqueUnlit,
@@ -1801,22 +1839,11 @@ impl SceneCubeTextureSlot {
 }
 
 pub(crate) struct SceneMeshes {
-	pipeline_outline_toon: wgpu::RenderPipeline,
-	_compute_fur_cards_compute_pipeline: ComputeFurCardsComputePipeline,
-	pipeline_compute_fur_cards_pre_toon: wgpu::RenderPipeline,
-	pipeline_compute_fur_cards_toon: wgpu::RenderPipeline,
-	pipeline_opaque_lit: wgpu::RenderPipeline,
-	pipeline_opaque_unlit: wgpu::RenderPipeline,
-	pipeline_opaque_toon: wgpu::RenderPipeline,
-	pipeline_transparent_toon_backpass: wgpu::RenderPipeline,
-	pipeline_transparent_toon_backpass_no_zwrite: wgpu::RenderPipeline,
-	pipeline_blend_lit: wgpu::RenderPipeline,
-	pipeline_blend_unlit: wgpu::RenderPipeline,
-	pipeline_blend_toon: wgpu::RenderPipeline,
-	pipeline_blend_toon_zwrite: wgpu::RenderPipeline,
-	pipeline_blend_toon_add: wgpu::RenderPipeline,
-	pipeline_blend_toon_add_zwrite: wgpu::RenderPipeline,
-	pipeline_liltoon_gem_pre_toon: wgpu::RenderPipeline,
+	pipelines: BTreeMap<DrawPipelineKind, wgpu::RenderPipeline>,
+	pipeline_outline_toon: Option<wgpu::RenderPipeline>,
+	compute_fur_cards_compute_pipeline: Option<ComputeFurCardsComputePipeline>,
+	pipeline_compute_fur_cards_pre_toon: Option<wgpu::RenderPipeline>,
+	pipeline_compute_fur_cards_toon: Option<wgpu::RenderPipeline>,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_layout: wgpu::BindGroupLayout,
@@ -6219,6 +6246,128 @@ impl SceneMeshes {
 		})
 	}
 
+	fn create_draw_pipeline(
+		device: &wgpu::Device,
+		pipeline_layout: &wgpu::PipelineLayout,
+		shader: &wgpu::ShaderModule,
+		format: wgpu::TextureFormat,
+		vb_layout: &wgpu::VertexBufferLayout<'_>,
+		kind: DrawPipelineKind,
+		sample_count: u32,
+	) -> wgpu::RenderPipeline {
+		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
+		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+		let additive_toon_blend = Some(wgpu::BlendState {
+			color: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::One,
+				operation: wgpu::BlendOperation::Add,
+			},
+			alpha: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+				operation: wgpu::BlendOperation::Add,
+			},
+		});
+		let gem_pre_blend = Some(wgpu::BlendState {
+			color: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::One,
+				dst_factor: wgpu::BlendFactor::Zero,
+				operation: wgpu::BlendOperation::Add,
+			},
+			alpha: wgpu::BlendComponent {
+				src_factor: wgpu::BlendFactor::Zero,
+				dst_factor: wgpu::BlendFactor::One,
+				operation: wgpu::BlendOperation::Add,
+			},
+		});
+		let (label, vertex_entry, fragment_entry, render_state) = match kind {
+			DrawPipelineKind::OpaqueLit => (
+				"mesh_opaque_lit",
+				"vs_main",
+				"fs_lit",
+				MeshPipelineRenderState::mesh_main(None, true, sample_count),
+			),
+			DrawPipelineKind::OpaqueUnlit => (
+				"mesh_opaque_unlit",
+				"vs_main",
+				"fs_unlit",
+				MeshPipelineRenderState::mesh_main(None, true, sample_count),
+			),
+			DrawPipelineKind::OpaqueToon => (
+				"mesh_opaque_toon",
+				"vs_main",
+				"fs_toon",
+				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+			),
+			DrawPipelineKind::BlendLit => (
+				"mesh_blend_lit",
+				"vs_main",
+				"fs_lit",
+				MeshPipelineRenderState::mesh_main(blend, false, sample_count),
+			),
+			DrawPipelineKind::BlendUnlit => (
+				"mesh_blend_unlit",
+				"vs_main",
+				"fs_unlit",
+				MeshPipelineRenderState::mesh_main(blend, false, sample_count),
+			),
+			DrawPipelineKind::BlendToon => (
+				"mesh_blend_toon",
+				"vs_main",
+				"fs_toon",
+				MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
+			),
+			DrawPipelineKind::BlendToonZWrite => (
+				"mesh_blend_toon_zwrite",
+				"vs_main",
+				"fs_toon",
+				MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
+			),
+			DrawPipelineKind::BlendToonAdd => (
+				"mesh_blend_toon_add",
+				"vs_main",
+				"fs_toon",
+				MeshPipelineRenderState::mesh_main(additive_toon_blend, false, sample_count),
+			),
+			DrawPipelineKind::BlendToonAddZWrite => (
+				"mesh_blend_toon_add_zwrite",
+				"vs_main",
+				"fs_toon",
+				MeshPipelineRenderState::mesh_main(additive_toon_blend, true, sample_count),
+			),
+			DrawPipelineKind::TransparentToonBackpass => (
+				"mesh_transparent_toon_backpass",
+				"vs_main",
+				"fs_toon_backpass",
+				MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
+			),
+			DrawPipelineKind::TransparentToonBackpassNoZWrite => (
+				"mesh_transparent_toon_backpass_no_zwrite",
+				"vs_main",
+				"fs_toon_backpass",
+				MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
+			),
+			DrawPipelineKind::LilToonGemPre => (
+				"mesh_liltoon_gem_pre_toon",
+				"vs_main",
+				"fs_toon_gem_pre",
+				MeshPipelineRenderState::mesh_main(gem_pre_blend, false, sample_count),
+			),
+		};
+		Self::create_mesh_pipeline(
+			device,
+			pipeline_layout,
+			shader,
+			format,
+			vb_layout,
+			label,
+			vertex_entry,
+			fragment_entry,
+			render_state,
+		)
+	}
+
 	#[allow(clippy::too_many_arguments)]
 	pub fn new(
 		device: &wgpu::Device,
@@ -6262,7 +6411,7 @@ impl SceneMeshes {
 				}),
 			)
 		};
-		let total_steps = 3u32
+		let total_steps = 4u32
 			.saturating_add(scene_texture_upload_step_count(scene, &texture_roles, texture_max_dimension))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
@@ -6277,6 +6426,7 @@ impl SceneMeshes {
 			});
 		};
 		report("gpu-upload", "Preparing GPU scene layouts".to_string());
+		let scene_layout_start = Instant::now();
 		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_frame"),
 			entries: &[
@@ -6379,7 +6529,6 @@ impl SceneMeshes {
 			],
 		});
 		let compute_fur_cards_bind_group_layout = create_compute_fur_cards_bind_group_layout(device);
-		let compute_fur_cards_compute_pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout);
 
 		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 			label: Some("mesh"),
@@ -6501,201 +6650,8 @@ impl SceneMeshes {
 			step_mode: wgpu::VertexStepMode::Vertex,
 			attributes: &COMPUTE_FUR_CARDS_VTX_ATTRS,
 		};
+		log_slow_gpu_scene_step("layout/shader module setup", scene_layout_start.elapsed());
 
-		let pipeline_outline_toon = Self::create_mesh_pipeline(
-			device,
-			&outline_pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_outline_toon",
-			"vs_outline",
-			"fs_outline",
-			MeshPipelineRenderState::outline(sample_count),
-		);
-		let pipeline_opaque_lit = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_opaque_lit",
-			"vs_main",
-			"fs_lit",
-			MeshPipelineRenderState::mesh_main(None, true, sample_count),
-		);
-		let pipeline_opaque_unlit = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_opaque_unlit",
-			"vs_main",
-			"fs_unlit",
-			MeshPipelineRenderState::mesh_main(None, true, sample_count),
-		);
-		let pipeline_opaque_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_opaque_toon",
-			"vs_main",
-			"fs_toon",
-			MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-		);
-		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
-		// lilToon Transparent uses SrcBlend=One, DstBlend=OneMinusSrcAlpha
-		// with shader-side premultiply. The lilToon-like v2 path follows the same
-		// premultiplied-alpha convention while it still shares this pipeline.
-		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-		let additive_toon_blend = Some(wgpu::BlendState {
-			color: wgpu::BlendComponent {
-				src_factor: wgpu::BlendFactor::One,
-				dst_factor: wgpu::BlendFactor::One,
-				operation: wgpu::BlendOperation::Add,
-			},
-			alpha: wgpu::BlendComponent {
-				src_factor: wgpu::BlendFactor::One,
-				dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-				operation: wgpu::BlendOperation::Add,
-			},
-		});
-		let gem_pre_blend = Some(wgpu::BlendState {
-			color: wgpu::BlendComponent {
-				src_factor: wgpu::BlendFactor::One,
-				dst_factor: wgpu::BlendFactor::Zero,
-				operation: wgpu::BlendOperation::Add,
-			},
-			alpha: wgpu::BlendComponent {
-				src_factor: wgpu::BlendFactor::Zero,
-				dst_factor: wgpu::BlendFactor::One,
-				operation: wgpu::BlendOperation::Add,
-			},
-		});
-		let pipeline_blend_lit = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_lit",
-			"vs_main",
-			"fs_lit",
-			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
-		);
-		let pipeline_blend_unlit = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_unlit",
-			"vs_main",
-			"fs_unlit",
-			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
-		);
-		let pipeline_blend_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_toon",
-			"vs_main",
-			"fs_toon",
-			MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
-		);
-		let pipeline_compute_fur_cards_pre_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&compute_fur_cards_vb_layout,
-			"mesh_compute_fur_cards_pre_toon",
-			"vs_compute_fur_cards_pre",
-			"fs_fur_toon_pre",
-			MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-		);
-		let pipeline_compute_fur_cards_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&compute_fur_cards_vb_layout,
-			"mesh_compute_fur_cards_toon",
-			"vs_compute_fur_cards",
-			"fs_fur_toon",
-			MeshPipelineRenderState::mesh_main(blend, false, sample_count),
-		);
-		let pipeline_transparent_toon_backpass = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_transparent_toon_backpass",
-			"vs_main",
-			"fs_toon_backpass",
-			MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
-		);
-		let pipeline_transparent_toon_backpass_no_zwrite = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_transparent_toon_backpass_no_zwrite",
-			"vs_main",
-			"fs_toon_backpass",
-			MeshPipelineRenderState::mesh_main(premultiplied_blend, false, sample_count),
-		);
-		let pipeline_blend_toon_zwrite = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_toon_zwrite",
-			"vs_main",
-			"fs_toon",
-			MeshPipelineRenderState::mesh_main(premultiplied_blend, true, sample_count),
-		);
-		let pipeline_blend_toon_add = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_toon_add",
-			"vs_main",
-			"fs_toon",
-			MeshPipelineRenderState::mesh_main(additive_toon_blend, false, sample_count),
-		);
-		let pipeline_blend_toon_add_zwrite = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_blend_toon_add_zwrite",
-			"vs_main",
-			"fs_toon",
-			MeshPipelineRenderState::mesh_main(additive_toon_blend, true, sample_count),
-		);
-		let pipeline_liltoon_gem_pre_toon = Self::create_mesh_pipeline(
-			device,
-			&pipeline_layout,
-			&shader,
-			format,
-			&vb_layout,
-			"mesh_liltoon_gem_pre_toon",
-			"vs_main",
-			"fs_toon_gem_pre",
-			MeshPipelineRenderState::mesh_main(gem_pre_blend, false, sample_count),
-		);
 		report("gpu-upload", "Preparing mesh frame buffers".to_string());
 		let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_frame"),
@@ -7174,6 +7130,8 @@ impl SceneMeshes {
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
 				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
+				let primitive_start = Instant::now();
+				let mut step_start = Instant::now();
 				let material_slot_index = buf
 					.material_index
 					.filter(|material_index| scene.materials.get(*material_index).is_some());
@@ -7181,14 +7139,25 @@ impl SceneMeshes {
 					.and_then(|mi| scene.materials.get(mi))
 					.unwrap_or(&default_material);
 				if material_is_fully_invisible_for_draw(mat, &opts) {
+					log_slow_gpu_scene_step(
+						format!("primitive mesh={mesh_i} primitive={prim_i} skipped invisible material"),
+						primitive_start.elapsed(),
+					);
 					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
 					continue;
 				}
+				let material_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let original_expression_bindings = expression_bindings.get(&(mesh_i, prim_i)).map(Vec::as_slice).unwrap_or(&[]);
 				let dynamic_morph_targets = dynamic_morph_target_indices(buf, original_expression_bindings, opts.debug_zero_morphs);
+				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let Some(exp) = expand_primitive(buf, Some(&dynamic_morph_targets)) else {
+					log_slow_gpu_scene_step(
+						format!("primitive mesh={mesh_i} primitive={prim_i} expand skipped"),
+						primitive_start.elapsed(),
+					);
 					continue;
 				};
+				let expand_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let ExpandedPrimitive {
 					mut verts,
 					indices,
@@ -7200,6 +7169,7 @@ impl SceneMeshes {
 				let compact_expression_bindings = remap_expression_bindings(original_expression_bindings, &morph_source_indices);
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
 				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
+				let skinning_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let skin_palette_key = skin_palette_key_for_node(ni, node.skin);
 				let skin_palette_index = Self::skin_palette_index(
 					device,
@@ -7210,6 +7180,7 @@ impl SceneMeshes {
 					skin_palette_key,
 					skin,
 				);
+				let skin_palette_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let index_format = compact_index_format(&indices);
 				let buffer_upload = SceneMeshBufferUpload { vertices: verts, indices };
 				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
@@ -7222,6 +7193,7 @@ impl SceneMeshes {
 				} else {
 					(None, None)
 				};
+				let buffer_upload_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 
 				let liltoon_like = mat.liltoon_like_runtime();
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
@@ -7266,6 +7238,7 @@ impl SceneMeshes {
 						draw_material: &draw_material_buffer,
 					},
 				);
+				let material_bind_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
@@ -7289,6 +7262,7 @@ impl SceneMeshes {
 						bind_group: empty_morph_resources.bind_group.clone(),
 					}
 				};
+				let morph_resource_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let compute_fur_cards = if material_has_fur(mat, mat.shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
@@ -7306,6 +7280,8 @@ impl SceneMeshes {
 				} else {
 					None
 				};
+				let fur_resource_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
+				let vertex_count = buffer_upload.vertices.len();
 				draws.push(MeshDraw {
 					vertex_buffer,
 					index_buffer,
@@ -7346,30 +7322,121 @@ impl SceneMeshes {
 					local_bounds: node.local_bounds,
 					world_origin: Vec3::ZERO,
 				});
+				let draw_push_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
+				log_slow_gpu_scene_primitive(
+					mesh_i,
+					prim_i,
+					vertex_count,
+					index_count as usize,
+					morph_target_count,
+					asset_resident,
+					primitive_start.elapsed(),
+					&[
+						("material", material_elapsed),
+						("dynamic_morphs", dynamic_morph_elapsed),
+						("expand", expand_elapsed),
+						("skinning", skinning_elapsed),
+						("skin_palette", skin_palette_elapsed),
+						("buffers", buffer_upload_elapsed),
+						("material_bind", material_bind_elapsed),
+						("morph_resources", morph_resource_elapsed),
+						("fur_resources", fur_resource_elapsed),
+						("draw_push", draw_push_elapsed),
+					],
+				);
 			}
 		}
 
 		let draw_state = build_draw_order(&draws, &opts);
+		let mut required_pipeline_kinds = BTreeSet::new();
+		for batch in draw_state.opaque_batches.iter().chain(draw_state.blended_batches.iter()) {
+			required_pipeline_kinds.insert(batch.pipeline);
+		}
+		for &draw_index in &draw_state.transparent_backpass_draw_indices {
+			let zwrite = draws
+				.get(draw_index)
+				.and_then(|draw| draw.material.liltoon_like_runtime())
+				.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+			required_pipeline_kinds.insert(if zwrite {
+				DrawPipelineKind::TransparentToonBackpass
+			} else {
+				DrawPipelineKind::TransparentToonBackpassNoZWrite
+			});
+		}
+		let needs_outline_pipeline = !draw_state.outline_draw_indices.is_empty()
+			&& !opts.force_simple_basecolor
+			&& !opts.debug_bind_pose
+			&& !opts.debug_primitive_colors;
+		let needs_fur_pipelines = !draw_state.fur_draw_indices.is_empty();
+		let pipeline_count = required_pipeline_kinds
+			.len()
+			.saturating_add(usize::from(needs_outline_pipeline))
+			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
+		report("gpu-upload", format!("Creating {pipeline_count} mesh pipeline(s)"));
+		let pipeline_start = Instant::now();
+		let pipeline_outline_toon = needs_outline_pipeline.then(|| {
+			Self::create_mesh_pipeline(
+				device,
+				&outline_pipeline_layout,
+				&shader,
+				format,
+				&vb_layout,
+				"mesh_outline_toon",
+				"vs_outline",
+				"fs_outline",
+				MeshPipelineRenderState::outline(sample_count),
+			)
+		});
+		let compute_fur_cards_compute_pipeline =
+			needs_fur_pipelines.then(|| create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout));
+		let pipeline_compute_fur_cards_pre_toon = needs_fur_pipelines.then(|| {
+			Self::create_mesh_pipeline(
+				device,
+				&pipeline_layout,
+				&shader,
+				format,
+				&compute_fur_cards_vb_layout,
+				"mesh_compute_fur_cards_pre_toon",
+				"vs_compute_fur_cards_pre",
+				"fs_fur_toon_pre",
+				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+			)
+		});
+		let pipeline_compute_fur_cards_toon = needs_fur_pipelines.then(|| {
+			Self::create_mesh_pipeline(
+				device,
+				&pipeline_layout,
+				&shader,
+				format,
+				&compute_fur_cards_vb_layout,
+				"mesh_compute_fur_cards_toon",
+				"vs_compute_fur_cards",
+				"fs_fur_toon",
+				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
+			)
+		});
+		let pipelines = required_pipeline_kinds
+			.into_iter()
+			.map(|kind| {
+				(
+					kind,
+					Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count),
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
+		log_slow_gpu_scene_step(
+			format!("pipeline creation count={pipeline_count} outline={needs_outline_pipeline} fur={needs_fur_pipelines}"),
+			pipeline_start.elapsed(),
+		);
 		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
 		let expression_value_capacity = expression_names.len();
 
 		let mut scene_meshes = Self {
+			pipelines,
 			pipeline_outline_toon,
-			_compute_fur_cards_compute_pipeline: compute_fur_cards_compute_pipeline,
+			compute_fur_cards_compute_pipeline,
 			pipeline_compute_fur_cards_pre_toon,
 			pipeline_compute_fur_cards_toon,
-			pipeline_opaque_lit,
-			pipeline_opaque_unlit,
-			pipeline_opaque_toon,
-			pipeline_transparent_toon_backpass,
-			pipeline_transparent_toon_backpass_no_zwrite,
-			pipeline_blend_lit,
-			pipeline_blend_unlit,
-			pipeline_blend_toon,
-			pipeline_blend_toon_zwrite,
-			pipeline_blend_toon_add,
-			pipeline_blend_toon_add_zwrite,
-			pipeline_liltoon_gem_pre_toon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_layout,
@@ -7617,7 +7684,10 @@ impl SceneMeshes {
 		{
 			return;
 		}
-		pass.set_pipeline(&self.pipeline_outline_toon);
+		let Some(pipeline_outline_toon) = self.pipeline_outline_toon.as_ref() else {
+			return;
+		};
+		pass.set_pipeline(pipeline_outline_toon);
 		let mut state = DrawBindState::default();
 		for &draw_index in &self.outline_draw_indices {
 			let bind_material = &self.draws[draw_index].bind_outline_material;
@@ -7633,7 +7703,10 @@ impl SceneMeshes {
 			label: Some("compute_fur_cards"),
 			timestamp_writes: None,
 		});
-		pass.set_pipeline(&self._compute_fur_cards_compute_pipeline._pipeline);
+		let Some(compute_pipeline) = self.compute_fur_cards_compute_pipeline.as_ref() else {
+			return;
+		};
+		pass.set_pipeline(&compute_pipeline._pipeline);
 		for &draw_index in &self.fur_draw_indices {
 			let Some(compute_fur_cards) = self.draws[draw_index]._compute_fur_cards.as_ref() else {
 				continue;
@@ -7813,20 +7886,7 @@ impl SceneMeshes {
 
 	#[inline]
 	fn pipeline_for_kind(&self, kind: DrawPipelineKind) -> &wgpu::RenderPipeline {
-		match kind {
-			DrawPipelineKind::OpaqueLit => &self.pipeline_opaque_lit,
-			DrawPipelineKind::OpaqueUnlit => &self.pipeline_opaque_unlit,
-			DrawPipelineKind::OpaqueToon => &self.pipeline_opaque_toon,
-			DrawPipelineKind::BlendLit => &self.pipeline_blend_lit,
-			DrawPipelineKind::BlendUnlit => &self.pipeline_blend_unlit,
-			DrawPipelineKind::BlendToon => &self.pipeline_blend_toon,
-			DrawPipelineKind::BlendToonZWrite => &self.pipeline_blend_toon_zwrite,
-			DrawPipelineKind::BlendToonAdd => &self.pipeline_blend_toon_add,
-			DrawPipelineKind::BlendToonAddZWrite => &self.pipeline_blend_toon_add_zwrite,
-			DrawPipelineKind::TransparentToonBackpass => &self.pipeline_transparent_toon_backpass,
-			DrawPipelineKind::TransparentToonBackpassNoZWrite => &self.pipeline_transparent_toon_backpass_no_zwrite,
-			DrawPipelineKind::LilToonGemPre => &self.pipeline_liltoon_gem_pre_toon,
-		}
+		self.pipelines.get(&kind).expect("draw pipeline was requested but not created")
 	}
 
 	pub fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -7865,9 +7925,9 @@ impl SceneMeshes {
 					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 				if backpass_zwrite != Some(zwrite) {
 					pass.set_pipeline(if zwrite {
-						&self.pipeline_transparent_toon_backpass
+						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpass)
 					} else {
-						&self.pipeline_transparent_toon_backpass_no_zwrite
+						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpassNoZWrite)
 					});
 					backpass_zwrite = Some(zwrite);
 					*state = DrawBindState::default();
@@ -7922,13 +7982,19 @@ impl SceneMeshes {
 
 	fn draw_fur_blended(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.fur_draw_indices.is_empty() {
+			let (Some(pre_toon), Some(toon)) = (
+				self.pipeline_compute_fur_cards_pre_toon.as_ref(),
+				self.pipeline_compute_fur_cards_toon.as_ref(),
+			) else {
+				return;
+			};
 			*state = DrawBindState::default();
-			pass.set_pipeline(&self.pipeline_compute_fur_cards_pre_toon);
+			pass.set_pipeline(pre_toon);
 			for &draw_index in &self.fur_draw_indices {
 				let _ = self.draw_compute_fur_cards_inner(pass, state, draw_index);
 			}
 			*state = DrawBindState::default();
-			pass.set_pipeline(&self.pipeline_compute_fur_cards_toon);
+			pass.set_pipeline(toon);
 			for &draw_index in &self.fur_draw_indices {
 				if self.draw_compute_fur_cards_inner(pass, state, draw_index) {
 					continue;
