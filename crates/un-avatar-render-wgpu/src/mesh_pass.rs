@@ -8361,6 +8361,29 @@ impl SceneMeshes {
 			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
 		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(4);
 		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
+		let shader_module_start = Instant::now();
+		let outline_shader_module = needs_outline_pipeline
+			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, outline_shader_features, "mesh_outline_shader"));
+		let fur_shader_module = needs_fur_pipelines
+			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader"));
+		let mut pipeline_shader_features_by_kind = BTreeMap::new();
+		let mut draw_shader_modules = BTreeMap::new();
+		for kind in &required_pipeline_kinds {
+			let shader_features = pipeline_shader_features.get(kind).copied().unwrap_or_default();
+			pipeline_shader_features_by_kind.insert(*kind, shader_features);
+			draw_shader_modules.entry(shader_features).or_insert_with(|| {
+				create_mesh_shader_module_for_features(device, shader_variant_tier, shader_features, "mesh_draw_shader")
+			});
+		}
+		log_slow_gpu_scene_step(
+			format!(
+				"mesh shader module creation draw_variants={} outline={} fur={}",
+				draw_shader_modules.len(),
+				needs_outline_pipeline,
+				needs_fur_pipelines
+			),
+			shader_module_start.elapsed(),
+		);
 		let pipeline_start = Instant::now();
 		let render_pipeline_start = Instant::now();
 		let (
@@ -8375,10 +8398,9 @@ impl SceneMeshes {
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
 				let outline_pipeline_layout = outline_pipeline_layout.clone();
 				let vb_layout = vb_layout.clone();
+				let shader = outline_shader_module.as_ref().expect("outline shader module missing");
 				scope.spawn(move || {
 					let start = Instant::now();
-					let shader =
-						create_mesh_shader_module_for_features(device, shader_variant_tier, outline_shader_features, "mesh_outline_shader");
 					let pipeline = Self::create_mesh_pipeline(
 						device,
 						&outline_pipeline_layout,
@@ -8411,10 +8433,9 @@ impl SceneMeshes {
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
 				let pipeline_layout = pipeline_layout.clone();
 				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
 				scope.spawn(move || {
 					let start = Instant::now();
-					let shader =
-						create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader");
 					let pipeline = Self::create_mesh_pipeline(
 						device,
 						&pipeline_layout,
@@ -8436,10 +8457,9 @@ impl SceneMeshes {
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
 				let pipeline_layout = pipeline_layout.clone();
 				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
 				scope.spawn(move || {
 					let start = Instant::now();
-					let shader =
-						create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader");
 					let pipeline = Self::create_mesh_pipeline(
 						device,
 						&pipeline_layout,
@@ -8460,15 +8480,14 @@ impl SceneMeshes {
 			for kind in required_pipeline_kinds {
 				let label = kind.label();
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let shader_features = pipeline_shader_features.get(&kind).copied().unwrap_or_default();
+				let shader_features = pipeline_shader_features_by_kind.get(&kind).copied().unwrap_or_default();
+				let shader = draw_shader_modules.get(&shader_features).expect("draw shader module missing");
 				let pipeline_layout = pipeline_layout.clone();
 				let vb_layout = vb_layout.clone();
 				pipeline_handles.push((
 					kind,
 					scope.spawn(move || {
 						let start = Instant::now();
-						let shader =
-							create_mesh_shader_module_for_features(device, shader_variant_tier, shader_features, "mesh_draw_shader");
 						let pipeline = Self::create_draw_pipeline(
 							device,
 							&pipeline_layout,
