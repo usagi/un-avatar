@@ -22,7 +22,7 @@ VRM SpringBone、VRC PhysBone、VRC PhysBone Collider、VRC Contacts、VRC Const
 
 UNDynamics の中核概念:
 
-- `UnaDynamicsGroup`: stable source id、enabled state、source provenance、solver parameters、chains、colliders、limits、interactions を束ねる runtime group。
+- `UnaDynamicsGroup`: stable source id、enabled state、source provenance、solver parameters、chains、writeback mode、colliders、limits、interactions を束ねる runtime group。
 - `UnaDynamicsChain`: 親から子へ向かう node chain。PhysBone endpointPosition は synthetic endpoint chain node として lower できる。
 - `UnaDynamicsCollider`: sphere / capsule / inside bounds など source-neutral collider。
 - `UnaDynamicsLimit`: angle / stretch など chain motion constraints。v2 初期は angle cone を現 solver backend が扱える拘束として近似反映し、stretch は metadata / diagnostics に留める。
