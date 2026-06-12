@@ -1635,6 +1635,10 @@ impl AvatarApp {
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_rotation_translation_writeback_group_count =
+					runtime_dynamics_unsupported_writeback_group_count(&status) as u32;
+				status.dynamics_translation_writeback_candidate_count =
+					runtime_dynamics_unsupported_writeback_candidate_count(&status) as u32;
 				status.dynamics_interaction_hooks = gpu.map(|g| g.dynamics_interaction_hooks()).unwrap_or_default();
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
@@ -3252,11 +3256,10 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let unsupported_writeback_groups = runtime_dynamics_unsupported_writeback_group_count(status);
 	if unsupported_writeback_groups > 0 {
 		let samples = runtime_dynamics_unsupported_writeback_samples(status);
-		let candidate_joints = runtime_dynamics_unsupported_writeback_candidate_count(status);
 		warnings.push(format!(
 			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={}{}",
 			unsupported_writeback_groups,
-			candidate_joints,
+			status.dynamics_translation_writeback_candidate_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -3579,6 +3582,10 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_stretch_limit_group_count: u32,
 	#[serde(default)]
+	dynamics_rotation_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_candidate_count: u32,
+	#[serde(default)]
 	dynamics_grabbing_enabled_group_count: u32,
 	#[serde(default)]
 	dynamics_posing_enabled_group_count: u32,
@@ -3737,6 +3744,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_limit_group_count: 0,
 		dynamics_angle_limit_group_count: 0,
 		dynamics_stretch_limit_group_count: 0,
+		dynamics_rotation_translation_writeback_group_count: 0,
+		dynamics_translation_writeback_candidate_count: 0,
 		dynamics_grabbing_enabled_group_count: 0,
 		dynamics_posing_enabled_group_count: 0,
 		dynamics_collider_count: 0,
@@ -4986,6 +4995,8 @@ mod tests {
 		status.dynamics_source_enabled_group_count = 0;
 		status.dynamics_enabled_override_count = 0;
 		status.dynamics_stretch_limit_group_count = 2;
+		status.dynamics_rotation_translation_writeback_group_count = 1;
+		status.dynamics_translation_writeback_candidate_count = 1;
 		status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
 			index: 0,
 			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
@@ -5668,6 +5679,18 @@ mod tests {
 		assert_eq!(
 			snapshot.get("dynamics_stretch_limit_group_count").and_then(|value| value.as_u64()),
 			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_rotation_translation_writeback_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_translation_writeback_candidate_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
 		);
 		let dynamics_warnings = snapshot
 			.get("dynamics_warnings")
