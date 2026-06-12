@@ -154,6 +154,35 @@ namespace UNAvatar.UnityExporter
             return curve.TryGetValue("keyCount", out var keyCount) && keyCount is int intKeyCount ? intKeyCount : 0;
         }
 
+        private static bool VrcPhysBoneNeedsTranslationWriteback(Dictionary<string, object> sourceParams)
+        {
+            return SourceFloatNonZero(sourceParams, "maxStretch") ||
+                SourceFloatNonZero(sourceParams, "maxSquish") ||
+                SourceFloatNonZero(sourceParams, "stretchMotion") ||
+                SourceParamCurveKeyCount(sourceParams, "maxStretchCurve") > 0 ||
+                SourceParamCurveKeyCount(sourceParams, "maxSquishCurve") > 0 ||
+                SourceParamCurveKeyCount(sourceParams, "stretchMotionCurve") > 0;
+        }
+
+        private static bool SourceFloatNonZero(Dictionary<string, object> sourceParams, string name)
+        {
+            return sourceParams != null &&
+                sourceParams.TryGetValue(name, out var value) &&
+                value is float f &&
+                Mathf.Abs(f) > 1e-6f;
+        }
+
+        private static int SourceParamCurveKeyCount(Dictionary<string, object> sourceParams, string curveName)
+        {
+            if (sourceParams == null ||
+                !sourceParams.TryGetValue(curveName, out var rawCurve) ||
+                !(rawCurve is Dictionary<string, object> curve))
+            {
+                return 0;
+            }
+            return curve.TryGetValue("keyCount", out var keyCount) && keyCount is int intKeyCount ? intKeyCount : 0;
+        }
+
         private static Dictionary<string, object> SourceInteractionSample(Dictionary<string, object> group)
         {
             var sourceParams = SourceParams(group);
@@ -275,8 +304,9 @@ namespace UNAvatar.UnityExporter
             var radius = ReadFloatMember(type, component, "radius", 0.02f);
             var gravity = ReadFloatMember(type, component, "gravity", 0.0f);
             var multiChildType = ReadMember(type, component, "multiChildType")?.ToString() ?? "";
+            var sourceParams = BuildVrcPhysBoneSourceParams(root, type, component);
 
-            return new Dictionary<string, object>
+            var payload = new Dictionary<string, object>
             {
                 ["id"] = sourceId,
                 ["name"] = component.name ?? "",
@@ -292,8 +322,13 @@ namespace UNAvatar.UnityExporter
                 ["drag"] = 0.4f,
                 ["gravity"] = new List<object> { 0.0f, -gravity, 0.0f },
                 ["radius"] = radius,
-                ["sourceParams"] = BuildVrcPhysBoneSourceParams(root, type, component)
+                ["sourceParams"] = sourceParams
             };
+            if (VrcPhysBoneNeedsTranslationWriteback(sourceParams))
+            {
+                payload["writebackMode"] = "rotation_translation";
+            }
+            return payload;
         }
 
         private Dictionary<string, object> BuildVrcPhysBoneSourceParams(Transform root, Type type, Component component)
