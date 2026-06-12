@@ -2265,16 +2265,27 @@ fn instance_descriptor_for_backend(backend: RenderBackend) -> wgpu::InstanceDesc
 	descriptor
 }
 
-fn effective_window_backend(backend: RenderBackend) -> RenderBackend {
+fn effective_window_backend(backend: RenderBackend, transparent: bool) -> RenderBackend {
 	#[cfg(windows)]
 	{
-		// Windows Vulkan HWND surfaces commonly expose only Opaque alpha. The renderer
-		// supports runtime transparency toggles, so prefer the DX12 DirectComposition path.
-		if backend == RenderBackend::Vulkan {
+		// Windows Vulkan HWND surfaces commonly expose only Opaque alpha. Keep Vulkan
+		// as the default path, and switch to DX12 DirectComposition only when real
+		// transparent-window presentation is requested.
+		if transparent && backend == RenderBackend::Vulkan {
 			return RenderBackend::Dx12;
 		}
 	}
 	backend
+}
+
+fn log_effective_window_backend(requested: RenderBackend, effective: RenderBackend, transparent: bool) {
+	#[cfg(windows)]
+	if transparent && requested == RenderBackend::Vulkan && effective == RenderBackend::Dx12 {
+		eprintln!(
+			"un-avatar-renderer: transparent window output uses DX12 on Windows; Vulkan pipeline cache/prewarm is unavailable for this renderer startup"
+		);
+	}
+	let _ = (requested, effective, transparent);
 }
 
 pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions) -> SceneMeshLoadOpts {
@@ -2317,7 +2328,9 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		import_started.elapsed().as_secs_f64() * 1000.0
 	);
 
-	let render_backend = effective_window_backend(opts.render_backend);
+	let requested_render_backend = opts.render_backend;
+	let render_backend = effective_window_backend(requested_render_backend, opts.transparent);
+	log_effective_window_backend(requested_render_backend, render_backend, opts.transparent);
 	let instance = wgpu::Instance::new(instance_descriptor_for_backend(render_backend));
 	let adapter_started = Instant::now();
 	let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -3511,7 +3524,9 @@ impl GpuState {
 		let primary_motion_source = Arc::new(AtomicU8::new(primary_motion_source_to_u8(primary_motion_source)));
 		let motion_buffer = Arc::new(MotionControlBuffer::default());
 
-		let render_backend = effective_window_backend(render_backend);
+		let requested_render_backend = render_backend;
+		let render_backend = effective_window_backend(requested_render_backend, transparent);
+		log_effective_window_backend(requested_render_backend, render_backend, transparent);
 		let instance_descriptor = instance_descriptor_for_backend(render_backend);
 		let instance = wgpu::Instance::new(instance_descriptor);
 
@@ -7180,15 +7195,16 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, modular_avatar_menu_components,
-		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode,
-		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		effective_window_backend, menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits,
+		modular_avatar_menu_components, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
+		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		RuntimeMenuGraphNode, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
+	use crate::RenderBackend;
 	use serde_json::json;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
@@ -7921,6 +7937,18 @@ mod tests {
 			high_plan.required_limits.max_samplers_per_shader_stage,
 			HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
 		);
+	}
+
+	#[test]
+	fn effective_window_backend_keeps_vulkan_for_opaque_window() {
+		assert_eq!(effective_window_backend(RenderBackend::Vulkan, false), RenderBackend::Vulkan);
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn effective_window_backend_uses_dx12_only_for_transparent_vulkan_window() {
+		assert_eq!(effective_window_backend(RenderBackend::Vulkan, true), RenderBackend::Dx12);
+		assert_eq!(effective_window_backend(RenderBackend::Dx12, true), RenderBackend::Dx12);
 	}
 
 	#[test]
