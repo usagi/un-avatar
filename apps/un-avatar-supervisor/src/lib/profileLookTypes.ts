@@ -45,16 +45,6 @@ export type ProfileOutlineSetting = Pick<
 	"outline_policy" | "outline_type" | "outline_width" | "outline_color" | "outline_lighting_mix" | "outline_roundness"
 >;
 
-export type ProfileRimSetting = Pick<
-	ProfileLookSetting,
-	"rim_policy" | "rim_color" | "rim_intensity" | "rim_lighting_mix" | "rim_fresnel_power" | "rim_lift"
->;
-
-export type ProfileSurfaceSetting = Pick<
-	ProfileLookSetting,
-	"matcap_scale" | "specular_enabled" | "specular_intensity" | "specular_power" | "ambient_occlusion_strength"
->;
-
 export type ProfileShadowsSetting = Pick<
 	ProfileLookSetting,
 	| "contact_shadow_enabled"

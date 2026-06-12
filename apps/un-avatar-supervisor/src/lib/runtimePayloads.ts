@@ -30,17 +30,6 @@ export type RuntimeAvatarEffectsSetting = {
 	outline_color: [number, number, number] | null;
 	outline_lighting_mix: number | null;
 	outline_roundness: number | null;
-	rim_policy: string;
-	rim_color: [number, number, number] | null;
-	rim_intensity: number | null;
-	rim_lighting_mix: number | null;
-	rim_fresnel_power: number | null;
-	rim_lift: number | null;
-	matcap_scale: number;
-	specular_enabled: boolean;
-	specular_intensity: number;
-	specular_power: number;
-	ambient_occlusion_strength: number;
 	contact_shadow_enabled: boolean;
 	contact_shadow_strength: number;
 	contact_shadow_radius: number;
@@ -124,25 +113,6 @@ export function rendererAvatarOutlinePayload(setting: RuntimeAvatarEffectsSettin
 		color: setting.outline_color,
 		lightingMix: setting.outline_lighting_mix,
 		roundness: setting.outline_roundness,
-	};
-}
-
-export function rendererAvatarRimPayload(setting: RuntimeAvatarEffectsSetting) {
-	return {
-		policy: setting.rim_policy,
-		color: setting.rim_color,
-		intensity: setting.rim_intensity,
-		lightingMix: setting.rim_lighting_mix,
-		fresnelPower: setting.rim_fresnel_power,
-		lift: setting.rim_lift,
-	};
-}
-
-export function rendererAvatarSpecularPayload(setting: RuntimeAvatarEffectsSetting) {
-	return {
-		enabled: setting.specular_enabled,
-		intensity: setting.specular_intensity,
-		power: setting.specular_power,
 	};
 }
 

@@ -103,8 +103,6 @@
 	} from "./lib/rendererLogs";
 	import {
 		rendererAvatarOutlinePayload,
-		rendererAvatarRimPayload,
-		rendererAvatarSpecularPayload,
 		rendererBloomPayload,
 		rendererClearColorPayload,
 		rendererContactShadowPayload,
@@ -1951,34 +1949,6 @@
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_outline", () =>
 				rendererAvatarOutlinePayload(setting)
 			);
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
-			return;
-		}
-		if (fieldSetStartsWith(fields, "effects.avatar.rim.")) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_rim", () =>
-				rendererAvatarRimPayload(setting)
-			);
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
-			return;
-		}
-		if (fieldSetStartsWith(fields, "effects.avatar.matcap.")) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_matcap", () => ({
-				scale: setting.matcap_scale,
-			}));
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
-			return;
-		}
-		if (fieldSetStartsWith(fields, "effects.avatar.specular.")) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_specular", () =>
-				rendererAvatarSpecularPayload(setting)
-			);
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
-			return;
-		}
-		if (fieldSetStartsWith(fields, "effects.avatar.ambient_occlusion.")) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_ambient_occlusion", () => ({
-				strength: setting.ambient_occlusion_strength,
-			}));
 			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
 			return;
 		}
