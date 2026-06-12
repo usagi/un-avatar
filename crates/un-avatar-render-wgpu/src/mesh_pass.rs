@@ -842,10 +842,25 @@ struct TexturePrepareSummary {
 	processed_elapsed: Duration,
 	payload_elapsed: Duration,
 	upload_elapsed: Duration,
+	cache_hits: u32,
+	cache_misses: u32,
+	cache_writes: u32,
+	compressed_cache_hits: u32,
+	compressed_cache_misses: u32,
+	compressed_cache_writes: u32,
 }
 
 impl TexturePrepareSummary {
-	fn record(&mut self, image_index: usize, role: TextureRole, resident: bool, elapsed: Duration, timings: TextureImagePrepareTimings) {
+	fn record(
+		&mut self,
+		image_index: usize,
+		role: TextureRole,
+		resident: bool,
+		elapsed: Duration,
+		timings: TextureImagePrepareTimings,
+		cache_event: TextureCacheEvent,
+		compressed_cache_event: TextureCacheEvent,
+	) {
 		self.images += 1;
 		if resident {
 			self.resident_images += 1;
@@ -862,6 +877,24 @@ impl TexturePrepareSummary {
 		self.processed_elapsed += timings.processed;
 		self.payload_elapsed += timings.payload;
 		self.upload_elapsed += timings.upload;
+		if cache_event.hit {
+			self.cache_hits += 1;
+		}
+		if cache_event.miss {
+			self.cache_misses += 1;
+		}
+		if cache_event.write {
+			self.cache_writes += 1;
+		}
+		if compressed_cache_event.hit {
+			self.compressed_cache_hits += 1;
+		}
+		if compressed_cache_event.miss {
+			self.compressed_cache_misses += 1;
+		}
+		if compressed_cache_event.write {
+			self.compressed_cache_writes += 1;
+		}
 		let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
 		if elapsed_ms >= 50.0 {
 			let stage_ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0;
@@ -887,7 +920,7 @@ impl TexturePrepareSummary {
 			return;
 		}
 		eprintln!(
-			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms",
+			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms processed_cache={}/{}/{} compressed_cache={}/{}/{}",
 			self.images,
 			self.resident_images,
 			self.deferred_images,
@@ -901,6 +934,12 @@ impl TexturePrepareSummary {
 			self.processed_elapsed.as_secs_f64() * 1000.0,
 			self.payload_elapsed.as_secs_f64() * 1000.0,
 			self.upload_elapsed.as_secs_f64() * 1000.0,
+			self.cache_hits,
+			self.cache_misses,
+			self.cache_writes,
+			self.compressed_cache_hits,
+			self.compressed_cache_misses,
+			self.compressed_cache_writes,
 		);
 	}
 }
@@ -8324,6 +8363,8 @@ impl SceneMeshes {
 						image_resident,
 						image_prepare_start.elapsed(),
 						image_prepare_timings,
+						TextureCacheEvent::DISABLED,
+						TextureCacheEvent::DISABLED,
 					);
 					continue;
 				}
@@ -8366,6 +8407,8 @@ impl SceneMeshes {
 					image_resident,
 					image_prepare_start.elapsed(),
 					image_prepare_timings,
+					TextureCacheEvent::DISABLED,
+					TextureCacheEvent::DISABLED,
 				);
 				continue;
 			}
@@ -8404,6 +8447,8 @@ impl SceneMeshes {
 					image_resident,
 					image_prepare_start.elapsed(),
 					image_prepare_timings,
+					TextureCacheEvent::DISABLED,
+					TextureCacheEvent::DISABLED,
 				);
 				continue;
 			}
@@ -8644,6 +8689,8 @@ impl SceneMeshes {
 				image_resident,
 				image_prepare_start.elapsed(),
 				image_prepare_timings,
+				cache_event,
+				compressed_cache_event,
 			);
 		}
 		texture_prepare_summary.log(texture_prepare_start.elapsed());
