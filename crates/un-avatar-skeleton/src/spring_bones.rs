@@ -778,7 +778,14 @@ fn step_group(
 		let parent_world = rt.world_scratch[joint.parent_node];
 		let (_, parent_rot_raw, parent_pos) = parent_world.to_scale_rotation_translation();
 		let parent_rot = parent_rot_raw.normalize();
-		let child_pos = parent_pos + parent_rot * joint.rest_local_translation;
+		let local_child = Mat4::from_cols_array(&scene.nodes[joint.child_node].transform);
+		let (_, _, current_local_translation) = local_child.to_scale_rotation_translation();
+		let child_local_translation = if group.writeback_mode == UnaDynamicsWritebackMode::RotationTranslation {
+			current_local_translation
+		} else {
+			joint.rest_local_translation
+		};
+		let child_pos = parent_pos + parent_rot * child_local_translation;
 
 		let target_rotation = (parent_rot * joint.rest_local_rotation).normalize();
 		let target_axis_world = (target_rotation * joint.bone_axis).normalize_or_zero();
@@ -800,38 +807,47 @@ fn step_group(
 			let external = gravity * dt;
 			joint.curr_tail + inertia + stiff_pull + external
 		};
+		let max_tail_length = tail_max_length(joint.length, group.limit, joint.translation_writeback_target.is_some());
 
 		if is_xpbd {
 			let target_tail = child_pos + target_axis_world * joint.length;
 			for _ in 0..rt.params.constraint_iterations {
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);
-				next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
-				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
+				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 				next_tail = constrain_tail_colliders(
 					next_tail,
 					child_pos,
 					target_axis_world,
-					joint.length,
+					constrained_length,
 					&rt.world_scratch,
 					bone_colliders,
 					joint.hit_radius,
 				);
-				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
+				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
 			}
 		} else {
 			joint.rest_lambda = 0.0;
-			next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
-			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
+			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 			next_tail = constrain_tail_colliders(
 				next_tail,
 				child_pos,
 				target_axis_world,
-				joint.length,
+				constrained_length,
 				&rt.world_scratch,
 				bone_colliders,
 				joint.hit_radius,
 			);
-			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, joint.length, group.limit);
+			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
 		}
 
 		// 回転補正: rest pose の axis (target_axis_world) を実際の axis (next_tail - child_pos) に向ける。
@@ -846,9 +862,19 @@ fn step_group(
 		let parent_rot_inv = parent_rot.conjugate();
 		let new_local_rotation = (parent_rot_inv * new_world_rotation).normalize();
 
-		// 子の local transform を rest_translation + new_local_rotation + rest_scale で書き戻す。
-		let new_local = Mat4::from_scale_rotation_translation(joint.rest_local_scale, new_local_rotation, joint.rest_local_translation);
+		// 子の local transform を現在の translation + new_local_rotation + rest_scale で書き戻す。
+		let new_local = Mat4::from_scale_rotation_translation(joint.rest_local_scale, new_local_rotation, child_local_translation);
 		scene.nodes[joint.child_node].transform = new_local.to_cols_array();
+		if let Some(TailTranslationWritebackTarget::NextChainNode { node }) = joint.translation_writeback_target {
+			if node < scene.nodes.len() {
+				let child_world = parent_world * new_local;
+				let target_local_translation = child_world.inverse().transform_point3(next_tail);
+				let target_local = Mat4::from_cols_array(&scene.nodes[node].transform);
+				let (target_scale, target_rotation, _) = target_local.to_scale_rotation_translation();
+				scene.nodes[node].transform =
+					Mat4::from_scale_rotation_translation(target_scale, target_rotation, target_local_translation).to_cols_array();
+			}
+		}
 
 		// 子以下の world 行列を更新（次の joint の親回転計算で使う）。
 		propagate_world_subtree(&scene.nodes, &mut rt.world_scratch, joint.child_node, parent_world);
@@ -865,6 +891,41 @@ fn constrain_tail_length(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, 
 	} else {
 		child_pos + dir * length
 	}
+}
+
+fn tail_max_length(rest_length: f32, limit: Option<&UnaDynamicsLimit>, translation_writeback_targeted: bool) -> f32 {
+	if !translation_writeback_targeted {
+		return rest_length;
+	}
+	let Some(max_stretch) = limit
+		.map(|limit| limit.max_stretch)
+		.filter(|value| value.is_finite() && *value > 0.0)
+	else {
+		return rest_length;
+	};
+	(rest_length * (1.0 + max_stretch)).max(rest_length)
+}
+
+fn tail_distance_or(next_tail: Vec3, child_pos: Vec3, fallback_length: f32) -> f32 {
+	let distance = (next_tail - child_pos).length();
+	if distance.is_finite() && distance > 1e-6 {
+		distance
+	} else {
+		fallback_length
+	}
+}
+
+fn constrain_tail_length_range(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, min_length: f32, max_length: f32) -> Vec3 {
+	if max_length <= min_length + 1e-6 {
+		return constrain_tail_length(next_tail, child_pos, fallback_axis, min_length);
+	}
+	let offset = next_tail - child_pos;
+	let dir = offset.normalize_or_zero();
+	if dir.length_squared() < 1e-12 {
+		return child_pos + fallback_axis * min_length;
+	}
+	let distance = offset.length().clamp(min_length, max_length);
+	child_pos + dir * distance
 }
 
 fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32, limit: Option<&UnaDynamicsLimit>) -> Vec3 {
@@ -1266,6 +1327,51 @@ mod tests {
 		assert_eq!(sim.translation_writeback_candidate_count(), 1);
 		assert_eq!(sim.translation_writeback_target_count(), 0);
 		assert_eq!(runtime.joints[0].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn rotation_translation_writeback_stretches_next_chain_node_within_limit() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 0.0,
+				gravity_power: 4.0,
+				gravity_dir: [1.0, 0.0, 0.0],
+				drag_force: 0.0,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				limit: Some(UnaDynamicsLimit {
+					max_stretch: 0.5,
+					..Default::default()
+				}),
+				bone_node_indices: vec![0, 1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		for _ in 0..120 {
+			sim.step(&mut scene, &settings, 1.0 / 60.0);
+		}
+
+		let (_, _, tip_local_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		let stretched_length = tip_local_translation.length();
+		assert!(
+			stretched_length > 1.01,
+			"next chain node local translation should stretch beyond rest length; got {stretched_length}"
+		);
+		assert!(
+			stretched_length <= 1.5 + 1e-4,
+			"next chain node local translation should respect max_stretch; got {stretched_length}"
+		);
 	}
 
 	#[test]

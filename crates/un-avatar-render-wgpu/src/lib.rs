@@ -1636,10 +1636,11 @@ impl AvatarApp {
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
 				status.dynamics_rotation_translation_writeback_group_count =
-					runtime_dynamics_unsupported_writeback_group_count(&status) as u32;
+					runtime_dynamics_rotation_translation_writeback_group_count(&status) as u32;
 				status.dynamics_translation_writeback_candidate_count =
-					runtime_dynamics_unsupported_writeback_candidate_count(&status) as u32;
-				status.dynamics_translation_writeback_target_count = runtime_dynamics_unsupported_writeback_target_count(&status) as u32;
+					runtime_dynamics_rotation_translation_writeback_candidate_count(&status) as u32;
+				status.dynamics_translation_writeback_target_count =
+					runtime_dynamics_rotation_translation_writeback_target_count(&status) as u32;
 				status.dynamics_stretch_translation_writeback_group_count =
 					runtime_dynamics_stretch_translation_writeback_group_count(&status) as u32;
 				status.dynamics_stretch_translation_writeback_target_group_count =
@@ -3253,7 +3254,7 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	if status.dynamics_stretch_limit_group_count > 0 {
 		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
-			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
+			"dynamics stretch limits are partially supported by rotation_translation target writeback; targetless stretch groups remain metadata-only; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
 			status.dynamics_stretch_limit_group_count,
 			status.dynamics_stretch_translation_writeback_target_group_count,
 			format_runtime_warning_samples(&samples)
@@ -3262,11 +3263,13 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let unsupported_writeback_groups = runtime_dynamics_unsupported_writeback_group_count(status);
 	if unsupported_writeback_groups > 0 {
 		let samples = runtime_dynamics_unsupported_writeback_samples(status);
+		let unsupported_candidate_count = runtime_dynamics_unsupported_writeback_candidate_count(status);
+		let unsupported_target_count = runtime_dynamics_unsupported_writeback_target_count(status);
 		warnings.push(format!(
-			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={} target_joints={}{}",
+			"dynamics rotation_translation writeback has no safe translation target in the current solver; groups={} candidate_joints={} target_joints={}{}",
 			unsupported_writeback_groups,
-			status.dynamics_translation_writeback_candidate_count,
-			status.dynamics_translation_writeback_target_count,
+			unsupported_candidate_count,
+			unsupported_target_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -3321,11 +3324,22 @@ fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> V
 		.collect()
 }
 
+fn runtime_dynamics_rotation_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.count()
+}
+
 fn runtime_dynamics_unsupported_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
 		.count()
 }
 
@@ -3333,17 +3347,41 @@ fn runtime_dynamics_unsupported_writeback_samples(status: &RendererRuntimeSnapsh
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
 		.take(4)
 		.map(runtime_dynamics_group_sample_label)
 		.collect()
+}
+
+fn runtime_dynamics_rotation_translation_writeback_candidate_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.map(|group| group.translation_writeback_candidate_count)
+		.sum()
+}
+
+fn runtime_dynamics_rotation_translation_writeback_target_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.map(|group| group.translation_writeback_target_count)
+		.sum()
 }
 
 fn runtime_dynamics_unsupported_writeback_candidate_count(status: &RendererRuntimeSnapshot) -> usize {
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
 		.map(|group| group.translation_writeback_candidate_count)
 		.sum()
 }
@@ -3352,7 +3390,10 @@ fn runtime_dynamics_unsupported_writeback_target_count(status: &RendererRuntimeS
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
 		.map(|group| group.translation_writeback_target_count)
 		.sum()
 }
@@ -5141,21 +5182,19 @@ mod tests {
 		status.contact_parameter_emission_enabled = false;
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 6);
+		assert_eq!(warnings.len(), 5);
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics groups are present but none are currently enabled")
 				&& warning.contains("samples=[physbone:hair@root/hair]")
 		));
-		assert!(warnings.iter().any(
-			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics stretch limits are partially supported")
 				&& warning.contains("writeback_target_groups=1")
-				&& warning.contains("physbone:hair@root/hair")
-		));
-		assert!(warnings.iter().any(|warning| warning
-			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
-			&& warning.contains("candidate_joints=1")
-			&& warning.contains("target_joints=1")
-			&& warning.contains("physbone:hair@root/hair")));
+				&& warning.contains("physbone:hair@root/hair")));
+		assert!(!warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
 			&& warning.contains("samples=[physbone:hair@root/hair]")));
@@ -5782,7 +5821,7 @@ mod tests {
 		assert_eq!(dynamics_warnings.len(), 3);
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver"))));
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are partially supported"))));
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
 			.is_some_and(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver"))));

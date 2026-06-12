@@ -12,8 +12,7 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
-	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, Approximation, ReportStatus,
+	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
 	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
 	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaDynamicsWritebackMode,
 	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
@@ -9551,6 +9550,7 @@ mod tests {
 	use glam::Mat4;
 	use image::ImageEncoder;
 	use std::io::Write;
+	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
 	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind};
 
 	fn triangle_bin_bytes() -> Vec<u8> {

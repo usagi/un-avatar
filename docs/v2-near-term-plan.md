@@ -62,7 +62,7 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 - VRC PhysBone は v2 初期では完全再現を狙わず、source metadata を保持しながら UNDynamics terms へ lower する。現 solver backend が解けない term は metadata / diagnostics に残し、SpringBone semantics へ丸めたことにしない。
 - 正規化境界は現在進めている runtime model view の一部として扱う。形式別の VRM / VRC / Unity component 判定を frame loop や solver 内へ散らさない。
 - solver state は source scene を直接 mutate せず、resolved runtime state と pose buffer を入力にする方向へ寄せる。
-- Stretch は `maxStretch` を SpringBone 固定長拘束の例外として雑に流し込まない。UNDynamics chain limit と solver writeback policy の問題として扱い、現 rotation-only backend では metadata-only に留める。`.unavatar` の `writebackMode` / `writeback_mode` は runtime group へ lower するが、`rotation_translation` は現 solver backend では unsupported warning に留める。translation stretch を実装する場合は synthetic endpoint / leaf accessory chain など、skinned deformation の基準を壊さない対象へ限定する。
+- Stretch は `maxStretch` を SpringBone 固定長拘束の例外として雑に流し込まない。UNDynamics chain limit と solver writeback policy の問題として扱い、`.unavatar` の `writebackMode` / `writeback_mode` は runtime group へ lower する。現 solver backend は `rotation_translation` かつ安全な next-chain-node target がある joint だけ `max_stretch` upper bound を local translation writeback へ反映し、target の無い 2-node leaf / terminal imaginary tail は metadata / diagnostics に留める。`maxSquish` / `stretchMotion` curve の忠実再現は未対応。
 
 この段階でやること:
 
