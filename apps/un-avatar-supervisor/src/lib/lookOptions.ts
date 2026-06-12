@@ -12,50 +12,6 @@ export const OUTLINE_TYPE_OPTIONS = [
 ] as const;
 
 export const OUTLINE_COLOR_FALLBACK: [number, number, number] = [0.02, 0.01, 0.03];
-export const RIM_COLOR_FALLBACK: [number, number, number] = [0.85, 0.92, 1];
-
-export const RIM_NUMBER_FIELDS = [
-	{
-		key: "rim_intensity",
-		labelKey: "profiles.editor.look_rim_intensity",
-		hintKey: "profiles.hints.look.rim_intensity",
-		field: "effects.avatar.rim.intensity",
-		fallback: 0.35,
-		min: 0,
-		max: 4,
-		step: 0.05,
-	},
-	{
-		key: "rim_fresnel_power",
-		labelKey: "profiles.editor.look_rim_power",
-		hintKey: "profiles.hints.look.rim_power",
-		field: "effects.avatar.rim.fresnel_power",
-		fallback: 3,
-		min: 0.00001,
-		max: 32,
-		step: 0.25,
-	},
-	{
-		key: "rim_lift",
-		labelKey: "profiles.editor.look_rim_lift",
-		hintKey: "profiles.hints.look.rim_lift",
-		field: "effects.avatar.rim.lift",
-		fallback: 0,
-		min: -1,
-		max: 1,
-		step: 0.05,
-	},
-	{
-		key: "rim_lighting_mix",
-		labelKey: "profiles.editor.look_rim_lighting",
-		hintKey: "profiles.hints.look.rim_lighting",
-		field: "effects.avatar.rim.lighting_mix",
-		fallback: 0,
-		min: 0,
-		max: 1,
-		step: 0.05,
-	},
-] as const;
 
 export const OUTLINE_RANGE_FIELDS = [
 	{
