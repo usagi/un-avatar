@@ -87,6 +87,7 @@ v2 初期では priority / lock は導入しない。
 - core は ready な inactive action restore apply entry を node visibility、material color/scalar、material slot、dynamics enabled に書き戻せる。renderer は runtime action activation 後に現在 parameter state で inactive になった action の restore を適用する。
 - renderer `set_parameter` は condition metadata で active になった action を deterministic order で全件適用し、該当 action が無い parameter change でも inactive restore を走らせる。これは continuous evaluator の初期段階であり、アニメータ風の frame-by-frame blend / layer evaluation ではない。
 - core runtime model は action trigger / condition、contact receiver、PhysBone interaction suffix、runtime state から source-neutral runtime parameter definitions を作れる。contact transient parameter や PhysBone interaction suffix parameter と action/menu parameter の同名共有は `runtime_parameter_conflicts` diagnostics で観測する。通常の 0/1 toggle のような同一 action parameter の値違いは衝突扱いしない。
+- UNMotion `signals` は初期 animation-linked parameter input として扱う。ただし `Bool` と finite `Scalar` だけを、既に action trigger / action condition / ModularAvatarParameters 由来で宣言されている runtime parameter 名に限って runtime state へ書く。未知名、Vec/Quat、`Missing` sample、contact receiver parameter、PhysBone interaction suffix parameter には書かない。これにより animation state 由来の wardrobe / dynamics action は既存 runtime action evaluator へ流せるが、direct interaction suffix emission や full Animator graph evaluation はまだ開始しない。
 - この diagnostics / capture / restore は source package を mutate しない。inactive-state default restore、continuous evaluator、衝突診断の前提情報として使う。
 - `action:<action_id>` owner は latched action state の説明用であり、v2 初期では priority / lock を意味しない。
 

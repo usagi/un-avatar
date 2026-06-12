@@ -2684,6 +2684,63 @@ fn upsert_motion_signal(signals: &mut Vec<un_motion_frame::MotionSignal>, next: 
 	}
 }
 
+fn motion_signal_runtime_parameter_value(signal: &un_motion_frame::MotionSignal) -> Option<f32> {
+	if signal.state == un_motion_frame::SampleState::Missing {
+		return None;
+	}
+	match signal.value {
+		un_motion_frame::MotionSignalValue::Bool(value) => Some(if value { 1.0 } else { 0.0 }),
+		un_motion_frame::MotionSignalValue::Scalar(value) if value.is_finite() => Some(value),
+		_ => None,
+	}
+}
+
+fn motion_signal_runtime_parameter_names(document: &UnaDocument) -> BTreeSet<String> {
+	document
+		.runtime_model()
+		.runtime_parameter_definitions()
+		.into_iter()
+		.filter(|definition| {
+			definition
+				.source_kinds
+				.iter()
+				.any(|kind| matches!(kind.as_str(), "action_trigger" | "action_condition" | "modular_avatar_parameter"))
+		})
+		.map(|definition| definition.name)
+		.collect()
+}
+
+fn apply_motion_signal_runtime_parameters(document: &mut UnaDocument, frames: &[un_motion_frame::UNMotionFrame]) -> BTreeMap<String, f32> {
+	let parameter_names = motion_signal_runtime_parameter_names(document);
+	if parameter_names.is_empty() {
+		return BTreeMap::new();
+	}
+	let mut next_values = BTreeMap::<String, f32>::new();
+	for frame in frames {
+		for signal in &frame.signals {
+			if !parameter_names.contains(&signal.name) {
+				continue;
+			}
+			let Some(value) = motion_signal_runtime_parameter_value(signal) else {
+				continue;
+			};
+			next_values.insert(signal.name.clone(), value);
+		}
+	}
+	if next_values.is_empty() {
+		return BTreeMap::new();
+	}
+	let before = document.runtime_model().runtime_parameter_values().clone();
+	let changed = next_values
+		.into_iter()
+		.filter(|(name, value)| before.get(name).copied() != Some(*value))
+		.collect::<BTreeMap<_, _>>();
+	if !changed.is_empty() {
+		document.runtime_model_mut().set_runtime_parameter_values(changed.clone());
+	}
+	changed
+}
+
 #[cfg(test)]
 mod motion_buffer_tests {
 	use super::*;
@@ -2702,6 +2759,24 @@ mod motion_buffer_tests {
 				source_index: None,
 				state: un_motion_frame::SampleState::Valid,
 			}],
+		});
+		frame
+	}
+
+	fn signal_frame(
+		sequence: u64,
+		name: &str,
+		value: un_motion_frame::MotionSignalValue,
+		state: un_motion_frame::SampleState,
+	) -> un_motion_frame::UNMotionFrame {
+		let mut frame = un_motion_frame::UNMotionFrame::new(sequence);
+		frame.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+		frame.signals.push(un_motion_frame::MotionSignal {
+			name: name.to_string(),
+			value,
+			confidence: 1.0,
+			source_index: None,
+			state,
 		});
 		frame
 	}
@@ -2736,6 +2811,98 @@ mod motion_buffer_tests {
 		assert!((expressions[0].value - 0.75).abs() < f32::EPSILON);
 		buffer.take_pending_frames_into(&mut frames);
 		assert!(frames.is_empty());
+	}
+
+	#[test]
+	fn motion_signals_update_declared_runtime_parameters_only() {
+		let mut document = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "coat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Coat".to_string(),
+						value: 1.0,
+					}],
+					..Default::default()
+				}],
+			}),
+			..Default::default()
+		};
+		let frames = vec![
+			signal_frame(
+				1,
+				"Coat",
+				un_motion_frame::MotionSignalValue::Bool(true),
+				un_motion_frame::SampleState::Valid,
+			),
+			signal_frame(
+				1,
+				"Unknown",
+				un_motion_frame::MotionSignalValue::Scalar(1.0),
+				un_motion_frame::SampleState::Valid,
+			),
+			signal_frame(
+				1,
+				"CoatVec",
+				un_motion_frame::MotionSignalValue::Vec2(un_motion_frame::Vec2f { x: 1.0, y: 0.0 }),
+				un_motion_frame::SampleState::Valid,
+			),
+		];
+
+		let changed = apply_motion_signal_runtime_parameters(&mut document, &frames);
+
+		assert_eq!(changed, BTreeMap::from([("Coat".to_string(), 1.0)]));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("Coat"), Some(&1.0));
+		assert!(!document.runtime_model().runtime_parameter_values().contains_key("Unknown"));
+		assert!(!document.runtime_model().runtime_parameter_values().contains_key("CoatVec"));
+	}
+
+	#[test]
+	fn motion_signals_ignore_physbone_suffix_and_missing_values() {
+		let mut document = UnaDocument {
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:hair".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "Hair".to_string(),
+						..Default::default()
+					}),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "hat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					..Default::default()
+				}],
+			}),
+			..Default::default()
+		};
+		let frames = vec![
+			signal_frame(
+				1,
+				"Hair_IsGrabbed",
+				un_motion_frame::MotionSignalValue::Bool(true),
+				un_motion_frame::SampleState::Valid,
+			),
+			signal_frame(
+				1,
+				"Hat",
+				un_motion_frame::MotionSignalValue::Scalar(1.0),
+				un_motion_frame::SampleState::Missing,
+			),
+		];
+
+		let changed = apply_motion_signal_runtime_parameters(&mut document, &frames);
+
+		assert!(changed.is_empty());
+		assert!(document.runtime_model().runtime_parameter_values().is_empty());
 	}
 
 	#[test]
@@ -5593,7 +5760,18 @@ impl GpuState {
 			}
 			retarget_runtime.apply_frame(&mut document, frame, opts);
 		}
+		let changed_runtime_parameters = apply_motion_signal_runtime_parameters(&mut document, &self.pending_motion_frames);
+		if should_log && !changed_runtime_parameters.is_empty() {
+			self.debug_log
+				.line("motion", format!("runtime_parameters={changed_runtime_parameters:?}"));
+		}
 		let applied_frame_count = self.pending_motion_frames.len();
+		drop(document);
+		if !changed_runtime_parameters.is_empty() {
+			if let Err(e) = self.evaluate_runtime_parameter_actions() {
+				eprintln!("un-avatar-renderer: motion signal parameter action evaluation failed: {e}");
+			}
+		}
 		self.pending_motion_frames.clear();
 		self.motion_applied_frames.fetch_add(applied_frame_count as u64, Ordering::Relaxed);
 		self.mark_document_changed();
