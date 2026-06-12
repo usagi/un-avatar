@@ -5,6 +5,7 @@ use std::{
 	fs,
 	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
+	sync::atomic::{AtomicBool, Ordering},
 	thread,
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -372,47 +373,72 @@ fn bleed_transparent_rgb(rgba: &mut [u8], width: u32, height: u32) {
 	}
 	let mut scratch = rgba.to_vec();
 	for _ in 0..8 {
-		let mut changed = false;
+		let changed = AtomicBool::new(false);
 		scratch.copy_from_slice(rgba);
-		for y in 0..height {
-			for x in 0..width {
-				let i = ((y * width + x) as usize) * 4;
-				if rgba[i + 3] >= 250 {
-					continue;
-				}
-				let mut rgb = [0u32; 3];
-				let mut count = 0u32;
-				let y0 = y.saturating_sub(1);
-				let y1 = (y + 1).min(height - 1);
-				let x0 = x.saturating_sub(1);
-				let x1 = (x + 1).min(width - 1);
-				for ny in y0..=y1 {
-					for nx in x0..=x1 {
-						if nx == x && ny == y {
-							continue;
-						}
-						let ni = ((ny * width + nx) as usize) * 4;
-						if rgba[ni + 3] < 250 {
-							continue;
-						}
-						rgb[0] += u32::from(rgba[ni]);
-						rgb[1] += u32::from(rgba[ni + 1]);
-						rgb[2] += u32::from(rgba[ni + 2]);
-						count += 1;
-					}
-				}
-				if count > 0 {
-					scratch[i] = (rgb[0] / count) as u8;
-					scratch[i + 1] = (rgb[1] / count) as u8;
-					scratch[i + 2] = (rgb[2] / count) as u8;
-					changed = true;
-				}
-			}
-		}
-		if !changed {
+		fill_bleed_transparent_rgb(rgba, width, height, &mut scratch, &changed);
+		if !changed.load(Ordering::Relaxed) {
 			break;
 		}
 		rgba.copy_from_slice(&scratch);
+	}
+}
+
+fn fill_bleed_transparent_rgb(src: &[u8], width: u32, height: u32, dst: &mut [u8], changed: &AtomicBool) {
+	let row_bytes = (width as usize) * 4;
+	let stripes = parallel_row_stripes(height, PARALLEL_TEXTURE_MIN_ROWS_PER_WORKER);
+	if stripes.len() <= 1 {
+		fill_bleed_transparent_rgb_rows(src, width, height, 0, dst, changed);
+		return;
+	}
+	let mut remaining = dst;
+	thread::scope(|scope| {
+		for stripe in stripes {
+			let chunk_len = (stripe.len as usize) * row_bytes;
+			let (chunk, rest) = remaining.split_at_mut(chunk_len);
+			remaining = rest;
+			scope.spawn(move || fill_bleed_transparent_rgb_rows(src, width, height, stripe.start, chunk, changed));
+		}
+	});
+}
+
+fn fill_bleed_transparent_rgb_rows(src: &[u8], width: u32, height: u32, start_y: u32, dst: &mut [u8], changed: &AtomicBool) {
+	let row_bytes = (width as usize) * 4;
+	for (row_index, row) in dst.chunks_exact_mut(row_bytes).enumerate() {
+		let y = start_y + row_index as u32;
+		for x in 0..width {
+			let dst_i = (x as usize) * 4;
+			let src_i = ((y * width + x) as usize) * 4;
+			if src[src_i + 3] >= 250 {
+				continue;
+			}
+			let mut rgb = [0u32; 3];
+			let mut count = 0u32;
+			let y0 = y.saturating_sub(1);
+			let y1 = (y + 1).min(height - 1);
+			let x0 = x.saturating_sub(1);
+			let x1 = (x + 1).min(width - 1);
+			for ny in y0..=y1 {
+				for nx in x0..=x1 {
+					if nx == x && ny == y {
+						continue;
+					}
+					let ni = ((ny * width + nx) as usize) * 4;
+					if src[ni + 3] < 250 {
+						continue;
+					}
+					rgb[0] += u32::from(src[ni]);
+					rgb[1] += u32::from(src[ni + 1]);
+					rgb[2] += u32::from(src[ni + 2]);
+					count += 1;
+				}
+			}
+			if count > 0 {
+				row[dst_i] = (rgb[0] / count) as u8;
+				row[dst_i + 1] = (rgb[1] / count) as u8;
+				row[dst_i + 2] = (rgb[2] / count) as u8;
+				changed.store(true, Ordering::Relaxed);
+			}
+		}
 	}
 }
 
