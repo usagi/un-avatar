@@ -1398,7 +1398,7 @@ struct MeshDraw {
 	visible: bool,
 	asset_resident: bool,
 	shading: UnaShadingModel,
-	morph_pos: Vec<Vec<[f32; 3]>>,
+	morph_target_count: usize,
 	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 	expression_bindings: Vec<ExpressionBinding>,
@@ -7572,7 +7572,7 @@ impl SceneMeshes {
 					visible: active,
 					asset_resident,
 					shading: mat.shading,
-					morph_pos,
+					morph_target_count,
 					morph_source_indices,
 					expression_bindings: compact_expression_bindings,
 					default_morph_weights,
@@ -7718,7 +7718,7 @@ impl SceneMeshes {
 			format!("pipeline creation count={pipeline_count} outline={needs_outline_pipeline} fur={needs_fur_pipelines}"),
 			pipeline_start.elapsed(),
 		);
-		let has_morph_draws = draws.iter().any(|draw| !draw.morph_pos.is_empty());
+		let has_morph_draws = draws.iter().any(|draw| draw.morph_target_count > 0);
 		let expression_value_capacity = expression_names.len();
 
 		let mut scene_meshes = Self {
@@ -8357,26 +8357,26 @@ impl SceneMeshes {
 				mesh_world.transform_point3(Vec3::ZERO)
 			};
 
-			if !d.morph_pos.is_empty() {
+			if d.morph_target_count > 0 {
 				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
 				let skip_static_default_morph = !draw_has_active_expression
 					&& !debug_zero_morphs
-					&& morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_pos.len());
+					&& morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
 				if !skip_static_default_morph {
 					d.morph_weight_scratch.clear();
 					if debug_zero_morphs {
-						d.morph_weight_scratch.resize(d.morph_pos.len(), 0.0);
+						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
 					} else {
 						fill_morph_weights_for_draw(
 							&d.default_morph_weights,
-							d.morph_pos.len(),
+							d.morph_target_count,
 							&d.expression_bindings,
 							expression_values,
 							&mut d.morph_weight_scratch,
 						);
 					}
 
-					if d.morph_weight_scratch.len() == d.morph_pos.len() {
+					if d.morph_weight_scratch.len() == d.morph_target_count {
 						if d.morph_weights != d.morph_weight_scratch {
 							queue.write_buffer(&d.morph_weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 							d.morph_weights.clear();
@@ -8384,7 +8384,7 @@ impl SceneMeshes {
 						}
 					} else if !d.morph_weights.is_empty() {
 						d.morph_weight_scratch.clear();
-						d.morph_weight_scratch.resize(d.morph_pos.len(), 0.0);
+						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
 						queue.write_buffer(&d.morph_weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 						d.morph_weights.clear();
 					}
@@ -8416,7 +8416,7 @@ impl SceneMeshes {
 		}
 		let mut changed = 0;
 		for draw in &mut self.draws {
-			let target_count = draw.morph_pos.len();
+			let target_count = draw.morph_target_count;
 			if target_count == 0 {
 				continue;
 			}
