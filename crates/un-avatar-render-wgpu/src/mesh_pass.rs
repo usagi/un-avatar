@@ -3350,6 +3350,53 @@ fn texture_mip_copy_layout(kind: TextureUploadKind, width: u32, height: u32) -> 
 	}
 }
 
+fn payload_texture_format(
+	kind: TextureUploadKind,
+	role: TextureRole,
+	source_metadata: Option<&UnaImageSourceMetadata>,
+) -> wgpu::TextureFormat {
+	match kind {
+		TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
+		TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
+		TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+		TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
+		TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+	}
+}
+
+fn payload_top_mip_dimensions(payload: &TextureUploadPayload, fallback_width: u32, fallback_height: u32) -> (u32, u32) {
+	payload
+		.mips
+		.first()
+		.map_or((fallback_width, fallback_height), |mip| (mip.width, mip.height))
+}
+
+fn upload_payload_texture_slot(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	transparent_black_view: &wgpu::TextureView,
+	gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+	image_views: &mut Vec<wgpu::TextureView>,
+	payload: TextureUploadPayload,
+	format: wgpu::TextureFormat,
+	width: u32,
+	height: u32,
+) -> (SceneImageTextureSlot, Duration) {
+	let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+		payload,
+		format,
+		width,
+		height,
+	});
+	let upload_start = Instant::now();
+	if let Some(view) = slot.ensure_uploaded(device, queue, None, gpu_texture_compression) {
+		image_views.push(view);
+	} else {
+		image_views.push(transparent_black_view.clone());
+	}
+	(slot, upload_start.elapsed())
+}
+
 fn build_scene_image_texture_upload(
 	im: &UnaImageRgba,
 	source_metadata: Option<&UnaImageSourceMetadata>,
@@ -3430,17 +3477,8 @@ fn build_scene_image_texture_upload(
 		);
 		(payload, processed_w, processed_h)
 	};
-	let (w, h) = payload
-		.mips
-		.first()
-		.map_or((processed_w, processed_h), |mip| (mip.width, mip.height));
-	let format = match payload.kind {
-		TextureUploadKind::Rgba if rgba_upload_uses_linear_format(lazy.role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
-		TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
-		TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-		TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
-		TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-	};
+	let (w, h) = payload_top_mip_dimensions(&payload, processed_w, processed_h);
+	let format = payload_texture_format(payload.kind, lazy.role, source_metadata);
 	Some(SceneImageTextureUpload::Payload {
 		payload,
 		format,
@@ -8454,28 +8492,19 @@ impl SceneMeshes {
 							texture_summary.cache_writes += 1;
 						}
 						texture_summary.record_image(src_w, src_h, processed_w, processed_h, payload.byte_len(), true);
-						let texture_format = match payload.kind {
-							TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => {
-								wgpu::TextureFormat::Rgba8Unorm
-							}
-							TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
-							TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-							TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
-							TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-						};
-						let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+						let texture_format = payload_texture_format(payload.kind, role, source_metadata);
+						let (slot, upload_elapsed) = upload_payload_texture_slot(
+							device,
+							queue,
+							&transparent_black_view,
+							&mut gpu_texture_compression,
+							&mut image_views,
 							payload,
-							format: texture_format,
-							width: processed_w,
-							height: processed_h,
-						});
-						let upload_start = Instant::now();
-						if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
-							image_views.push(view);
-						} else {
-							image_views.push(transparent_black_view.clone());
-						}
-						image_prepare_timings.upload += upload_start.elapsed();
+							texture_format,
+							processed_w,
+							processed_h,
+						);
+						image_prepare_timings.upload += upload_elapsed;
 						image_texture_slots.push(slot);
 						texture_prepare_summary.record(
 							image_index,
@@ -8522,23 +8551,12 @@ impl SceneMeshes {
 					});
 					image_prepare_timings.cache_read += cache_read_start.elapsed();
 					if let Some((payload, compressed_cache_event, processed_w, processed_h)) = compressed_cache_hit {
-						let (w, h) = payload
-							.mips
-							.first()
-							.map_or((processed_w, processed_h), |mip| (mip.width, mip.height));
+						let (w, h) = payload_top_mip_dimensions(&payload, processed_w, processed_h);
 						texture_summary.compressed_cache_hits += 1;
 						texture_summary.compressed_count += 1;
 						texture_summary.compressed_mip_bytes += payload.byte_len();
 						texture_summary.record_image(src_w, src_h, w, h, payload.byte_len(), true);
-						let texture_format = match payload.kind {
-							TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => {
-								wgpu::TextureFormat::Rgba8Unorm
-							}
-							TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
-							TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-							TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
-							TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-						};
+						let texture_format = payload_texture_format(payload.kind, role, source_metadata);
 						report(
 							"gpu-upload",
 							total_steps,
@@ -8553,19 +8571,18 @@ impl SceneMeshes {
 								payload.mips.len()
 							),
 						);
-						let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+						let (slot, upload_elapsed) = upload_payload_texture_slot(
+							device,
+							queue,
+							&transparent_black_view,
+							&mut gpu_texture_compression,
+							&mut image_views,
 							payload,
-							format: texture_format,
-							width: w,
-							height: h,
-						});
-						let upload_start = Instant::now();
-						if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
-							image_views.push(view);
-						} else {
-							image_views.push(transparent_black_view.clone());
-						}
-						image_prepare_timings.upload += upload_start.elapsed();
+							texture_format,
+							w,
+							h,
+						);
+						image_prepare_timings.upload += upload_elapsed;
 						image_texture_slots.push(slot);
 						texture_prepare_summary.record(
 							image_index,
@@ -8616,10 +8633,7 @@ impl SceneMeshes {
 						compressed_cache_lookup.is_some(),
 					);
 					image_prepare_timings.payload += payload_start.elapsed();
-					let (w, h) = payload
-						.mips
-						.first()
-						.map_or((processed_w, processed_h), |mip| (mip.width, mip.height));
+					let (w, h) = payload_top_mip_dimensions(&payload, processed_w, processed_h);
 					if compressed_cache_event.miss {
 						texture_summary.compressed_cache_misses += 1;
 					}
@@ -8640,13 +8654,7 @@ impl SceneMeshes {
 						texture_summary.compressed_mip_bytes += payload.byte_len();
 					}
 					texture_summary.record_image(src_w, src_h, w, h, payload.byte_len(), true);
-					let texture_format = match payload.kind {
-						TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
-						TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
-						TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-						TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
-						TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-					};
+					let texture_format = payload_texture_format(payload.kind, role, source_metadata);
 					report(
 						"gpu-upload",
 						total_steps,
@@ -8661,19 +8669,18 @@ impl SceneMeshes {
 							payload.mips.len()
 						),
 					);
-					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+					let (slot, upload_elapsed) = upload_payload_texture_slot(
+						device,
+						queue,
+						&transparent_black_view,
+						&mut gpu_texture_compression,
+						&mut image_views,
 						payload,
-						format: texture_format,
-						width: w,
-						height: h,
-					});
-					let upload_start = Instant::now();
-					if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
-						image_views.push(view);
-					} else {
-						image_views.push(transparent_black_view.clone());
-					}
-					image_prepare_timings.upload += upload_start.elapsed();
+						texture_format,
+						w,
+						h,
+					);
+					image_prepare_timings.upload += upload_elapsed;
 					image_texture_slots.push(slot);
 					texture_prepare_summary.record(
 						image_index,
@@ -8922,10 +8929,7 @@ impl SceneMeshes {
 			// 圧縮テクスチャは block 整列 (4 の倍数) に padding されているため、テクスチャ次元・サンプリング寸法も
 			// payload の最上位 mip サイズに揃える。非4倍数寸法を元の論理寸法へ戻すと BCn upload が停止する。
 			// 非圧縮 (Rgba) は元の processed 寸法と一致する。
-			let (w, h) = payload
-				.mips
-				.first()
-				.map_or((processed_w, processed_h), |mip| (mip.width, mip.height));
+			let (w, h) = payload_top_mip_dimensions(&payload, processed_w, processed_h);
 			if compressed_cache_event.hit {
 				texture_summary.compressed_cache_hits += 1;
 			}
@@ -8953,13 +8957,7 @@ impl SceneMeshes {
 				texture_summary.compression_fallback_count += 1;
 			}
 			texture_summary.record_image(src_w, src_h, w, h, payload.byte_len(), image_resident);
-			let texture_format = match payload.kind {
-				TextureUploadKind::Rgba if rgba_upload_uses_linear_format(role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
-				TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
-				TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
-				TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
-				TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
-			};
+			let texture_format = payload_texture_format(payload.kind, role, source_metadata);
 			if image_resident {
 				for (mip_level, mip) in payload.mips.iter().enumerate() {
 					report(
@@ -8988,24 +8986,29 @@ impl SceneMeshes {
 					),
 				);
 			}
-			let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
-				payload,
-				format: texture_format,
-				width: w,
-				height: h,
-			});
 			if image_resident {
-				let upload_start = Instant::now();
-				if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
-					image_views.push(view);
-				} else {
-					image_views.push(transparent_black_view.clone());
-				}
-				image_prepare_timings.upload += upload_start.elapsed();
+				let (slot, upload_elapsed) = upload_payload_texture_slot(
+					device,
+					queue,
+					&transparent_black_view,
+					&mut gpu_texture_compression,
+					&mut image_views,
+					payload,
+					texture_format,
+					w,
+					h,
+				);
+				image_prepare_timings.upload += upload_elapsed;
+				image_texture_slots.push(slot);
 			} else {
 				image_views.push(transparent_black_view.clone());
+				image_texture_slots.push(SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
+					payload,
+					format: texture_format,
+					width: w,
+					height: h,
+				}));
 			}
-			image_texture_slots.push(slot);
 			texture_prepare_summary.record(
 				image_index,
 				role,
