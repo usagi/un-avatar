@@ -166,7 +166,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 - `[~]` MA Convert Constraints
   - done: Importer classifies as unsupported and emits diagnostic/lost feature entries for enabled components, and catalog reports include unsupported counts by type.
-  - remaining: identify constraints that affect render transform and convert to runtime-supported node constraints where possible.
+  - remaining: keep enabled components as diagnostics/lost features until `UNConstraints` transform evaluation order is defined. Runtime-supported node constraints must be source-neutral evaluation results, not Modular Avatar specific frame-loop branches.
 - `[~]` MA Global Collider / PhysBone Blocker
   - done: PhysBone Blocker is classified as metadata and fed into VRC PhysBone lowering by adding blocker target nodes to ancestor PhysBone root ignore sets, matching Modular Avatar's parent-root ignore injection rule. Global Collider is classified as metadata and lowered as UNDynamics VRC PhysBone capsule collider intent from its resolved root / radius / height / position / rotation fields.
   - remaining: exact VRChat descriptor slot hijack / auto-remap priority semantics are not reproduced; U.N. runtime uses the collider intent directly.

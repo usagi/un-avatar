@@ -111,7 +111,7 @@ Contacts は v2 初期では interaction / parameter source として扱う。
    - 座標系、tag match、shape overlap、誤爆を検証する。
    - core runtime view、CLI diagnose、renderer runtime status の current runtime scene pose probe は実装済み。Renderer では motion retarget / dynamics が scene pose を更新した後の document scene を読む。Sphere / Capsule は exact overlap、Unknown は bounding sphere 近似で扱う。Phase C 単体では runtime parameter state は変更しない。
 4. Phase D: Opt-in parameter emission
-   - profile flag または `.unavatar` capability で明示有効化する。
+   - `[physics.contacts] parameter_emission = true` profile flag または `.unavatar` capability で明示有効化する。
    - `.unavatar` capability / contacts flag の opt-in 判定、emitted count、reset-to-zero count は CLI diagnose / renderer runtime status / Supervisor diagnostics で観測できる。
    - contact 切断時は 0。
    - 複数 Receiver が同じ parameter を書く場合は max / OR。
@@ -129,9 +129,23 @@ VRC Constraints、VRM node constraints、Modular Avatar resolver 由来 constrai
 v2 初期では transform dependency metadata、reset / rebuild 対象、diagnostics の役割に留める。
 solver integration は transform evaluation layer が安定してから行う。
 
+`UNConstraints` の実装境界:
+
+- `ConstraintRef` は source metadata と reset dependency の表現であり、現 solver frame loop の入力ではない。
+- dynamics source-scoped reset では、対象 dynamics group の dynamic nodes と重なる constraint ref の target/source nodes だけを reset 対象へ含める。
+- transform を毎 frame 書き換える constraint solver は、runtime action / animation / humanoid retarget / dynamics writeback の評価順が固定されるまで入れない。
+- VRC / MA source kind ごとの条件分岐を renderer frame loop へ散らさず、将来は source-neutral `UNConstraints` evaluation result を scene transform evaluator が読む。
+
 grabbing / posing は `UNInteraction` の capability metadata とする。
 VRC PhysBone `parameter` は Modular Avatar 本家の `PhysBoneSuffixes` と同じ `_IsGrabbed` / `_Angle` / `_Stretch` / `_IsPosed` / `_Squish` / `_Hit` / `_Ratio` / `_Distance` を runtime parameter definition として宣言するが、direct interaction evaluator が入るまでは値を書かない。これらの suffix parameter が action/menu parameter と同名になる場合は、将来の continuous interaction emission と latched action/menu ownership が衝突し得るため conflict diagnostics として扱う。
 v2 初期では UI / diagnostics / future hook 用であり、物理的な操作挙動は持たせない。
+
+`UNInteraction` の実装境界:
+
+- `allowGrabbing` / `allowPosing` / base parameter / suffix parameter は capability metadata と runtime parameter definition までを標準範囲とする。
+- `_IsGrabbed` / `_IsPosed` / `_Angle` / `_Stretch` / `_Squish` / `_Hit` / `_Ratio` / `_Distance` は、pointer / hand / tool などの direct interaction evaluator が実装されるまで runtime parameter value を書かない。
+- suffix emission は continuous owner として扱い、latched action/menu owner より暗黙に強くしない。衝突は owner-key diagnostics で観測してから policy を決める。
+- 物理 solver は interaction state を直接決めない。solver は UNEvaluation が確定した enabled state / interaction parameter state を読むだけにする。
 
 ## Diagnostics
 
