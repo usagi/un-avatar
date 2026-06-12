@@ -1429,4 +1429,26 @@ aa = "msaa"
 
 		assert_eq!(opts.aa, AaMode::Msaa);
 	}
+
+	#[test]
+	fn toml_manifest_applies_partial_texture_compression_advanced_options() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[render_quality]
+texture_compression = "balanced"
+
+[render_quality.texture_compression_advanced]
+data = "high_quality"
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert_eq!(
+			opts.texture_compression_advanced.data,
+			crate::TextureCompressionPreference::HighQuality
+		);
+		assert_eq!(opts.texture_compression_advanced.face, crate::TextureCompressionPreference::Source);
+	}
 }

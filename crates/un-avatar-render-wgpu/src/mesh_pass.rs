@@ -3424,7 +3424,9 @@ fn texture_mip_copy_layout(kind: TextureUploadKind, width: u32, height: u32) -> 
 	match kind {
 		TextureUploadKind::Rgba => (4 * width, height),
 		TextureUploadKind::Bc1Srgb => (width.div_ceil(4) * 8, height.div_ceil(4)),
-		TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Srgb => (width.div_ceil(4) * 16, height.div_ceil(4)),
+		TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Unorm | TextureUploadKind::Bc7Srgb => {
+			(width.div_ceil(4) * 16, height.div_ceil(4))
+		}
 	}
 }
 
@@ -3438,6 +3440,7 @@ fn payload_texture_format(
 		TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
 		TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
 		TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
+		TextureUploadKind::Bc7Unorm => wgpu::TextureFormat::Bc7RgbaUnorm,
 		TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
 	}
 }
@@ -8698,6 +8701,20 @@ impl SceneMeshes {
 					image_prepare_timings.processed += processed_start.elapsed().saturating_sub(deferred_rgba_elapsed);
 					let processed_w = processed.width;
 					let processed_h = processed.height;
+					if gpu_texture_compression_enabled
+						&& gpu_texture_compression.is_none()
+						&& compressed_upload_kind_for_texture(
+							&processed,
+							texture_compression,
+							texture_compression_advanced,
+							role,
+							texture_compression_bc_supported,
+						)
+						.is_some()
+					{
+						report("gpu-upload", total_steps, "Preparing GPU texture compression".to_string());
+						gpu_texture_compression = Some(create_vulkan_gpu_texture_compression_context()?);
+					}
 					let payload_start = Instant::now();
 					let (payload, compressed_cache_event) = texture_upload_payload(
 						processed,
@@ -11061,6 +11078,7 @@ mod tests {
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Rgba, 5, 3), (20, 3));
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc1Srgb, 5, 3), (16, 1));
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc5Unorm, 5, 7), (32, 2));
+		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc7Unorm, 8, 9), (32, 3));
 		assert_eq!(texture_mip_copy_layout(TextureUploadKind::Bc7Srgb, 8, 9), (32, 3));
 	}
 

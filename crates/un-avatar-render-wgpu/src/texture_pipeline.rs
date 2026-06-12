@@ -72,6 +72,7 @@ pub(crate) enum TextureUploadKind {
 	Rgba,
 	Bc1Srgb,
 	Bc5Unorm,
+	Bc7Unorm,
 	Bc7Srgb,
 }
 
@@ -81,7 +82,8 @@ impl TextureUploadKind {
 			Self::Rgba => 0,
 			Self::Bc1Srgb => 1,
 			Self::Bc5Unorm => 2,
-			Self::Bc7Srgb => 3,
+			Self::Bc7Unorm => 3,
+			Self::Bc7Srgb => 4,
 		}
 	}
 
@@ -90,7 +92,8 @@ impl TextureUploadKind {
 			0 => Some(Self::Rgba),
 			1 => Some(Self::Bc1Srgb),
 			2 => Some(Self::Bc5Unorm),
-			3 => Some(Self::Bc7Srgb),
+			3 => Some(Self::Bc7Unorm),
+			4 => Some(Self::Bc7Srgb),
 			_ => None,
 		}
 	}
@@ -103,7 +106,7 @@ impl TextureUploadKind {
 		match self {
 			Self::Rgba => 4,
 			Self::Bc1Srgb => 8,
-			Self::Bc5Unorm | Self::Bc7Srgb => 16,
+			Self::Bc5Unorm | Self::Bc7Unorm | Self::Bc7Srgb => 16,
 		}
 	}
 
@@ -112,7 +115,7 @@ impl TextureUploadKind {
 			Self::Rgba => None,
 			Self::Bc1Srgb => Some(block_compression::CompressionVariant::BC1),
 			Self::Bc5Unorm => Some(block_compression::CompressionVariant::BC5),
-			Self::Bc7Srgb => {
+			Self::Bc7Unorm | Self::Bc7Srgb => {
 				let settings = if rgba_has_translucent_alpha(rgba) {
 					block_compression::BC7Settings::alpha_basic()
 				} else {
@@ -1158,7 +1161,8 @@ pub(crate) fn compression_preference_for_role(
 		TextureCompressionMode::Source => TextureCompressionPreference::Source,
 		TextureCompressionMode::Compat => TextureCompressionPreference::Source,
 		TextureCompressionMode::Balanced => match role {
-			TextureRole::Face | TextureRole::Eyes | TextureRole::Data => TextureCompressionPreference::Source,
+			TextureRole::Face | TextureRole::Eyes => TextureCompressionPreference::Source,
+			TextureRole::Data => advanced.data,
 			TextureRole::Normal | TextureRole::Occlusion => TextureCompressionPreference::GpuNative,
 			TextureRole::Emissive => TextureCompressionPreference::HighQuality,
 			TextureRole::Clothing | TextureRole::GenericColor => TextureCompressionPreference::Auto,
@@ -1236,6 +1240,21 @@ fn should_try_bc7_color(
 		return false;
 	}
 	matches!(role, TextureRole::Clothing | TextureRole::Emissive | TextureRole::GenericColor)
+}
+
+fn should_try_bc7_data(
+	mode: TextureCompressionMode,
+	advanced: &TextureCompressionAdvancedOptions,
+	role: TextureRole,
+	bc_supported: bool,
+) -> bool {
+	if !bc_supported || matches!(mode, TextureCompressionMode::Source | TextureCompressionMode::Compat) || role != TextureRole::Data {
+		return false;
+	}
+	!matches!(
+		compression_preference_for_role(mode, advanced, role),
+		TextureCompressionPreference::Source | TextureCompressionPreference::Auto
+	)
 }
 
 fn padded_rgba_for_block_encoder(rgba: &[u8], width: u32, height: u32) -> PaddedRgba<'_> {
@@ -1465,6 +1484,8 @@ fn compressed_upload_kind_for_source(
 ) -> Option<TextureUploadKind> {
 	if should_try_bc5_normal(mode, advanced, role, bc_supported) {
 		Some(TextureUploadKind::Bc5Unorm)
+	} else if should_try_bc7_data(mode, advanced, role, bc_supported) {
+		Some(TextureUploadKind::Bc7Unorm)
 	} else if should_try_bc7_color(mode, advanced, role, bc_supported) {
 		Some(TextureUploadKind::Bc7Srgb)
 	} else if should_try_bc1_source(mode, advanced, role, bc_supported, rgba) {
@@ -1526,6 +1547,8 @@ pub(crate) fn compressed_cache_lookup_from_source_metadata(
 ) -> Option<CompressedTextureCacheLookup> {
 	let kind = if should_try_bc5_normal(mode, advanced, role, bc_supported) {
 		TextureUploadKind::Bc5Unorm
+	} else if should_try_bc7_data(mode, advanced, role, bc_supported) {
+		TextureUploadKind::Bc7Unorm
 	} else if should_try_bc7_color(mode, advanced, role, bc_supported) {
 		TextureUploadKind::Bc7Srgb
 	} else if bc_supported
@@ -1577,7 +1600,7 @@ fn build_texture_upload_payload_cpu(
 	for (mip_index, (width, height, rgba)) in processed.mips.into_iter().enumerate() {
 		progress(mip_index as u32 + 1, mip_count, width, height, kind);
 		let (mip_width, mip_height, data) = match kind {
-			TextureUploadKind::Bc1Srgb | TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Srgb => {
+			TextureUploadKind::Bc1Srgb | TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Unorm | TextureUploadKind::Bc7Srgb => {
 				let compression_variant = kind.compression_variant(&rgba).expect("compressed texture kind");
 				encode_block_compressed_rgba_mip_cpu_with_variant(compression_variant, &rgba, width, height, block_compression_cpu_threads)
 			}
@@ -1641,6 +1664,8 @@ pub(crate) fn compressed_upload_kind_for_texture(
 ) -> Option<TextureUploadKind> {
 	if should_try_bc5_normal(mode, advanced, role, bc_supported) {
 		Some(TextureUploadKind::Bc5Unorm)
+	} else if should_try_bc7_data(mode, advanced, role, bc_supported) {
+		Some(TextureUploadKind::Bc7Unorm)
 	} else if should_try_bc7_color(mode, advanced, role, bc_supported) {
 		Some(TextureUploadKind::Bc7Srgb)
 	} else if should_try_bc1(mode, advanced, role, bc_supported, &processed.mips) {
@@ -1980,6 +2005,9 @@ mod tests {
 		let (w, h, bc7) = encode_block_compressed_rgba_mip_cpu(TextureUploadKind::Bc7Srgb, &rgba, 2, 2, 1);
 		assert_eq!((w, h), (4, 4));
 		assert_eq!(bc7.len(), 16);
+		let (w, h, bc7_unorm) = encode_block_compressed_rgba_mip_cpu(TextureUploadKind::Bc7Unorm, &rgba, 2, 2, 1);
+		assert_eq!((w, h), (4, 4));
+		assert_eq!(bc7_unorm.len(), 16);
 		let normal = [128, 128, 255, 255].repeat(2 * 2);
 		let (w, h, bc5) = encode_block_compressed_rgba_mip_cpu(TextureUploadKind::Bc5Unorm, &normal, 2, 2, 1);
 		assert_eq!((w, h), (4, 4));
@@ -2095,6 +2123,43 @@ mod tests {
 	}
 
 	#[test]
+	fn data_bc7_unorm_requires_explicit_advanced_preference() {
+		assert!(!should_try_bc7_data(
+			TextureCompressionMode::Balanced,
+			&TextureCompressionAdvancedOptions::default(),
+			TextureRole::Data,
+			true,
+		));
+
+		let mut advanced = TextureCompressionAdvancedOptions::default();
+		advanced.data = TextureCompressionPreference::HighQuality;
+		assert!(should_try_bc7_data(
+			TextureCompressionMode::Balanced,
+			&advanced,
+			TextureRole::Data,
+			true,
+		));
+		let rgba = [10, 20, 30, 40].repeat(4 * 4);
+		let processed = build_processed_texture(&rgba, 4, 4, None, TextureRole::Data, TextureMipmapFilter::Box2x2);
+		let (payload, _) = texture_upload_payload(
+			processed,
+			TextureCompressionMode::Balanced,
+			&advanced,
+			TextureRole::Data,
+			true,
+			BlockCompressionEncoder::Cpu,
+			1,
+			None,
+			false,
+			None,
+			false,
+		);
+
+		assert_eq!(payload.kind.cache_tag(), TextureUploadKind::Bc7Unorm.cache_tag());
+		assert_eq!(payload.mips[0].data.len(), 16);
+	}
+
+	#[test]
 	fn processed_texture_cache_roundtrips_mips() {
 		let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
 		let texture = build_processed_texture(&rgba, 2, 2, None, TextureRole::Normal, TextureMipmapFilter::Box2x2);
@@ -2116,9 +2181,9 @@ mod tests {
 	}
 
 	#[test]
-	fn compressed_texture_cache_roundtrips_bc7_payload() {
+	fn compressed_texture_cache_roundtrips_bc7_unorm_payload() {
 		let payload = TextureUploadPayload {
-			kind: TextureUploadKind::Bc7Srgb,
+			kind: TextureUploadKind::Bc7Unorm,
 			mips: vec![TextureUploadMip {
 				width: 2,
 				height: 2,
@@ -2133,8 +2198,8 @@ mod tests {
 		let _ = fs::remove_file(&path);
 
 		assert!(write_compressed_texture_cache(&path, key, &payload));
-		let loaded = read_compressed_texture_cache(&path, key, TextureUploadKind::Bc7Srgb).expect("cache should load");
-		assert_eq!(loaded.kind.cache_tag(), TextureUploadKind::Bc7Srgb.cache_tag());
+		let loaded = read_compressed_texture_cache(&path, key, TextureUploadKind::Bc7Unorm).expect("cache should load");
+		assert_eq!(loaded.kind.cache_tag(), TextureUploadKind::Bc7Unorm.cache_tag());
 		assert_eq!(loaded.mips.len(), 1);
 		assert_eq!(loaded.mips[0].data, vec![42; 16]);
 
