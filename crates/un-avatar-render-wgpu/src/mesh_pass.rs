@@ -1069,6 +1069,25 @@ enum DrawPipelineKind {
 	LilToonGemPre,
 }
 
+impl DrawPipelineKind {
+	fn label(self) -> &'static str {
+		match self {
+			DrawPipelineKind::OpaqueLit => "mesh_opaque_lit",
+			DrawPipelineKind::OpaqueUnlit => "mesh_opaque_unlit",
+			DrawPipelineKind::OpaqueToon => "mesh_opaque_toon",
+			DrawPipelineKind::BlendLit => "mesh_blend_lit",
+			DrawPipelineKind::BlendUnlit => "mesh_blend_unlit",
+			DrawPipelineKind::BlendToon => "mesh_blend_toon",
+			DrawPipelineKind::BlendToonZWrite => "mesh_blend_toon_zwrite",
+			DrawPipelineKind::BlendToonAdd => "mesh_blend_toon_add",
+			DrawPipelineKind::BlendToonAddZWrite => "mesh_blend_toon_add_zwrite",
+			DrawPipelineKind::TransparentToonBackpass => "mesh_transparent_toon_backpass",
+			DrawPipelineKind::TransparentToonBackpassNoZWrite => "mesh_transparent_toon_backpass_no_zwrite",
+			DrawPipelineKind::LilToonGemPre => "mesh_liltoon_gem_pre_toon",
+		}
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct UntoonShaderFeatures {
 	profile_extensions: bool,
@@ -6985,21 +7004,21 @@ impl SceneMeshes {
 				}),
 			)
 		};
-		let total_steps = 4u32
+		let mut total_steps = 4u32
 			.saturating_add(scene_texture_upload_step_count(scene, &texture_roles, texture_max_dimension))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
 		let mut current_step = 0u32;
-		let mut report = |phase: &'static str, message: String| {
-			current_step = current_step.saturating_add(1).min(total_steps);
+		let mut report = |phase: &'static str, total: u32, message: String| {
+			current_step = current_step.saturating_add(1).min(total);
 			progress(SceneMeshBuildProgress {
 				phase,
 				current: current_step,
-				total: total_steps,
+				total,
 				message,
 			});
 		};
-		report("gpu-upload", "Preparing GPU scene layouts".to_string());
+		report("gpu-upload", total_steps, "Preparing GPU scene layouts".to_string());
 		let scene_layout_start = Instant::now();
 		let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("mesh_frame"),
@@ -7221,7 +7240,7 @@ impl SceneMeshes {
 		};
 		log_slow_gpu_scene_step("layout/shader module setup", scene_layout_start.elapsed());
 
-		report("gpu-upload", "Preparing mesh frame buffers".to_string());
+		report("gpu-upload", total_steps, "Preparing mesh frame buffers".to_string());
 		let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_frame"),
 			size: std::mem::size_of::<MeshFrameGpu>() as u64,
@@ -7355,7 +7374,7 @@ impl SceneMeshes {
 			wgpu::TextureFormat::Rgba8UnormSrgb,
 			[0, 0, 255, 255],
 		);
-		report("gpu-upload", "Uploading fallback textures".to_string());
+		report("gpu-upload", total_steps, "Uploading fallback textures".to_string());
 		let mut texture_summary = TextureUploadSummary {
 			limit_max_dimension: texture_max_dimension,
 			compression_mode: texture_compression,
@@ -7398,6 +7417,7 @@ impl SceneMeshes {
 				if image_resident {
 					report(
 						"gpu-upload",
+						total_steps,
 						format!(
 							"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
 							image_index + 1,
@@ -7414,6 +7434,7 @@ impl SceneMeshes {
 					texture_summary.deferred_cubemap_mip_bytes += cube_bytes;
 					report(
 						"gpu-upload",
+						total_steps,
 						format!(
 							"Deferring cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
 							image_index + 1,
@@ -7431,6 +7452,7 @@ impl SceneMeshes {
 					texture_summary.cubemap_fallback_count += 1;
 					report(
 						"gpu-upload",
+						total_steps,
 						format!(
 							"Cubemap texture {}/{} has unsupported source layout {:?}; using black cube fallback",
 							image_index + 1,
@@ -7447,6 +7469,7 @@ impl SceneMeshes {
 					if image_resident {
 						report(
 							"gpu-upload",
+							total_steps,
 							format!(
 								"Uploading precision-preserving source texture {}/{} {}x{} {:?} ({role:?})",
 								image_index + 1,
@@ -7475,6 +7498,7 @@ impl SceneMeshes {
 					} else {
 						report(
 							"gpu-upload",
+							total_steps,
 							format!(
 								"Deferring precision-preserving source texture {}/{} ({role:?})",
 								image_index + 1,
@@ -7497,6 +7521,7 @@ impl SceneMeshes {
 				texture_summary.record_image(src_w, src_h, processed_w, processed_h, estimated_mip_bytes, false);
 				report(
 					"gpu-upload",
+					total_steps,
 					format!("Deferring lazy texture {}/{} ({role:?})", image_index + 1, scene.images.len()),
 				);
 				image_views.push(transparent_black_view.clone());
@@ -7588,7 +7613,7 @@ impl SceneMeshes {
 						)
 						.is_some()
 					{
-						report("gpu-upload", "Preparing GPU texture compression".to_string());
+						report("gpu-upload", total_steps, "Preparing GPU texture compression".to_string());
 						gpu_texture_compression = Some(create_vulkan_gpu_texture_compression_context()?);
 					}
 					let (payload, compressed_cache_event) = texture_upload_payload(
@@ -7651,6 +7676,7 @@ impl SceneMeshes {
 				for (mip_level, mip) in payload.mips.iter().enumerate() {
 					report(
 						"gpu-upload",
+						total_steps,
 						format!(
 							"Uploading texture {}/{} mip {}/{} {}x{} ({role:?})",
 							image_index + 1,
@@ -7665,6 +7691,7 @@ impl SceneMeshes {
 			} else {
 				report(
 					"gpu-upload",
+					total_steps,
 					format!(
 						"Deferring texture {}/{} mips={} ({role:?})",
 						image_index + 1,
@@ -7746,7 +7773,7 @@ impl SceneMeshes {
 			let Some(mesh_i) = node.mesh else { continue };
 			let Some(mesh_prims) = scene.meshes.get(mesh_i) else { continue };
 			for (prim_i, buf) in mesh_prims.iter().enumerate() {
-				report("gpu-upload", format!("Preparing mesh {mesh_i} primitive {prim_i}"));
+				report("gpu-upload", total_steps, format!("Preparing mesh {mesh_i} primitive {prim_i}"));
 				let primitive_start = Instant::now();
 				let mut step_start = Instant::now();
 				let material_slot_index = buf
@@ -7760,7 +7787,11 @@ impl SceneMeshes {
 						format!("primitive mesh={mesh_i} primitive={prim_i} skipped invisible material"),
 						primitive_start.elapsed(),
 					);
-					report("gpu-upload", format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"));
+					report(
+						"gpu-upload",
+						total_steps,
+						format!("Skipping fully transparent mesh {mesh_i} primitive {prim_i}"),
+					);
 					continue;
 				}
 				let material_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
@@ -8075,7 +8106,8 @@ impl SceneMeshes {
 			.len()
 			.saturating_add(usize::from(needs_outline_pipeline))
 			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
-		report("gpu-upload", format!("Creating {pipeline_count} mesh pipeline(s)"));
+		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(1);
+		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let pipeline_start = Instant::now();
 		let mut scene_shader_features = UntoonShaderFeatures::default();
 		if needs_fur_pipelines {
@@ -8095,55 +8127,76 @@ impl SceneMeshes {
 		);
 		let render_pipeline_start = Instant::now();
 		let pipeline_outline_toon = needs_outline_pipeline.then(|| {
-			Self::create_mesh_pipeline(
+			let label = "mesh_outline_toon";
+			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+			let start = Instant::now();
+			let pipeline = Self::create_mesh_pipeline(
 				device,
 				&outline_pipeline_layout,
 				&shader,
 				format,
 				&vb_layout,
-				"mesh_outline_toon",
+				label,
 				"vs_outline",
 				"fs_outline",
 				MeshPipelineRenderState::outline(sample_count),
-			)
+			);
+			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+			pipeline
 		});
-		let compute_fur_cards_compute_pipeline =
-			needs_fur_pipelines.then(|| create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout));
+		let compute_fur_cards_compute_pipeline = needs_fur_pipelines.then(|| {
+			let label = "compute_fur_cards";
+			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+			let start = Instant::now();
+			let pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout);
+			log_slow_gpu_scene_step(format!("compute pipeline {label}"), start.elapsed());
+			pipeline
+		});
 		let pipeline_compute_fur_cards_pre_toon = needs_fur_pipelines.then(|| {
-			Self::create_mesh_pipeline(
+			let label = "mesh_compute_fur_cards_pre_toon";
+			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+			let start = Instant::now();
+			let pipeline = Self::create_mesh_pipeline(
 				device,
 				&pipeline_layout,
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
-				"mesh_compute_fur_cards_pre_toon",
+				label,
 				"vs_compute_fur_cards_pre",
 				"fs_fur_toon_pre",
 				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-			)
+			);
+			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+			pipeline
 		});
 		let pipeline_compute_fur_cards_toon = needs_fur_pipelines.then(|| {
-			Self::create_mesh_pipeline(
+			let label = "mesh_compute_fur_cards_toon";
+			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+			let start = Instant::now();
+			let pipeline = Self::create_mesh_pipeline(
 				device,
 				&pipeline_layout,
 				&shader,
 				format,
 				&compute_fur_cards_vb_layout,
-				"mesh_compute_fur_cards_toon",
+				label,
 				"vs_compute_fur_cards",
 				"fs_fur_toon",
 				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
-			)
+			);
+			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+			pipeline
 		});
-		let pipelines = required_pipeline_kinds
-			.into_iter()
-			.map(|kind| {
-				(
-					kind,
-					Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count),
-				)
-			})
-			.collect::<BTreeMap<_, _>>();
+		let mut pipelines = BTreeMap::new();
+		for kind in required_pipeline_kinds {
+			let label = kind.label();
+			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+			let start = Instant::now();
+			let pipeline = Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count);
+			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+			pipelines.insert(kind, pipeline);
+		}
 		log_slow_gpu_scene_step(
 			format!("render pipeline creation count={pipeline_count}"),
 			render_pipeline_start.elapsed(),
