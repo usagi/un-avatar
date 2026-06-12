@@ -3153,23 +3153,106 @@ fn initial_wardrobe_asset_groups(unavatar: &UnaUnavatarExtension, initial_wardro
 	}
 }
 
+fn texture_source_index_from_root(root: &Value, texture_index: usize) -> Option<usize> {
+	root.get("textures")
+		.and_then(Value::as_array)
+		.and_then(|textures| textures.get(texture_index))
+		.and_then(|texture| texture.get("source"))
+		.and_then(Value::as_u64)
+		.map(|value| value as usize)
+}
+
+fn gltf_texture_info_image_index(root: &Value, texture_info: Option<&Value>) -> Option<usize> {
+	let texture_index = texture_info
+		.and_then(|texture_info| texture_info.get("index"))
+		.and_then(Value::as_u64)? as usize;
+	texture_source_index_from_root(root, texture_index)
+}
+
+fn collect_direct_image_texture_indices_from_material_json(value: &Value, out: &mut BTreeSet<usize>) {
+	match value {
+		Value::Object(object) => {
+			for (key, value) in object {
+				let key_lower = key.to_ascii_lowercase();
+				if (key_lower.ends_with("textureindex") || key_lower.ends_with("texture_index")) && value.as_u64().is_some() {
+					out.insert(value.as_u64().unwrap() as usize);
+					continue;
+				}
+				collect_direct_image_texture_indices_from_material_json(value, out);
+			}
+		}
+		Value::Array(values) => {
+			for value in values {
+				collect_direct_image_texture_indices_from_material_json(value, out);
+			}
+		}
+		_ => {}
+	}
+}
+
+fn material_image_indices_from_root(root: &Value, material_index: usize) -> BTreeSet<usize> {
+	let mut indices = BTreeSet::new();
+	let Some(material) = root
+		.get("materials")
+		.and_then(Value::as_array)
+		.and_then(|materials| materials.get(material_index))
+	else {
+		return indices;
+	};
+	let pbr = material.get("pbrMetallicRoughness");
+	for texture_info in [
+		pbr.and_then(|pbr| pbr.get("baseColorTexture")),
+		pbr.and_then(|pbr| pbr.get("metallicRoughnessTexture")),
+		material.get("normalTexture"),
+		material.get("occlusionTexture"),
+		material.get("emissiveTexture"),
+	] {
+		if let Some(image_index) = gltf_texture_info_image_index(root, texture_info) {
+			indices.insert(image_index);
+		}
+	}
+	if let Some(extras) = material.get("extras") {
+		collect_direct_image_texture_indices_from_material_json(extras, &mut indices);
+	}
+	indices
+}
+
+fn mesh_primitive_material_index_from_root(root: &Value, mesh_index: usize, primitive_index: usize) -> Option<usize> {
+	root.get("meshes")
+		.and_then(Value::as_array)
+		.and_then(|meshes| meshes.get(mesh_index))
+		.and_then(|mesh| mesh.get("primitives"))
+		.and_then(Value::as_array)
+		.and_then(|primitives| primitives.get(primitive_index))
+		.and_then(|primitive| primitive.get("material"))
+		.and_then(Value::as_u64)
+		.map(|value| value as usize)
+}
+
 fn initial_resident_image_indices(root: Option<&Value>, initial_wardrobe_set: Option<&str>) -> Option<BTreeSet<usize>> {
 	let unavatar = root.and_then(unavatar_extension_from_root)?;
 	let ownership = unavatar_asset_group_ownership(&unavatar);
 	if ownership.is_empty() {
 		return None;
 	}
-	let image_count = root
-		.and_then(|root| root.get("images"))
-		.and_then(Value::as_array)
-		.map(Vec::len)
-		.unwrap_or(0);
+	let root = root?;
+	let image_count = root.get("images").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
 	let active_groups = initial_wardrobe_asset_groups(&unavatar, initial_wardrobe_set);
 	let active_groups = active_groups.into_iter().collect::<BTreeSet<_>>();
 	let mut owned_images = BTreeSet::new();
 	let mut resident_images = BTreeSet::new();
+	let mut active_materials = BTreeSet::new();
 	for group in ownership {
 		let is_active = active_groups.contains(&group.group_id);
+		if is_active {
+			active_materials.extend(group.materials.iter().copied());
+			for primitive in &group.mesh_primitives {
+				if let Some(material_index) = mesh_primitive_material_index_from_root(root, primitive.mesh_index, primitive.primitive_index)
+				{
+					active_materials.insert(material_index);
+				}
+			}
+		}
 		for image in group.images {
 			owned_images.insert(image);
 			if is_active {
@@ -3177,9 +3260,14 @@ fn initial_resident_image_indices(root: Option<&Value>, initial_wardrobe_set: Op
 			}
 		}
 	}
-	for image in 0..image_count {
-		if !owned_images.contains(&image) {
-			resident_images.insert(image);
+	for material_index in &active_materials {
+		resident_images.extend(material_image_indices_from_root(root, *material_index));
+	}
+	if active_materials.is_empty() {
+		for image in 0..image_count {
+			if !owned_images.contains(&image) {
+				resident_images.insert(image);
+			}
 		}
 	}
 	Some(resident_images)
@@ -17534,6 +17622,71 @@ mod tests {
 
 		let coat = initial_resident_image_indices(Some(&root), Some("coat")).expect("coat selection");
 		assert_eq!(coat, [0, 1, 2, 4, 5].into_iter().collect());
+	}
+
+	#[test]
+	fn initial_resident_image_indices_limit_unowned_images_to_active_material_refs() {
+		let root = serde_json::json!({
+			"images": [{}, {}, {}, {}, {}],
+			"textures": [
+				{"source": 0},
+				{"source": 1},
+				{"source": 2},
+				{"source": 3},
+				{"source": 4}
+			],
+			"materials": [{
+				"pbrMetallicRoughness": {
+					"baseColorTexture": {"index": 1}
+				},
+				"extras": {
+					"UN_avatar_material": {
+						"main2ndTextureIndex": 2
+					}
+				}
+			}, {
+				"pbrMetallicRoughness": {
+					"baseColorTexture": {"index": 4}
+				}
+			}],
+			"meshes": [{
+				"primitives": [{"material": 0}]
+			}, {
+				"primitives": [{"material": 1}]
+			}],
+			"extensions": {
+				"UN_avatar": {
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}],
+						"assetGroupOwnership": [{
+							"groupId": "",
+							"images": [0],
+							"meshPrimitives": [{"mesh": 0, "primitive": 0}]
+						}, {
+							"groupId": "outfit:coat",
+							"images": [3],
+							"materials": [1],
+							"meshPrimitives": [{"mesh": 1, "primitive": 0}]
+						}]
+					}
+				}
+			}
+		});
+
+		let base = initial_resident_image_indices(Some(&root), None).expect("base selection");
+		assert_eq!(base, [0, 1, 2].into_iter().collect());
+
+		let coat = initial_resident_image_indices(Some(&root), Some("coat")).expect("coat selection");
+		assert_eq!(coat, [0, 1, 2, 3, 4].into_iter().collect());
 	}
 
 	#[test]
