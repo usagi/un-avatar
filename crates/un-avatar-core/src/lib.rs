@@ -1111,6 +1111,8 @@ pub struct UnaSpringBoneGroup {
 	pub hit_radius: f32,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub hit_radius_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "UnaDynamicsWritebackMode::is_default")]
+	pub writeback_mode: UnaDynamicsWritebackMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub limit: Option<UnaDynamicsLimit>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1135,6 +1137,20 @@ pub struct UnaDynamicsChain<'a> {
 	pub hit_radius_samples: &'a [f32],
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsWritebackMode {
+	#[default]
+	RotationOnly,
+	RotationTranslation,
+}
+
+impl UnaDynamicsWritebackMode {
+	pub fn is_default(self: &Self) -> bool {
+		*self == Self::default()
+	}
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnaDynamicsGroup<'a> {
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1145,6 +1161,7 @@ pub struct UnaDynamicsGroup<'a> {
 	pub category: &'a str,
 	pub parameters: UnaDynamicsParameters,
 	pub chain: UnaDynamicsChain<'a>,
+	pub writeback_mode: UnaDynamicsWritebackMode,
 	pub limit: Option<&'a UnaDynamicsLimit>,
 	pub interaction: Option<&'a UnaDynamicsInteraction>,
 }
@@ -1170,6 +1187,7 @@ impl<'a> UnaDynamicsGroup<'a> {
 				bone_node_indices: &group.bone_node_indices,
 				hit_radius_samples: &group.hit_radius_samples,
 			},
+			writeback_mode: group.writeback_mode,
 			limit: group.limit.as_ref(),
 			interaction: group.interaction.as_ref(),
 		}
@@ -6903,6 +6921,7 @@ mod tests {
 					center_node: Some(10),
 					hit_radius: 0.04,
 					hit_radius_samples: Vec::new(),
+					writeback_mode: Default::default(),
 					limit: Some(UnaDynamicsLimit {
 						limit_type: "angle".to_string(),
 						max_angle_x: 45.0,

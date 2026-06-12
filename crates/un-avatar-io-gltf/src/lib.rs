@@ -2235,6 +2235,7 @@ fn unavatar_dynamics_settings(
 					center_node: None,
 					hit_radius,
 					hit_radius_samples,
+					writeback_mode: Default::default(),
 					limit: limit.clone(),
 					interaction: interaction.clone(),
 					bone_node_indices: chain,
