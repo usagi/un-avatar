@@ -10265,10 +10265,11 @@ fn record_gltf_import_profile_step(report: &mut ImportReport, step: &str, starte
 fn initial_image_decode_indices_for_import(
 	root_json: Option<&Value>,
 	initial_wardrobe_set: Option<&str>,
+	defer_initial_image_decode: bool,
 	import_profile_messages: &mut Vec<String>,
 ) -> Option<BTreeSet<usize>> {
 	let indices = initial_resident_image_indices(root_json, initial_wardrobe_set);
-	if std::env::var_os("UN_AVATAR_EAGER_INITIAL_IMAGE_DECODE").is_none() {
+	if defer_initial_image_decode {
 		if let Some(indices) = &indices {
 			import_profile_messages.push(format!(
 				"glTF import profile: deferred_initial_image_decode_count={}",
@@ -10538,6 +10539,7 @@ impl AvatarImporter for GltfImporter {
 						let decode_image_indices = initial_image_decode_indices_for_import(
 							Some(&root),
 							ctx.initial_wardrobe_set.as_deref(),
+							ctx.defer_initial_image_decode,
 							&mut import_profile_messages,
 						);
 						let retain_encoded_indices =
@@ -10572,6 +10574,7 @@ impl AvatarImporter for GltfImporter {
 						initial_image_decode_indices_for_import(
 							root_json.as_ref(),
 							ctx.initial_wardrobe_set.as_deref(),
+							ctx.defer_initial_image_decode,
 							&mut import_profile_messages,
 						)
 					});
@@ -10640,6 +10643,7 @@ impl AvatarImporter for GltfImporter {
 					let decode_image_indices = initial_image_decode_indices_for_import(
 						Some(&root),
 						ctx.initial_wardrobe_set.as_deref(),
+						ctx.defer_initial_image_decode,
 						&mut import_profile_messages,
 					);
 					let retain_encoded_indices = deferred_image_indices_for_decode_selection(Some(&root), decode_image_indices.as_ref());
@@ -10678,6 +10682,7 @@ impl AvatarImporter for GltfImporter {
 					initial_image_decode_indices_for_import(
 						root_json.as_ref(),
 						ctx.initial_wardrobe_set.as_deref(),
+						ctx.defer_initial_image_decode,
 						&mut import_profile_messages,
 					)
 				});

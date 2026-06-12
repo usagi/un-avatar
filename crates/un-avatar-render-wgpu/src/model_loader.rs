@@ -181,16 +181,22 @@ pub(crate) fn apply_requested_wardrobe_set(document: &mut UnaDocument, wardrobe_
 	}
 }
 
-pub(crate) fn load_document(path: &Path, wardrobe_set: Option<&str>, contact_parameter_emission: bool) -> Result<Arc<UnaDocument>, String> {
-	load_document_inner(path, wardrobe_set, contact_parameter_emission, false)
+pub(crate) fn load_document(
+	path: &Path,
+	wardrobe_set: Option<&str>,
+	contact_parameter_emission: bool,
+	defer_initial_image_decode: bool,
+) -> Result<Arc<UnaDocument>, String> {
+	load_document_inner(path, wardrobe_set, contact_parameter_emission, defer_initial_image_decode, false)
 }
 
 pub(crate) fn load_document_profiled(
 	path: &Path,
 	wardrobe_set: Option<&str>,
 	contact_parameter_emission: bool,
+	defer_initial_image_decode: bool,
 ) -> Result<Arc<UnaDocument>, String> {
-	load_document_inner(path, wardrobe_set, contact_parameter_emission, true)
+	load_document_inner(path, wardrobe_set, contact_parameter_emission, defer_initial_image_decode, true)
 }
 
 fn log_import_profile_step(path: &Path, step: &str, started: Instant) {
@@ -205,12 +211,14 @@ fn load_document_inner(
 	path: &Path,
 	wardrobe_set: Option<&str>,
 	contact_parameter_emission: bool,
+	defer_initial_image_decode: bool,
 	profile: bool,
 ) -> Result<Arc<UnaDocument>, String> {
 	let mut ctx = ImportContext {
 		asset_root: path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: normalize_wardrobe_set_id(wardrobe_set).map(str::to_string),
+		defer_initial_image_decode,
 	};
 	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 	let result = if ext.eq_ignore_ascii_case("vrm") {
