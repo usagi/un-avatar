@@ -65,6 +65,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
 3. Texture upload / source cache
    - inactive wardrobe image decode は defer 済み。次は deferred cubemap conversion、source-native upload、processed texture cache の役割を分離する。
    - decoded 済み画像の encoded source bytes は保持せず、deferred placeholder のみ lazy decode 用に保持する方針を維持する。
+   - 2026-06-13 の `mizuki-split / field_drape` 比較では processed texture cache 有効時は `texture prepare total=1.1-1.3s`、`processed_cache=40/0/0`、`compressed_cache=19/0/0`。`--no-processed-texture-cache` は `texture prepare total=5.8s` まで悪化したため、cache read が見えても既定無効化はしない。次に削るなら cache artifact の read 量 / upload 量 / active resident texture 数を分けて測る。
 4. Runtime CPU
    - world matrix rebuild、UNPhysics / UNDynamics step、wardrobe residency refresh、fur card encode など、毎 frame 全体走査になっている箇所を dirty / active scope へ寄せる。
    - Runtime CPU の判断では swapchain / vsync 待ちを実処理 CPU と混ぜない。Renderer title / runtime status の `cpu_ms` は `cpu_record_ms - frame_surface_acquire_ms` の busy estimate とし、surface wait は別 field / title の `wait` として見る。
