@@ -3473,6 +3473,12 @@ impl ScreenGrabTarget {
 	}
 }
 
+struct ContactShadowResources {
+	bind_group_layout: wgpu::BindGroupLayout,
+	buffer: wgpu::Buffer,
+	bind_group: wgpu::BindGroup,
+}
+
 pub(crate) struct GpuState {
 	pub(crate) surface: wgpu::Surface<'static>,
 	pub(crate) device: wgpu::Device,
@@ -3496,10 +3502,8 @@ pub(crate) struct GpuState {
 	startup_splash_pipeline: wgpu::RenderPipeline,
 	startup_splash_buffer: wgpu::Buffer,
 	startup_splash_bind_group: wgpu::BindGroup,
-	contact_shadow_bind_group_layout: wgpu::BindGroupLayout,
+	contact_shadow_resources: Option<ContactShadowResources>,
 	contact_shadow_pipeline: Option<wgpu::RenderPipeline>,
-	contact_shadow_buffer: wgpu::Buffer,
-	contact_shadow_bind_group: wgpu::BindGroup,
 	document: Option<Arc<RwLock<UnaDocument>>>,
 	document_revision: Arc<AtomicU64>,
 	applied_document_revision: u64,
@@ -3778,39 +3782,11 @@ impl GpuState {
 				resource: startup_splash_buffer.as_entire_binding(),
 			}],
 		});
-		let contact_shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("contact_shadow"),
-			entries: &[wgpu::BindGroupLayoutEntry {
-				binding: 0,
-				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<ContactShadowGpu>() as u64),
-				},
-				count: None,
-			}],
-		});
-		let contact_shadow_pipeline = None;
-		let contact_shadow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("contact_shadow"),
-			size: std::mem::size_of::<ContactShadowGpu>() as u64,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-		let contact_shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("contact_shadow"),
-			layout: &contact_shadow_bind_group_layout,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: contact_shadow_buffer.as_entire_binding(),
-			}],
-		});
-
 		let texture_summary = None;
 		let avatar_outline = mesh_diagnostics.avatar_outline;
 		let scene_meshes = None;
 		let dynamics_sim = None;
+		let contact_shadow_pipeline = None;
 		let bone_collider_count = 0;
 		let bone_collider_source = BoneColliderSource::Off;
 
@@ -3869,10 +3845,8 @@ impl GpuState {
 			startup_splash_pipeline,
 			startup_splash_buffer,
 			startup_splash_bind_group,
-			contact_shadow_bind_group_layout,
+			contact_shadow_resources: None,
 			contact_shadow_pipeline,
-			contact_shadow_buffer,
-			contact_shadow_bind_group,
 			document: None,
 			document_revision,
 			applied_document_revision: 0,
@@ -4413,8 +4387,12 @@ impl GpuState {
 	}
 
 	fn write_contact_shadow_uniform(&self) {
+		let resources = self
+			.contact_shadow_resources
+			.as_ref()
+			.expect("contact shadow resources are initialized");
 		self.queue.write_buffer(
-			&self.contact_shadow_buffer,
+			&resources.buffer,
 			0,
 			bytemuck::bytes_of(&ContactShadowGpu {
 				params: [
@@ -4451,13 +4429,56 @@ impl GpuState {
 		}
 	}
 
+	fn ensure_contact_shadow_resources(&mut self) {
+		if self.contact_shadow_resources.is_some() {
+			return;
+		}
+		let bind_group_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("contact_shadow"),
+			entries: &[wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+				ty: wgpu::BindingType::Buffer {
+					ty: wgpu::BufferBindingType::Uniform,
+					has_dynamic_offset: false,
+					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<ContactShadowGpu>() as u64),
+				},
+				count: None,
+			}],
+		});
+		let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("contact_shadow"),
+			size: std::mem::size_of::<ContactShadowGpu>() as u64,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("contact_shadow"),
+			layout: &bind_group_layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: buffer.as_entire_binding(),
+			}],
+		});
+		self.contact_shadow_resources = Some(ContactShadowResources {
+			bind_group_layout,
+			buffer,
+			bind_group,
+		});
+	}
+
 	fn ensure_contact_shadow_pipeline(&mut self) {
+		self.ensure_contact_shadow_resources();
 		if self.contact_shadow_pipeline.is_none() {
 			let sample_count = aa_sample_count(self.aa);
+			let resources = self
+				.contact_shadow_resources
+				.as_ref()
+				.expect("contact shadow resources are initialized");
 			self.contact_shadow_pipeline = Some(create_contact_shadow_pipeline(
 				&self.device,
 				&self.bind_group_layout,
-				&self.contact_shadow_bind_group_layout,
+				&resources.bind_group_layout,
 				self.config.format,
 				sample_count,
 			));
@@ -4471,7 +4492,15 @@ impl GpuState {
 				.expect("contact shadow pipeline is initialized"),
 		);
 		pass.set_bind_group(0, &self.bind_group, &[]);
-		pass.set_bind_group(1, &self.contact_shadow_bind_group, &[]);
+		pass.set_bind_group(
+			1,
+			&self
+				.contact_shadow_resources
+				.as_ref()
+				.expect("contact shadow resources are initialized")
+				.bind_group,
+			&[],
+		);
 		pass.draw(0..6, 0..1);
 	}
 
