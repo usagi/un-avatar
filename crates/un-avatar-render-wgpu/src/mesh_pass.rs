@@ -7955,7 +7955,11 @@ impl SceneMeshes {
 				cube_image_views.push(None);
 				cube_texture_slots.push(None);
 			}
-			if texture_max_dimension.is_none() && skin_tone_override.is_none() && texture_compression != TextureCompressionMode::Compat {
+			if image_resident
+				&& texture_max_dimension.is_none()
+				&& skin_tone_override.is_none()
+				&& texture_compression != TextureCompressionMode::Compat
+			{
 				if let Some(source_upload) = source_texture_upload(im) {
 					if image_resident {
 						report(
