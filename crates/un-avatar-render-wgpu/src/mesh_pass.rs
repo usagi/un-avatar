@@ -1178,10 +1178,6 @@ impl UntoonShaderFeatures {
 			("UNTOON_FEATURE_NORMAL_SECOND", self.normal_second),
 		]
 	}
-
-	fn enabled_count(self) -> usize {
-		self.shader_feature_values().into_iter().filter(|(_, enabled)| *enabled).count()
-	}
 }
 
 fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
@@ -8423,6 +8419,12 @@ impl SceneMeshes {
 			&& !opts.debug_primitive_colors;
 		let needs_fur_pipelines = !draw_state.fur_draw_indices.is_empty();
 		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &draw_state, &opts);
+		let mut outline_shader_features = UntoonShaderFeatures::default();
+		for &draw_index in &draw_state.outline_draw_indices {
+			if let Some(draw) = draws.get(draw_index) {
+				outline_shader_features.include(draw_untoon_shader_features(draw, &opts));
+			}
+		}
 		let mut fur_shader_features = draw_state.runtime_requirements.toon_shader_features;
 		fur_shader_features.fur = needs_fur_pipelines;
 		let pipeline_count = required_pipeline_kinds
@@ -8432,106 +8434,148 @@ impl SceneMeshes {
 		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(1);
 		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let pipeline_start = Instant::now();
-		let mut scene_shader_features = UntoonShaderFeatures::default();
-		if needs_fur_pipelines {
-			scene_shader_features.include(fur_shader_features);
-		}
-		for shader_features in pipeline_shader_features.values().copied() {
-			scene_shader_features.include(shader_features);
-		}
-		let shader_module_start = Instant::now();
-		let shader = create_mesh_shader_module_for_features(device, shader_variant_tier, scene_shader_features, "mesh_scene_shader");
-		log_slow_gpu_scene_step(
-			format!(
-				"mesh shader module creation enabled_features={}",
-				scene_shader_features.enabled_count()
-			),
-			shader_module_start.elapsed(),
-		);
 		let render_pipeline_start = Instant::now();
-		let pipeline_outline_toon = needs_outline_pipeline.then(|| {
-			let label = "mesh_outline_toon";
-			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-			let start = Instant::now();
-			let pipeline = Self::create_mesh_pipeline(
-				device,
-				&outline_pipeline_layout,
-				&shader,
-				format,
-				&vb_layout,
-				pipeline_cache,
-				label,
-				"vs_outline",
-				"fs_outline",
-				MeshPipelineRenderState::outline(sample_count),
-			);
-			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-			pipeline
+		let (
+			pipeline_outline_toon,
+			compute_fur_cards_compute_pipeline,
+			pipeline_compute_fur_cards_pre_toon,
+			pipeline_compute_fur_cards_toon,
+			pipelines,
+		) = std::thread::scope(|scope| {
+			let pipeline_outline_toon_handle = needs_outline_pipeline.then(|| {
+				let label = "mesh_outline_toon";
+				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+				let outline_pipeline_layout = outline_pipeline_layout.clone();
+				let vb_layout = vb_layout.clone();
+				scope.spawn(move || {
+					let start = Instant::now();
+					let shader =
+						create_mesh_shader_module_for_features(device, shader_variant_tier, outline_shader_features, "mesh_outline_shader");
+					let pipeline = Self::create_mesh_pipeline(
+						device,
+						&outline_pipeline_layout,
+						&shader,
+						format,
+						&vb_layout,
+						pipeline_cache,
+						label,
+						"vs_outline",
+						"fs_outline",
+						MeshPipelineRenderState::outline(sample_count),
+					);
+					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+					pipeline
+				})
+			});
+			let compute_fur_cards_compute_pipeline_handle = needs_fur_pipelines.then(|| {
+				let label = "compute_fur_cards";
+				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+				let compute_fur_cards_bind_group_layout = compute_fur_cards_bind_group_layout.clone();
+				scope.spawn(move || {
+					let start = Instant::now();
+					let pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout, pipeline_cache);
+					log_slow_gpu_scene_step(format!("compute pipeline {label}"), start.elapsed());
+					pipeline
+				})
+			});
+			let pipeline_compute_fur_cards_pre_toon_handle = needs_fur_pipelines.then(|| {
+				let label = "mesh_compute_fur_cards_pre_toon";
+				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+				let pipeline_layout = pipeline_layout.clone();
+				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+				scope.spawn(move || {
+					let start = Instant::now();
+					let shader =
+						create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader");
+					let pipeline = Self::create_mesh_pipeline(
+						device,
+						&pipeline_layout,
+						&shader,
+						format,
+						&compute_fur_cards_vb_layout,
+						pipeline_cache,
+						label,
+						"vs_compute_fur_cards_pre",
+						"fs_fur_toon_pre",
+						MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+					);
+					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+					pipeline
+				})
+			});
+			let pipeline_compute_fur_cards_toon_handle = needs_fur_pipelines.then(|| {
+				let label = "mesh_compute_fur_cards_toon";
+				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+				let pipeline_layout = pipeline_layout.clone();
+				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+				scope.spawn(move || {
+					let start = Instant::now();
+					let shader =
+						create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader");
+					let pipeline = Self::create_mesh_pipeline(
+						device,
+						&pipeline_layout,
+						&shader,
+						format,
+						&compute_fur_cards_vb_layout,
+						pipeline_cache,
+						label,
+						"vs_compute_fur_cards",
+						"fs_fur_toon",
+						MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
+					);
+					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+					pipeline
+				})
+			});
+			let mut pipeline_handles = Vec::new();
+			for kind in required_pipeline_kinds {
+				let label = kind.label();
+				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+				let shader_features = pipeline_shader_features.get(&kind).copied().unwrap_or_default();
+				let pipeline_layout = pipeline_layout.clone();
+				let vb_layout = vb_layout.clone();
+				pipeline_handles.push((
+					kind,
+					scope.spawn(move || {
+						let start = Instant::now();
+						let shader =
+							create_mesh_shader_module_for_features(device, shader_variant_tier, shader_features, "mesh_draw_shader");
+						let pipeline = Self::create_draw_pipeline(
+							device,
+							&pipeline_layout,
+							&shader,
+							format,
+							&vb_layout,
+							pipeline_cache,
+							kind,
+							sample_count,
+						);
+						log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+						pipeline
+					}),
+				));
+			}
+			let pipeline_outline_toon =
+				pipeline_outline_toon_handle.map(|handle| handle.join().expect("mesh outline pipeline worker panicked"));
+			let compute_fur_cards_compute_pipeline =
+				compute_fur_cards_compute_pipeline_handle.map(|handle| handle.join().expect("compute fur pipeline worker panicked"));
+			let pipeline_compute_fur_cards_pre_toon =
+				pipeline_compute_fur_cards_pre_toon_handle.map(|handle| handle.join().expect("compute fur pre pipeline worker panicked"));
+			let pipeline_compute_fur_cards_toon =
+				pipeline_compute_fur_cards_toon_handle.map(|handle| handle.join().expect("compute fur draw pipeline worker panicked"));
+			let mut pipelines = BTreeMap::new();
+			for (kind, handle) in pipeline_handles {
+				pipelines.insert(kind, handle.join().expect("mesh draw pipeline worker panicked"));
+			}
+			(
+				pipeline_outline_toon,
+				compute_fur_cards_compute_pipeline,
+				pipeline_compute_fur_cards_pre_toon,
+				pipeline_compute_fur_cards_toon,
+				pipelines,
+			)
 		});
-		let compute_fur_cards_compute_pipeline = needs_fur_pipelines.then(|| {
-			let label = "compute_fur_cards";
-			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-			let start = Instant::now();
-			let pipeline = create_compute_fur_cards_compute_pipeline(device, &compute_fur_cards_bind_group_layout, pipeline_cache);
-			log_slow_gpu_scene_step(format!("compute pipeline {label}"), start.elapsed());
-			pipeline
-		});
-		let pipeline_compute_fur_cards_pre_toon = needs_fur_pipelines.then(|| {
-			let label = "mesh_compute_fur_cards_pre_toon";
-			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-			let start = Instant::now();
-			let pipeline = Self::create_mesh_pipeline(
-				device,
-				&pipeline_layout,
-				&shader,
-				format,
-				&compute_fur_cards_vb_layout,
-				pipeline_cache,
-				label,
-				"vs_compute_fur_cards_pre",
-				"fs_fur_toon_pre",
-				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-			);
-			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-			pipeline
-		});
-		let pipeline_compute_fur_cards_toon = needs_fur_pipelines.then(|| {
-			let label = "mesh_compute_fur_cards_toon";
-			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-			let start = Instant::now();
-			let pipeline = Self::create_mesh_pipeline(
-				device,
-				&pipeline_layout,
-				&shader,
-				format,
-				&compute_fur_cards_vb_layout,
-				pipeline_cache,
-				label,
-				"vs_compute_fur_cards",
-				"fs_fur_toon",
-				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
-			);
-			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-			pipeline
-		});
-		let mut pipelines = BTreeMap::new();
-		for kind in required_pipeline_kinds {
-			let label = kind.label();
-			report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-			let start = Instant::now();
-			let pipeline = Self::create_draw_pipeline(
-				device,
-				&pipeline_layout,
-				&shader,
-				format,
-				&vb_layout,
-				pipeline_cache,
-				kind,
-				sample_count,
-			);
-			log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-			pipelines.insert(kind, pipeline);
-		}
 		log_slow_gpu_scene_step(
 			format!("render pipeline creation count={pipeline_count}"),
 			render_pipeline_start.elapsed(),
