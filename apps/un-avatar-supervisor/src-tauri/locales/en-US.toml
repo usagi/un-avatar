@@ -394,7 +394,7 @@ mipmap_filter = "Mipmap filter: Mitchell-Netravali is the default. Box2x2 is leg
 render_backend = "Render backend: Vulkan is the default. DX12 can differ by environment, so use it only when selected intentionally."
 bcn_encoder = "BCn encoder: GPU is faster, CPU is a stable fallback. CPU thread count is clamped to logical CPU count at runtime."
 bcn_cpu_threads = "BCn CPU threads: worker count for CPU encoding. Default is 4 and runtime clamps it to logical CPU count."
-advanced_compression = "Developer-only texture role overrides. Normal profiles use Source / Balanced / Memory / Compatibility."
+advanced_compression = "Developer-only texture role overrides. Keep defaults unless benchmarking a model; BC7-like choices can reduce hot cache reads after warmup but may make first cache generation slower."
 
 [profiles.hints.look]
 section = "Avatar Effects: adjust viewer-space presentation effects without rewriting authored material values. These settings can also apply to a running Renderer."

@@ -406,7 +406,7 @@ mipmap_filter = "Mipmap filter: 既定は Mitchell-Netravali。Box2x2 は旧実�
 render_backend = "Render backend: 既定は Vulkan。DX12 は環境依存の挙動差があるため明示選択時のみ使います。"
 bcn_encoder = "BCn encoder: GPU は高速、CPU は安定 fallback。CPU thread count は論理 CPU 数で自動的に上限 clamp されます。"
 bcn_cpu_threads = "BCn CPU threads: CPU encoder 使用時の worker 数。既定は 4、実行時に論理 CPU 数を超えないように調整されます。"
-advanced_compression = "開発者向けの用途別圧縮 override。通常 profile は Source / Balanced / Memory / Compatibility を使います。"
+advanced_compression = "開発者向けの用途別圧縮 override。通常は既定値を維持。BC7 系は warmup 後の cache read を減らせる場合がありますが、初回 cache 生成は重くなります。"
 
 [profiles.hints.look]
 section = "Avatar Effects: authored material value を書き換えず、viewer-space の見た目効果を調整します。実行中の Renderer にも反映されます。"
