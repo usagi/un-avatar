@@ -2404,6 +2404,7 @@ fn ensure_unique_mesh_for_node(scene: &mut UnaSceneSnapshot, node_idx: usize) ->
 fn expression_catalog_from_morph_target_names(
 	scene: &UnaSceneSnapshot,
 	allowed_names: Option<&BTreeSet<String>>,
+	allowed_normalized_names: Option<&BTreeSet<String>>,
 ) -> Option<UnaExpressionCatalog> {
 	let mut binds_by_name: BTreeMap<String, Vec<UnaMorphTargetBind>> = BTreeMap::new();
 	for (mesh_index, primitives) in scene.meshes.iter().enumerate() {
@@ -2412,7 +2413,10 @@ fn expression_catalog_from_morph_target_names(
 				if name.is_empty() || morph_target_index >= primitive.morph_targets.len() {
 					continue;
 				}
-				if allowed_names.is_some_and(|allowed_names| !allowed_names.contains(name)) {
+				let exact_allowed = allowed_names.is_some_and(|allowed_names| allowed_names.contains(name));
+				let normalized_allowed = allowed_normalized_names
+					.is_some_and(|allowed_names| allowed_names.contains(&normalize_expression_match_key(name)));
+				if (allowed_names.is_some() || allowed_normalized_names.is_some()) && !exact_allowed && !normalized_allowed {
 					continue;
 				}
 				binds_by_name.entry(name.clone()).or_default().push(UnaMorphTargetBind {
@@ -2433,6 +2437,75 @@ fn expression_catalog_from_morph_target_names(
 			.map(|(name, binds)| UnaExpressionPreset { name, binds })
 			.collect(),
 	})
+}
+
+const ARKIT_PERFECT_SYNC_EXPRESSION_NAMES: &[&str] = &[
+	"browInnerUp",
+	"browDownLeft",
+	"browDownRight",
+	"browOuterUpLeft",
+	"browOuterUpRight",
+	"eyeLookUpLeft",
+	"eyeLookUpRight",
+	"eyeLookDownLeft",
+	"eyeLookDownRight",
+	"eyeLookInLeft",
+	"eyeLookInRight",
+	"eyeLookOutLeft",
+	"eyeLookOutRight",
+	"eyeBlinkLeft",
+	"eyeBlinkRight",
+	"eyeSquintLeft",
+	"eyeSquintRight",
+	"eyeWideLeft",
+	"eyeWideRight",
+	"cheekPuff",
+	"cheekSquintLeft",
+	"cheekSquintRight",
+	"noseSneerLeft",
+	"noseSneerRight",
+	"jawOpen",
+	"jawForward",
+	"jawLeft",
+	"jawRight",
+	"mouthFunnel",
+	"mouthPucker",
+	"mouthLeft",
+	"mouthRight",
+	"mouthRollUpper",
+	"mouthRollLower",
+	"mouthShrugUpper",
+	"mouthShrugLower",
+	"mouthClose",
+	"mouthSmileLeft",
+	"mouthSmileRight",
+	"mouthFrownLeft",
+	"mouthFrownRight",
+	"mouthDimpleLeft",
+	"mouthDimpleRight",
+	"mouthUpperUpLeft",
+	"mouthUpperUpRight",
+	"mouthLowerDownLeft",
+	"mouthLowerDownRight",
+	"mouthPressLeft",
+	"mouthPressRight",
+	"mouthStretchLeft",
+	"mouthStretchRight",
+	"tongueOut",
+];
+
+fn normalize_expression_match_key(name: &str) -> String {
+	name.chars()
+		.filter(|c| c.is_ascii_alphanumeric())
+		.map(|c| c.to_ascii_lowercase())
+		.collect()
+}
+
+fn arkit_perfect_sync_expression_name_set() -> BTreeSet<String> {
+	ARKIT_PERFECT_SYNC_EXPRESSION_NAMES
+		.iter()
+		.map(|name| normalize_expression_match_key(name))
+		.collect()
 }
 
 fn expression_weight_names_from_runtime_actions(actions: Option<&UnaRuntimeActionSet>) -> BTreeSet<String> {
@@ -9883,8 +9956,13 @@ impl AvatarImporter for GltfImporter {
 			.as_ref()
 			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene)));
 		let runtime_expression_names = expression_weight_names_from_runtime_actions(runtime_actions.as_ref());
-		let mut expression_catalog = if unavatar.is_some() && !runtime_expression_names.is_empty() {
-			expression_catalog_from_morph_target_names(&scene, Some(&runtime_expression_names))
+		let arkit_perfect_sync_names = arkit_perfect_sync_expression_name_set();
+		let mut expression_catalog = if unavatar.is_some() {
+			expression_catalog_from_morph_target_names(
+				&scene,
+				(!runtime_expression_names.is_empty()).then_some(&runtime_expression_names),
+				Some(&arkit_perfect_sync_names),
+			)
 		} else {
 			None
 		};
@@ -14018,6 +14096,55 @@ mod tests {
 		assert_eq!(materials[0].uv_offset_scale, [0.25, -0.5, 2.0, 3.0]);
 	}
 
+	#[test]
+	fn unavatar_expression_catalog_includes_arkit_perfect_sync_without_all_morphs() {
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![UnaMeshBuffers {
+				name: None,
+				vertex_payload_id: None,
+				positions: vec![[0.0, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: None,
+				weights: None,
+				indices: None,
+				material_index: None,
+				morph_targets: vec![
+					UnaMorphTargetDeltas {
+						position_deltas: vec![[0.0, 0.0, 0.0]],
+						normal_deltas: None,
+					},
+					UnaMorphTargetDeltas {
+						position_deltas: vec![[0.0, 0.0, 0.0]],
+						normal_deltas: None,
+					},
+					UnaMorphTargetDeltas {
+						position_deltas: vec![[0.0, 0.0, 0.0]],
+						normal_deltas: None,
+					},
+				],
+				morph_target_names: vec!["jawOpen".to_string(), "MenuToggleMorph".to_string(), "BodySetupMorph".to_string()],
+				default_morph_weights: Vec::new(),
+			}]],
+			..Default::default()
+		};
+		let runtime_expression_names = BTreeSet::from(["MenuToggleMorph".to_string()]);
+		let arkit_names = arkit_perfect_sync_expression_name_set();
+
+		let catalog = expression_catalog_from_morph_target_names(&scene, Some(&runtime_expression_names), Some(&arkit_names))
+			.expect("expression catalog");
+		let names: Vec<_> = catalog.presets.iter().map(|preset| preset.name.as_str()).collect();
+
+		assert_eq!(names, vec!["MenuToggleMorph", "jawOpen"]);
+		assert_eq!(catalog.presets[0].binds[0].morph_target_index, 1);
+		assert_eq!(catalog.presets[1].binds[0].morph_target_index, 0);
+	}
+
 	fn assert_vec3_near(actual: Vec3, expected: Vec3) {
 		assert!(actual.abs_diff_eq(expected, 0.0001), "actual={actual:?} expected={expected:?}");
 	}
@@ -15083,7 +15210,7 @@ mod tests {
 				}
 			}),
 		};
-		let mut catalog = expression_catalog_from_morph_target_names(&scene, None).expect("expression catalog");
+		let mut catalog = expression_catalog_from_morph_target_names(&scene, None, None).expect("expression catalog");
 		let mut report = ImportReport::default();
 
 		apply_unavatar_blendshape_sync_expression_binds(&mut catalog, &scene, &unavatar, &mut report);

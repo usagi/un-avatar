@@ -34,7 +34,7 @@
 - まだ `UnaDocument` 自体は source data と runtime state を同居させる transitional container であり、Wardrobe hot switch 前に resolved wardrobe state / active asset groups / action state / runtime parameter values の所有境界をさらに分ける。
 - scene node は source node id と runtime resolved node id を別フィールドとして保持し、runtime node target は source id 優先のまま resolved id / path / index fallback へ解決できる。MA Replace Object のような resolver 派生 node は source id を authored target として残し、resolved id を cache / diagnostics 用に付与する。
 - `.unavatar` / glTF / GLB import は、root `UN_avatar` extension に Modular Avatar payload がある場合は resolver を正本にし、payload がない別アーマチュア衣装は Humanoid 同名骨 fallback で retarget する。同名 Humanoid 接続点にぶら下がる non-Humanoid 補助骨 subtree は world pose を保って主 armature へ reparent する。ただし fallback は constraints、PhysBone behavior、blendshape / material side effects、曖昧な重複骨名の完全解決までは復元しない。
-- 2026-06-09 時点の目視確認では、これまで見つかっていた `mizuki-split.unavatar` の visual regression は期待動作まで解決済み。`usagi.unavatar` は Perfect Sync 対応 sample として表情 / blendshape と sparse MA payload export の検証対象にする。
+- 2026-06-09 時点の目視確認では、これまで見つかっていた `mizuki-split.unavatar` の visual regression は期待動作まで解決済み。Perfect Sync 対応 `.unavatar` は表情 / blendshape と sparse MA payload export の検証対象にする。`.unavatar` importer は VRC/ARKit Perfect Sync の既知 52 morph 名を runtime expression catalog に登録し、body / wardrobe morph まで全登録しない。VRC Menu / Animator / Modular Avatar 由来の morph は runtime action / resolver から参照された名前だけを別途 catalog に入れる。
 
 優先領域:
 
