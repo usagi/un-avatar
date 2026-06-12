@@ -27,10 +27,6 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field.startsWith("physics.spring_bone.") ||
 		field.startsWith("physics.bone_colliders.") ||
 		field.startsWith("effects.avatar.outline.") ||
-		field.startsWith("effects.avatar.rim.") ||
-		field.startsWith("effects.avatar.matcap.") ||
-		field.startsWith("effects.avatar.specular.") ||
-		field.startsWith("effects.avatar.ambient_occlusion.") ||
 		field.startsWith("effects.avatar.contact_shadow.") ||
 		field.startsWith("effects.post.ssao.") ||
 		field.startsWith("effects.post.bloom.") ||
