@@ -83,6 +83,12 @@ Supervisor look policy:
 - Authored outline / Rim / MatCap / Specular / AO は UNToon material へ正規化された source-authored parameter として扱う。v1 のように Supervisor profile から全 material へ同じ width / color / rim / matcap / specular / AO 値を押し付ける設定は v2 の標準 UI から廃止する。
 - Profile で直接扱う look controls は、Silhouette Outline、Bloom、SSAO、Contact shadow、color grading、背景などの screen / output / viewer-space effect を中心にする。material の authored value を壊す override は diagnostic / migration 互換に限定し、通常設定へ昇格しない。
 
+Output / preview policy:
+
+- Spout2 output resolution and local Window preview size are separate user concepts. Streamers often want OBS to receive 1920x1080 while the local preview stays small or minimized.
+- v2 Supervisor exposes output modes as Window Preview, Spout2 + Preview, and Spout2 Only. `Spout2 Only` initially means Spout2 enabled, output resolution set for OBS, and the local preview window launched minimized; this keeps the current winit/wgpu surface path intact.
+- True headless output, where renderer rendering no longer depends on a visible/native surface, is a later renderer architecture task. Do not fake it by silently changing Spout resolution or coupling it back to window size.
+
 ## UNPhysics / UNDynamics Runtime Normalization
 
 SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。

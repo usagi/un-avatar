@@ -1,7 +1,9 @@
 import type {
 	CameraTargetPreset,
 	LookRecommendation,
+	OutputModePreset,
 	ProfileSettingValue,
+	PreviewWindowPreset,
 	RenderQualityRecommendation,
 	SpoutResolutionPreset,
 } from "./profileTypes";
@@ -103,5 +105,39 @@ export const SPOUT_RESOLUTION_PRESETS: Record<SpoutResolutionPreset, readonly Pr
 	"4k": [
 		["output.spout2.width", 3840],
 		["output.spout2.height", 2160],
+	],
+};
+
+export const OUTPUT_MODE_PRESETS: Record<OutputModePreset, readonly ProfilePresetUpdate[]> = {
+	window_preview: [
+		["output.spout2.enabled", false],
+		["window.minimized", false],
+	],
+	spout2_preview: [
+		["output.spout2.enabled", true],
+		["window.minimized", false],
+	],
+	spout2_only: [
+		["output.spout2.enabled", true],
+		["output.spout2.width", 1920],
+		["output.spout2.height", 1080],
+		["window.width", 640],
+		["window.height", 360],
+		["window.minimized", true],
+	],
+};
+
+export const PREVIEW_WINDOW_PRESETS: Record<PreviewWindowPreset, readonly ProfilePresetUpdate[]> = {
+	compact: [
+		["window.width", 640],
+		["window.height", 360],
+	],
+	half_hd: [
+		["window.width", 960],
+		["window.height", 540],
+	],
+	hd: [
+		["window.width", 1280],
+		["window.height", 720],
 	],
 };

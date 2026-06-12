@@ -523,7 +523,7 @@ Control channelとして、Supervisorは `--runtime-control-address 127.0.0.1:po
 {"command":"set_window","transparent":true,"input_passthrough":true}
 ```
 
-SupervisorのStop/Stop Allはまず `shutdown` によるgraceful shutdownを試し、短時間で終了しない場合だけprocess killへfallbackする。App Settingsの `stop_all_on_console_exit` がonの場合は、Supervisor Consoleがtrayへ隠れず実際に閉じる時にも同じStop Allを実行する。Renderers tabのReset Viewは `reset_camera`、clear color presetは `set_clear_color`、Spout output toggle / 解像度preset（720p / 1080p / Match Window）は `set_spout_output` を送るため、renderer restartなしで反映する。
+SupervisorのStop/Stop Allはまず `shutdown` によるgraceful shutdownを試し、短時間で終了しない場合だけprocess killへfallbackする。App Settingsの `stop_all_on_console_exit` がonの場合は、Supervisor Consoleがtrayへ隠れず実際に閉じる時にも同じStop Allを実行する。Renderers tabのReset Viewは `reset_camera`、clear color presetは `set_clear_color`、Spout output toggle / 解像度preset（720p / 1080p など）は `set_spout_output` を送るため、renderer restartなしで反映する。Spout2 出力解像度と Window preview size は独立した概念で、`Match Window` は標準導線ではなく例外的な補助操作とする。
 Renderers tabのBorderless / Transparent / Topmost / Click-throughは `set_window` を送るため、同じくrenderer restartなしで反映する。renderer側は枠なしwindowの四隅と上下左右をresize領域にし、cursorも対応するresize cursorへ変える。Transparent時はclear alpha 0と明示的なwindow透過alpha modeを使う。Click-throughはTransparent時だけmouse hit-testを無効化し、透明背景の背面ウィンドウ操作を優先する。ピクセル単位ではなくwindow全体がmouse操作を受けないruntime modeなので、解除はSupervisorから行う。
 
 ### 6.2 RendererCommand

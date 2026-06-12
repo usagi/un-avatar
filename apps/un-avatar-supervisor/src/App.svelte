@@ -22,6 +22,8 @@
 		CameraLensPreset,
 		CameraTargetPreset,
 		LookRecommendation,
+		OutputModePreset,
+		PreviewWindowPreset,
 		ProfileSectionId,
 		ProfileSettingValue,
 		RenderQualityRecommendation,
@@ -76,6 +78,8 @@
 	import {
 		CAMERA_TARGET_PRESETS,
 		LOOK_RECOMMENDATIONS,
+		OUTPUT_MODE_PRESETS,
+		PREVIEW_WINDOW_PRESETS,
 		RENDER_QUALITY_RECOMMENDATIONS,
 		SPOUT_RESOLUTION_PRESETS,
 		type ProfilePresetUpdate,
@@ -934,6 +938,14 @@
 
 	function applySpoutResolutionPreset(kind: SpoutResolutionPreset): Promise<void> {
 		return applyProfileUpdates(SPOUT_RESOLUTION_PRESETS[kind]);
+	}
+
+	function applyOutputModePreset(kind: OutputModePreset): Promise<void> {
+		return applyProfileUpdates(OUTPUT_MODE_PRESETS[kind]);
+	}
+
+	function applyPreviewWindowPreset(kind: PreviewWindowPreset): Promise<void> {
+		return applyProfileUpdates(PREVIEW_WINDOW_PRESETS[kind]);
 	}
 
 	function runningCountForSetting(setting: AvatarSetting): number {
@@ -3063,6 +3075,8 @@
 									{busy}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onApplySpoutResolutionPreset={(preset) => applySpoutResolutionPreset(preset)}
+									onApplyOutputModePreset={(preset) => applyOutputModePreset(preset)}
+									onApplyPreviewWindowPreset={(preset) => applyPreviewWindowPreset(preset)}
 									onActivate={() => (activeProfileSection = "output")}
 								/>
 							</div>

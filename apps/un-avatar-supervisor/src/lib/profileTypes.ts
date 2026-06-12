@@ -28,6 +28,8 @@ export type LookRecommendation = "natural" | "clear" | "pop" | "soft";
 export type CameraTargetPreset = "face" | "neck" | "chest";
 export type CameraLensPreset = 10 | 16 | 35 | 70 | 200;
 export type SpoutResolutionPreset = "720p" | "1080p" | "1440p" | "4k";
+export type OutputModePreset = "window_preview" | "spout2_preview" | "spout2_only";
+export type PreviewWindowPreset = "compact" | "half_hd" | "hd";
 export type AudioLinkSource = "none" | "input_device";
 
 export type QualitySetting = {
@@ -111,6 +113,8 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	camera_latitude_deg: number | null;
 	camera_radius: number | null;
 	camera_diagonal_fov_deg: number | null;
+	spout_enabled: boolean;
+	spout_name: string | null;
 	spout_width: number | null;
 	spout_height: number | null;
 	aa: string;
@@ -202,7 +206,10 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	group: string;
 };
 
-export type SpoutOutputSetting = Pick<AvatarSetting, "spout_enabled" | "spout_name" | "spout_width" | "spout_height">;
+export type SpoutOutputSetting = Pick<
+	AvatarSetting,
+	"spout_enabled" | "spout_name" | "spout_width" | "spout_height" | "minimized" | "window_width" | "window_height"
+>;
 
 export type IdentitySetting = Pick<AvatarSetting, "name" | "group" | "icon_path" | "avatar_path" | "allow_multiple_renderers" | "notes">;
 
