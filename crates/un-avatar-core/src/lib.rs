@@ -8664,6 +8664,26 @@ mod tests {
 	}
 
 	#[test]
+	fn spring_bone_group_writeback_mode_defaults_and_deserializes() {
+		let default_group: UnaSpringBoneGroup = serde_json::from_str(
+			r#"{
+				"bone_node_indices": [0, 1]
+			}"#,
+		)
+		.expect("default writeback mode");
+		assert_eq!(default_group.writeback_mode, UnaDynamicsWritebackMode::RotationOnly);
+
+		let group: UnaSpringBoneGroup = serde_json::from_str(
+			r#"{
+				"writeback_mode": "rotation_translation",
+				"bone_node_indices": [0, 1]
+			}"#,
+		)
+		.expect("explicit writeback mode");
+		assert_eq!(group.writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
+	}
+
+	#[test]
 	fn import_report_serializes_source_format_when_set() {
 		let mut r = ImportReport::default();
 		r.source_format = Some(FormatId::new("io.un-avatar.una"));
