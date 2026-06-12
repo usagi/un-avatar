@@ -2257,20 +2257,28 @@ fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSe
 	} else {
 		None
 	};
+	let static_default_morphs = dynamic_morph_targets
+		.map(|dynamic_morph_targets| {
+			buf.morph_targets
+				.iter()
+				.enumerate()
+				.filter_map(|(target_index, target)| {
+					if dynamic_morph_targets.contains(&target_index) {
+						return None;
+					}
+					let weight = default_morph_weight_for(buf, target_index);
+					(weight.abs() > 0.000001).then_some((target, weight))
+				})
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
 
 	let mut verts = Vec::with_capacity(positions.len());
 	for pi in 0..positions.len() {
 		let mut pos = positions[pi];
 		let mut n = normals.and_then(|nn| nn.get(pi)).copied().unwrap_or(default_n);
-		if let Some(dynamic_morph_targets) = dynamic_morph_targets {
-			for (target_index, target) in buf.morph_targets.iter().enumerate() {
-				if dynamic_morph_targets.contains(&target_index) {
-					continue;
-				}
-				let weight = default_morph_weight_for(buf, target_index);
-				if weight.abs() <= 0.000001 {
-					continue;
-				}
+		if !static_default_morphs.is_empty() {
+			for &(target, weight) in &static_default_morphs {
 				if let Some(delta) = target.position_deltas.get(pi) {
 					pos[0] += delta[0] * weight;
 					pos[1] += delta[1] * weight;
