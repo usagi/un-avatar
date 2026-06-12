@@ -2224,6 +2224,9 @@ pub struct FrameTimings {
 	pub surface_acquire_ms: f32,
 	pub target_prepare_ms: f32,
 	pub draw_state_refresh_ms: f32,
+	pub draw_doc_lock_ms: f32,
+	pub draw_expression_select_ms: f32,
+	pub draw_update_total_ms: f32,
 	pub scene_world_ms: f32,
 	pub draw_skin_palette_ms: f32,
 	pub draw_skin_palette_write_ms: f32,
@@ -3387,6 +3390,7 @@ pub(crate) struct GpuState {
 	document: Option<Arc<RwLock<UnaDocument>>>,
 	document_revision: Arc<AtomicU64>,
 	applied_document_revision: u64,
+	scene_pose_dirty: bool,
 	last_runtime_parameter_action_values: BTreeMap<String, f32>,
 	/// VMC 受信スレッドが起動済みか。受信データは描画直前に pending buffer から適用する。
 	vmc_live: bool,
@@ -3407,6 +3411,9 @@ pub(crate) struct GpuState {
 	last_cubemap_scoped_load_count: usize,
 	last_cubemap_scoped_unload_count: usize,
 	last_material_slot_scoped_upload_count: usize,
+	last_draw_doc_lock_ms: f32,
+	last_draw_expression_select_ms: f32,
+	last_draw_update_total_ms: f32,
 	last_scene_world_ms: f32,
 	last_draw_transform_timings: DrawTransformUpdateTimings,
 	audio_link_options: AudioLinkOptions,
@@ -3756,6 +3763,7 @@ impl GpuState {
 			document: None,
 			document_revision,
 			applied_document_revision: 0,
+			scene_pose_dirty: false,
 			last_runtime_parameter_action_values: BTreeMap::new(),
 			vmc_live,
 			scene_meshes,
@@ -3775,6 +3783,9 @@ impl GpuState {
 			last_cubemap_scoped_load_count: 0,
 			last_cubemap_scoped_unload_count: 0,
 			last_material_slot_scoped_upload_count: 0,
+			last_draw_doc_lock_ms: 0.0,
+			last_draw_expression_select_ms: 0.0,
+			last_draw_update_total_ms: 0.0,
 			last_scene_world_ms: 0.0,
 			last_draw_transform_timings: DrawTransformUpdateTimings::default(),
 			audio_link_options: AudioLinkOptions::default(),
@@ -3918,9 +3929,11 @@ impl GpuState {
 		let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) else {
 			return false;
 		};
+		let t_doc_lock0 = Instant::now();
 		let Ok(doc) = doc_arc.read() else {
 			return false;
 		};
+		self.last_draw_doc_lock_ms = t_doc_lock0.elapsed().as_secs_f32() * 1000.0;
 		let runtime_model = doc.runtime_model();
 		let Some(runtime) = runtime_model.scene_expression_catalog() else {
 			return false;
@@ -3933,8 +3946,10 @@ impl GpuState {
 			self.expression_presets = expression_preset_names(runtime.expression_catalog);
 		}
 		let refresh_scene_morph_defaults = document_changed;
+		let t_expr0 = Instant::now();
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
+		self.last_draw_expression_select_ms = t_expr0.elapsed().as_secs_f32() * 1000.0;
 		if document_changed {
 			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
 			let residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
@@ -4031,6 +4046,7 @@ impl GpuState {
 			}
 			sm.rebuild_material_bind_groups(&self.device);
 		}
+		let t_update0 = Instant::now();
 		self.last_draw_transform_timings = sm.update_draw_transforms(
 			&self.queue,
 			runtime.scene,
@@ -4039,6 +4055,7 @@ impl GpuState {
 			expression_overrides,
 			refresh_scene_morph_defaults,
 		);
+		self.last_draw_update_total_ms = t_update0.elapsed().as_secs_f32() * 1000.0;
 		let runtime_requirements_after_update = refresh_scene_morph_defaults.then(|| sm.runtime_requirements());
 		if let Some(document_revision) = document_revision_to_apply {
 			self.applied_document_revision = document_revision;
@@ -4057,6 +4074,7 @@ impl GpuState {
 
 	fn invalidate_applied_document_state(&mut self) {
 		self.applied_document_revision = 0;
+		self.scene_pose_dirty = true;
 		self.mark_document_changed();
 	}
 
@@ -5939,7 +5957,7 @@ impl GpuState {
 		}
 		self.pending_motion_frames.clear();
 		self.motion_applied_frames.fetch_add(applied_frame_count as u64, Ordering::Relaxed);
-		self.mark_document_changed();
+		self.scene_pose_dirty = true;
 	}
 
 	pub fn resize(&mut self, width: u32, height: u32) {
@@ -6268,14 +6286,30 @@ impl GpuState {
 		let draw_contact_shadow_in_main = draw_contact_shadow && !use_avatar_outline;
 		let document_revision = self.document_revision.load(Ordering::Acquire);
 		let expression_overrides_changed = self.expression_overrides_revision != self.applied_expression_overrides_revision;
-		let scene_pose_may_change =
-			self.dynamics_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
+		let scene_pose_may_change = self.scene_pose_dirty
+			|| self.dynamics_sim.is_some()
+			|| document_revision != self.applied_document_revision
+			|| expression_overrides_changed;
 		let mut world_scratch_current = false;
 		let t_draw_state0 = Instant::now();
 		if draw_scene && scene_pose_may_change {
 			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
+			if world_scratch_current {
+				self.scene_pose_dirty = false;
+			}
 		}
 		let draw_state_refresh_ms = t_draw_state0.elapsed().as_secs_f32() * 1000.0;
+		let draw_doc_lock_ms = if world_scratch_current { self.last_draw_doc_lock_ms } else { 0.0 };
+		let draw_expression_select_ms = if world_scratch_current {
+			self.last_draw_expression_select_ms
+		} else {
+			0.0
+		};
+		let draw_update_total_ms = if world_scratch_current {
+			self.last_draw_update_total_ms
+		} else {
+			0.0
+		};
 		let scene_world_ms = if world_scratch_current { self.last_scene_world_ms } else { 0.0 };
 		let draw_transform_timings = if world_scratch_current {
 			self.last_draw_transform_timings
@@ -6680,6 +6714,9 @@ impl GpuState {
 			surface_acquire_ms,
 			target_prepare_ms,
 			draw_state_refresh_ms,
+			draw_doc_lock_ms,
+			draw_expression_select_ms,
+			draw_update_total_ms,
 			scene_world_ms,
 			draw_skin_palette_ms: draw_transform_timings.skin_palette_ms,
 			draw_skin_palette_write_ms: draw_transform_timings.skin_palette_write_ms,

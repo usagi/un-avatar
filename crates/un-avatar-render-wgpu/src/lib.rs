@@ -1561,6 +1561,9 @@ impl AvatarApp {
 			status.frame_surface_acquire_ms = Some(timings.surface_acquire_ms);
 			status.frame_target_prepare_ms = Some(timings.target_prepare_ms);
 			status.frame_draw_state_refresh_ms = Some(timings.draw_state_refresh_ms);
+			status.frame_draw_doc_lock_ms = Some(timings.draw_doc_lock_ms);
+			status.frame_draw_expression_select_ms = Some(timings.draw_expression_select_ms);
+			status.frame_draw_update_total_ms = Some(timings.draw_update_total_ms);
 			status.frame_scene_world_ms = Some(timings.scene_world_ms);
 			status.frame_draw_skin_palette_ms = Some(timings.draw_skin_palette_ms);
 			status.frame_draw_skin_palette_write_ms = Some(timings.draw_skin_palette_write_ms);
@@ -3540,6 +3543,9 @@ struct RendererRuntimeSnapshot {
 	frame_surface_acquire_ms: Option<f32>,
 	frame_target_prepare_ms: Option<f32>,
 	frame_draw_state_refresh_ms: Option<f32>,
+	frame_draw_doc_lock_ms: Option<f32>,
+	frame_draw_expression_select_ms: Option<f32>,
+	frame_draw_update_total_ms: Option<f32>,
 	frame_scene_world_ms: Option<f32>,
 	frame_draw_skin_palette_ms: Option<f32>,
 	frame_draw_skin_palette_write_ms: Option<f32>,
@@ -3792,6 +3798,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		frame_surface_acquire_ms: None,
 		frame_target_prepare_ms: None,
 		frame_draw_state_refresh_ms: None,
+		frame_draw_doc_lock_ms: None,
+		frame_draw_expression_select_ms: None,
+		frame_draw_update_total_ms: None,
 		frame_scene_world_ms: None,
 		frame_draw_skin_palette_ms: None,
 		frame_draw_skin_palette_write_ms: None,
