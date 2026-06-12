@@ -5,7 +5,7 @@
 // - fs_toon: UNToon avatar toon shading. Source profiles are normalized into
 //   feature-specialized pipelines by the renderer.
 
-override UNTOON_FEATURE_LILTOON: f32 = 1.0;
+override UNTOON_FEATURE_PROFILE_EXTENSIONS: f32 = 1.0;
 override UNTOON_FEATURE_MAIN_LAYERS: f32 = 1.0;
 override UNTOON_FEATURE_ALPHA_MASK: f32 = 1.0;
 override UNTOON_FEATURE_DISSOLVE: f32 = 1.0;
@@ -749,10 +749,9 @@ const DBG_BASE_TEXTURE_ONLY: u32 = 128u;
 const DBG_DISABLE_NORMAL_MAP: u32 = 256u;
 const MAT_DOUBLE_SIDED: u32 = 512u;
 const MAT_CULL_FRONT: u32 = 2048u;
-const SRC_LILTOON: u32 = 4096u;
-const SRC_LILTOON_GEM: u32 = 8192u;
-const SRC_LILTOON_REFRACTION: u32 = 16384u;
-const SRC_LILTOON_ADDITIVE_BLEND: u32 = 32768u;
+const MAT_UNTOON_GEM_PROFILE: u32 = 8192u;
+const MAT_UNTOON_REFRACTION_PROFILE: u32 = 16384u;
+const MAT_UNTOON_ADDITIVE_BLEND: u32 = 32768u;
 
 /// MASK（Lit/Unlit）: ゲートはテクスチャ α のみ。
 fn mask_discard_lit_unlit(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
@@ -774,18 +773,18 @@ fn mask_discard_toon(alb: vec3<f32>, a: f32, alpha_kind: f32, cutoff: f32) {
 	}
 }
 
-fn liltoon_cutout_alpha(a: f32, alpha_kind: f32, cutoff: f32, is_liltoon: bool) -> f32 {
-	if is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5 {
+fn liltoon_cutout_alpha(a: f32, alpha_kind: f32, cutoff: f32, has_untoon_extensions: bool) -> f32 {
+	if has_untoon_extensions && alpha_kind > 0.5 && alpha_kind < 1.5 {
 		return clamp((a - cutoff) / max(fwidth(a), 0.0001) + 0.5, 0.0, 1.0);
 	}
 	return a;
 }
 
-fn liltoon_blend_discard(a: f32, alpha_kind: f32, cutoff: f32, is_liltoon: bool) {
+fn liltoon_blend_discard(a: f32, alpha_kind: f32, cutoff: f32, has_untoon_extensions: bool) {
 	// lilToon's transparent fragment path still performs clip(alpha - _Cutoff)
 	// before blending. Without this, atlas edge alpha becomes unintended
 	// see-through cloth instead of discarded texels.
-	if is_liltoon && alpha_kind > 1.5 {
+	if has_untoon_extensions && alpha_kind > 1.5 {
 		if a < cutoff {
 			discard;
 		}
@@ -1491,7 +1490,7 @@ fn lil_apply_layer_dissolve(alpha: f32, uv: vec2<f32>, wp: vec3<f32>, params_in:
 	return vec2<f32>(alpha * dissolve_mask, dissolve_alpha);
 }
 
-fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv_mat: vec2<f32>, wp: vec3<f32>, nv: f32, is_right_hand: bool, front_facing: bool, is_liltoon: bool, audio_link_value: f32) -> MainLayerResult {
+fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv_mat: vec2<f32>, wp: vec3<f32>, nv: f32, is_right_hand: bool, front_facing: bool, has_untoon_extensions: bool, audio_link_value: f32) -> MainLayerResult {
 	var out_col = base;
 	var dissolve_emission = vec3<f32>(0.0);
 	var second_unlit = vec4<f32>(0.0);
@@ -1502,7 +1501,7 @@ fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: ve
 		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main2nd_uv_offset_scale, drawu.main2nd_decal_flags, drawu.main2nd_decal_transform, drawu.main2nd_decal_animation, drawu.main2nd_decal_sub_param, nv, is_right_hand);
 		let layer = textureSample(main2nd_tex, base_samp, layer_uv.sample_uv) * drawu.main2nd_color;
 		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main2nd_blend_mask_tex, base_samp, uv).r;
-		if (is_liltoon) {
+		if (has_untoon_extensions) {
 			let dissolve_mask_uv = uv * drawu.main2nd_dissolve_mask_uv_offset_scale.zw + drawu.main2nd_dissolve_mask_uv_offset_scale.xy;
 			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main2nd_dissolve_noise_uv_offset_scale, drawu.main2nd_dissolve_noise_uv_anim_params);
 			let dissolve_noise = (textureSample(main2nd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.main2nd_dissolve_ext.x * drawu.main2nd_dissolve_ext.z;
@@ -1533,7 +1532,7 @@ fn apply_lil_main_layers(base: vec4<f32>, uv: vec2<f32>, uv1: vec2<f32>, uv2: ve
 		let layer_uv = lil_layer_sub_tex_uv(layer_uv_raw, drawu.main3rd_uv_offset_scale, drawu.main3rd_decal_flags, drawu.main3rd_decal_transform, drawu.main3rd_decal_animation, drawu.main3rd_decal_sub_param, nv, is_right_hand);
 		let layer = textureSample(main3rd_tex, base_samp, layer_uv.sample_uv) * drawu.main3rd_color;
 		var layer_alpha = layer.a * layer_uv.alpha_mask * textureSample(main3rd_blend_mask_tex, base_samp, uv).r;
-		if (is_liltoon) {
+		if (has_untoon_extensions) {
 			let dissolve_mask_uv = uv * drawu.main3rd_dissolve_mask_uv_offset_scale.zw + drawu.main3rd_dissolve_mask_uv_offset_scale.xy;
 			let dissolve_noise_uv = lil_calc_uv_scroll_rotate(uv, drawu.main3rd_dissolve_noise_uv_offset_scale, drawu.main3rd_dissolve_noise_uv_anim_params);
 			let dissolve_noise = (textureSample(main3rd_dissolve_noise_mask_tex, base_samp, dissolve_noise_uv).r - 0.5) * drawu.main3rd_dissolve_ext.x * drawu.main3rd_dissolve_ext.z;
@@ -1665,8 +1664,8 @@ fn lil_parallax_view_ts(n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>) -> ve
 	return vec3<f32>(dot(v, t), dot(v, b), max(dot(v, n), 0.0001));
 }
 
-fn lil_apply_parallax(uv: vec2<f32>, n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>, is_liltoon: bool) -> vec2<f32> {
-	if (!is_liltoon || drawu.parallax_params.x <= 0.5) {
+fn lil_apply_parallax(uv: vec2<f32>, n: vec3<f32>, tangent_in: vec4<f32>, v: vec3<f32>, has_untoon_extensions: bool) -> vec2<f32> {
+	if (!has_untoon_extensions || drawu.parallax_params.x <= 0.5) {
 		return uv;
 	}
 	let scale = drawu.parallax_params.z;
@@ -1898,21 +1897,21 @@ fn fs_unlit(i: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
 
 fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fur_layer: f32, fur_alpha_in: f32, fur_card_side: f32, fur_cutout_pre: bool, fur_uv0: vec2<f32>) -> vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
-	let is_liltoon = (dbg & SRC_LILTOON) != 0u && UNTOON_FEATURE_LILTOON > 0.5;
-	let is_liltoon_gem = (dbg & SRC_LILTOON_GEM) != 0u && UNTOON_FEATURE_GEM > 0.5;
-	let is_liltoon_refraction = (dbg & SRC_LILTOON_REFRACTION) != 0u && UNTOON_FEATURE_REFRACTION > 0.5;
-	let is_liltoon_additive_blend = (dbg & SRC_LILTOON_ADDITIVE_BLEND) != 0u;
+	let has_untoon_extensions = UNTOON_FEATURE_PROFILE_EXTENSIONS > 0.5;
+	let is_untoon_gem_profile = (dbg & MAT_UNTOON_GEM_PROFILE) != 0u && UNTOON_FEATURE_GEM > 0.5;
+	let is_untoon_refraction_profile = (dbg & MAT_UNTOON_REFRACTION_PROFILE) != 0u && UNTOON_FEATURE_REFRACTION > 0.5;
+	let is_untoon_additive_blend = (dbg & MAT_UNTOON_ADDITIVE_BLEND) != 0u;
 	if use_transparent_prepass {
 		discard_by_liltoon_cull_factor(front_facing, drawu.alpha_ext_params.w);
 	} else {
 		discard_by_cull_mode(front_facing, dbg);
 	}
-	if is_liltoon && UNTOON_FEATURE_UDIM_DISCARD > 0.5 && lil_udim_discard(i) {
+	if has_untoon_extensions && UNTOON_FEATURE_UDIM_DISCARD > 0.5 && lil_udim_discard(i) {
 		discard;
 	}
 	let v = normalize(frame.camera_pos.xyz - i.wp);
 	let geometry_n_faced_pre = face_normal(normalize(i.wn), front_facing, dbg);
-	let uv = lil_apply_parallax(animated_uv(i.uv), geometry_n_faced_pre, i.wt, v, is_liltoon && UNTOON_FEATURE_PARALLAX > 0.5);
+	let uv = lil_apply_parallax(animated_uv(i.uv), geometry_n_faced_pre, i.wt, v, has_untoon_extensions && UNTOON_FEATURE_PARALLAX > 0.5);
 	let layer_uv_mat = toon_matcap_uv(
 		i.uv1,
 		geometry_n_faced_pre,
@@ -1926,20 +1925,20 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let samp_tex = textureSample(tex, base_samp, uv);
 	let main_rgb = apply_main_color_adjustments(samp_tex.rgb, uv);
 	var audio_link_value = 1.0;
-	if (is_liltoon && UNTOON_FEATURE_AUDIO_LINK > 0.5) {
+	if (has_untoon_extensions && UNTOON_FEATURE_AUDIO_LINK > 0.5) {
 		audio_link_value = lil_calc_audio_link_value(layer_nv, uv, i.uv1, i.uv2, i.uv3, i.op);
 	}
-	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, is_liltoon && UNTOON_FEATURE_MAIN_LAYERS > 0.5, audio_link_value);
+	let main_layers = apply_lil_main_layers(vec4<f32>(main_rgb * drawu.base_color.rgb, samp_tex.a * drawu.base_color.a), uv, i.uv1, i.uv2, i.uv3, layer_uv_mat, i.wp, layer_nv, i.wt.w > 0.0, front_facing, has_untoon_extensions && UNTOON_FEATURE_MAIN_LAYERS > 0.5, audio_link_value);
 	let main_col = main_layers.col;
 	var a = main_col.a;
-	if (is_liltoon && UNTOON_FEATURE_ALPHA_MASK > 0.5) {
+	if (has_untoon_extensions && UNTOON_FEATURE_ALPHA_MASK > 0.5) {
 		a = apply_lil_alpha_mask(a, uv);
 	}
-	if is_liltoon && UNTOON_FEATURE_ID_MASK > 0.5 {
+	if has_untoon_extensions && UNTOON_FEATURE_ID_MASK > 0.5 {
 		a = a * i.id_mask.x;
 	}
 	let dissolve_result = lil_apply_dissolve(a, uv, i.wp, i.id_mask.y, i.id_mask.z);
-	if is_liltoon && UNTOON_FEATURE_DISSOLVE > 0.5 {
+	if has_untoon_extensions && UNTOON_FEATURE_DISSOLVE > 0.5 {
 		a = dissolve_result.x;
 	}
 	let fur_alpha = fur_layer_alpha(uv, fur_uv0, fur_layer, fur_alpha_in, fur_card_side, fur_cutout_pre);
@@ -1953,15 +1952,15 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		if (a * fur_alpha <= 0.4) {
 			discard;
 		}
-	} else if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
-		if (liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) <= 0.0) {
+	} else if (has_untoon_extensions && alpha_kind > 0.5 && alpha_kind < 1.5) {
+		if (liltoon_cutout_alpha(a, alpha_kind, cutoff, has_untoon_extensions) <= 0.0) {
 			discard;
 		}
 	} else {
 		mask_discard_toon(main_col.rgb, a, alpha_kind, cutoff);
 	}
 	if (!is_fur_pass) {
-		liltoon_blend_discard(a, alpha_kind, cutoff, is_liltoon && !is_liltoon_gem);
+		liltoon_blend_discard(a, alpha_kind, cutoff, has_untoon_extensions && !is_untoon_gem_profile);
 	}
 	if use_transparent_prepass {
 		discard_transparent_zprepass(a, alpha_kind, cutoff, drawu.alpha_ext_params.x, drawu.outline_params.w);
@@ -1970,10 +1969,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	var out_a = fragment_out_alpha(alpha_kind, a, drawu.base_color.a) * fur_alpha;
 	if (is_fur_pass && (alpha_kind > 0.5 && alpha_kind < 1.5 || fur_cutout_pre)) {
 		out_a = clamp(a * fur_alpha * 5.0 - 2.0, 0.0, 1.0);
-	} else if (is_liltoon && alpha_kind > 0.5 && alpha_kind < 1.5) {
-		out_a = liltoon_cutout_alpha(a, alpha_kind, cutoff, is_liltoon) * fur_alpha;
+	} else if (has_untoon_extensions && alpha_kind > 0.5 && alpha_kind < 1.5) {
+		out_a = liltoon_cutout_alpha(a, alpha_kind, cutoff, has_untoon_extensions) * fur_alpha;
 	}
-	let liltoon_apply_effect_transparency = is_liltoon && alpha_kind > 1.5 && !is_liltoon_refraction;
+	let liltoon_apply_effect_transparency = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_refraction_profile;
 	let compute_fur = fur_layer > 0.0 && fur_alpha_in > 1.0;
 	if (fur_layer > 0.0) {
 		if (fur_cutout_pre || alpha_kind > 0.5 && alpha_kind < 1.5) {
@@ -1990,20 +1989,20 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	if ((dbg & DBG_BASE_TEXTURE_ONLY) != 0u) {
 		// 診断用: shading / GI / matcap / rim / emissive / shade_term を全てスキップして base のみ。
 		// リングがまだ残るならテクスチャ自身（モデル制作者が描いた肌グラデ）かメッシュ重なり由来。
-		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
+		return vec4<f32>(premultiply_when_blending(max(base, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_untoon_additive_blend), out_a);
 	}
 	let normal_scale = select(drawu.shade_color.w, 0.0, (dbg & DBG_DISABLE_NORMAL_MAP) != 0u || is_fur_pass);
 	let geometry_n_faced = face_normal(normalize(i.wn), front_facing, dbg);
 	let n_faced = face_normal(normal_mapped(i.wn, i.wt, uv, i.uv1, i.uv2, i.uv3, normal_scale), front_facing, dbg);
 	let l = normalize(frame.light_dir.xyz);
-	let gem_backface_normal = is_liltoon_gem && !front_facing;
-	let lil_geometry_n_faced = lil_flip_backface_normal(geometry_n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
-	let lil_n_faced = lil_flip_backface_normal(n_faced, front_facing, select(0.0, drawu.material_ext_params.x, is_liltoon));
+	let gem_backface_normal = is_untoon_gem_profile && !front_facing;
+	let lil_geometry_n_faced = lil_flip_backface_normal(geometry_n_faced, front_facing, select(0.0, drawu.material_ext_params.x, has_untoon_extensions));
+	let lil_n_faced = lil_flip_backface_normal(n_faced, front_facing, select(0.0, drawu.material_ext_params.x, has_untoon_extensions));
 	let geometry_n = select(lil_geometry_n_faced, normalize(lil_geometry_n_faced - v * 0.2), gem_backface_normal);
 	let n = select(lil_n_faced, normalize(lil_n_faced - v * 0.2), gem_backface_normal);
 	let raw_light_color = frame.light_color.rgb * frame.light_color.w;
 	let lil_light_color = liltoon_light_color();
-	let effect_light_color = select(raw_light_color, lil_light_color, is_liltoon);
+	let effect_light_color = select(raw_light_color, lil_light_color, has_untoon_extensions);
 	let shadow_n = normalize(mix(geometry_n, n, clamp(drawu.shadow_ext_params.w, 0.0, 1.0)));
 	let shadow2_n = normalize(mix(geometry_n, n, clamp(drawu.shadow2_params.z, 0.0, 1.0)));
 	let shadow3_n = normalize(mix(geometry_n, n, clamp(drawu.shadow3_params.z, 0.0, 1.0)));
@@ -2046,11 +2045,11 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let shade_texel = textureSample(shade_tex, shade_samp, uv);
 	let mtoon_shade_term_raw = drawu.shade_color.rgb * shade_texel.rgb;
 	let lil_shadow_term_raw = mix(base, shade_texel.rgb, clamp(shade_texel.a, 0.0, 1.0)) * drawu.shade_color.rgb;
-	let shade_term_raw = select(mtoon_shade_term_raw, lil_shadow_term_raw, is_liltoon && UNTOON_FEATURE_SHADOW_LAYERS > 0.5);
+	let shade_term_raw = select(mtoon_shade_term_raw, lil_shadow_term_raw, has_untoon_extensions && UNTOON_FEATURE_SHADOW_LAYERS > 0.5);
 	let shade_term = select(shade_term_raw, base, disable_shade_color);
 	var lit: vec3<f32>;
 	if (UNTOON_FEATURE_SHADOW_LAYERS > 0.5 && drawu.shadow_params.x > 0.5) {
-		let light_color = select(lil_direct_light_color(), lil_light_color, is_liltoon);
+		let light_color = select(lil_direct_light_color(), lil_light_color, has_untoon_extensions);
 		let direct_col = base * light_color;
 		var indirect_col = shade_term * light_color;
 		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);
@@ -2106,7 +2105,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let indirect_light = mix(shade_term, base, gi_equalization) * frame.ambient_color.rgb * frame.ambient_color.w;
 		lit = min(direct_color + indirect_light, base) * authored_occlusion(uv, dbg);
 	}
-	if (is_liltoon && UNTOON_FEATURE_MAIN_LAYERS > 0.5 && !is_liltoon_gem) {
+	if (has_untoon_extensions && UNTOON_FEATURE_MAIN_LAYERS > 0.5 && !is_untoon_gem_profile) {
 		if drawu.main2nd_params.x > 0.5 {
 			lit = lil_blend_color(lit, main_layers.second_unlit.rgb, main_layers.second_unlit.a, drawu.main2nd_params.w);
 		}
@@ -2114,22 +2113,22 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lil_blend_color(lit, main_layers.third_unlit.rgb, main_layers.third_unlit.a, drawu.main3rd_params.w);
 		}
 	}
-	if (is_liltoon_gem) {
+	if (is_untoon_gem_profile) {
 		lit = base * clamp(abs(dot(n, v)), 0.0, 1.0) * 0.75;
 	}
-	lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_liltoon_gem && !is_fur_pass);
+	lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), has_untoon_extensions && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_untoon_gem_profile && !is_fur_pass);
 
 	let disable_matcap = (dbg & DBG_DISABLE_MATCAP) != 0u;
 	let disable_rim = (dbg & DBG_DISABLE_RIM) != 0u;
 	if (is_fur_pass) {
-		lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon);
+		lit = select(lit, lil_apply_rim_shade(lit, geometry_n, n, v, uv), has_untoon_extensions);
 		if (!disable_rim) {
 			let fur_rim_raw = pow(clamp(1.0 - abs(dot(normalize(n), v)), 0.0, 1.0), max(drawu.fur_rim_params.x, 0.00001));
 			let inv_lighting = clamp(vec3<f32>(1.0) / max(lil_direct_light_color() + frame.ambient_color.rgb * frame.ambient_color.w, vec3<f32>(0.25)), vec3<f32>(1.0), vec3<f32>(4.0));
 			let fur_rim_anti_light = mix(1.0, dot(inv_lighting, vec3<f32>(1.0 / 3.0)), clamp(drawu.fur_rim_params.y, 0.0, 1.0));
 			lit = lit + clamp(fur_layer, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
 		}
-		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend), out_a);
+		return vec4<f32>(premultiply_when_blending(max(lit, vec3<f32>(0.0, 0.0, 0.0)), out_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_untoon_additive_blend), out_a);
 	}
 	var specular = vec3<f32>(0.0, 0.0, 0.0);
 	var specular_blend = vec3<f32>(0.0, 0.0, 0.0);
@@ -2146,7 +2145,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let reflection_dir = normalize(reflect(-v, reflection_n));
 	let reflection_fresnel = pow(clamp(1.0 - dot(reflection_n, v), 0.0, 1.0), 2.0);
 	var reflection_metallic = 0.0;
-	if (UNTOON_FEATURE_REFLECTION > 0.5 && !is_liltoon_gem && drawu.reflection_control.x > 0.5) {
+	if (UNTOON_FEATURE_REFLECTION > 0.5 && !is_untoon_gem_profile && drawu.reflection_control.x > 0.5) {
 		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
 		let metallic_uv = uv * drawu.metallic_uv_offset_scale.zw + drawu.metallic_uv_offset_scale.xy;
@@ -2223,7 +2222,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let specular_term = smith_joint_ggx * ggx * nl_spec;
 			specular_reflect = specular_term * fresnel_term(specular_color, lh);
 		}
-		specular_reflect = specular_reflect * select(1.0, lil_shadowmix, is_liltoon);
+		specular_reflect = specular_reflect * select(1.0, lil_shadowmix, has_untoon_extensions);
 		specular = specular_reflect * effect_light_color;
 		specular_blend = specular_reflect;
 		let reflection_lighting = mix(
@@ -2245,8 +2244,8 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let grazing_term = clamp(smoothness + (1.0 - one_minus_reflectivity), 0.0, 1.0);
 		let surface_reduction = 1.0 / (roughness * roughness + 1.0);
 		authored_reflection = env * surface_reduction * fresnel_lerp(specular_color, grazing_term, max(dot(n, v), 0.0));
-		authored_reflection_blend = authored_reflection * select(1.0, a, is_liltoon_refraction);
-	} else if (is_liltoon_gem && UNTOON_FEATURE_GEM > 0.5) {
+		authored_reflection_blend = authored_reflection * select(1.0, a, is_untoon_refraction_profile);
+	} else if (is_untoon_gem_profile && UNTOON_FEATURE_GEM > 0.5) {
 		let smoothness_uv = uv * drawu.smoothness_uv_offset_scale.zw + drawu.smoothness_uv_offset_scale.xy;
 		var smoothness = clamp(drawu.reflection_params.x * textureSample(smoothness_tex, smoothness_samp, smoothness_uv).r, 0.0, 1.0);
 		smoothness = lil_gsaa_smoothness(smoothness, n, drawu.rendering_ext_params.x);
@@ -2287,7 +2286,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let particle = select(particle_1 * particle_2 * particle_3, 0.0, particle_loop <= 0.0);
 		let particle_color = select(vec3<f32>(1.0) + particle * drawu.gem_particle_color.rgb, vec3<f32>(1.0), front_facing);
 		authored_reflection = (surface_reduction * fresnel_lerp(reflectance, grazing_term, nv_view) + vec3<f32>(0.5)) * 0.5 * particle_color * env;
-	} else if (!is_liltoon && UNTOON_FEATURE_REFLECTION > 0.5) {
+	} else if (!has_untoon_extensions && UNTOON_FEATURE_REFLECTION > 0.5) {
 		let specular_intensity = clamp(drawu.uv_anim_params.w, 0.0, 2.0);
 		let specular_shape = pow(max(dot(n, half_vec), 0.0), clamp(drawu.emissive_factor.w, 1.0, 128.0));
 		specular = vec3<f32>(specular_shape * specular_intensity);
@@ -2297,10 +2296,10 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	}
 	var rim = vec3<f32>(0.0, 0.0, 0.0);
 	var rim_blend = 0.0;
-	let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);
+	let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_untoon_gem_profile);
 	if (!disable_rim && UNTOON_FEATURE_RIM > 0.5) {
 		let rim_uv = uv * drawu.rim_uv_offset_scale.zw + drawu.rim_uv_offset_scale.xy;
-		if (is_liltoon && drawu.rim_params.w > 0.0) {
+		if (has_untoon_extensions && drawu.rim_params.w > 0.0) {
 			let rim_tex_color = textureSample(rim_tex, rim_samp, rim_uv);
 			var rim_color = drawu.rim_color.rgb * rim_tex_color.rgb;
 			let rim_indirect_color = drawu.rim_indirect_color.rgb * rim_tex_color.rgb;
@@ -2334,7 +2333,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			let rim_indirect_blend = clamp(indir_factor * rim_indirect_alpha * rim_shadow * rim_backface * rim_transparency, 0.0, 1.0);
 			rim = rim + rim_indirect_color * rim_light_mul * rim_indirect_blend;
 			rim_blend = max(rim_blend, rim_indirect_blend);
-		} else if (!is_liltoon) {
+		} else if (!has_untoon_extensions) {
 			let rim_base = pow(clamp(1.0 - dot(n, v) + drawu.rim_params.z, 0.0, 1.0), max(drawu.rim_params.y, 0.00001));
 			rim = rim_base * drawu.rim_color.rgb;
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), textureSample(rim_tex, rim_samp, rim_uv).rgb, clamp(drawu.rim_params.w, 0.0, 1.0));
@@ -2342,7 +2341,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			rim = rim * mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(lighting_scalar, lighting_scalar, lighting_scalar), clamp(drawu.rim_params.x, 0.0, 1.0));
 		}
 	}
-	if (is_liltoon && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_liltoon_gem && drawu.backlight_params.x > 0.5) {
+	if (has_untoon_extensions && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_untoon_gem_profile && drawu.backlight_params.x > 0.5) {
 		let backlight_n = mix(geometry_n, n, clamp(drawu.backlight_params.z, 0.0, 1.0));
 		let backlight_factor = pow(clamp(-dot(normalize(l + v), l) * 0.5 + 0.5, 0.0, 1.0), max(drawu.backlight_params.w, 0.00001));
 		let backlight_ln_dir = normalize(-v * clamp(drawu.backlight_ext_params.z, 0.0, 1.0) + l);
@@ -2361,9 +2360,9 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let backlight_color = mix(authored_backlight_color.rgb, authored_backlight_color.rgb * base, clamp(drawu.backlight_params.y, 0.0, 1.0));
 		lit = lit + backlight * backlight_color * effect_light_color;
 	}
-	let lil_premultiplied_before_effects = is_liltoon && alpha_kind > 1.5 && !is_liltoon_additive_blend;
+	let lil_premultiplied_before_effects = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_additive_blend;
 	lit = mix(lit, lit * out_a, select(0.0, 1.0, lil_premultiplied_before_effects));
-	if (is_liltoon_refraction && UNTOON_FEATURE_REFRACTION > 0.5) {
+	if (is_untoon_refraction_profile && UNTOON_FEATURE_REFRACTION > 0.5) {
 		let refraction_strength = drawu.gem_params.x;
 		if (abs(refraction_strength) > 0.00001) {
 			let refraction_fresnel = pow(clamp(1.0 - max(dot(n, v), 0.0), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
@@ -2378,7 +2377,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			out_a = 1.0;
 		}
 	}
-	if (is_liltoon && (UNTOON_FEATURE_REFLECTION > 0.5 || UNTOON_FEATURE_MATCAP > 0.5 || UNTOON_FEATURE_MATCAP_SECOND > 0.5 || UNTOON_FEATURE_RIM > 0.5 || UNTOON_FEATURE_GEM > 0.5)) {
+	if (has_untoon_extensions && (UNTOON_FEATURE_REFLECTION > 0.5 || UNTOON_FEATURE_MATCAP > 0.5 || UNTOON_FEATURE_MATCAP_SECOND > 0.5 || UNTOON_FEATURE_RIM > 0.5 || UNTOON_FEATURE_GEM > 0.5)) {
 		let reflection_color_uv = uv * drawu.reflection_color_uv_offset_scale.zw + drawu.reflection_color_uv_offset_scale.xy;
 		let reflection_color_texel = textureSample(reflection_color_tex, reflection_color_samp, reflection_color_uv);
 		let reflection_apply_transparency = select(clamp(drawu.transparency_params.w, 0.0, 1.0), 0.0, !liltoon_apply_effect_transparency);
@@ -2388,7 +2387,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let reflection_tint = drawu.reflection_color.rgb * reflection_color_texel.rgb;
 		let reflection_light_tint = reflection_tint * effect_light_color;
 		lit = lil_blend_color3(lit, reflection_light_tint, specular_blend * reflection_color_alpha * drawu.reflection_control.y, drawu.reflection_control.w);
-		if (is_liltoon_gem) {
+		if (is_untoon_gem_profile) {
 			let refraction_strength = drawu.gem_params.x;
 			let refraction_fresnel = pow(clamp(1.0 - abs(dot(n, v)), 0.0, 1.0), max(drawu.reflection_ext_params.z, 0.0001));
 			let base_screen_uv = screen_uv(i.clip);
@@ -2404,7 +2403,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lit * refract_color;
 			lit = lit + authored_reflection;
 		} else {
-			if (is_liltoon_refraction && drawu.reflection_control.x > 0.5 && drawu.reflection_control.z > 0.0) {
+			if (is_untoon_refraction_profile && drawu.reflection_control.x > 0.5 && drawu.reflection_control.z > 0.0) {
 				let refraction_reflection_mix = clamp(a + (1.0 - a) * pow(clamp(abs(dot(reflection_n, v)), 0.0, 1.0), abs(drawu.gem_params.x) * 0.5 + 0.25), 0.0, 1.0);
 				lit = mix(authored_reflection_env, lit, refraction_reflection_mix);
 			}
@@ -2510,7 +2509,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		lit = lit + clamp(fur_layer, 0.0, 1.0) * fur_rim_raw * fur_rim_anti_light * drawu.fur_rim_color.rgb * lil_direct_light_color();
 	}
 
-	if (is_liltoon && UNTOON_FEATURE_GLITTER > 0.5 && drawu.glitter_control.x > 0.5) {
+	if (has_untoon_extensions && UNTOON_FEATURE_GLITTER > 0.5 && drawu.glitter_control.x > 0.5) {
 		let glitter_n = normalize(mix(geometry_n, n, clamp(drawu.glitter_control.z, 0.0, 1.0)));
 		let glitter_uv = lil_select_uv(drawu.glitter_ext2.z, uv, i.uv1, uv, uv);
 		let glitter_color_uv_raw = lil_select_uv(drawu.glitter_ext2.w, uv, i.uv1, i.uv2, i.uv3);
@@ -2536,7 +2535,7 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		let emission_uv_base = lil_select_emission_uv(drawu.emission_uv_anim_params.w, uv, i.uv1, i.uv2, i.uv3, uv_rim);
 		let emission_uv = lil_calc_uv_scroll_rotate(emission_uv_base, drawu.emission_uv_offset_scale, drawu.emission_uv_anim_params) + parallax_offset * drawu.emission_grad_params.w;
 		let emission_tex_color = textureSample(emissive_tex, emissive_samp, emission_uv);
-		if (is_liltoon) {
+		if (has_untoon_extensions) {
 			var emission_color = drawu.emission_color.rgb * emission_tex_color.rgb;
 			let emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);
 			let emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;
@@ -2574,16 +2573,16 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 			lit = lit + emission_raw;
 		}
 	}
-	if is_liltoon && UNTOON_FEATURE_DISSOLVE > 0.5 {
+	if has_untoon_extensions && UNTOON_FEATURE_DISSOLVE > 0.5 {
 		lit = lit + drawu.dissolve_color.rgb * dissolve_result.y + main_layers.dissolve_emission;
 	}
-	if is_liltoon && !front_facing {
+	if has_untoon_extensions && !front_facing {
 		lit = mix(lit, drawu.backface_color.rgb * effect_light_color, clamp(drawu.backface_color.a, 0.0, 1.0));
 	}
-	let distance_faded = select(vec4<f32>(lit, out_a), lil_apply_distance_fade(lit, out_a, i.wp, n, v, front_facing), is_liltoon && UNTOON_FEATURE_DISTANCE_FADE > 0.5);
+	let distance_faded = select(vec4<f32>(lit, out_a), lil_apply_distance_fade(lit, out_a, i.wp, n, v, front_facing), has_untoon_extensions && UNTOON_FEATURE_DISTANCE_FADE > 0.5);
 	let final_a = clamp(distance_faded.a, 0.0, 1.0);
 	return vec4<f32>(
-		premultiply_when_blending(max(distance_faded.rgb, vec3<f32>(0.0, 0.0, 0.0)), final_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_liltoon_additive_blend && !lil_premultiplied_before_effects),
+		premultiply_when_blending(max(distance_faded.rgb, vec3<f32>(0.0, 0.0, 0.0)), final_a, alpha_kind, !compute_fur && !fur_cutout_pre && !is_untoon_additive_blend && !lil_premultiplied_before_effects),
 		final_a,
 	);
 }
@@ -2635,8 +2634,8 @@ fn fs_fur_toon_pre(i: FurVsOut, @builtin(front_facing) front_facing: bool) -> @l
 @fragment
 fn fs_outline(i: VsOut) -> @location(0) vec4<f32> {
 	let dbg = bitcast<u32>(drawu.params.w);
-	let is_liltoon = (dbg & SRC_LILTOON) != 0u;
-	if is_liltoon && (i.id_mask.x <= 0.0 || lil_udim_discard(i)) {
+	let has_untoon_extensions = UNTOON_FEATURE_PROFILE_EXTENSIONS > 0.5;
+	if has_untoon_extensions && (i.id_mask.x <= 0.0 || lil_udim_discard(i)) {
 		discard;
 	}
 	let uv = animated_uv(i.uv);

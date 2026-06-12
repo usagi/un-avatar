@@ -278,6 +278,9 @@ use wgpu::util::DeviceExt;
 
 const SHADER_MESH: &str = include_str!("../shaders/mesh.wgsl");
 const SHADER_COMPUTE_FUR_CARDS: &str = include_str!("../shaders/compute_fur_cards.wgsl");
+const MAT_UNTOON_GEM_PROFILE: u32 = 8192;
+const MAT_UNTOON_REFRACTION_PROFILE: u32 = 16384;
+const MAT_UNTOON_ADDITIVE_BLEND: u32 = 32768;
 
 fn mesh_shader_source_for_tier(variant_tier: MeshShaderVariantTier) -> Cow<'static, str> {
 	match variant_tier {
@@ -1045,7 +1048,7 @@ enum DrawPipelineKind {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct UntoonShaderFeatures {
-	liltoon: bool,
+	profile_extensions: bool,
 	main_layers: bool,
 	alpha_mask: bool,
 	dissolve: bool,
@@ -1075,7 +1078,7 @@ struct UntoonShaderFeatures {
 
 impl UntoonShaderFeatures {
 	fn include(&mut self, other: Self) {
-		self.liltoon |= other.liltoon;
+		self.profile_extensions |= other.profile_extensions;
 		self.main_layers |= other.main_layers;
 		self.alpha_mask |= other.alpha_mask;
 		self.dissolve |= other.dissolve;
@@ -1105,7 +1108,7 @@ impl UntoonShaderFeatures {
 
 	fn shader_feature_values(self) -> [(&'static str, bool); 26] {
 		[
-			("UNTOON_FEATURE_LILTOON", self.liltoon),
+			("UNTOON_FEATURE_PROFILE_EXTENSIONS", self.profile_extensions),
 			("UNTOON_FEATURE_MAIN_LAYERS", self.main_layers),
 			("UNTOON_FEATURE_ALPHA_MASK", self.alpha_mask),
 			("UNTOON_FEATURE_DISSOLVE", self.dissolve),
@@ -1738,7 +1741,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 		let emission = liltoon_like.emission.enabled_factor > 0.5 || liltoon_like.emission.texture_index.is_some();
 		let emission_second = liltoon_like.emission.second_enabled_factor > 0.5 || liltoon_like.emission.second_texture_index.is_some();
 		UntoonShaderFeatures {
-			liltoon: true,
+			profile_extensions: true,
 			main_layers,
 			alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
 			dissolve: has_dissolve,
@@ -1775,7 +1778,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 	} else {
 		let mtoon = material.mtoon_like_runtime();
 		UntoonShaderFeatures {
-			liltoon: false,
+			profile_extensions: false,
 			shadow_layers: true,
 			matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
 			reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
@@ -4994,17 +4997,14 @@ fn mesh_draw_material_gpu_with_profiles(
 	} else {
 		1.0
 	};
-	if liltoon_like.is_some() {
-		flags |= 4096;
-	}
 	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile) {
-		flags |= 8192;
+		flags |= MAT_UNTOON_GEM_PROFILE;
 	}
 	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_refraction_profile) {
-		flags |= 16384;
+		flags |= MAT_UNTOON_REFRACTION_PROFILE;
 	}
 	if liltoon_uses_additive_color_blend(mat) {
-		flags |= 32768;
+		flags |= MAT_UNTOON_ADDITIVE_BLEND;
 	}
 	let normal_uv_offset_scale = liltoon_like
 		.and_then(|u| texture_slot_uv_offset_scale(u, &["_BumpMap", "_NormalMap", "_BumpTex"]))
@@ -9260,7 +9260,7 @@ mod tests {
 			MeshPipelineRenderState::outline(1),
 		);
 		let mut toon_features = UntoonShaderFeatures::default();
-		toon_features.liltoon = true;
+		toon_features.profile_extensions = true;
 		toon_features.shadow_layers = true;
 		toon_features.fur = true;
 		let toon_shader = create_mesh_shader_module_for_features(&device, shader_variant_tier, toon_features, "mesh_toon_shader_test");
@@ -10062,7 +10062,7 @@ mod tests {
 	}
 
 	#[test]
-	fn mtoon_compatibility_maps_to_untoon_features_without_liltoon_branch() {
+	fn mtoon_compatibility_maps_to_untoon_features_without_profile_extensions() {
 		let mat = UnaMaterialPbr {
 			shading: UnaShadingModel::MToonLike,
 			emissive_texture_index: Some(4),
@@ -10077,7 +10077,7 @@ mod tests {
 
 		let features = material_untoon_shader_features(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
 
-		assert!(!features.liltoon);
+		assert!(!features.profile_extensions);
 		assert!(features.shadow_layers);
 		assert!(features.matcap);
 		assert!(features.reflection);
@@ -10202,7 +10202,7 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_source_flag_reaches_draw_uniform() {
+	fn plain_profile_emits_no_untoon_semantic_flags() {
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::default()),
 			..Default::default()
@@ -10211,12 +10211,12 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
-		assert_ne!(flags & 4096, 0);
-		assert_eq!(flags & 32768, 0);
+		assert_eq!(flags & MAT_UNTOON_GEM_PROFILE, 0);
+		assert_eq!(flags & MAT_UNTOON_ADDITIVE_BLEND, 0);
 	}
 
 	#[test]
-	fn liltoon_gem_source_flag_reaches_draw_uniform() {
+	fn gem_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.45;
@@ -10234,9 +10234,8 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
-		assert_ne!(flags & 4096, 0);
-		assert_ne!(flags & 8192, 0);
-		assert_ne!(flags & 32768, 0);
+		assert_ne!(flags & MAT_UNTOON_GEM_PROFILE, 0);
+		assert_ne!(flags & MAT_UNTOON_ADDITIVE_BLEND, 0);
 		assert_eq!(draw.gem_params, [0.45, 0.03, 6.0, 0.8]);
 		assert_eq!(draw.gem_particle_color, [2.0, 3.0, 4.0, 0.5]);
 	}
@@ -10291,7 +10290,7 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_refraction_source_flag_reaches_draw_uniform() {
+	fn refraction_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = -0.25;
@@ -10305,8 +10304,7 @@ mod tests {
 		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
-		assert_ne!(flags & 4096, 0);
-		assert_ne!(flags & 16384, 0);
+		assert_ne!(flags & MAT_UNTOON_REFRACTION_PROFILE, 0);
 		assert_eq!(draw.gem_params, [-0.25, 1.0, 0.0, 1.0]);
 		assert_eq!(draw.gem_particle_color, [0.8, 0.9, 1.0, 0.6]);
 	}

@@ -433,7 +433,9 @@ mod tests {
 	fn liltoon_reflection_apply_transparency_is_transparent_only() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("let liltoon_apply_effect_transparency = is_liltoon && alpha_kind > 1.5 && !is_liltoon_refraction;"),
+			mesh.contains(
+				"let liltoon_apply_effect_transparency = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_refraction_profile;"
+			),
 			"lilToon effect transparency flags apply only in transparent render mode and not in refraction"
 		);
 		assert!(
@@ -635,8 +637,8 @@ mod tests {
 			"lilToon fd.lightColor must include an SH/environment proxy, matching lilToon main light + SH semantics"
 		);
 		assert!(
-			mesh.contains("let effect_light_color = select(raw_light_color, lil_light_color, is_liltoon);"),
-			"Only the lilToon-like path should replace direct light with the lilToon lightColor approximation"
+			mesh.contains("let effect_light_color = select(raw_light_color, lil_light_color, has_untoon_extensions);"),
+			"UNToon extension path should replace direct light with the lilToon lightColor approximation"
 		);
 	}
 
@@ -659,11 +661,11 @@ mod tests {
 		assert!(
 			mesh.contains("var lil_shadowmix = 1.0;")
 				&& mesh.contains("lil_shadowmix = lil_shadow;")
-				&& mesh.contains("let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_liltoon_gem);"),
+				&& mesh.contains("let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_untoon_gem_profile);"),
 			"lilToon effect masks must use fd.shadowmix before _ShadowStrength is applied"
 		);
 		assert!(
-			mesh.contains("specular_reflect = specular_reflect * select(1.0, lil_shadowmix, is_liltoon);"),
+			mesh.contains("specular_reflect = specular_reflect * select(1.0, lil_shadowmix, has_untoon_extensions);"),
 			"lilToon screen-shadow specular path attenuates specular by fd.shadowmix"
 		);
 	}
@@ -703,7 +705,7 @@ mod tests {
 	fn liltoon_transparent_premultiplies_before_reflection_effects() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let premultiply = mesh
-			.find("let lil_premultiplied_before_effects = is_liltoon && alpha_kind > 1.5 && !is_liltoon_additive_blend;")
+			.find("let lil_premultiplied_before_effects = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_additive_blend;")
 			.expect("lilToon transparent premultiply flag");
 		let reflection = premultiply
 			+ mesh[premultiply..]
@@ -713,7 +715,7 @@ mod tests {
 				.expect("lilToon reflection blend block");
 		assert!(premultiply < reflection, "lilToon LIL_PREMULTIPLY runs before reflection");
 		assert!(
-			mesh.contains("!is_liltoon_additive_blend && !lil_premultiplied_before_effects"),
+			mesh.contains("!is_untoon_additive_blend && !lil_premultiplied_before_effects"),
 			"final blend premultiply must not multiply lilToon transparent output twice"
 		);
 	}
@@ -771,10 +773,12 @@ mod tests {
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh
-			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_liltoon_gem && !is_fur_pass")
+			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), has_untoon_extensions && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_untoon_gem_profile && !is_fur_pass")
 			.expect("lilToon rim shade application");
 		let backlight = mesh
-			.find("if (is_liltoon && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_liltoon_gem && drawu.backlight_params.x > 0.5)")
+			.find(
+				"if (has_untoon_extensions && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_untoon_gem_profile && drawu.backlight_params.x > 0.5)",
+			)
 			.expect("lilToon backlight block");
 		let reflection = backlight
 			+ mesh[backlight..]
