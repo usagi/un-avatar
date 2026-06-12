@@ -2449,24 +2449,6 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 	index
 }
 
-fn runtime_expression_morph_name_candidate(name: &str) -> bool {
-	let normalized = name.trim();
-	let lower = normalized.to_ascii_lowercase();
-	lower.starts_with("vrc.")
-		|| lower.starts_with("fcl_")
-		|| lower.starts_with("brow")
-		|| lower.starts_with("eye")
-		|| lower.starts_with("jaw")
-		|| lower.starts_with("mouth")
-		|| lower.starts_with("cheek")
-		|| lower.starts_with("nose")
-		|| lower == "tongueout"
-		|| matches!(
-			normalized,
-			"Blink" | "Blink_L" | "Blink_R" | "A" | "I" | "U" | "E" | "O" | "Joy" | "Angry" | "Sorrow" | "Fun" | "Surprised"
-		)
-}
-
 fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBinding], include_all: bool) -> BTreeSet<usize> {
 	if include_all {
 		return (0..buf.morph_targets.len()).collect();
@@ -2478,12 +2460,7 @@ fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBind
 		}
 	}
 	for binding in bindings {
-		if binding.morph_target_index < buf.morph_targets.len()
-			&& buf
-				.morph_target_names
-				.get(binding.morph_target_index)
-				.is_some_and(|name| runtime_expression_morph_name_candidate(name))
-		{
+		if binding.morph_target_index < buf.morph_targets.len() {
 			indices.insert(binding.morph_target_index);
 		}
 	}
@@ -9813,7 +9790,7 @@ mod tests {
 	}
 
 	#[test]
-	fn dynamic_morph_targets_keep_runtime_expressions_and_nonzero_defaults() {
+	fn dynamic_morph_targets_use_normalized_binds_and_nonzero_defaults() {
 		let buf = UnaMeshBuffers {
 			name: None,
 			vertex_payload_id: None,
@@ -9865,7 +9842,7 @@ mod tests {
 
 		let indices = dynamic_morph_target_indices(&buf, &bindings, false);
 
-		assert_eq!(indices, BTreeSet::from([0, 1]));
+		assert_eq!(indices, BTreeSet::from([0, 1, 2]));
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {

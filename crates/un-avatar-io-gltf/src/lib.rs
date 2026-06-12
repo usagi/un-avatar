@@ -2406,12 +2406,18 @@ fn ensure_unique_mesh_for_node(scene: &mut UnaSceneSnapshot, node_idx: usize) ->
 	Some(cloned_idx)
 }
 
-fn expression_catalog_from_morph_target_names(scene: &UnaSceneSnapshot) -> Option<UnaExpressionCatalog> {
+fn expression_catalog_from_morph_target_names(
+	scene: &UnaSceneSnapshot,
+	allowed_names: Option<&BTreeSet<String>>,
+) -> Option<UnaExpressionCatalog> {
 	let mut binds_by_name: BTreeMap<String, Vec<UnaMorphTargetBind>> = BTreeMap::new();
 	for (mesh_index, primitives) in scene.meshes.iter().enumerate() {
 		for (primitive_index, primitive) in primitives.iter().enumerate() {
 			for (morph_target_index, name) in primitive.morph_target_names.iter().enumerate() {
 				if name.is_empty() || morph_target_index >= primitive.morph_targets.len() {
+					continue;
+				}
+				if allowed_names.is_some_and(|allowed_names| !allowed_names.contains(name)) {
 					continue;
 				}
 				binds_by_name.entry(name.clone()).or_default().push(UnaMorphTargetBind {
@@ -2432,6 +2438,23 @@ fn expression_catalog_from_morph_target_names(scene: &UnaSceneSnapshot) -> Optio
 			.map(|(name, binds)| UnaExpressionPreset { name, binds })
 			.collect(),
 	})
+}
+
+fn expression_weight_names_from_runtime_actions(actions: Option<&UnaRuntimeActionSet>) -> BTreeSet<String> {
+	let mut names = BTreeSet::new();
+	let Some(actions) = actions else {
+		return names;
+	};
+	for action in &actions.actions {
+		for effect in &action.effects {
+			if let UnaRuntimeActionEffect::ExpressionWeight { name, .. } = effect {
+				if !name.is_empty() {
+					names.insert(name.clone());
+				}
+			}
+		}
+	}
+	names
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -9861,8 +9884,12 @@ impl AvatarImporter for GltfImporter {
 			apply_unavatar_initial_variant_state(&mut scene, unavatar, &mut report);
 			apply_unavatar_base_wardrobe(&mut scene, unavatar, &mut report);
 		}
-		let mut expression_catalog = if unavatar.is_some() {
-			expression_catalog_from_morph_target_names(&scene)
+		let runtime_actions = unavatar
+			.as_ref()
+			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene)));
+		let runtime_expression_names = expression_weight_names_from_runtime_actions(runtime_actions.as_ref());
+		let mut expression_catalog = if unavatar.is_some() && !runtime_expression_names.is_empty() {
+			expression_catalog_from_morph_target_names(&scene, Some(&runtime_expression_names))
 		} else {
 			None
 		};
@@ -9872,9 +9899,6 @@ impl AvatarImporter for GltfImporter {
 		let spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
-		let runtime_actions = unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene)));
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
 		}
@@ -11569,11 +11593,8 @@ mod tests {
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
-		let expressions = got.document.expression_catalog.as_ref().expect("expression catalog");
-		assert_eq!(expressions.presets.len(), 1);
-		assert_eq!(expressions.presets[0].name, "Shrink");
-		assert_eq!(expressions.presets[0].binds.len(), 1);
-		assert!(got.document.expression_weights.is_some());
+		assert!(got.document.expression_catalog.is_none());
+		assert!(got.document.expression_weights.is_none());
 		let runtime_actions = got.document.runtime_actions.as_ref().expect("runtime actions");
 		assert_eq!(runtime_actions.actions.len(), 3);
 		assert_eq!(runtime_actions.actions[0].id, "wardrobe:visible");
@@ -15064,7 +15085,7 @@ mod tests {
 				}
 			}),
 		};
-		let mut catalog = expression_catalog_from_morph_target_names(&scene).expect("expression catalog");
+		let mut catalog = expression_catalog_from_morph_target_names(&scene, None).expect("expression catalog");
 		let mut report = ImportReport::default();
 
 		apply_unavatar_blendshape_sync_expression_binds(&mut catalog, &scene, &unavatar, &mut report);
