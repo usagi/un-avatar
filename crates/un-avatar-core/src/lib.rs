@@ -646,12 +646,20 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 							out.insert("name".to_string(), Value::String(name.clone()));
 						}
 						out.insert("positions".to_string(), Value::from(primitive.positions.len() as u64));
+						out.insert("positionsHash".to_string(), Value::from(hash_f32_arrays(&primitive.positions)));
 						out.insert(
 							"normals".to_string(),
 							primitive
 								.normals
 								.as_ref()
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"normalsHash".to_string(),
+							primitive
+								.normals
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
 						);
 						out.insert(
 							"tangents".to_string(),
@@ -661,11 +669,25 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
 						);
 						out.insert(
+							"tangentsHash".to_string(),
+							primitive
+								.tangents
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
+						);
+						out.insert(
 							"texCoords0".to_string(),
 							primitive
 								.tex_coords_0
 								.as_ref()
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords0Hash".to_string(),
+							primitive
+								.tex_coords_0
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
 						);
 						out.insert(
 							"texCoords1".to_string(),
@@ -675,11 +697,25 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
 						);
 						out.insert(
+							"texCoords1Hash".to_string(),
+							primitive
+								.tex_coords_1
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
+						);
+						out.insert(
 							"texCoords2".to_string(),
 							primitive
 								.tex_coords_2
 								.as_ref()
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"texCoords2Hash".to_string(),
+							primitive
+								.tex_coords_2
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
 						);
 						out.insert(
 							"texCoords3".to_string(),
@@ -689,11 +725,25 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
 						);
 						out.insert(
+							"texCoords3Hash".to_string(),
+							primitive
+								.tex_coords_3
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
+						);
+						out.insert(
 							"colors0".to_string(),
 							primitive
 								.colors_0
 								.as_ref()
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"colors0Hash".to_string(),
+							primitive
+								.colors_0
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
 						);
 						out.insert(
 							"joints".to_string(),
@@ -703,11 +753,25 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
 						);
 						out.insert(
+							"jointsHash".to_string(),
+							primitive
+								.joints
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_u16_arrays(values))),
+						);
+						out.insert(
 							"weights".to_string(),
 							primitive
 								.weights
 								.as_ref()
 								.map_or(Value::Null, |values| Value::from(values.len() as u64)),
+						);
+						out.insert(
+							"weightsHash".to_string(),
+							primitive
+								.weights
+								.as_ref()
+								.map_or(Value::Null, |values| Value::from(hash_f32_arrays(values))),
 						);
 						out.insert(
 							"indices".to_string(),
@@ -717,13 +781,28 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 								.map_or(Value::Null, |indices| Value::from(indices.len() as u64)),
 						);
 						out.insert(
+							"indicesHash".to_string(),
+							primitive
+								.indices
+								.as_ref()
+								.map_or(Value::Null, |indices| Value::from(hash_u32_values(indices))),
+						);
+						out.insert(
 							"material".to_string(),
 							primitive.material_index.map_or(Value::Null, |index| Value::from(index as u64)),
 						);
 						out.insert("morphTargets".to_string(), Value::from(primitive.morph_targets.len() as u64));
 						out.insert(
+							"morphTargetsHash".to_string(),
+							Value::from(hash_morph_targets(&primitive.morph_targets)),
+						);
+						out.insert(
 							"defaultMorphWeights".to_string(),
 							Value::from(primitive.default_morph_weights.len() as u64),
+						);
+						out.insert(
+							"defaultMorphWeightsHash".to_string(),
+							Value::from(hash_f32_values(&primitive.default_morph_weights)),
 						);
 						out.insert(
 							"morphTargetNames".to_string(),
@@ -742,6 +821,55 @@ fn scene_mesh_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 		})
 		.collect();
 	Some(stable_json_hash(&Value::Array(meshes)))
+}
+
+fn hash_f32_values(values: &[f32]) -> u64 {
+	stable_json_hash(&Value::Array(
+		values.iter().map(|value| Value::from(u64::from(value.to_bits()))).collect(),
+	))
+}
+
+fn hash_f32_arrays<const N: usize>(values: &[[f32; N]]) -> u64 {
+	stable_json_hash(&Value::Array(
+		values
+			.iter()
+			.map(|items| Value::Array(items.iter().map(|value| Value::from(u64::from(value.to_bits()))).collect()))
+			.collect(),
+	))
+}
+
+fn hash_u16_arrays<const N: usize>(values: &[[u16; N]]) -> u64 {
+	stable_json_hash(&Value::Array(
+		values
+			.iter()
+			.map(|items| Value::Array(items.iter().map(|value| Value::from(u64::from(*value))).collect()))
+			.collect(),
+	))
+}
+
+fn hash_u32_values(values: &[u32]) -> u64 {
+	stable_json_hash(&Value::Array(values.iter().map(|value| Value::from(u64::from(*value))).collect()))
+}
+
+fn hash_morph_targets(values: &[UnaMorphTargetDeltas]) -> u64 {
+	let value = Value::Array(
+		values
+			.iter()
+			.map(|target| {
+				let mut out = serde_json::Map::new();
+				out.insert("positions".to_string(), Value::from(hash_f32_arrays(&target.position_deltas)));
+				out.insert(
+					"normals".to_string(),
+					target
+						.normal_deltas
+						.as_ref()
+						.map_or(Value::Null, |normals| Value::from(hash_f32_arrays(normals))),
+				);
+				Value::Object(out)
+			})
+			.collect(),
+	);
+	stable_json_hash(&value)
 }
 
 fn scene_material_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
@@ -8516,6 +8644,20 @@ mod tests {
 
 		document.scene.as_mut().unwrap().meshes[0][0].morph_target_names = vec!["Smile".to_string()];
 		document.scene.as_mut().unwrap().meshes[0][0].colors_0 = Some(vec![[1.0, 1.0, 1.0, 1.0]; 2]);
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().mesh_source_hash,
+			first.mesh_source_hash
+		);
+
+		document.scene.as_mut().unwrap().meshes[0][0].colors_0 = None;
+		document.scene.as_mut().unwrap().meshes[0][0].positions[1] = [2.0, 0.0, 0.0];
+		assert_ne!(
+			document.runtime_model().resolver_cache_key().mesh_source_hash,
+			first.mesh_source_hash
+		);
+
+		document.scene.as_mut().unwrap().meshes[0][0].positions[1] = [1.0, 0.0, 0.0];
+		document.scene.as_mut().unwrap().meshes[0][0].indices = Some(vec![1, 0]);
 		assert_ne!(
 			document.runtime_model().resolver_cache_key().mesh_source_hash,
 			first.mesh_source_hash
