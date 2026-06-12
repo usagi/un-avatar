@@ -87,6 +87,26 @@ fn placeholder_deferred_image() -> UnaImageRgba {
 	}
 }
 
+fn is_deferred_image_placeholder(image: &UnaImageRgba) -> bool {
+	image.width == 0 && image.height == 0 && image.pixels.is_empty()
+}
+
+fn retain_encoded_bytes_for_deferred_images(image_sources: &mut [Option<UnaImageSourceMetadata>], images: &[UnaImageRgba]) -> usize {
+	let mut retained = 0usize;
+	for (index, source) in image_sources.iter_mut().enumerate() {
+		let keep_encoded = images.get(index).is_some_and(is_deferred_image_placeholder);
+		let Some(source) = source else {
+			continue;
+		};
+		if keep_encoded {
+			retained += usize::from(source.encoded_bytes.is_some());
+		} else {
+			source.encoded_bytes = None;
+		}
+	}
+	retained
+}
+
 fn collect_scene_images_from_imported_data(
 	images_data: Vec<Option<gltf::image::Data>>,
 	report: &mut ImportReport,
@@ -10081,7 +10101,7 @@ fn scene_snapshot_from_gltf_inner(
 	record_scene_snapshot_profile_step(report, profile, "build_materials", step_started);
 
 	let step_started = Instant::now();
-	let image_sources = if let Some(image_sources) = precomputed_image_sources {
+	let mut image_sources = if let Some(image_sources) = precomputed_image_sources {
 		record_scene_snapshot_profile_step(report, profile, "reuse_image_source_metadata", step_started);
 		image_sources
 	} else {
@@ -10092,6 +10112,12 @@ fn scene_snapshot_from_gltf_inner(
 	let step_started = Instant::now();
 	let images = collect_scene_images_from_imported_data(image_data, report).map_err(ImportError::Message)?;
 	record_scene_snapshot_profile_step(report, profile, "collect_images", step_started);
+	let retained_encoded_sources = retain_encoded_bytes_for_deferred_images(&mut image_sources, &images);
+	if retained_encoded_sources > 0 {
+		report.push_info(format!(
+			"glTF import profile: retained_deferred_encoded_image_count={retained_encoded_sources}"
+		));
+	}
 	let step_started = Instant::now();
 	refine_liltoon_alpha_from_images(&mut materials, &images);
 	record_scene_snapshot_profile_step(report, profile, "refine_liltoon_alpha_from_images", step_started);
@@ -17458,6 +17484,41 @@ mod tests {
 		});
 
 		assert!(initial_resident_image_indices(Some(&root), None).is_none());
+	}
+
+	#[test]
+	fn encoded_image_bytes_are_retained_only_for_deferred_placeholders() {
+		let mut image_sources = vec![
+			Some(UnaImageSourceMetadata {
+				encoded_bytes: Some(vec![1, 2, 3]),
+				..Default::default()
+			}),
+			Some(UnaImageSourceMetadata {
+				encoded_bytes: Some(vec![4, 5, 6]),
+				..Default::default()
+			}),
+			Some(UnaImageSourceMetadata {
+				encoded_bytes: None,
+				..Default::default()
+			}),
+		];
+		let images = vec![
+			UnaImageRgba {
+				width: 1,
+				height: 1,
+				pixel_format: UnaImagePixelFormat::R8G8B8A8,
+				pixels: vec![255, 255, 255, 255],
+			},
+			placeholder_deferred_image(),
+			placeholder_deferred_image(),
+		];
+
+		let retained = retain_encoded_bytes_for_deferred_images(&mut image_sources, &images);
+
+		assert_eq!(retained, 1);
+		assert!(image_sources[0].as_ref().unwrap().encoded_bytes.is_none());
+		assert_eq!(image_sources[1].as_ref().unwrap().encoded_bytes.as_deref(), Some(&[4, 5, 6][..]));
+		assert!(image_sources[2].as_ref().unwrap().encoded_bytes.is_none());
 	}
 
 	#[test]
