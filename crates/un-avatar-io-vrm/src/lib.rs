@@ -4,7 +4,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, path::Path, time::Instant};
+use std::{
+	collections::BTreeMap,
+	fs::File,
+	io::{Read, Seek, SeekFrom},
+	path::Path,
+	time::Instant,
+};
 
 use glam::Mat4;
 use serde_json::Value;
@@ -21,6 +27,14 @@ use un_avatar_io::{
 use un_avatar_io_gltf::{scene_snapshot_from_gltf, scene_snapshot_from_gltf_profiled};
 use un_avatar_types::HumanoidProfile;
 
+const GLB_MAGIC: u32 = 0x46546C67;
+const GLB_VERSION_2: u32 = 2;
+const JSON_CHUNK_TYPE: u32 = 0x4E4F534A;
+
+fn read_le_u32(bytes: &[u8; 4]) -> u32 {
+	u32::from_le_bytes(*bytes)
+}
+
 pub fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
 	if bytes.starts_with(b"glTF") {
 		let glb = gltf::Glb::from_slice(bytes).map_err(|e| ImportError::Message(format!("GLB 解析: {e}")))?;
@@ -28,6 +42,42 @@ pub fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
 	} else {
 		serde_json::from_slice(bytes).map_err(|e| ImportError::Message(format!("glTF JSON: {e}")))
 	}
+}
+
+pub fn gltf_root_json_from_path(path: &Path) -> Result<Value, ImportError> {
+	let mut file = File::open(path).map_err(|e| ImportError::Message(format!("read {}: {e}", path.display())))?;
+	let mut header = [0u8; 12];
+	let header_len = file
+		.read(&mut header)
+		.map_err(|e| ImportError::Message(format!("read {} header: {e}", path.display())))?;
+	if header_len == header.len()
+		&& read_le_u32(header[0..4].try_into().expect("slice length")) == GLB_MAGIC
+		&& read_le_u32(header[4..8].try_into().expect("slice length")) == GLB_VERSION_2
+	{
+		loop {
+			let mut chunk_header = [0u8; 8];
+			file.read_exact(&mut chunk_header)
+				.map_err(|e| ImportError::Message(format!("GLB JSON chunk is missing in {}: {e}", path.display())))?;
+			let length = read_le_u32(chunk_header[0..4].try_into().expect("slice length")) as usize;
+			let chunk_type = read_le_u32(chunk_header[4..8].try_into().expect("slice length"));
+			if chunk_type == JSON_CHUNK_TYPE {
+				let mut json = vec![0u8; length];
+				file.read_exact(&mut json)
+					.map_err(|e| ImportError::Message(format!("read {} GLB JSON chunk: {e}", path.display())))?;
+				let end = json.iter().position(|byte| *byte == 0).unwrap_or(json.len());
+				return serde_json::from_slice(&json[..end]).map_err(|e| ImportError::Message(format!("GLB JSON: {e}")));
+			}
+			file.seek(SeekFrom::Current(length as i64))
+				.map_err(|e| ImportError::Message(format!("skip {} GLB chunk: {e}", path.display())))?;
+		}
+	}
+
+	let mut bytes = Vec::new();
+	file.seek(SeekFrom::Start(0))
+		.map_err(|e| ImportError::Message(format!("seek {}: {e}", path.display())))?;
+	file.read_to_end(&mut bytes)
+		.map_err(|e| ImportError::Message(format!("read {}: {e}", path.display())))?;
+	gltf_root_json_from_bytes(&bytes)
 }
 
 fn take_vrm_extension(root: &Value) -> Result<(VrmFlavor, Value), ImportError> {

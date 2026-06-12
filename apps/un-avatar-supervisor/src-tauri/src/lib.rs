@@ -3059,8 +3059,7 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 	if !resolved.is_file() {
 		return Err(format!("avatar file not found: {}", resolved.display()));
 	}
-	let bytes = fs::read(&resolved).map_err(|e| format!("read {}: {e}", resolved.display()))?;
-	let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let root = un_avatar_io_vrm::gltf_root_json_from_path(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
 	let Some(wardrobe) = root
 		.get("extensions")
 		.and_then(|extensions| extensions.get("UN_avatar"))
@@ -9955,6 +9954,64 @@ id = "test"
 		assert_eq!(options.sets[0].name, "Original");
 		assert_eq!(options.sets[1].id, "noble13");
 		assert_eq!(options.sets[1].name, "Noble 13");
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	fn write_glb_with_json_and_bin(path: &Path, json: &str, bin_len: usize) {
+		let mut json_bytes = json.as_bytes().to_vec();
+		while json_bytes.len() % 4 != 0 {
+			json_bytes.push(b' ');
+		}
+		let mut bin = vec![0u8; bin_len];
+		while bin.len() % 4 != 0 {
+			bin.push(0);
+		}
+		let total_len = 12 + 8 + json_bytes.len() + 8 + bin.len();
+		let mut glb = Vec::with_capacity(total_len);
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
+		glb.extend_from_slice(&bin);
+		fs::write(path, glb).unwrap();
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_reads_glb_json_chunk_without_full_metadata_payload() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-glb-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		write_glb_with_json_and_bin(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"baseSet": "",
+							"sets": [
+								{"id": "", "displayName": "Base"},
+								{"id": "field_drape", "displayName": "Field Drape"}
+							]
+						}
+					}
+				}
+			}"#,
+			4 * 1024 * 1024,
+		);
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.base_label, "Base");
+		assert_eq!(options.sets.len(), 1);
+		assert_eq!(options.sets[0].id, "field_drape");
+		assert_eq!(options.sets[0].name, "Field Drape");
 		let _ = fs::remove_dir_all(&dir);
 	}
 
