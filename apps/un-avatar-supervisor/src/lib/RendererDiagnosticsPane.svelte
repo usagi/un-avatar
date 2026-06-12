@@ -166,6 +166,9 @@
 						wouldEmit: runtimeStatus.dynamics_contact_probe_would_emit_count,
 						emitted: runtimeStatus.dynamics_contact_parameter_emitted_count,
 						constraints: runtimeStatus.dynamics_constraint_ref_count,
+						writeback: runtimeStatus.dynamics_rotation_translation_writeback_group_count,
+						writebackCandidates: runtimeStatus.dynamics_translation_writeback_candidate_count,
+						stretchWriteback: runtimeStatus.dynamics_stretch_translation_writeback_group_count,
 					},
 				})}
 			</dd>
