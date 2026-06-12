@@ -7798,14 +7798,28 @@ fn image_alpha_has_translucency(image: &UnaImageRgba) -> bool {
 }
 
 fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[UnaImageRgba]) {
+	let mut alpha_cache = vec![None; images.len()];
 	for material in materials {
 		if !unavatar_material_is_liltoon(material) {
 			continue;
 		}
-		let Some(image) = material.base_color_texture_index.and_then(|index| images.get(index)) else {
+		let Some(image_index) = material.base_color_texture_index else {
 			continue;
 		};
-		let has_transparent_alpha = image_alpha_has_transparency(image);
+		let Some(image) = images.get(image_index) else {
+			continue;
+		};
+		let (has_transparent_alpha, has_translucent_alpha) = if let Some(cached) = alpha_cache.get(image_index).copied().flatten() {
+			cached
+		} else {
+			let has_transparent_alpha = image_alpha_has_transparency(image);
+			let has_translucent_alpha = has_transparent_alpha && image_alpha_has_translucency(image);
+			let cached = (has_transparent_alpha, has_translucent_alpha);
+			if let Some(slot) = alpha_cache.get_mut(image_index) {
+				*slot = Some(cached);
+			}
+			cached
+		};
 		if material.alpha_mode == UnaAlphaMode::Mask && has_transparent_alpha && material.alpha_cutoff <= 0.0 {
 			material.alpha_cutoff = 1.0 / 255.0;
 		}
@@ -7816,7 +7830,7 @@ fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[
 			UnaAlphaMode::Mask if material.alpha_cutoff <= 0.5 => {
 				if !has_transparent_alpha {
 					material.alpha_mode = UnaAlphaMode::Opaque;
-				} else if material.alpha_cutoff <= 0.01 && image_alpha_has_translucency(image) {
+				} else if material.alpha_cutoff <= 0.01 && has_translucent_alpha {
 					material.alpha_mode = UnaAlphaMode::Blend;
 				}
 			}
