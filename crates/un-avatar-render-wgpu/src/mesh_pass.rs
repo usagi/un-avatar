@@ -876,12 +876,20 @@ fn scene_primitive_count(scene: &UnaSceneSnapshot) -> u32 {
 	count
 }
 
-fn scene_texture_upload_step_count(scene: &UnaSceneSnapshot, texture_roles: &[TextureRole], texture_max_dimension: Option<u32>) -> u32 {
+fn scene_texture_upload_step_count(
+	scene: &UnaSceneSnapshot,
+	texture_roles: &[TextureRole],
+	texture_max_dimension: Option<u32>,
+	active_texture_indices: Option<&BTreeSet<usize>>,
+) -> u32 {
 	scene
 		.images
 		.iter()
 		.enumerate()
 		.map(|(image_index, im)| {
+			if active_texture_indices.is_some_and(|indices| !indices.contains(&image_index)) {
+				return 1;
+			}
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
 			estimated_processed_mip_count(im.width, im.height, texture_max_dimension, role)
 		})
@@ -1314,6 +1322,39 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 		push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
 	}
 	indices.into_iter().collect()
+}
+
+fn initial_active_texture_indices_for_scene(
+	scene: &UnaSceneSnapshot,
+	effective_visibility: &[bool],
+	asset_residency: &SceneAssetResidencySets,
+	opts: &SceneMeshLoadOpts,
+) -> BTreeSet<usize> {
+	let default_material = UnaMaterialPbr::default();
+	let mut indices = BTreeSet::new();
+	for (node_index, node) in scene.nodes.iter().enumerate() {
+		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
+			continue;
+		}
+		let Some(mesh_index) = node.mesh else { continue };
+		let Some(mesh_primitives) = scene.meshes.get(mesh_index) else {
+			continue;
+		};
+		for (primitive_index, primitive) in mesh_primitives.iter().enumerate() {
+			if !asset_residency.mesh_primitive_resident(mesh_index, primitive_index) {
+				continue;
+			}
+			let material = primitive
+				.material_index
+				.and_then(|material_index| scene.materials.get(material_index))
+				.unwrap_or(&default_material);
+			if material_is_fully_invisible_for_draw(material, opts) {
+				continue;
+			}
+			indices.extend(material_texture_indices(material));
+		}
+	}
+	indices
 }
 
 fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
@@ -7251,8 +7292,17 @@ impl SceneMeshes {
 				}),
 			)
 		};
+		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
+		let effective_visibility = scene_effective_visibility(scene);
+		let initial_active_texture_indices =
+			initial_active_texture_indices_for_scene(scene, &effective_visibility, &asset_residency, &opts);
 		let mut total_steps = 4u32
-			.saturating_add(scene_texture_upload_step_count(scene, &texture_roles, texture_max_dimension))
+			.saturating_add(scene_texture_upload_step_count(
+				scene,
+				&texture_roles,
+				texture_max_dimension,
+				Some(&initial_active_texture_indices),
+			))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
 		let mut current_step = 0u32;
@@ -7639,7 +7689,6 @@ impl SceneMeshes {
 		let mut image_texture_slots: Vec<SceneImageTextureSlot> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
 		let mut gpu_texture_compression = None;
-		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		let material_slot_residency = scene
 			.materials
 			.iter()
@@ -7650,7 +7699,7 @@ impl SceneMeshes {
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			let image_resident = asset_residency.image_resident(image_index);
+			let image_resident = asset_residency.image_resident(image_index) && initial_active_texture_indices.contains(&image_index);
 			image_texture_residency.push(image_resident);
 			let source_metadata = scene.image_sources.get(image_index).and_then(Option::as_ref);
 			let skin_tone_override = skin_tone_matched_images.get(image_index).and_then(Option::as_deref);
@@ -8005,7 +8054,6 @@ impl SceneMeshes {
 		} else {
 			BTreeMap::new()
 		};
-		let effective_visibility = scene_effective_visibility(scene);
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
@@ -9881,6 +9929,110 @@ mod tests {
 		};
 
 		assert_eq!(material_texture_indices(&mat), vec![3, 4, 7]);
+	}
+
+	#[test]
+	fn initial_active_textures_follow_visible_resident_primitives() {
+		let identity = Mat4::IDENTITY.to_cols_array();
+		let primitive = |material_index| UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: Some(material_index),
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let image = || UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![primitive(0)], vec![primitive(1)], vec![primitive(2)]],
+			materials: vec![
+				UnaMaterialPbr {
+					base_color_texture_index: Some(0),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					base_color_texture_index: Some(1),
+					..Default::default()
+				},
+				UnaMaterialPbr {
+					base_color_texture_index: Some(2),
+					..Default::default()
+				},
+			],
+			images: vec![image(), image(), image()],
+			nodes: vec![
+				UnaSceneNode {
+					name: None,
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: None,
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: false,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(1),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: None,
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(2),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+				group_id: "outfit:hidden".to_string(),
+				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+					mesh_index: 2,
+					primitive_index: 0,
+				}],
+				materials: vec![2],
+				images: vec![2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let residency = SceneAssetResidencySets::for_scene(&scene, &[]);
+		let effective_visibility = scene_effective_visibility(&scene);
+
+		assert_eq!(
+			initial_active_texture_indices_for_scene(&scene, &effective_visibility, &residency, &SceneMeshLoadOpts::default()),
+			BTreeSet::from([0])
+		);
 	}
 
 	#[test]
