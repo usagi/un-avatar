@@ -29,7 +29,7 @@ use std::{
 	net::SocketAddr,
 	path::{Path, PathBuf},
 	sync::{
-		atomic::{AtomicU64, Ordering},
+		atomic::{AtomicBool, AtomicU64, Ordering},
 		Arc, Mutex,
 	},
 	thread,
@@ -2020,6 +2020,28 @@ impl AvatarApp {
 		self.set_startup_progress("model", 0, 0, "Loading model");
 		let spawn_result = thread::Builder::new().name("un-avatar-startup-load".to_string()).spawn(move || {
 			let startup_started = Instant::now();
+			let heartbeat_done = Arc::new(AtomicBool::new(false));
+			let heartbeat_done_for_thread = Arc::clone(&heartbeat_done);
+			let heartbeat_proxy = proxy.clone();
+			let heartbeat_result = thread::Builder::new()
+				.name("un-avatar-startup-load-heartbeat".to_string())
+				.spawn(move || {
+					while !heartbeat_done_for_thread.load(Ordering::Acquire) {
+						thread::sleep(Duration::from_millis(250));
+						if heartbeat_done_for_thread.load(Ordering::Acquire) {
+							break;
+						}
+						let _ = heartbeat_proxy.send_event(RendererControlEvent::StartupProgress {
+							phase: StartupPhase::Model,
+							current: 0,
+							total: 0,
+							message: startup_message("Loading model", startup_started),
+						});
+					}
+				});
+			if let Err(e) = heartbeat_result {
+				eprintln!("un-avatar-renderer: spawn startup loader heartbeat failed: {e}");
+			}
 			let _ = proxy.send_event(RendererControlEvent::StartupProgress {
 				phase: StartupPhase::Model,
 				current: 0,
@@ -2029,12 +2051,14 @@ impl AvatarApp {
 			let document = match model_loader::load_document(&path, wardrobe_set.as_deref(), contact_parameter_emission) {
 				Ok(document) => document,
 				Err(e) => {
+					heartbeat_done.store(true, Ordering::Release);
 					let _ = proxy.send_event(RendererControlEvent::StartupFailed {
 						message: format!("Failed to load model {}: {e}", path.display()),
 					});
 					return;
 				}
 			};
+			heartbeat_done.store(true, Ordering::Release);
 			let _ = proxy.send_event(RendererControlEvent::StartupProgress {
 				phase: StartupPhase::Model,
 				current: 1,
