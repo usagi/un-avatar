@@ -3933,6 +3933,7 @@ impl GpuState {
 			let (mesh_buffer_load_count, mesh_buffer_unload_count) = sm.apply_mesh_buffer_residency(
 				&self.device,
 				&self.queue,
+				runtime.scene,
 				&residency_refresh.mesh_buffer_load_indices,
 				&residency_refresh.mesh_buffer_unload_indices,
 			);

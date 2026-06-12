@@ -1408,14 +1408,11 @@ struct MeshDraw {
 	draw_transform: wgpu::Buffer,
 	draw_transform_uploaded: Option<MeshDrawTransformGpu>,
 	draw_material: wgpu::Buffer,
-	bind_material: wgpu::BindGroup,
-	bind_outline_material: wgpu::BindGroup,
+	bind_material: Option<wgpu::BindGroup>,
+	bind_outline_material: Option<wgpu::BindGroup>,
 	skin_palette_index: usize,
 	skin_palette_static_identity: bool,
-	_morph_meta_buffer: wgpu::Buffer,
-	morph_weight_buffer: wgpu::Buffer,
-	_morph_delta_buffer: wgpu::Buffer,
-	morph_bind_group: wgpu::BindGroup,
+	morph_resources: Option<MorphGpuResources>,
 	_compute_fur_cards: Option<ComputeFurCardsDrawResources>,
 	world_node_index: usize,
 	visible: bool,
@@ -1423,6 +1420,8 @@ struct MeshDraw {
 	shading: UnaShadingModel,
 	morph_target_count: usize,
 	morph_source_indices: Vec<usize>,
+	morph_pos: Vec<Vec<[f32; 3]>>,
+	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
 	default_morph_weights: Vec<f32>,
 	expression_bindings: Vec<ExpressionBinding>,
 	morph_weights: Vec<f32>,
@@ -2159,6 +2158,7 @@ impl SceneCubeTextureSlot {
 pub(crate) struct SceneMeshes {
 	pipelines: BTreeMap<DrawPipelineKind, wgpu::RenderPipeline>,
 	pipeline_outline_toon: Option<wgpu::RenderPipeline>,
+	compute_fur_cards_bind_group_layout: wgpu::BindGroupLayout,
 	compute_fur_cards_compute_pipeline: Option<ComputeFurCardsComputePipeline>,
 	pipeline_compute_fur_cards_pre_toon: Option<wgpu::RenderPipeline>,
 	pipeline_compute_fur_cards_toon: Option<wgpu::RenderPipeline>,
@@ -2168,6 +2168,7 @@ pub(crate) struct SceneMeshes {
 	frame_bind_group: wgpu::BindGroup,
 	material_layout: wgpu::BindGroupLayout,
 	outline_material_layout: wgpu::BindGroupLayout,
+	morph_bind_group_layout: wgpu::BindGroupLayout,
 	shader_variant_tier: MeshShaderVariantTier,
 	screen_grab_sampler: wgpu::Sampler,
 	reflection_cube_sampler: wgpu::Sampler,
@@ -3090,6 +3091,58 @@ fn build_scene_image_texture_upload(
 		width: w,
 		height: h,
 	})
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_mesh_draw_bind_groups(
+	device: &wgpu::Device,
+	material_layout: &wgpu::BindGroupLayout,
+	outline_material_layout: &wgpu::BindGroupLayout,
+	shader_variant_tier: MeshShaderVariantTier,
+	texture_views: &SceneTextureViews,
+	samplers: &[wgpu::Sampler],
+	image_sampler_indices: &[usize],
+	reflection_cube_sampler: &wgpu::Sampler,
+	material: &UnaMaterialPbr,
+	draw_transform: &wgpu::Buffer,
+	draw_material: &wgpu::Buffer,
+) -> (wgpu::BindGroup, wgpu::BindGroup) {
+	create_mesh_material_bind_groups(
+		device,
+		material_layout,
+		outline_material_layout,
+		shader_variant_tier,
+		texture_views,
+		samplers,
+		image_sampler_indices,
+		reflection_cube_sampler,
+		MeshMaterialBindingSource {
+			material,
+			draw_transform,
+			draw_material,
+		},
+	)
+}
+
+fn create_mesh_draw_morph_resources(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	layout: &wgpu::BindGroupLayout,
+	draw: &MeshDraw,
+) -> MorphGpuResources {
+	if draw.morph_target_count > 0 {
+		let morph_deltas = morph_delta_data(&draw.morph_pos, draw.morph_nrm.as_deref(), draw.buffer_upload.vertices.len());
+		create_morph_resources(
+			device,
+			queue,
+			layout,
+			draw.morph_target_count as u32,
+			draw.buffer_upload.vertices.len() as u32,
+			&morph_deltas,
+		)
+	} else {
+		create_morph_resources(device, queue, layout, 0, 0, &[])
+	}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7836,65 +7889,72 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 				});
 
-				let (bind_material, bind_outline_material) = create_mesh_material_bind_groups(
-					device,
-					&material_layout,
-					&outline_material_layout,
-					shader_variant_tier,
-					&texture_views,
-					&samplers,
-					&image_sampler_indices,
-					&reflection_cube_sampler,
-					MeshMaterialBindingSource {
-						material: mat,
-						draw_transform: &draw_transform,
-						draw_material: &draw_material_buffer,
-					},
-				);
+				let (bind_material, bind_outline_material) = if asset_resident {
+					let (bind_material, bind_outline_material) = create_mesh_draw_bind_groups(
+						device,
+						&material_layout,
+						&outline_material_layout,
+						shader_variant_tier,
+						&texture_views,
+						&samplers,
+						&image_sampler_indices,
+						&reflection_cube_sampler,
+						mat,
+						&draw_transform,
+						&draw_material_buffer,
+					);
+					(Some(bind_material), Some(bind_outline_material))
+				} else {
+					(None, None)
+				};
 				let material_bind_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
-				let morph_resources = if has_morph_targets {
-					if let Some(cache_key) = morph_delta_cache_key.as_ref() {
-						if let Some(shared) = shared_morph_delta_cache.get(cache_key) {
-							create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, shared)
+				let morph_resources = if asset_resident {
+					Some(if has_morph_targets {
+						if let Some(cache_key) = morph_delta_cache_key.as_ref() {
+							if let Some(shared) = shared_morph_delta_cache.get(cache_key) {
+								create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, shared)
+							} else {
+								let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+								let shared = create_shared_morph_delta_resources(
+									device,
+									queue,
+									morph_target_count as u32,
+									buffer_upload.vertices.len() as u32,
+									&morph_deltas,
+								);
+								let resources = create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, &shared);
+								shared_morph_delta_cache.insert(cache_key.clone(), shared);
+								resources
+							}
 						} else {
 							let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
-							let shared = create_shared_morph_delta_resources(
+							create_morph_resources(
 								device,
 								queue,
+								&morph_bind_group_layout,
 								morph_target_count as u32,
 								buffer_upload.vertices.len() as u32,
 								&morph_deltas,
-							);
-							let resources = create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, &shared);
-							shared_morph_delta_cache.insert(cache_key.clone(), shared);
-							resources
+							)
 						}
 					} else {
-						let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
-						create_morph_resources(
-							device,
-							queue,
-							&morph_bind_group_layout,
-							morph_target_count as u32,
-							buffer_upload.vertices.len() as u32,
-							&morph_deltas,
-						)
-					}
+						let empty_morph_resources = empty_morph_resources
+							.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
+						MorphGpuResources {
+							meta_buffer: empty_morph_resources.meta_buffer.clone(),
+							weight_buffer: empty_morph_resources.weight_buffer.clone(),
+							delta_buffer: empty_morph_resources.delta_buffer.clone(),
+							bind_group: empty_morph_resources.bind_group.clone(),
+						}
+					})
 				} else {
-					let empty_morph_resources = empty_morph_resources
-						.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
-					MorphGpuResources {
-						meta_buffer: empty_morph_resources.meta_buffer.clone(),
-						weight_buffer: empty_morph_resources.weight_buffer.clone(),
-						delta_buffer: empty_morph_resources.delta_buffer.clone(),
-						bind_group: empty_morph_resources.bind_group.clone(),
-					}
+					None
 				};
 				let morph_resource_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let compute_fur_cards = if material_has_fur(mat, mat.shading, &opts) {
+				let compute_fur_cards = if asset_resident && material_has_fur(mat, mat.shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
 						&compute_fur_cards_bind_group_layout,
@@ -7928,10 +7988,7 @@ impl SceneMeshes {
 					bind_outline_material,
 					skin_palette_index,
 					skin_palette_static_identity: skin_palette_key.skin_index.is_none(),
-					_morph_meta_buffer: morph_resources.meta_buffer,
-					morph_weight_buffer: morph_resources.weight_buffer,
-					_morph_delta_buffer: morph_resources.delta_buffer,
-					morph_bind_group: morph_resources.bind_group,
+					morph_resources,
 					_compute_fur_cards: compute_fur_cards,
 					world_node_index: ni,
 					visible: active,
@@ -7939,6 +7996,8 @@ impl SceneMeshes {
 					shading: mat.shading,
 					morph_target_count,
 					morph_source_indices,
+					morph_pos,
+					morph_nrm,
 					expression_bindings: compact_expression_bindings,
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_target_count),
@@ -8089,6 +8148,7 @@ impl SceneMeshes {
 		let mut scene_meshes = Self {
 			pipelines,
 			pipeline_outline_toon,
+			compute_fur_cards_bind_group_layout,
 			compute_fur_cards_compute_pipeline,
 			pipeline_compute_fur_cards_pre_toon,
 			pipeline_compute_fur_cards_toon,
@@ -8098,6 +8158,7 @@ impl SceneMeshes {
 			frame_bind_group,
 			material_layout,
 			outline_material_layout,
+			morph_bind_group_layout,
 			shader_variant_tier,
 			screen_grab_sampler,
 			reflection_cube_sampler,
@@ -8296,14 +8357,19 @@ impl SceneMeshes {
 		let (Some(vertex_buffer), Some(index_buffer)) = (&d.vertex_buffer, &d.index_buffer) else {
 			return;
 		};
-		pass.set_bind_group(3, &d.morph_bind_group, &[]);
+		let Some(morph_resources) = d.morph_resources.as_ref() else {
+			return;
+		};
+		pass.set_bind_group(3, &morph_resources.bind_group, &[]);
 		pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 		pass.set_index_buffer(index_buffer.slice(..), d.index_format);
 		pass.draw_indexed(0..d.index_count, 0, 0..instance_count);
 	}
 
 	fn draw_inner(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, draw_index: usize) {
-		let bind_material = &self.draws[draw_index].bind_material;
+		let Some(bind_material) = self.draws[draw_index].bind_material.as_ref() else {
+			return;
+		};
 		self.draw_inner_with_material(pass, state, draw_index, bind_material);
 	}
 
@@ -8319,13 +8385,19 @@ impl SceneMeshes {
 			pass.set_bind_group(0, &self.frame_bind_group, &[]);
 			state.frame_bound = true;
 		}
-		pass.set_bind_group(1, &d.bind_material, &[]);
+		let Some(bind_material) = d.bind_material.as_ref() else {
+			return false;
+		};
+		let Some(morph_resources) = d.morph_resources.as_ref() else {
+			return false;
+		};
+		pass.set_bind_group(1, bind_material, &[]);
 		let palette = &self.skin_palettes[d.skin_palette_index];
 		if state.skin_palette_index != Some(d.skin_palette_index) {
 			pass.set_bind_group(2, &palette.bind_group, &[]);
 			state.skin_palette_index = Some(d.skin_palette_index);
 		}
-		pass.set_bind_group(3, &d.morph_bind_group, &[]);
+		pass.set_bind_group(3, &morph_resources.bind_group, &[]);
 		pass.set_vertex_buffer(0, compute_fur_cards.generated_vertex_buffer.slice(..));
 		pass.set_index_buffer(compute_fur_cards.generated_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 		pass.draw_indexed(0..compute_fur_cards.generated_index_count, 0, 0..1);
@@ -8346,7 +8418,9 @@ impl SceneMeshes {
 		pass.set_pipeline(pipeline_outline_toon);
 		let mut state = DrawBindState::default();
 		for &draw_index in &self.outline_draw_indices {
-			let bind_material = &self.draws[draw_index].bind_outline_material;
+			let Some(bind_material) = self.draws[draw_index].bind_outline_material.as_ref() else {
+				continue;
+			};
 			self.draw_inner_with_material(pass, &mut state, draw_index, bind_material);
 		}
 	}
@@ -8474,7 +8548,7 @@ impl SceneMeshes {
 	}
 
 	fn rebuild_draw_material_bind_groups(&mut self, device: &wgpu::Device, draw_index: usize) {
-		let (bind_material, bind_outline_material) = create_mesh_material_bind_groups(
+		let (bind_material, bind_outline_material) = create_mesh_draw_bind_groups(
 			device,
 			&self.material_layout,
 			&self.outline_material_layout,
@@ -8483,22 +8557,25 @@ impl SceneMeshes {
 			&self._samplers,
 			&self.image_sampler_indices,
 			&self.reflection_cube_sampler,
-			MeshMaterialBindingSource {
-				material: &self.draws[draw_index].material,
-				draw_transform: &self.draws[draw_index].draw_transform,
-				draw_material: &self.draws[draw_index].draw_material,
-			},
+			&self.draws[draw_index].material,
+			&self.draws[draw_index].draw_transform,
+			&self.draws[draw_index].draw_material,
 		);
 		let draw = &mut self.draws[draw_index];
-		draw.bind_material = bind_material;
-		draw.bind_outline_material = bind_outline_material;
+		draw.bind_material = Some(bind_material);
+		draw.bind_outline_material = Some(bind_outline_material);
 	}
 
 	pub(crate) fn rebuild_material_bind_groups(&mut self, device: &wgpu::Device) -> usize {
+		let mut rebuilt = 0;
 		for draw_index in 0..self.draws.len() {
+			if !self.draws[draw_index].active() {
+				continue;
+			}
 			self.rebuild_draw_material_bind_groups(device, draw_index);
+			rebuilt += 1;
 		}
-		self.draws.len()
+		rebuilt
 	}
 
 	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
@@ -8531,7 +8608,12 @@ impl SceneMeshes {
 					mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			}
-			self.rebuild_draw_material_bind_groups(device, draw_index);
+			if self.draws[draw_index].active() {
+				self.rebuild_draw_material_bind_groups(device, draw_index);
+			} else {
+				self.draws[draw_index].bind_material = None;
+				self.draws[draw_index].bind_outline_material = None;
+			}
 			changed += 1;
 		}
 		if changed > 0 {
@@ -8724,6 +8806,9 @@ impl SceneMeshes {
 			};
 
 			if d.morph_target_count > 0 {
+				let Some(morph_resources) = d.morph_resources.as_ref() else {
+					continue;
+				};
 				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
 				let skip_static_default_morph = !draw_has_active_expression
 					&& !debug_zero_morphs
@@ -8744,14 +8829,14 @@ impl SceneMeshes {
 
 					if d.morph_weight_scratch.len() == d.morph_target_count {
 						if d.morph_weights != d.morph_weight_scratch {
-							queue.write_buffer(&d.morph_weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
+							queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 							d.morph_weights.clear();
 							d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
 						}
 					} else if !d.morph_weights.is_empty() {
 						d.morph_weight_scratch.clear();
 						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
-						queue.write_buffer(&d.morph_weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
+						queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 						d.morph_weights.clear();
 					}
 				}
@@ -8900,17 +8985,20 @@ impl SceneMeshes {
 		&mut self,
 		device: &wgpu::Device,
 		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
 		load_indices: &[usize],
 		unload_indices: &[usize],
 	) -> (usize, usize) {
 		let mut load_count = 0;
 		for draw_index in load_indices.iter().copied() {
-			let Some(draw) = self.draws.get_mut(draw_index) else {
-				continue;
-			};
-			if draw.ensure_mesh_buffers(device, queue) {
+			let loaded = self
+				.draws
+				.get_mut(draw_index)
+				.is_some_and(|draw| draw.ensure_mesh_buffers(device, queue));
+			if loaded {
 				load_count += 1;
 			}
+			self.ensure_draw_gpu_resources(device, queue, scene, draw_index);
 		}
 		let mut unload_count = 0;
 		for draw_index in unload_indices.iter().copied() {
@@ -8922,6 +9010,78 @@ impl SceneMeshes {
 			}
 		}
 		(load_count, unload_count)
+	}
+
+	fn ensure_draw_gpu_resources(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
+		draw_index: usize,
+	) -> bool {
+		let Some(draw) = self.draws.get(draw_index) else {
+			return false;
+		};
+		if !draw.asset_resident {
+			return false;
+		}
+		let needs_bind = draw.bind_material.is_none() || draw.bind_outline_material.is_none();
+		let needs_morph = draw.morph_resources.is_none();
+		let needs_fur = draw._compute_fur_cards.is_none() && material_has_fur(&draw.material, draw.shading, &self.opts);
+		if !needs_bind && !needs_morph && !needs_fur {
+			return false;
+		}
+		if needs_bind {
+			self.rebuild_draw_material_bind_groups(device, draw_index);
+		}
+		if needs_morph {
+			let resources = create_mesh_draw_morph_resources(device, queue, &self.morph_bind_group_layout, &self.draws[draw_index]);
+			self.draws[draw_index].morph_resources = Some(resources);
+		}
+		if needs_fur {
+			let draw = &self.draws[draw_index];
+			let Some(liltoon_like) = draw.material.liltoon_like_runtime() else {
+				return true;
+			};
+			let tex_sampler = texture_sampler_or(
+				&self._samplers,
+				&self.image_sampler_indices,
+				draw.material.base_color_texture_index,
+				0,
+			);
+			let fur_vector_texture_index = liltoon_like.fur.vector_texture_index;
+			let fur_vector_view = texture_view_or(
+				&self.texture_views.images,
+				fur_vector_texture_index,
+				&self.texture_views.neutral_vector,
+			);
+			let fur_length_mask_texture_index = liltoon_like.fur.length_mask_texture_index;
+			let fur_length_mask_view =
+				texture_view_or(&self.texture_views.images, fur_length_mask_texture_index, &self.texture_views.white);
+			let fur_noise_mask_texture_index = liltoon_like.fur.noise_mask_texture_index;
+			let fur_noise_mask_view = texture_view_or(&self.texture_views.images, fur_noise_mask_texture_index, &self.texture_views.white);
+			let fur_mask_texture_index = liltoon_like.fur.mask_texture_index;
+			let fur_mask_view = texture_view_or(&self.texture_views.images, fur_mask_texture_index, &self.texture_views.white);
+			let compute_fur_cards_cpu_fur_maps = ComputeFurCardsCpuFurMaps {
+				length_mask: fur_length_mask_texture_index.and_then(|index| scene.images.get(index)),
+				fur_mask: fur_mask_texture_index.and_then(|index| scene.images.get(index)),
+			};
+			let compute_fur_cards = create_compute_fur_cards_draw_resources(
+				device,
+				&self.compute_fur_cards_bind_group_layout,
+				&draw.material,
+				&draw.buffer_upload.vertices,
+				&draw.buffer_upload.indices,
+				compute_fur_cards_cpu_fur_maps,
+				fur_vector_view,
+				fur_length_mask_view,
+				fur_noise_mask_view,
+				fur_mask_view,
+				tex_sampler,
+			);
+			self.draws[draw_index]._compute_fur_cards = compute_fur_cards;
+		}
+		true
 	}
 
 	pub(crate) fn asset_residency_counts(&self) -> SceneMeshAssetResidencyCounts {
