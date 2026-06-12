@@ -19,7 +19,7 @@
 <div class="section-grid profile-channel-fields">
 	<ProfileToggleField
 		label={$_("profiles.editor.spring_bone")}
-		phaseTag="VRM"
+		phaseTag="UNPhysics"
 		hint={$_("profiles.hints.motion.spring_bone")}
 		checked={setting.spring_bones}
 		onChange={(checked) => onUpdateSettingValue("spring_bones", checked)}

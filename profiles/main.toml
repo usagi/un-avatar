@@ -43,7 +43,8 @@ enabled = false
 key = ""
 
 [physics.dynamics]
-enable_all_on_launch = true
+enabled = true
+enable_all_on_launch = false
 
 [output.spout2]
 enabled = true

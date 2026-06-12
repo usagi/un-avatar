@@ -1109,8 +1109,8 @@ struct AvatarSetting {
 	/// motion source の選択。manifest `[motion] primary_source` に対応。
 	/// 値は `"vmc"` / `"unmotion_zenoh"`。未指定時は VMC（Phase 1 からの既存挙動）。
 	primary_motion_source: String,
-	/// VRM SpringBone（揺れもの）シミュレーションを有効化するか。manifest `spring_bones` に対応。
-	/// 既定 true（VRM アバターの基本機能）。
+	/// UNPhysics / UNDynamics の runtime solver を有効化するか。
+	/// 新形式は manifest `[physics.dynamics] enabled`、旧互換として top-level `spring_bones` も読む。
 	spring_bones: bool,
 	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
 	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
@@ -1334,6 +1334,7 @@ struct DebugSettings {
 }
 
 struct PhysicsSettings {
+	dynamics_enabled: Option<bool>,
 	dynamics_enable_all_on_launch: bool,
 	contact_parameter_emission: bool,
 	spring_bone_physics_configured: bool,
@@ -1646,6 +1647,7 @@ struct ManifestContactsPhysics {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct ManifestDynamicsPhysics {
+	enabled: Option<bool>,
 	enable_all_on_launch: Option<bool>,
 }
 
@@ -1885,8 +1887,8 @@ struct AvatarManifestSummary {
 	camera: Option<ManifestCameraSetting>,
 	environment: Option<ManifestEnvironment>,
 	effects: Option<ManifestEffects>,
-	/// VRM SpringBone を毎フレーム計算するか。`spring_bones = true|false` の top-level bool。
-	/// 既定 true（renderer 側で `enable_spring_bones: true`）。
+	/// 旧互換: UNPhysics / UNDynamics master enable の古い top-level bool。
+	/// 新規保存は `[physics.dynamics] enabled` を使う。
 	spring_bones: Option<bool>,
 }
 
@@ -4510,7 +4512,7 @@ fn apply_physics_setting_value(
 	value: serde_json::Value,
 ) -> Result<(), String> {
 	match field {
-		"spring_bones" => set_nested_json_bool(manifest, &["spring_bones"], &value, field),
+		"spring_bones" => set_nested_json_bool(manifest, &["physics", "dynamics", "enabled"], &value, field),
 		"physics.contacts.parameter_emission" => {
 			set_nested_json_bool(manifest, &["physics", "contacts", "parameter_emission"], &value, field)
 		}
@@ -6829,8 +6831,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		look_at_enabled: motion.look_at_enabled,
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
-		// 既定 true（VRM 揺れもの表現は基本機能）。manifest で明示的に false を書いたときだけ OFF。
-		spring_bones: manifest.spring_bones.unwrap_or(true),
+		spring_bones: physics.dynamics_enabled.or(manifest.spring_bones).unwrap_or(true),
 		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		contact_parameter_emission: physics.contact_parameter_emission,
 		spring_bone_physics_configured: physics.spring_bone_physics_configured,
@@ -8010,6 +8011,7 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 	let spring_bone_physics = physics.and_then(|physics| physics.spring_bone.as_ref());
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
+		dynamics_enabled: dynamics.and_then(|dynamics| dynamics.enabled),
 		dynamics_enable_all_on_launch: dynamics.and_then(|dynamics| dynamics.enable_all_on_launch).unwrap_or(false),
 		contact_parameter_emission: contacts
 			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
@@ -8547,10 +8549,10 @@ fn apply_spring_bone_category_override_value(
 ) -> Result<(), String> {
 	let rest = field
 		.strip_prefix("physics.spring_bone.overrides.")
-		.ok_or_else(|| format!("invalid SpringBone override field: {field}"))?;
+		.ok_or_else(|| format!("invalid Dynamics override field: {field}"))?;
 	let (category, key) = rest
 		.split_once('.')
-		.ok_or_else(|| format!("invalid SpringBone override field: {field}"))?;
+		.ok_or_else(|| format!("invalid Dynamics override field: {field}"))?;
 	let category = normalize_spring_bone_category_id(category);
 	let authored = spring_bone_authored_params_for_setting(setting, &category);
 	if key == "mode" {
@@ -8572,7 +8574,7 @@ fn apply_spring_bone_category_override_value(
 	if key == "preset" {
 		let preset = json_string(&value, field)?;
 		if spring_bone_category_override_solver(manifest, &category).as_deref() != Some("xpbd") {
-			return Err(format!("{field} can be applied only when SpringBone mode is Override: XPBD"));
+			return Err(format!("{field} can be applied only when Dynamics mode is Override: XPBD"));
 		}
 		set_spring_bone_category_recommended_preset(manifest, &category, &preset)?;
 		return Ok(());
@@ -8589,7 +8591,7 @@ fn apply_spring_bone_category_override_value(
 		"stiffness_hz" => ("stiffness_hz", ranged_float_toml_value(&value, field, 0.0..=60.0, "[0, 60]")?),
 		"xpbd_compliance" => ("xpbd_compliance", ranged_float_toml_value(&value, field, 0.0..=10.0, "[0, 10]")?),
 		"constraint_iterations" => ("constraint_iterations", ranged_u32_toml_value(&value, field, 1..=32, "[1, 32]")?),
-		_ => return Err(format!("unknown SpringBone override field: {field}")),
+		_ => return Err(format!("unknown Dynamics override field: {field}")),
 	};
 	set_spring_bone_category_override_value(manifest, &category, toml_key, toml_value)
 }
@@ -8671,7 +8673,7 @@ fn set_spring_bone_category_mode(
 
 fn set_spring_bone_category_recommended_preset(manifest: &mut toml::Value, category: &str, preset: &str) -> Result<(), String> {
 	let preset = spring_bone_recommended_preset(category, preset)
-		.ok_or_else(|| format!("unknown SpringBone recommended preset: {category}.{preset}"))?;
+		.ok_or_else(|| format!("unknown Dynamics recommended preset: {category}.{preset}"))?;
 	replace_spring_bone_category_override(
 		manifest,
 		category,
@@ -9729,7 +9731,7 @@ id = "test"
 	#[test]
 	fn dynamics_enable_all_on_launch_setting_round_trips_manifest_value() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		assert!(setting.dynamics_enable_all_on_launch);
+		assert!(!setting.dynamics_enable_all_on_launch);
 		let mut manifest = parse_manifest_value(
 			r#"title = "Test"
 
@@ -9767,6 +9769,59 @@ id = "test"
 		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
 		let _ = fs::remove_file(path);
 		assert!(parsed.dynamics_enable_all_on_launch);
+	}
+
+	#[test]
+	fn unphysics_enabled_setting_writes_v2_dynamics_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "spring_bones", serde_json::json!(true)).unwrap();
+		assert_eq!(
+			manifest
+				.get("physics")
+				.and_then(toml::Value::as_table)
+				.and_then(|physics| physics.get("dynamics"))
+				.and_then(toml::Value::as_table)
+				.and_then(|dynamics| dynamics.get("enabled"))
+				.and_then(toml::Value::as_bool),
+			Some(true)
+		);
+		assert_eq!(manifest.get("spring_bones").and_then(toml::Value::as_bool), Some(false));
+	}
+
+	#[test]
+	fn read_avatar_setting_prefers_v2_unphysics_enabled_over_legacy_spring_bones() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unphysics-enabled-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
+
+[physics.dynamics]
+enabled = true
+"#,
+		)
+		.unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.spring_bones);
 	}
 
 	#[test]

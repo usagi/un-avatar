@@ -301,6 +301,7 @@ pub(crate) struct PhysicsManifest {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct DynamicsPhysicsManifest {
+	pub enabled: Option<bool>,
 	pub enable_all_on_launch: Option<bool>,
 }
 
@@ -492,11 +493,11 @@ impl RendererManifest {
 		if let Some(audio_link) = self.audio_link {
 			audio_link.apply_to(opts);
 		}
-		if let Some(physics) = self.physics {
-			physics.apply_to(opts);
-		}
 		if let Some(spring_bones) = self.spring_bones {
 			opts.enable_spring_bones = spring_bones;
+		}
+		if let Some(physics) = self.physics {
+			physics.apply_to(opts);
 		}
 		if let Some(aa) = self.aa {
 			opts.aa = aa;
@@ -1047,6 +1048,9 @@ impl PhysicsManifest {
 
 impl DynamicsPhysicsManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(enabled) = self.enabled {
+			opts.enable_spring_bones = enabled;
+		}
 		if let Some(enabled) = self.enable_all_on_launch {
 			opts.dynamics_enable_all_on_launch = enabled;
 		}
@@ -1479,6 +1483,7 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
 		assert!(opts.dynamics_enable_all_on_launch);
+		assert!(opts.enable_spring_bones);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);
 		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");
@@ -1491,6 +1496,23 @@ constraint_iterations = 6
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.xpbd_compliance, Some(0.02));
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.constraint_iterations, Some(6));
+	}
+
+	#[test]
+	fn toml_manifest_prefers_v2_unphysics_enabled_over_legacy_spring_bones() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+spring_bones = false
+
+[physics.dynamics]
+enabled = true
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert!(opts.enable_spring_bones);
 	}
 
 	#[test]
