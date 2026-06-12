@@ -27,10 +27,10 @@ use crate::skin_tone::{
 };
 use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compressed_upload_kind_for_texture, compression_preference_for_role,
-	create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count, load_or_build_processed_texture, mip_level_count,
-	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
-	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
-	TextureUploadPayload,
+	create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count, load_or_build_processed_texture,
+	load_or_build_processed_texture_with_rgba, mip_level_count, read_compressed_texture_cache, source_texture_upload, texture_cache_key,
+	texture_cache_key_from_source_metadata, texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent,
+	TextureRole, TextureUploadKind, TextureUploadPayload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -834,10 +834,18 @@ struct TexturePrepareSummary {
 	deferred_images: u32,
 	resident_elapsed: Duration,
 	deferred_elapsed: Duration,
+	cube_elapsed: Duration,
+	source_elapsed: Duration,
+	rgba_elapsed: Duration,
+	cache_lookup_elapsed: Duration,
+	cache_read_elapsed: Duration,
+	processed_elapsed: Duration,
+	payload_elapsed: Duration,
+	upload_elapsed: Duration,
 }
 
 impl TexturePrepareSummary {
-	fn record(&mut self, image_index: usize, role: TextureRole, resident: bool, elapsed: Duration) {
+	fn record(&mut self, image_index: usize, role: TextureRole, resident: bool, elapsed: Duration, timings: TextureImagePrepareTimings) {
 		self.images += 1;
 		if resident {
 			self.resident_images += 1;
@@ -846,11 +854,29 @@ impl TexturePrepareSummary {
 			self.deferred_images += 1;
 			self.deferred_elapsed += elapsed;
 		}
+		self.cube_elapsed += timings.cube;
+		self.source_elapsed += timings.source;
+		self.rgba_elapsed += timings.rgba;
+		self.cache_lookup_elapsed += timings.cache_lookup;
+		self.cache_read_elapsed += timings.cache_read;
+		self.processed_elapsed += timings.processed;
+		self.payload_elapsed += timings.payload;
+		self.upload_elapsed += timings.upload;
 		let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
 		if elapsed_ms >= 50.0 {
+			let stage_ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0;
 			eprintln!(
-				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms",
-				image_index, resident
+				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms",
+				image_index,
+				resident,
+				stage_ms(timings.cube),
+				stage_ms(timings.source),
+				stage_ms(timings.rgba),
+				stage_ms(timings.cache_lookup),
+				stage_ms(timings.cache_read),
+				stage_ms(timings.processed),
+				stage_ms(timings.payload),
+				stage_ms(timings.upload),
 			);
 		}
 	}
@@ -861,14 +887,34 @@ impl TexturePrepareSummary {
 			return;
 		}
 		eprintln!(
-			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms",
+			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms",
 			self.images,
 			self.resident_images,
 			self.deferred_images,
 			self.resident_elapsed.as_secs_f64() * 1000.0,
 			self.deferred_elapsed.as_secs_f64() * 1000.0,
+			self.cube_elapsed.as_secs_f64() * 1000.0,
+			self.source_elapsed.as_secs_f64() * 1000.0,
+			self.rgba_elapsed.as_secs_f64() * 1000.0,
+			self.cache_lookup_elapsed.as_secs_f64() * 1000.0,
+			self.cache_read_elapsed.as_secs_f64() * 1000.0,
+			self.processed_elapsed.as_secs_f64() * 1000.0,
+			self.payload_elapsed.as_secs_f64() * 1000.0,
+			self.upload_elapsed.as_secs_f64() * 1000.0,
 		);
 	}
+}
+
+#[derive(Clone, Copy, Default)]
+struct TextureImagePrepareTimings {
+	cube: Duration,
+	source: Duration,
+	rgba: Duration,
+	cache_lookup: Duration,
+	cache_read: Duration,
+	processed: Duration,
+	payload: Duration,
+	upload: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -8138,6 +8184,7 @@ impl SceneMeshes {
 		let mut texture_prepare_summary = TexturePrepareSummary::default();
 		for (image_index, im) in scene.images.iter().enumerate() {
 			let image_prepare_start = Instant::now();
+			let mut image_prepare_timings = TextureImagePrepareTimings::default();
 			let src_w = im.width.max(1);
 			let src_h = im.height.max(1);
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
@@ -8151,7 +8198,9 @@ impl SceneMeshes {
 			if texture_source_is_cube(source_metadata) {
 				texture_summary.cubemap_count += 1;
 			}
+			let cube_prepare_start = Instant::now();
 			if let Some((cube_upload, cube_cache_event)) = cube_upload_from_image(im, source_metadata, processed_texture_cache) {
+				image_prepare_timings.cube += cube_prepare_start.elapsed();
 				texture_summary.cubemap_converted_count += 1;
 				if cube_cache_event.hit {
 					texture_summary.cubemap_cache_hits += 1;
@@ -8178,7 +8227,9 @@ impl SceneMeshes {
 						),
 					);
 					texture_summary.cubemap_uploaded_bytes += cube_bytes;
+					let upload_start = Instant::now();
 					cube_image_views.push(slot.ensure_uploaded(device, queue));
+					image_prepare_timings.upload += upload_start.elapsed();
 				} else {
 					texture_summary.deferred_cubemap_upload_count += 1;
 					texture_summary.deferred_cubemap_mip_bytes += cube_bytes;
@@ -8198,6 +8249,7 @@ impl SceneMeshes {
 				}
 				cube_texture_slots.push(Some(slot));
 			} else {
+				image_prepare_timings.cube += cube_prepare_start.elapsed();
 				if texture_source_is_cube(source_metadata) {
 					texture_summary.cubemap_fallback_count += 1;
 					report(
@@ -8219,7 +8271,9 @@ impl SceneMeshes {
 				&& skin_tone_override.is_none()
 				&& texture_compression != TextureCompressionMode::Compat
 			{
+				let source_upload_start = Instant::now();
 				if let Some(source_upload) = source_texture_upload(im) {
+					image_prepare_timings.source += source_upload_start.elapsed();
 					if image_resident {
 						report(
 							"gpu-upload",
@@ -8244,11 +8298,13 @@ impl SceneMeshes {
 					);
 					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
 					if image_resident {
+						let upload_start = Instant::now();
 						if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
 							image_views.push(view);
 						} else {
 							image_views.push(transparent_black_view.clone());
 						}
+						image_prepare_timings.upload += upload_start.elapsed();
 					} else {
 						report(
 							"gpu-upload",
@@ -8262,9 +8318,16 @@ impl SceneMeshes {
 						image_views.push(transparent_black_view.clone());
 					}
 					image_texture_slots.push(slot);
-					texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
+					texture_prepare_summary.record(
+						image_index,
+						role,
+						image_resident,
+						image_prepare_start.elapsed(),
+						image_prepare_timings,
+					);
 					continue;
 				}
+				image_prepare_timings.source += source_upload_start.elapsed();
 			}
 			if !image_resident && skin_tone_override.is_none() && texture_source_is_cube(source_metadata) {
 				let estimated_mip_bytes = (src_w as u64)
@@ -8297,7 +8360,13 @@ impl SceneMeshes {
 						gpu_texture_compression_enabled,
 					},
 				)));
-				texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
+				texture_prepare_summary.record(
+					image_index,
+					role,
+					image_resident,
+					image_prepare_start.elapsed(),
+					image_prepare_timings,
+				);
 				continue;
 			}
 			if !image_resident && skin_tone_override.is_none() && !texture_source_is_cube(source_metadata) {
@@ -8329,48 +8398,104 @@ impl SceneMeshes {
 						gpu_texture_compression_enabled,
 					},
 				)));
-				texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
+				texture_prepare_summary.record(
+					image_index,
+					role,
+					image_resident,
+					image_prepare_start.elapsed(),
+					image_prepare_timings,
+				);
 				continue;
 			}
-			let rgba_compat = im.rgba8_compat_pixels();
-			let rgba = skin_tone_override.unwrap_or(rgba_compat.as_ref());
-			let source_key = if skin_tone_override.is_none() {
-				scene.image_sources.get(image_index).and_then(Option::as_ref).map_or_else(
-					|| texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba),
-					|source| texture_cache_key_from_source_metadata(src_w, src_h, texture_max_dimension, role, mipmap_filter, source),
-				)
-			} else {
-				texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba)
-			};
-			let compressed_cache_lookup = processed_texture_cache.then(|| {
-				compressed_cache_lookup_from_source(
-					rgba,
+			let source_metadata_key = skin_tone_override
+				.is_none()
+				.then(|| {
+					source_metadata.map(|source| {
+						texture_cache_key_from_source_metadata(src_w, src_h, texture_max_dimension, role, mipmap_filter, source)
+					})
+				})
+				.flatten();
+			let compression_preference = compression_preference_for_role(texture_compression, texture_compression_advanced, role);
+			let can_defer_rgba_for_processed_cache =
+				source_metadata_key.is_some() && compression_preference == TextureCompressionPreference::Source;
+			let (payload, cache_event, compressed_cache_event, processed_w, processed_h) = if can_defer_rgba_for_processed_cache {
+				let source_key = source_metadata_key.expect("checked above");
+				let processed_start = Instant::now();
+				let mut deferred_rgba_elapsed = Duration::ZERO;
+				let (processed, cache_event) = load_or_build_processed_texture_with_rgba(
 					src_w,
 					src_h,
 					texture_max_dimension,
 					role,
+					mipmap_filter,
+					processed_texture_cache,
+					source_key,
+					|| {
+						let rgba_start = Instant::now();
+						let rgba = im.rgba8_compat_pixels();
+						deferred_rgba_elapsed += rgba_start.elapsed();
+						rgba
+					},
+				);
+				image_prepare_timings.rgba += deferred_rgba_elapsed;
+				image_prepare_timings.processed += processed_start.elapsed().saturating_sub(deferred_rgba_elapsed);
+				let processed_w = processed.width;
+				let processed_h = processed.height;
+				let payload_start = Instant::now();
+				let (payload, compressed_cache_event) = texture_upload_payload(
+					processed,
 					texture_compression,
 					texture_compression_advanced,
+					role,
 					texture_compression_bc_supported,
-					source_key,
-				)
-			});
-			let compressed_cache_lookup = compressed_cache_lookup.flatten();
-			let compressed_cache_hit = compressed_cache_lookup.as_ref().and_then(|lookup| {
-				read_compressed_texture_cache(&lookup.path, lookup.key, lookup.kind).map(|payload| {
-					(
-						payload,
-						TextureCacheEvent {
-							hit: true,
-							miss: false,
-							write: false,
-						},
-						lookup.processed_width,
-						lookup.processed_height,
+					block_compression_encoder,
+					block_compression_cpu_threads,
+					gpu_texture_compression.as_mut(),
+					processed_texture_cache,
+					None,
+					false,
+				);
+				image_prepare_timings.payload += payload_start.elapsed();
+				(payload, cache_event, compressed_cache_event, processed_w, processed_h)
+			} else {
+				let rgba_start = Instant::now();
+				let rgba_compat = im.rgba8_compat_pixels();
+				let rgba = skin_tone_override.unwrap_or(rgba_compat.as_ref());
+				image_prepare_timings.rgba += rgba_start.elapsed();
+				let source_key = source_metadata_key
+					.unwrap_or_else(|| texture_cache_key(src_w, src_h, texture_max_dimension, role, mipmap_filter, rgba));
+				let cache_lookup_start = Instant::now();
+				let compressed_cache_lookup = processed_texture_cache.then(|| {
+					compressed_cache_lookup_from_source(
+						rgba,
+						src_w,
+						src_h,
+						texture_max_dimension,
+						role,
+						texture_compression,
+						texture_compression_advanced,
+						texture_compression_bc_supported,
+						source_key,
 					)
-				})
-			});
-			let (payload, cache_event, compressed_cache_event, processed_w, processed_h) =
+				});
+				let compressed_cache_lookup = compressed_cache_lookup.flatten();
+				image_prepare_timings.cache_lookup += cache_lookup_start.elapsed();
+				let cache_read_start = Instant::now();
+				let compressed_cache_hit = compressed_cache_lookup.as_ref().and_then(|lookup| {
+					read_compressed_texture_cache(&lookup.path, lookup.key, lookup.kind).map(|payload| {
+						(
+							payload,
+							TextureCacheEvent {
+								hit: true,
+								miss: false,
+								write: false,
+							},
+							lookup.processed_width,
+							lookup.processed_height,
+						)
+					})
+				});
+				image_prepare_timings.cache_read += cache_read_start.elapsed();
 				if let Some((payload, compressed_cache_event, processed_w, processed_h)) = compressed_cache_hit {
 					(
 						payload,
@@ -8380,6 +8505,7 @@ impl SceneMeshes {
 						processed_h,
 					)
 				} else {
+					let processed_start = Instant::now();
 					let (processed, cache_event) = load_or_build_processed_texture(
 						rgba,
 						src_w,
@@ -8390,6 +8516,7 @@ impl SceneMeshes {
 						processed_texture_cache,
 						source_key,
 					);
+					image_prepare_timings.processed += processed_start.elapsed();
 					let processed_w = processed.width;
 					let processed_h = processed.height;
 					if gpu_texture_compression_enabled
@@ -8406,6 +8533,7 @@ impl SceneMeshes {
 						report("gpu-upload", total_steps, "Preparing GPU texture compression".to_string());
 						gpu_texture_compression = Some(create_vulkan_gpu_texture_compression_context()?);
 					}
+					let payload_start = Instant::now();
 					let (payload, compressed_cache_event) = texture_upload_payload(
 						processed,
 						texture_compression,
@@ -8419,8 +8547,10 @@ impl SceneMeshes {
 						compressed_cache_lookup.as_ref(),
 						compressed_cache_lookup.is_some(),
 					);
+					image_prepare_timings.payload += payload_start.elapsed();
 					(payload, cache_event, compressed_cache_event, processed_w, processed_h)
-				};
+				}
+			};
 			// 圧縮テクスチャは block 整列 (4 の倍数) に padding されているため、テクスチャ次元・サンプリング寸法も
 			// payload の最上位 mip サイズに揃える。非4倍数寸法を元の論理寸法へ戻すと BCn upload が停止する。
 			// 非圧縮 (Rgba) は元の processed 寸法と一致する。
@@ -8497,16 +8627,24 @@ impl SceneMeshes {
 				height: h,
 			});
 			if image_resident {
+				let upload_start = Instant::now();
 				if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
 					image_views.push(view);
 				} else {
 					image_views.push(transparent_black_view.clone());
 				}
+				image_prepare_timings.upload += upload_start.elapsed();
 			} else {
 				image_views.push(transparent_black_view.clone());
 			}
 			image_texture_slots.push(slot);
-			texture_prepare_summary.record(image_index, role, image_resident, image_prepare_start.elapsed());
+			texture_prepare_summary.record(
+				image_index,
+				role,
+				image_resident,
+				image_prepare_start.elapsed(),
+				image_prepare_timings,
+			);
 		}
 		texture_prepare_summary.log(texture_prepare_start.elapsed());
 

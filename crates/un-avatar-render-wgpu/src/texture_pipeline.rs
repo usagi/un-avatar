@@ -1085,15 +1085,32 @@ pub(crate) fn load_or_build_processed_texture(
 	cache_enabled: bool,
 	key: u64,
 ) -> (ProcessedTexture, TextureCacheEvent) {
+	load_or_build_processed_texture_with_rgba(width, height, max_dimension, role, mipmap_filter, cache_enabled, key, || {
+		Cow::Borrowed(rgba)
+	})
+}
+
+pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
+	width: u32,
+	height: u32,
+	max_dimension: Option<u32>,
+	role: TextureRole,
+	mipmap_filter: TextureMipmapFilter,
+	cache_enabled: bool,
+	key: u64,
+	rgba: impl FnOnce() -> Cow<'a, [u8]>,
+) -> (ProcessedTexture, TextureCacheEvent) {
 	if !cache_enabled {
+		let rgba = rgba();
 		return (
-			build_processed_texture(rgba, width, height, max_dimension, role, mipmap_filter),
+			build_processed_texture(rgba.as_ref(), width, height, max_dimension, role, mipmap_filter),
 			TextureCacheEvent::DISABLED,
 		);
 	}
 	let Some(cache_dir) = processed_texture_cache_dir() else {
+		let rgba = rgba();
 		return (
-			build_processed_texture(rgba, width, height, max_dimension, role, mipmap_filter),
+			build_processed_texture(rgba.as_ref(), width, height, max_dimension, role, mipmap_filter),
 			TextureCacheEvent::DISABLED,
 		);
 	};
@@ -1108,7 +1125,8 @@ pub(crate) fn load_or_build_processed_texture(
 			},
 		);
 	}
-	let texture = build_processed_texture(rgba, width, height, max_dimension, role, mipmap_filter);
+	let rgba = rgba();
+	let texture = build_processed_texture(rgba.as_ref(), width, height, max_dimension, role, mipmap_filter);
 	let write = write_processed_texture_cache(&path, key, &texture);
 	(
 		texture,
