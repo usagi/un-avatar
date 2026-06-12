@@ -246,90 +246,147 @@ fn collect_glb_image_source_metadata(root: &Value, bin: &[u8]) -> Vec<Option<Una
 	};
 	let buffer_views = root.get("bufferViews").and_then(Value::as_array);
 	let samplers = image_samplers_from_root_json(root);
+	let image_count = images.len();
+	if image_count == 0 {
+		return Vec::new();
+	}
+	let worker_count = std::thread::available_parallelism()
+		.map(|n| n.get())
+		.unwrap_or(1)
+		.clamp(1, 8)
+		.min(image_count);
+	let chunk_size = image_count.div_ceil(worker_count);
+	let chunks = std::thread::scope(|scope| {
+		let mut handles = Vec::with_capacity(worker_count);
+		for start in (0..image_count).step_by(chunk_size) {
+			let end = (start + chunk_size).min(image_count);
+			let images = images;
+			let samplers = &samplers;
+			handles.push(scope.spawn(move || {
+				let mut out = Vec::with_capacity(end - start);
+				for image_index in start..end {
+					let image = &images[image_index];
+					out.push((
+						image_index,
+						glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, samplers),
+					));
+				}
+				out
+			}));
+		}
+		handles
+			.into_iter()
+			.map(|handle| handle.join().expect("GLB image source metadata worker panicked"))
+			.collect::<Vec<_>>()
+	});
+	let mut out = vec![None; image_count];
+	for chunk in chunks {
+		for (image_index, metadata) in chunk {
+			out[image_index] = metadata;
+		}
+	}
+	out
+}
+
+fn glb_image_source_metadata_from_json_image(
+	image_index: usize,
+	image: &Value,
+	buffer_views: Option<&Vec<Value>>,
+	bin: &[u8],
+	samplers: &[Option<UnaTextureSampler>],
+) -> Option<UnaImageSourceMetadata> {
+	let sampler = samplers.get(image_index).copied().flatten();
+	let name = image.get("name").and_then(Value::as_str).map(str::to_string);
+	let mime_type = image.get("mimeType").and_then(Value::as_str).map(str::to_string);
+	let image_metadata = unavatar_image_metadata_from_image_json(image);
+	if let Some(uri) = image.get("uri").and_then(Value::as_str) {
+		return Some(UnaImageSourceMetadata {
+			name,
+			mime_type,
+			uri: Some(uri.to_string()),
+			source_pixel_format: image_metadata
+				.as_ref()
+				.and_then(|metadata| json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))),
+			channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+			color_space: image_metadata
+				.as_ref()
+				.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+			texture_type: image_metadata
+				.as_ref()
+				.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+			texture_shape: image_metadata
+				.as_ref()
+				.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+			source_layout: image_metadata
+				.as_ref()
+				.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+			unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+				json_string(
+					metadata
+						.get("unityGenerateCubemap")
+						.or_else(|| metadata.get("unity_generate_cubemap")),
+				)
+			}),
+			srgb: image_metadata
+				.as_ref()
+				.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
+			sampler,
+			byte_length: 0,
+			source_hash: fnv1a64(uri.as_bytes()),
+		});
+	}
+	let view_index = image.get("bufferView").and_then(Value::as_u64)? as usize;
+	let view = buffer_views?.get(view_index)?;
+	let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+	let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
+	let bytes = bin.get(offset..offset.checked_add(length)?)?;
+	Some(UnaImageSourceMetadata {
+		name,
+		mime_type,
+		uri: None,
+		source_pixel_format: image_metadata
+			.as_ref()
+			.and_then(|metadata| json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))),
+		channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
+		color_space: image_metadata
+			.as_ref()
+			.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
+		texture_type: image_metadata
+			.as_ref()
+			.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
+		texture_shape: image_metadata
+			.as_ref()
+			.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
+		source_layout: image_metadata
+			.as_ref()
+			.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
+		unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
+			json_string(
+				metadata
+					.get("unityGenerateCubemap")
+					.or_else(|| metadata.get("unity_generate_cubemap")),
+			)
+		}),
+		srgb: image_metadata
+			.as_ref()
+			.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
+		sampler,
+		byte_length: bytes.len() as u64,
+		source_hash: fnv1a64(bytes),
+	})
+}
+
+#[cfg(test)]
+fn collect_glb_image_source_metadata_serial(root: &Value, bin: &[u8]) -> Vec<Option<UnaImageSourceMetadata>> {
+	let Some(images) = root.get("images").and_then(Value::as_array) else {
+		return Vec::new();
+	};
+	let buffer_views = root.get("bufferViews").and_then(Value::as_array);
+	let samplers = image_samplers_from_root_json(root);
 	images
 		.iter()
 		.enumerate()
-		.map(|(image_index, image)| {
-			let sampler = samplers.get(image_index).copied().flatten();
-			let name = image.get("name").and_then(Value::as_str).map(str::to_string);
-			let mime_type = image.get("mimeType").and_then(Value::as_str).map(str::to_string);
-			let image_metadata = unavatar_image_metadata_from_image_json(image);
-			if let Some(uri) = image.get("uri").and_then(Value::as_str) {
-				return Some(UnaImageSourceMetadata {
-					name,
-					mime_type,
-					uri: Some(uri.to_string()),
-					source_pixel_format: image_metadata.as_ref().and_then(|metadata| {
-						json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))
-					}),
-					channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
-					color_space: image_metadata
-						.as_ref()
-						.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
-					texture_type: image_metadata
-						.as_ref()
-						.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
-					texture_shape: image_metadata
-						.as_ref()
-						.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
-					source_layout: image_metadata
-						.as_ref()
-						.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
-					unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
-						json_string(
-							metadata
-								.get("unityGenerateCubemap")
-								.or_else(|| metadata.get("unity_generate_cubemap")),
-						)
-					}),
-					srgb: image_metadata
-						.as_ref()
-						.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
-					sampler,
-					byte_length: 0,
-					source_hash: fnv1a64(uri.as_bytes()),
-				});
-			}
-			let view_index = image.get("bufferView").and_then(Value::as_u64)? as usize;
-			let view = buffer_views?.get(view_index)?;
-			let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
-			let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
-			let bytes = bin.get(offset..offset.checked_add(length)?)?;
-			Some(UnaImageSourceMetadata {
-				name,
-				mime_type,
-				uri: None,
-				source_pixel_format: image_metadata
-					.as_ref()
-					.and_then(|metadata| json_string(metadata.get("sourcePixelFormat").or_else(|| metadata.get("source_pixel_format")))),
-				channels: image_metadata.as_ref().and_then(|metadata| json_string(metadata.get("channels"))),
-				color_space: image_metadata
-					.as_ref()
-					.and_then(|metadata| json_string(metadata.get("colorSpace").or_else(|| metadata.get("color_space")))),
-				texture_type: image_metadata
-					.as_ref()
-					.and_then(|metadata| json_string(metadata.get("textureType").or_else(|| metadata.get("texture_type")))),
-				texture_shape: image_metadata
-					.as_ref()
-					.and_then(|metadata| json_string(metadata.get("textureShape").or_else(|| metadata.get("texture_shape")))),
-				source_layout: image_metadata
-					.as_ref()
-					.and_then(|metadata| json_string(metadata.get("sourceLayout").or_else(|| metadata.get("source_layout")))),
-				unity_generate_cubemap: image_metadata.as_ref().and_then(|metadata| {
-					json_string(
-						metadata
-							.get("unityGenerateCubemap")
-							.or_else(|| metadata.get("unity_generate_cubemap")),
-					)
-				}),
-				srgb: image_metadata
-					.as_ref()
-					.and_then(|metadata| metadata.get("sRGB").or_else(|| metadata.get("srgb")).and_then(Value::as_bool)),
-				sampler,
-				byte_length: bytes.len() as u64,
-				source_hash: fnv1a64(bytes),
-			})
-		})
+		.map(|(image_index, image)| glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers))
 		.collect()
 }
 
@@ -11349,6 +11406,32 @@ mod tests {
 		assert_eq!(source.mime_type.as_deref(), Some("image/png"));
 		assert_eq!(source.byte_length, 3);
 		assert_eq!(source.source_hash, fnv1a64(&[1, 2, 3]));
+	}
+
+	#[test]
+	fn parallel_glb_image_source_metadata_matches_serial_order() {
+		let root: Value = serde_json::from_str(
+			r#"{
+				"images": [
+					{"name": "a", "bufferView": 0, "mimeType": "image/png"},
+					{"name": "b", "bufferView": 1, "mimeType": "image/jpeg"},
+					{"name": "c", "uri": "textures/c.png"},
+					{"name": "d", "bufferView": 2, "mimeType": "image/png"}
+				],
+				"bufferViews": [
+					{"buffer": 0, "byteOffset": 0, "byteLength": 4},
+					{"buffer": 0, "byteOffset": 4, "byteLength": 4},
+					{"buffer": 0, "byteOffset": 8, "byteLength": 4}
+				]
+			}"#,
+		)
+		.unwrap();
+		let bin = (0u8..16).collect::<Vec<_>>();
+
+		assert_eq!(
+			collect_glb_image_source_metadata(&root, &bin),
+			collect_glb_image_source_metadata_serial(&root, &bin)
+		);
 	}
 
 	#[test]
