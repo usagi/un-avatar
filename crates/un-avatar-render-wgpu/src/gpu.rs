@@ -3487,7 +3487,7 @@ pub(crate) struct GpuState {
 	bind_group_layout: wgpu::BindGroupLayout,
 	bind_group: wgpu::BindGroup,
 	pipeline: wgpu::RenderPipeline,
-	axes_pipeline: wgpu::RenderPipeline,
+	axes_pipeline: Option<wgpu::RenderPipeline>,
 	bone_collider_pipeline: Option<wgpu::RenderPipeline>,
 	bone_collider_vertex_buffer: Option<wgpu::Buffer>,
 	bone_collider_vertex_capacity: usize,
@@ -3749,7 +3749,6 @@ impl GpuState {
 
 		let aa_sample_count = aa_sample_count(aa);
 		let pipeline = create_sky_pipeline(&device, &bind_group_layout, format, aa_sample_count);
-		let axes_pipeline = create_axes_pipeline(&device, &bind_group_layout, format, aa_sample_count);
 		let bone_collider_pipeline = None;
 		let startup_splash_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("startup_splash"),
@@ -3861,7 +3860,7 @@ impl GpuState {
 			bind_group_layout,
 			bind_group,
 			pipeline,
-			axes_pipeline,
+			axes_pipeline: None,
 			bone_collider_pipeline,
 			bone_collider_vertex_buffer: None,
 			bone_collider_vertex_capacity: 0,
@@ -4262,6 +4261,9 @@ impl GpuState {
 	/// XYZ デバッグ軸表示の ON/OFF。
 	pub fn set_show_axes(&mut self, enabled: bool) {
 		self.show_axes = enabled;
+		if enabled {
+			self.ensure_axes_pipeline();
+		}
 	}
 
 	pub fn set_show_bone_colliders(&mut self, enabled: bool) {
@@ -4429,6 +4431,18 @@ impl GpuState {
 		if self.bone_collider_pipeline.is_none() {
 			let sample_count = aa_sample_count(self.aa);
 			self.bone_collider_pipeline = Some(create_bone_collider_pipeline(
+				&self.device,
+				&self.bind_group_layout,
+				self.config.format,
+				sample_count,
+			));
+		}
+	}
+
+	fn ensure_axes_pipeline(&mut self) {
+		if self.axes_pipeline.is_none() {
+			let sample_count = aa_sample_count(self.aa);
+			self.axes_pipeline = Some(create_axes_pipeline(
 				&self.device,
 				&self.bind_group_layout,
 				self.config.format,
@@ -4690,6 +4704,9 @@ impl GpuState {
 		if draw_contact_shadow {
 			self.ensure_contact_shadow_pipeline();
 		}
+		if self.show_axes {
+			self.ensure_axes_pipeline();
+		}
 		let mut main_resolve: Option<&wgpu::TextureView> = None;
 		let (main_color, main_depth) = if let Some(post) = &post {
 			if let Some(msaa) = &msaa {
@@ -4800,7 +4817,7 @@ impl GpuState {
 				sm.draw_blended_after_screen_refraction(&mut pass);
 			}
 			if self.show_axes {
-				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_pipeline(self.axes_pipeline.as_ref().expect("axes pipeline is initialized"));
 				pass.set_bind_group(0, &self.bind_group, &[]);
 				pass.draw(0..6, 0..1);
 			}
@@ -4844,7 +4861,7 @@ impl GpuState {
 				pass.draw(0..3, 0..1);
 			}
 			if self.show_axes && draw_scene {
-				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_pipeline(self.axes_pipeline.as_ref().expect("axes pipeline is initialized"));
 				pass.set_bind_group(0, &self.bind_group, &[]);
 				pass.draw(0..6, 0..1);
 			}
@@ -6514,6 +6531,9 @@ impl GpuState {
 		if draw_contact_shadow {
 			self.ensure_contact_shadow_pipeline();
 		}
+		if self.show_axes {
+			self.ensure_axes_pipeline();
+		}
 		if self.show_bone_colliders && self.bone_collider_vertex_count > 0 {
 			self.ensure_bone_collider_pipeline();
 		}
@@ -6669,7 +6689,7 @@ impl GpuState {
 				sm.draw_blended_after_screen_refraction(&mut pass);
 			}
 			if self.show_axes {
-				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_pipeline(self.axes_pipeline.as_ref().expect("axes pipeline is initialized"));
 				pass.set_bind_group(0, &self.bind_group, &[]);
 				pass.draw(0..6, 0..1);
 			}
@@ -6737,7 +6757,7 @@ impl GpuState {
 				pass.draw(0..3, 0..1);
 			}
 			if self.show_axes && draw_scene {
-				pass.set_pipeline(&self.axes_pipeline);
+				pass.set_pipeline(self.axes_pipeline.as_ref().expect("axes pipeline is initialized"));
 				pass.set_bind_group(0, &self.bind_group, &[]);
 				pass.draw(0..6, 0..1);
 			}
