@@ -59,6 +59,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
 1. PostProcess pipeline lazy creation
    - 現状は outline / bloom / FXAA / SMAA などの post pipeline を起動時にまとめて作る。実際に有効な AA、Bloom、avatar silhouette outline、SSAO / color adjust / screen refraction に必要な pipeline だけを作る。
    - resize / runtime option change で後から必要になった pipeline はその時点で作る。起動時に未使用 shader を compile しない。
+   - 2026-06-13 に `PostProcess::new` / resize 時の unconditional FXAA / color-adjust pipeline creation を廃止し、各 encode path の初回呼び出しでだけ作るようにした。SMAA / Bloom / Silhouette Outline は既存の lazy pipeline path を維持する。
 2. Pipeline cache / prewarm
    - Vulkan `PipelineCache` は既に導入済み。透明 window など backend 制約で Vulkan cache を使えない場合は UI / profile diagnostics に明示する。
    - Supervisor / renderer warmup mode は、実用前に共有 pipeline cache と texture / compressed texture cache を作る用途として扱う。warmup は通常起動の見た目品質を落とす代替ではない。Renderer CLI は `--prewarm-scene-cache` で、ウィンドウなしに対象profile / wardrobe setのGPU sceneを構築して終了できる。

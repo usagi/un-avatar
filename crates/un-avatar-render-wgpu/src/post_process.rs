@@ -111,8 +111,8 @@ pub(crate) struct PostProcess {
 	avatar_outline_mask_pipeline: Option<wgpu::RenderPipeline>,
 	avatar_outline_smooth_pipeline: Option<wgpu::RenderPipeline>,
 	avatar_outline_pipeline: Option<wgpu::RenderPipeline>,
-	color_adjust_pipeline: wgpu::RenderPipeline,
-	fxaa_pipeline: wgpu::RenderPipeline,
+	color_adjust_pipeline: Option<wgpu::RenderPipeline>,
+	fxaa_pipeline: Option<wgpu::RenderPipeline>,
 	bloom_extract_pipeline: Option<wgpu::RenderPipeline>,
 	bloom_blur_h_pipeline: Option<wgpu::RenderPipeline>,
 	bloom_blur_v_pipeline: Option<wgpu::RenderPipeline>,
@@ -280,9 +280,6 @@ impl PostProcess {
 			&post_uniform,
 			"post-source",
 		);
-		let color_adjust_pipeline =
-			create_post_pipeline(device, &one_texture_layout, format, SHADER_COLOR_ADJUST, "color-adjust", "fs_main");
-		let fxaa_pipeline = create_post_pipeline(device, &one_texture_layout, format, SHADER_FXAA, "fxaa", "fs_main");
 		Self {
 			width,
 			height,
@@ -305,8 +302,8 @@ impl PostProcess {
 			avatar_outline_mask_pipeline: None,
 			avatar_outline_smooth_pipeline: None,
 			avatar_outline_pipeline: None,
-			color_adjust_pipeline,
-			fxaa_pipeline,
+			color_adjust_pipeline: None,
+			fxaa_pipeline: None,
 			bloom_extract_pipeline: None,
 			bloom_blur_h_pipeline: None,
 			bloom_blur_v_pipeline: None,
@@ -355,15 +352,8 @@ impl PostProcess {
 			&self.post_uniform,
 			"post-source",
 		);
-		self.fxaa_pipeline = create_post_pipeline(device, &self.one_texture_layout, format, SHADER_FXAA, "fxaa", "fs_main");
-		self.color_adjust_pipeline = create_post_pipeline(
-			device,
-			&self.one_texture_layout,
-			format,
-			SHADER_COLOR_ADJUST,
-			"color-adjust",
-			"fs_main",
-		);
+		self.fxaa_pipeline = None;
+		self.color_adjust_pipeline = None;
 	}
 
 	pub(crate) fn source_view(&self) -> &wgpu::TextureView {
@@ -408,6 +398,32 @@ impl PostProcess {
 				"avatar-outline-post",
 				"fs_main",
 				Some(wgpu::BlendState::ALPHA_BLENDING),
+			));
+		}
+	}
+
+	fn ensure_color_adjust_pipeline(&mut self, device: &wgpu::Device) {
+		if self.color_adjust_pipeline.is_none() {
+			self.color_adjust_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				self.format,
+				SHADER_COLOR_ADJUST,
+				"color-adjust",
+				"fs_main",
+			));
+		}
+	}
+
+	fn ensure_fxaa_pipeline(&mut self, device: &wgpu::Device) {
+		if self.fxaa_pipeline.is_none() {
+			self.fxaa_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				self.format,
+				SHADER_FXAA,
+				"fxaa",
+				"fs_main",
 			));
 		}
 	}
@@ -640,6 +656,7 @@ impl PostProcess {
 		bloom: BloomOptions,
 		ssao: SsaoOptions,
 	) {
+		self.ensure_color_adjust_pipeline(device);
 		queue.write_buffer(&self.post_uniform, 0, bytemuck::bytes_of(&post_uniform(color, bloom, ssao)));
 		let high_quality_bloom = self.prepare_bloom(device, encoder, bloom);
 		let bind_group = if high_quality_bloom {
@@ -647,6 +664,7 @@ impl PostProcess {
 		} else {
 			&self.source_bind_group
 		};
+		let color_adjust_pipeline = self.color_adjust_pipeline.as_ref().expect("color adjust pipeline is initialized");
 		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 			label: Some("color-adjust"),
 			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -663,7 +681,7 @@ impl PostProcess {
 			occlusion_query_set: None,
 			multiview_mask: None,
 		});
-		pass.set_pipeline(&self.color_adjust_pipeline);
+		pass.set_pipeline(color_adjust_pipeline);
 		pass.set_bind_group(0, bind_group, &[]);
 		pass.draw(0..3, 0..1);
 	}
@@ -678,6 +696,7 @@ impl PostProcess {
 		bloom: BloomOptions,
 		ssao: SsaoOptions,
 	) {
+		self.ensure_fxaa_pipeline(device);
 		queue.write_buffer(&self.post_uniform, 0, bytemuck::bytes_of(&post_uniform(color, bloom, ssao)));
 		let high_quality_bloom = self.prepare_bloom(device, encoder, bloom);
 		let bind_group = if high_quality_bloom {
@@ -685,6 +704,7 @@ impl PostProcess {
 		} else {
 			&self.source_bind_group
 		};
+		let fxaa_pipeline = self.fxaa_pipeline.as_ref().expect("fxaa pipeline is initialized");
 		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 			label: Some("fxaa"),
 			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -701,7 +721,7 @@ impl PostProcess {
 			occlusion_query_set: None,
 			multiview_mask: None,
 		});
-		pass.set_pipeline(&self.fxaa_pipeline);
+		pass.set_pipeline(fxaa_pipeline);
 		pass.set_bind_group(0, bind_group, &[]);
 		pass.draw(0..3, 0..1);
 	}
