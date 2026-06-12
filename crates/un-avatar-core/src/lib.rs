@@ -540,8 +540,9 @@ pub struct UnaRuntimeState {
 	/// this is runtime state so hot-switch clients can observe the active resolver choice.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub active_wardrobe_set: Option<String>,
-	/// Asset groups required by the currently resolved wardrobe set. Source declarations remain in `.unavatar`;
-	/// this records the transient selection for renderer cache planning.
+	/// Resource residency groups required by the currently resolved single wardrobe set. This is not a list of
+	/// wardrobe sets to compose; source declarations remain in `.unavatar`, and this records only the transient
+	/// renderer cache/upload plan.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub active_asset_groups: Vec<String>,
 	/// Last successfully activated runtime action. Action definitions remain in `UnaRuntimeActionSet`;
@@ -6385,13 +6386,13 @@ mod tests {
 		let mut document = UnaDocument::default();
 		document
 			.runtime_model_mut()
-			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "physbone:coat".to_string()]);
 
 		let selection = document.scoped_asset_selection();
 		assert!(selection.owned_active_groups.is_empty());
 		assert_eq!(
 			selection.missing_active_asset_groups,
-			vec!["outfit:coat".to_string(), "texture:red".to_string()]
+			vec!["outfit:coat".to_string(), "physbone:coat".to_string()]
 		);
 		assert!(selection.mesh_primitives.is_empty());
 		assert!(selection.materials.is_empty());
@@ -8318,7 +8319,7 @@ mod tests {
 			.set_active_wardrobe_set(Some("field_drape".to_string()));
 		document
 			.runtime_model_mut()
-			.set_active_asset_groups(vec!["outfit:field_drape".to_string(), "texture:red".to_string()]);
+			.set_active_asset_groups(vec!["".to_string(), "outfit:field_drape".to_string()]);
 		document
 			.runtime_model_mut()
 			.set_last_action_id(Some("wardrobe:field_drape".to_string()));
@@ -8326,13 +8327,13 @@ mod tests {
 		assert_eq!(document.runtime_model().active_wardrobe_set(), Some("field_drape"));
 		assert_eq!(
 			document.runtime_model().active_asset_groups(),
-			&["outfit:field_drape".to_string(), "texture:red".to_string()]
+			&["".to_string(), "outfit:field_drape".to_string()]
 		);
 		assert_eq!(
 			document.runtime_model().resolver_cache_key(),
 			UnaRuntimeResolverCacheKey {
 				wardrobe_set: Some("field_drape".to_string()),
-				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				active_asset_groups: vec!["".to_string(), "outfit:field_drape".to_string()],
 				modular_avatar_components_hash: None,
 				material_source_hash: None,
 				mesh_source_hash: None,
@@ -8347,7 +8348,7 @@ mod tests {
 			document.runtime_model().resolver_cache_key(),
 			UnaRuntimeResolverCacheKey {
 				wardrobe_set: Some("field_drape".to_string()),
-				active_asset_groups: vec!["outfit:field_drape".to_string(), "texture:red".to_string()],
+				active_asset_groups: vec!["".to_string(), "outfit:field_drape".to_string()],
 				modular_avatar_components_hash: None,
 				material_source_hash: None,
 				mesh_source_hash: None,
@@ -8360,7 +8361,7 @@ mod tests {
 		assert_eq!(decoded.runtime_model().active_wardrobe_set(), Some("field_drape"));
 		assert_eq!(
 			decoded.runtime_model().active_asset_groups(),
-			&["outfit:field_drape".to_string(), "texture:red".to_string()]
+			&["".to_string(), "outfit:field_drape".to_string()]
 		);
 		assert_eq!(decoded.runtime_model().last_action_id(), Some("wardrobe:field_drape"));
 		assert_eq!(decoded.runtime_model().runtime_parameter_values().get("Outfit"), Some(&3.0));

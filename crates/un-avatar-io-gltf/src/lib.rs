@@ -16878,11 +16878,11 @@ mod tests {
 				}],
 				"wardrobe": {
 					"asset_group_ownership": [{
-						"id": "texture:red",
+						"id": "effect:glow",
 						"mesh_primitives": [{"mesh": 6, "primitive": 7}],
 						"materials": [8],
 						"textures": [9],
-						"dynamics": ["spring:red"]
+						"dynamics": ["spring:glow"]
 					}]
 				}
 			}),

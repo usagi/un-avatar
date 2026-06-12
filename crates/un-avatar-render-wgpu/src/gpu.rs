@@ -7466,10 +7466,10 @@ mod tests {
 					"wardrobe": {
 						"sets": [{
 							"id": "base",
-							"assetGroups": ["avatar:base", "texture:red"]
+							"assetGroups": ["avatar:base"]
 						}, {
 							"id": "coat",
-							"assetGroups": ["outfit:coat", "texture:red"]
+							"assetGroups": ["outfit:coat"]
 						}]
 					}
 				}),
@@ -7478,21 +7478,18 @@ mod tests {
 		};
 		document
 			.runtime_model_mut()
-			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+			.set_active_asset_groups(vec!["outfit:coat".to_string()]);
 
 		let plan = wardrobe_asset_upload_plan_for_document(&document);
 		assert_eq!(plan.mode, "all-resident");
-		assert_eq!(plan.active_asset_groups, vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+		assert_eq!(plan.active_asset_groups, vec!["outfit:coat".to_string()]);
 		assert_eq!(
 			plan.declared_asset_groups,
-			vec!["avatar:base".to_string(), "outfit:coat".to_string(), "texture:red".to_string()]
+			vec!["avatar:base".to_string(), "outfit:coat".to_string()]
 		);
 		assert!(!plan.scoped_upload_supported);
 		assert!(plan.all_resident);
-		assert_eq!(
-			plan.missing_active_asset_groups,
-			vec!["outfit:coat".to_string(), "texture:red".to_string()]
-		);
+		assert_eq!(plan.missing_active_asset_groups, vec!["outfit:coat".to_string()]);
 		assert_eq!(plan.resident_mesh_primitive_count, 0);
 		assert_eq!(plan.resident_material_count, 0);
 		assert_eq!(plan.resident_image_count, 0);

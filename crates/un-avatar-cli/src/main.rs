@@ -6620,11 +6620,11 @@ mod tests {
 							"operations": [{"op": "subtreeEnabled"}]
 						}, {
 							"id": "jacket",
-							"assetGroups": ["outfit:jacket", "texture:red"],
+							"assetGroups": ["outfit:jacket"],
 							"operations": [{"op": "nodeVisibility"}]
 						}, {
 							"id": "pants",
-							"assetGroups": ["outfit:pants", "texture:red"],
+							"assetGroups": ["outfit:pants"],
 							"operations": [{"op": "nodeVisibility"}]
 						}, {
 							"id": "hat",
@@ -6946,7 +6946,7 @@ mod tests {
 		assert_eq!(sync.bindings[0].remap_key_count, 2);
 		assert_eq!(
 			unavatar.asset_group_ids,
-			vec!["outfit:jacket".to_string(), "outfit:pants".to_string(), "texture:red".to_string()]
+			vec!["outfit:jacket".to_string(), "outfit:pants".to_string()]
 		);
 		let vertex_filter = &unavatar.modular_avatar_vertex_filter_groups[0];
 		assert_eq!(vertex_filter.short_type, "ModularAvatarMeshCutter");
@@ -6999,7 +6999,7 @@ mod tests {
 	fn diagnose_report_keeps_scoped_missing_groups_without_scene() {
 		let mut doc = UnaDocument::default();
 		doc.runtime_model_mut()
-			.set_active_asset_groups(vec!["outfit:coat".to_string(), "texture:red".to_string()]);
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "physbone:coat".to_string()]);
 
 		let report = build_diagnose_report(
 			Path::new("avatar.unavatar"),
@@ -7020,7 +7020,7 @@ mod tests {
 		assert_eq!(report.scene.scoped_active_asset_group_count, 0);
 		assert_eq!(
 			report.scene.scoped_missing_active_asset_groups,
-			vec!["outfit:coat".to_string(), "texture:red".to_string()]
+			vec!["outfit:coat".to_string(), "physbone:coat".to_string()]
 		);
 		assert_eq!(report.scene.scoped_resident_mesh_primitive_count, 0);
 		assert_eq!(report.scene.scoped_resident_material_count, 0);
