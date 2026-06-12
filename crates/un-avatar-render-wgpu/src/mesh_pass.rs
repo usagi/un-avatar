@@ -807,6 +807,13 @@ struct MorphGpuResources {
 	bind_group: wgpu::BindGroup,
 }
 
+#[derive(Clone)]
+struct SharedMorphDeltaResources {
+	meta_buffer: wgpu::Buffer,
+	delta_buffer: wgpu::Buffer,
+	target_count: u32,
+}
+
 const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
 const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3120);
@@ -1014,6 +1021,7 @@ impl SceneAssetResidencySets {
 	}
 }
 
+#[derive(Clone)]
 struct ExpandedPrimitive {
 	verts: Vec<Vertex>,
 	indices: Vec<u32>,
@@ -1021,6 +1029,20 @@ struct ExpandedPrimitive {
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
 	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
+}
+
+#[derive(Clone)]
+struct ExpandedMorphPayload {
+	morph_pos: Vec<Vec<[f32; 3]>>,
+	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_source_indices: Vec<usize>,
+	default_morph_weights: Vec<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ExpandedPrimitiveCacheKey {
+	vertex_payload_id: u64,
+	dynamic_morph_targets: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -2223,7 +2245,38 @@ fn fill_missing_tangents(verts: &mut [Vertex], indices: &[u32]) {
 	}
 }
 
+fn primitive_indices(buf: &UnaMeshBuffers) -> Vec<u32> {
+	let vertex_count = buf.positions.len();
+	match &buf.indices {
+		Some(idx) => {
+			let mut out_idx = Vec::with_capacity(idx.len());
+			for &pi in idx {
+				if (pi as usize) < vertex_count {
+					out_idx.push(pi);
+				}
+			}
+			out_idx
+		}
+		None => (0..vertex_count as u32).collect(),
+	}
+}
+
+fn primitive_expand_cache_safe(buf: &UnaMeshBuffers) -> bool {
+	buf.tangents.as_ref().is_some_and(|tangents| {
+		tangents.len() >= buf.positions.len() && tangents.iter().copied().all(|tangent| !tangent_is_missing(tangent))
+	})
+}
+
+#[cfg(test)]
 fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSet<usize>>) -> Option<ExpandedPrimitive> {
+	expand_primitive_with_cached_morph(buf, dynamic_morph_targets, None)
+}
+
+fn expand_primitive_with_cached_morph(
+	buf: &UnaMeshBuffers,
+	dynamic_morph_targets: Option<&BTreeSet<usize>>,
+	cached_morph_payload: Option<&ExpandedMorphPayload>,
+) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
 	let positions = &buf.positions;
 	if positions.is_empty() {
@@ -2242,17 +2295,27 @@ fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSe
 	let w_default = [1.0_f32, 0.0, 0.0, 0.0];
 
 	let num_morph = buf.morph_targets.len();
-	let morph_source_indices: Vec<usize> = dynamic_morph_targets
-		.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
-		.unwrap_or_else(|| (0..num_morph).collect());
+	let cached_morph_payload = cached_morph_payload.filter(|payload| payload.morph_source_indices.iter().all(|&index| index < num_morph));
+	let morph_source_indices: Vec<usize> = cached_morph_payload.map_or_else(
+		|| {
+			dynamic_morph_targets
+				.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
+				.unwrap_or_else(|| (0..num_morph).collect())
+		},
+		|payload| payload.morph_source_indices.clone(),
+	);
 	let vertex_capacity = positions.len();
-	let mut morph_push: Vec<Vec<[f32; 3]>> = morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect();
+	let mut morph_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() {
+		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
+	} else {
+		None
+	};
 	let has_morph_normals = morph_source_indices.iter().any(|&target_index| {
 		buf.morph_targets
 			.get(target_index)
 			.is_some_and(|target| target.normal_deltas.is_some())
 	});
-	let mut morph_nrm_push: Option<Vec<Vec<[f32; 3]>>> = if has_morph_normals {
+	let mut morph_nrm_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() && has_morph_normals {
 		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
 	} else {
 		None
@@ -2315,14 +2378,16 @@ fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSe
 			weights: we,
 			color,
 		});
-		for (&target_index, bucket) in morph_source_indices.iter().zip(morph_push.iter_mut()) {
-			let d = buf
-				.morph_targets
-				.get(target_index)
-				.and_then(|target| target.position_deltas.get(pi))
-				.copied()
-				.unwrap_or([0.0, 0.0, 0.0]);
-			bucket.push(d);
+		if let Some(morph_push) = morph_push.as_mut() {
+			for (&target_index, bucket) in morph_source_indices.iter().zip(morph_push.iter_mut()) {
+				let d = buf
+					.morph_targets
+					.get(target_index)
+					.and_then(|target| target.position_deltas.get(pi))
+					.copied()
+					.unwrap_or([0.0, 0.0, 0.0]);
+				bucket.push(d);
+			}
 		}
 		if let Some(ref mut normal_buckets) = morph_nrm_push {
 			for (&target_index, bucket) in morph_source_indices.iter().zip(normal_buckets.iter_mut()) {
@@ -2337,34 +2402,30 @@ fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSe
 		}
 	}
 
-	let indices = match &buf.indices {
-		Some(idx) => {
-			let mut out_idx = Vec::with_capacity(idx.len());
-			for &pi in idx {
-				if (pi as usize) < positions.len() {
-					out_idx.push(pi);
-				}
-			}
-			out_idx
-		}
-		None => (0..positions.len() as u32).collect(),
-	};
+	let indices = primitive_indices(buf);
 
 	if verts.is_empty() || indices.is_empty() {
 		return None;
 	}
 	fill_missing_tangents(&mut verts, &indices);
 
-	Some(ExpandedPrimitive {
-		verts,
-		indices,
-		morph_pos: morph_push,
+	let morph_payload = cached_morph_payload.cloned().unwrap_or_else(|| ExpandedMorphPayload {
+		morph_pos: morph_push.unwrap_or_default(),
 		morph_nrm: morph_nrm_push,
 		default_morph_weights: morph_source_indices
 			.iter()
 			.map(|&target_index| default_morph_weight_for(buf, target_index))
 			.collect(),
 		morph_source_indices,
+	});
+
+	Some(ExpandedPrimitive {
+		verts,
+		indices,
+		morph_pos: morph_payload.morph_pos,
+		morph_nrm: morph_payload.morph_nrm,
+		default_morph_weights: morph_payload.default_morph_weights,
+		morph_source_indices: morph_payload.morph_source_indices,
 	})
 }
 
@@ -2707,6 +2768,78 @@ fn create_morph_resources(
 		meta_buffer,
 		weight_buffer,
 		delta_buffer,
+		bind_group,
+	}
+}
+
+fn create_shared_morph_delta_resources(
+	device: &wgpu::Device,
+	queue: &wgpu::Queue,
+	target_count: u32,
+	vertex_count: u32,
+	morph_deltas: &[[f32; 4]],
+) -> SharedMorphDeltaResources {
+	let morph_meta = MorphMetaGpu {
+		target_count,
+		vertex_count,
+		_pad: [0; 2],
+	};
+	let meta_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+		label: Some("mesh_morph_meta_shared"),
+		contents: bytemuck::bytes_of(&morph_meta),
+		usage: wgpu::BufferUsages::UNIFORM,
+	});
+	let delta_size = ((morph_deltas.len() * std::mem::size_of::<[f32; 4]>()) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
+	let delta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+		label: Some("mesh_morph_deltas_shared"),
+		size: delta_size,
+		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+		mapped_at_creation: false,
+	});
+	if !morph_deltas.is_empty() {
+		queue.write_buffer(&delta_buffer, 0, bytemuck::cast_slice(morph_deltas));
+	}
+	SharedMorphDeltaResources {
+		meta_buffer,
+		delta_buffer,
+		target_count,
+	}
+}
+
+fn create_morph_resources_with_shared_deltas(
+	device: &wgpu::Device,
+	layout: &wgpu::BindGroupLayout,
+	shared: &SharedMorphDeltaResources,
+) -> MorphGpuResources {
+	let weight_size = ((shared.target_count as u64) * std::mem::size_of::<f32>() as u64).max(MORPH_WEIGHT_BUFFER_MIN_SIZE);
+	let weight_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+		label: Some("mesh_morph_weights"),
+		size: weight_size,
+		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+		mapped_at_creation: false,
+	});
+	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+		label: Some("mesh_morph_bg"),
+		layout,
+		entries: &[
+			wgpu::BindGroupEntry {
+				binding: 0,
+				resource: shared.meta_buffer.as_entire_binding(),
+			},
+			wgpu::BindGroupEntry {
+				binding: 1,
+				resource: weight_buffer.as_entire_binding(),
+			},
+			wgpu::BindGroupEntry {
+				binding: 2,
+				resource: shared.delta_buffer.as_entire_binding(),
+			},
+		],
+	});
+	MorphGpuResources {
+		meta_buffer: shared.meta_buffer.clone(),
+		weight_buffer,
+		delta_buffer: shared.delta_buffer.clone(),
 		bind_group,
 	}
 }
@@ -7388,6 +7521,9 @@ impl SceneMeshes {
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		let mut empty_morph_resources: Option<MorphGpuResources> = None;
+		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitive> = BTreeMap::new();
+		let mut expanded_morph_payload_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedMorphPayload> = BTreeMap::new();
+		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
 		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
@@ -7416,7 +7552,66 @@ impl SceneMeshes {
 				let original_expression_bindings = expression_bindings.get(&(mesh_i, prim_i)).map(Vec::as_slice).unwrap_or(&[]);
 				let dynamic_morph_targets = dynamic_morph_target_indices(buf, original_expression_bindings, opts.debug_zero_morphs);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let Some(exp) = expand_primitive(buf, Some(&dynamic_morph_targets)) else {
+				let expanded_cache_key = buf
+					.vertex_payload_id
+					.filter(|_| primitive_expand_cache_safe(buf))
+					.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
+						vertex_payload_id,
+						dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+					});
+				let morph_delta_cache_key = buf.vertex_payload_id.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
+					vertex_payload_id,
+					dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+				});
+				let exp = if let Some(cache_key) = expanded_cache_key.as_ref() {
+					if let Some(exp) = expanded_primitive_cache.get(cache_key).cloned() {
+						let mut exp = exp;
+						exp.indices = primitive_indices(buf);
+						Some(exp)
+					} else {
+						let exp = expand_primitive_with_cached_morph(
+							buf,
+							Some(&dynamic_morph_targets),
+							morph_delta_cache_key
+								.as_ref()
+								.and_then(|cache_key| expanded_morph_payload_cache.get(cache_key)),
+						);
+						if let Some(exp) = &exp {
+							expanded_primitive_cache.insert(cache_key.clone(), exp.clone());
+							if let Some(morph_cache_key) = morph_delta_cache_key.as_ref() {
+								expanded_morph_payload_cache
+									.entry(morph_cache_key.clone())
+									.or_insert_with(|| ExpandedMorphPayload {
+										morph_pos: exp.morph_pos.clone(),
+										morph_nrm: exp.morph_nrm.clone(),
+										morph_source_indices: exp.morph_source_indices.clone(),
+										default_morph_weights: exp.default_morph_weights.clone(),
+									});
+							}
+						}
+						exp
+					}
+				} else {
+					let exp = expand_primitive_with_cached_morph(
+						buf,
+						Some(&dynamic_morph_targets),
+						morph_delta_cache_key
+							.as_ref()
+							.and_then(|cache_key| expanded_morph_payload_cache.get(cache_key)),
+					);
+					if let (Some(cache_key), Some(exp)) = (morph_delta_cache_key.as_ref(), exp.as_ref()) {
+						expanded_morph_payload_cache
+							.entry(cache_key.clone())
+							.or_insert_with(|| ExpandedMorphPayload {
+								morph_pos: exp.morph_pos.clone(),
+								morph_nrm: exp.morph_nrm.clone(),
+								morph_source_indices: exp.morph_source_indices.clone(),
+								default_morph_weights: exp.default_morph_weights.clone(),
+							});
+					}
+					exp
+				};
+				let Some(exp) = exp else {
 					log_slow_gpu_scene_step(
 						format!("primitive mesh={mesh_i} primitive={prim_i} expand skipped"),
 						primitive_start.elapsed(),
@@ -7509,15 +7704,33 @@ impl SceneMeshes {
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
 				let morph_resources = if has_morph_targets {
-					let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
-					create_morph_resources(
-						device,
-						queue,
-						&morph_bind_group_layout,
-						morph_target_count as u32,
-						buffer_upload.vertices.len() as u32,
-						&morph_deltas,
-					)
+					if let Some(cache_key) = morph_delta_cache_key.as_ref() {
+						if let Some(shared) = shared_morph_delta_cache.get(cache_key) {
+							create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, shared)
+						} else {
+							let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+							let shared = create_shared_morph_delta_resources(
+								device,
+								queue,
+								morph_target_count as u32,
+								buffer_upload.vertices.len() as u32,
+								&morph_deltas,
+							);
+							let resources = create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, &shared);
+							shared_morph_delta_cache.insert(cache_key.clone(), shared);
+							resources
+						}
+					} else {
+						let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+						create_morph_resources(
+							device,
+							queue,
+							&morph_bind_group_layout,
+							morph_target_count as u32,
+							buffer_upload.vertices.len() as u32,
+							&morph_deltas,
+						)
+					}
 				} else {
 					let empty_morph_resources = empty_morph_resources
 						.get_or_insert_with(|| create_morph_resources(device, queue, &morph_bind_group_layout, 0, 0, &[]));
@@ -9517,6 +9730,7 @@ mod tests {
 		let scene = UnaSceneSnapshot {
 			meshes: vec![vec![UnaMeshBuffers {
 				name: None,
+				vertex_payload_id: None,
 				positions: vec![[0.0; 3]],
 				normals: None,
 				tangents: None,
@@ -9553,6 +9767,7 @@ mod tests {
 		let scene = UnaSceneSnapshot {
 			meshes: vec![vec![UnaMeshBuffers {
 				name: None,
+				vertex_payload_id: None,
 				positions: vec![[0.0; 3]],
 				normals: None,
 				tangents: None,
@@ -9601,6 +9816,7 @@ mod tests {
 	fn dynamic_morph_targets_keep_runtime_expressions_and_nonzero_defaults() {
 		let buf = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -9708,6 +9924,7 @@ mod tests {
 	fn expand_primitive_bakes_static_default_morphs() {
 		let buf = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[1.0, 2.0, 3.0]],
 			normals: Some(vec![[0.0, 1.0, 0.0]]),
 			tangents: None,

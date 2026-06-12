@@ -9363,9 +9363,11 @@ fn mesh_buffers_from_vertex_payload(
 	payload: PrimitiveVertexPayload,
 	indices: Option<Vec<u32>>,
 	material_index: Option<usize>,
+	vertex_payload_id: Option<u64>,
 ) -> UnaMeshBuffers {
 	UnaMeshBuffers {
 		name: None,
+		vertex_payload_id,
 		positions: payload.positions,
 		normals: payload.normals,
 		tangents: payload.tangents,
@@ -9389,6 +9391,7 @@ fn read_primitive(
 	buffers: &[gltf::buffer::Data],
 	mesh_weights: Option<&[f32]>,
 	mesh_target_names: &[String],
+	vertex_payload_id: Option<u64>,
 	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
 	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	_report: &mut ImportReport,
@@ -9408,7 +9411,12 @@ fn read_primitive(
 		if let Some(payload) = vertex_payload_cache.get(&payload_key).cloned() {
 			let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
 			let material_index = prim.material().index();
-			return Ok(Some(mesh_buffers_from_vertex_payload(payload, indices, material_index)));
+			return Ok(Some(mesh_buffers_from_vertex_payload(
+				payload,
+				indices,
+				material_index,
+				vertex_payload_id,
+			)));
 		}
 	}
 	let Some(iter_pos) = reader.read_positions() else {
@@ -9538,7 +9546,12 @@ fn read_primitive(
 		vertex_payload_cache.insert(payload_key, payload.clone());
 	}
 
-	Ok(Some(mesh_buffers_from_vertex_payload(payload, indices, material_index)))
+	Ok(Some(mesh_buffers_from_vertex_payload(
+		payload,
+		indices,
+		material_index,
+		vertex_payload_id,
+	)))
 }
 
 /// glTF [`Document`] から [`UnaSceneSnapshot`] を構築（メッシュ・材質・スキン・ノード階層）。
@@ -9619,6 +9632,14 @@ fn scene_snapshot_from_gltf_inner(
 			}
 		}
 	}
+	let mut vertex_payload_key_ids = BTreeMap::<PrimitiveVertexPayloadKey, u64>::new();
+	let mut next_vertex_payload_id = 1u64;
+	for (key, count) in &vertex_payload_key_counts {
+		if *count > 1 {
+			vertex_payload_key_ids.insert(key.clone(), next_vertex_payload_id);
+			next_vertex_payload_id = next_vertex_payload_id.saturating_add(1);
+		}
+	}
 	let mut vertex_payload_cache = BTreeMap::new();
 	for mesh in document.meshes() {
 		let mid = mesh.index();
@@ -9627,11 +9648,15 @@ fn scene_snapshot_from_gltf_inner(
 		for prim in mesh.primitives() {
 			let primitive_started = Instant::now();
 			let primitive_index = prim.index();
+			let vertex_payload_id = vertex_payload_key_ids
+				.get(&primitive_vertex_payload_key(&prim, mw, &target_names))
+				.copied();
 			if let Some(buf) = read_primitive(
 				prim,
 				buffers,
 				mw,
 				&target_names,
+				vertex_payload_id,
 				&mut vertex_payload_cache,
 				&vertex_payload_key_counts,
 				report,
@@ -12154,6 +12179,7 @@ mod tests {
 	fn unavatar_runtime_actions_import_modular_avatar_material_swap_from_scene_slots() {
 		let primitive_base = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -12276,6 +12302,7 @@ mod tests {
 	fn unavatar_runtime_actions_import_modular_avatar_material_swap_null_slots() {
 		let primitive_null = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -12378,6 +12405,7 @@ mod tests {
 	fn unavatar_runtime_actions_skip_material_swap_when_explicit_root_is_missing() {
 		let primitive = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -12548,6 +12576,7 @@ mod tests {
 	fn wardrobe_material_slot_operation_replaces_primitive_material() {
 		let primitive = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -13999,6 +14028,7 @@ mod tests {
 	fn test_colored_primitive() -> UnaMeshBuffers {
 		UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0, 0.0, 0.0]],
 			normals: None,
 			tangents: None,
@@ -14020,6 +14050,7 @@ mod tests {
 	fn test_blend_shape_delete_primitive() -> UnaMeshBuffers {
 		UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
 			normals: None,
 			tangents: None,
@@ -14044,6 +14075,7 @@ mod tests {
 	fn test_morph_primitive(shape_name: &str, default_weight: f32) -> UnaMeshBuffers {
 		UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0, 0.0, 0.0]],
 			normals: None,
 			tangents: None,
@@ -14519,6 +14551,7 @@ mod tests {
 	fn modular_avatar_vertex_filter_axis_uses_skinned_rest_pose() {
 		let mut primitive = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
 			normals: None,
 			tangents: None,

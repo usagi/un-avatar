@@ -4095,6 +4095,9 @@ mod col16 {
 pub struct UnaMeshBuffers {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub name: Option<String>,
+	/// 同一 vertex / morph payload 由来の primitive を renderer が共有最適化するための importer-local id。
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub vertex_payload_id: Option<u64>,
 	pub positions: Vec<[f32; 3]>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub normals: Option<Vec<[f32; 3]>>,
@@ -6397,6 +6400,7 @@ mod tests {
 	fn morph_weights_merge_expression_preset() {
 		let mesh = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -6438,6 +6442,7 @@ mod tests {
 	fn morph_weights_clamp() {
 		let mesh = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -6848,6 +6853,7 @@ mod tests {
 	fn runtime_model_mut_replaces_material_slots() {
 		let primitive = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -7862,6 +7868,7 @@ mod tests {
 	fn runtime_action_restore_readiness_reports_baseline_requirements() {
 		let primitive = UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![[0.0; 3]],
 			normals: None,
 			tangents: None,
@@ -8664,6 +8671,7 @@ mod tests {
 			scene: Some(UnaSceneSnapshot {
 				meshes: vec![vec![UnaMeshBuffers {
 					name: Some("Body".to_string()),
+					vertex_payload_id: None,
 					positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
 					normals: None,
 					tangents: None,
