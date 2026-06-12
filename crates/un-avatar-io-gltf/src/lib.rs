@@ -7,6 +7,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
+use std::ops::Range;
 use std::time::Instant;
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
@@ -1230,12 +1231,17 @@ struct GltfBufferViewBytes {
 }
 
 fn read_glb_json_and_bin(bytes: &[u8]) -> Result<(Value, Vec<u8>), ImportError> {
+	let (json, bin_range) = read_glb_json_and_bin_range(bytes)?;
+	Ok((json, bytes[bin_range].to_vec()))
+}
+
+fn read_glb_json_and_bin_range(bytes: &[u8]) -> Result<(Value, Range<usize>), ImportError> {
 	if bytes.len() < 12 || read_glb_u32(bytes, 0)? != GLB_MAGIC || read_glb_u32(bytes, 4)? != GLB_VERSION_2 {
 		return Err(ImportError::Message("GLB 2.0 expected".to_string()));
 	}
 	let mut offset = 12usize;
 	let mut json = None;
-	let mut bin = Vec::new();
+	let mut bin_range = None;
 	while offset + 8 <= bytes.len() {
 		let length = read_glb_u32(bytes, offset)? as usize;
 		let chunk_type = read_glb_u32(bytes, offset + 4)?;
@@ -1249,14 +1255,14 @@ fn read_glb_json_and_bin(bytes: &[u8]) -> Result<(Value, Vec<u8>), ImportError> 
 				let end = chunk.iter().position(|b| *b == 0).unwrap_or(chunk.len());
 				json = Some(serde_json::from_slice(&chunk[..end]).map_err(|e| ImportError::Message(format!("GLB JSON: {e}")))?);
 			}
-			BIN_CHUNK_TYPE => bin = chunk.to_vec(),
+			BIN_CHUNK_TYPE => bin_range = Some(offset..offset + length),
 			_ => {}
 		}
 		offset += length;
 	}
 	Ok((
 		json.ok_or_else(|| ImportError::Message("GLB JSON chunk is missing".to_string()))?,
-		bin,
+		bin_range.ok_or_else(|| ImportError::Message("GLB BIN chunk is missing".to_string()))?,
 	))
 }
 
@@ -10391,6 +10397,8 @@ impl AvatarImporter for GltfImporter {
 		let mut root_json: Option<Value> = None;
 		let mut original_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>> = None;
 		let mut original_glb_bin: Option<Vec<u8>> = None;
+		let mut original_glb_bytes: Option<Vec<u8>> = None;
+		let mut original_glb_bin_range: Option<Range<usize>> = None;
 		let import_started = Instant::now();
 		let mut import_profile_messages = Vec::new();
 		let (path_hint, document, buffers, image_data) = match input {
@@ -10407,9 +10415,10 @@ impl AvatarImporter for GltfImporter {
 					));
 					if bytes.starts_with(b"glTF") {
 						let glb_started = Instant::now();
-						let (root, bin) = read_glb_json_and_bin(&bytes)?;
+						let (root, bin_range) = read_glb_json_and_bin_range(&bytes)?;
+						let bin = &bytes[bin_range.clone()];
 						import_profile_messages.push(format!(
-							"glTF import profile: glb_json_bin_copy_ms={} bin_bytes={}",
+							"glTF import profile: glb_json_bin_borrow_ms={} bin_bytes={}",
 							glb_started.elapsed().as_millis(),
 							bin.len()
 						));
@@ -10427,7 +10436,7 @@ impl AvatarImporter for GltfImporter {
 							"glTF import profile: image_source_metadata_ms={}",
 							source_started.elapsed().as_millis()
 						));
-						original_glb_bin = Some(bin);
+						original_glb_bin_range = Some(bin_range);
 						root_json = Some(root);
 					} else if extension.as_deref() == Some("unavatar") {
 						let json_started = Instant::now();
@@ -10459,6 +10468,9 @@ impl AvatarImporter for GltfImporter {
 						"glTF import profile: gltf_import_slice_ms={}",
 						import_slice_started.elapsed().as_millis()
 					));
+					if bytes.starts_with(b"glTF") {
+						original_glb_bytes = Some(bytes);
+					}
 					(Some(path), imported.0, imported.1, imported.2)
 				} else if path
 					.extension()
@@ -10576,7 +10588,12 @@ impl AvatarImporter for GltfImporter {
 			scene_started.elapsed().as_millis()
 		));
 		let mut texture_asset_map = BTreeMap::new();
-		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin.as_deref()) {
+		let original_glb_bin_slice = original_glb_bin.as_deref().or_else(|| {
+			let bytes = original_glb_bytes.as_deref()?;
+			let range = original_glb_bin_range.as_ref()?;
+			bytes.get(range.clone())
+		});
+		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin_slice) {
 			let step_started = Instant::now();
 			texture_asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);
 			record_gltf_import_profile_step(&mut report, "append_texture_assets", step_started);
