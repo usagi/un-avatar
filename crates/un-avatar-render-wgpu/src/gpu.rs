@@ -3463,10 +3463,11 @@ pub(crate) struct GpuState {
 	depth_view: wgpu::TextureView,
 	uniform_buffer: wgpu::Buffer,
 	globals_uploaded: Option<GlobalsGpu>,
+	bind_group_layout: wgpu::BindGroupLayout,
 	bind_group: wgpu::BindGroup,
 	pipeline: wgpu::RenderPipeline,
 	axes_pipeline: wgpu::RenderPipeline,
-	bone_collider_pipeline: wgpu::RenderPipeline,
+	bone_collider_pipeline: Option<wgpu::RenderPipeline>,
 	bone_collider_vertex_buffer: Option<wgpu::Buffer>,
 	bone_collider_vertex_capacity: usize,
 	bone_collider_vertex_count: u32,
@@ -3474,7 +3475,8 @@ pub(crate) struct GpuState {
 	startup_splash_pipeline: wgpu::RenderPipeline,
 	startup_splash_buffer: wgpu::Buffer,
 	startup_splash_bind_group: wgpu::BindGroup,
-	contact_shadow_pipeline: wgpu::RenderPipeline,
+	contact_shadow_bind_group_layout: wgpu::BindGroupLayout,
+	contact_shadow_pipeline: Option<wgpu::RenderPipeline>,
 	contact_shadow_buffer: wgpu::Buffer,
 	contact_shadow_bind_group: wgpu::BindGroup,
 	document: Option<Arc<RwLock<UnaDocument>>>,
@@ -3727,7 +3729,7 @@ impl GpuState {
 		let aa_sample_count = aa_sample_count(aa);
 		let pipeline = create_sky_pipeline(&device, &bind_group_layout, format, aa_sample_count);
 		let axes_pipeline = create_axes_pipeline(&device, &bind_group_layout, format, aa_sample_count);
-		let bone_collider_pipeline = create_bone_collider_pipeline(&device, &bind_group_layout, format, aa_sample_count);
+		let bone_collider_pipeline = None;
 		let startup_splash_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("startup_splash"),
 			entries: &[wgpu::BindGroupLayoutEntry {
@@ -3769,13 +3771,7 @@ impl GpuState {
 				count: None,
 			}],
 		});
-		let contact_shadow_pipeline = create_contact_shadow_pipeline(
-			&device,
-			&bind_group_layout,
-			&contact_shadow_bind_group_layout,
-			format,
-			aa_sample_count,
-		);
+		let contact_shadow_pipeline = None;
 		let contact_shadow_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("contact_shadow"),
 			size: std::mem::size_of::<ContactShadowGpu>() as u64,
@@ -3841,6 +3837,7 @@ impl GpuState {
 			depth_view,
 			uniform_buffer,
 			globals_uploaded: None,
+			bind_group_layout,
 			bind_group,
 			pipeline,
 			axes_pipeline,
@@ -3852,6 +3849,7 @@ impl GpuState {
 			startup_splash_pipeline,
 			startup_splash_buffer,
 			startup_splash_bind_group,
+			contact_shadow_bind_group_layout,
 			contact_shadow_pipeline,
 			contact_shadow_buffer,
 			contact_shadow_bind_group,
@@ -4406,8 +4404,37 @@ impl GpuState {
 		);
 	}
 
+	fn ensure_bone_collider_pipeline(&mut self) {
+		if self.bone_collider_pipeline.is_none() {
+			let sample_count = aa_sample_count(self.aa);
+			self.bone_collider_pipeline = Some(create_bone_collider_pipeline(
+				&self.device,
+				&self.bind_group_layout,
+				self.config.format,
+				sample_count,
+			));
+		}
+	}
+
+	fn ensure_contact_shadow_pipeline(&mut self) {
+		if self.contact_shadow_pipeline.is_none() {
+			let sample_count = aa_sample_count(self.aa);
+			self.contact_shadow_pipeline = Some(create_contact_shadow_pipeline(
+				&self.device,
+				&self.bind_group_layout,
+				&self.contact_shadow_bind_group_layout,
+				self.config.format,
+				sample_count,
+			));
+		}
+	}
+
 	fn draw_contact_shadow(&self, pass: &mut wgpu::RenderPass<'_>) {
-		pass.set_pipeline(&self.contact_shadow_pipeline);
+		pass.set_pipeline(
+			self.contact_shadow_pipeline
+				.as_ref()
+				.expect("contact shadow pipeline is initialized"),
+		);
 		pass.set_bind_group(0, &self.bind_group, &[]);
 		pass.set_bind_group(1, &self.contact_shadow_bind_group, &[]);
 		pass.draw(0..6, 0..1);
@@ -4639,6 +4666,9 @@ impl GpuState {
 		let draw_scene = self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
 		let draw_contact_shadow = draw_scene && self.contact_shadow.is_enabled();
 		let draw_contact_shadow_in_main = draw_contact_shadow && !use_avatar_outline;
+		if draw_contact_shadow {
+			self.ensure_contact_shadow_pipeline();
+		}
 		let mut main_resolve: Option<&wgpu::TextureView> = None;
 		let (main_color, main_depth) = if let Some(post) = &post {
 			if let Some(msaa) = &msaa {
@@ -6460,6 +6490,12 @@ impl GpuState {
 			self.bone_collider_vertex_count = 0;
 		}
 		let bone_collider_debug_ms = t_collider_debug0.elapsed().as_secs_f32() * 1000.0;
+		if draw_contact_shadow {
+			self.ensure_contact_shadow_pipeline();
+		}
+		if self.show_bone_colliders && self.bone_collider_vertex_count > 0 {
+			self.ensure_bone_collider_pipeline();
+		}
 
 		#[cfg(windows)]
 		let final_target_view = if use_spout {
@@ -6618,7 +6654,7 @@ impl GpuState {
 			}
 			if self.show_bone_colliders && self.bone_collider_vertex_count > 0 {
 				if let Some(buffer) = &self.bone_collider_vertex_buffer {
-					pass.set_pipeline(&self.bone_collider_pipeline);
+					pass.set_pipeline(self.bone_collider_pipeline.as_ref().expect("bone collider pipeline is initialized"));
 					pass.set_bind_group(0, &self.bind_group, &[]);
 					pass.set_vertex_buffer(0, buffer.slice(..));
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
@@ -6686,7 +6722,7 @@ impl GpuState {
 			}
 			if self.show_bone_colliders && self.bone_collider_vertex_count > 0 {
 				if let Some(buffer) = &self.bone_collider_vertex_buffer {
-					pass.set_pipeline(&self.bone_collider_pipeline);
+					pass.set_pipeline(self.bone_collider_pipeline.as_ref().expect("bone collider pipeline is initialized"));
 					pass.set_bind_group(0, &self.bind_group, &[]);
 					pass.set_vertex_buffer(0, buffer.slice(..));
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
