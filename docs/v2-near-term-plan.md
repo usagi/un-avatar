@@ -147,7 +147,7 @@ MVP control command:
 - core runtime model は node visibility、material property、material slot、dynamics enabled の現在値を read-only に取得できる。
 - core は runtime action restore readiness diagnostics を持つ。restore target は baseline 未保存なら `baseline_not_captured`、保存済みなら `ready=true` として観測できる。
 - restore readiness から read-only restore baseline candidates も診断できる。これは capture 候補値の確認用。
-- core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存でき、保存済み baseline がある action effect は restore readiness で `ready=true` として観測できる。renderer は runtime action activation の effect 適用前に baseline を capture し、既存 baseline は上書きしない。core は inactive action の restore apply plan を出せる。renderer は activation 後に inactive action restore を node visibility、material color/scalar、material slot、dynamics enabled へ適用し、dynamics enabled restore が含まれる場合は dynamics nodes を rest pose へ戻して simulator / collider state を再構築する。
+- core は restore baseline candidates から deterministic capture plan を作れる。capture plan は `UnaRuntimeState.restore_baselines` へ owner-keyed runtime state として保存でき、保存済み baseline がある action effect は restore readiness で `ready=true` として観測できる。renderer は runtime action activation の effect 適用前に baseline を capture し、既存 baseline は上書きしない。core は inactive action の restore apply plan を出せる。renderer は activation 後に inactive action restore を node visibility、material color/scalar、material slot、dynamics enabled へ適用し、dynamics enabled restore が含まれる場合は対象 source group の dynamic nodes と関連 constraint ref nodes だけを rest pose へ戻して simulator / collider state を再構築する。
 
 次の段階:
 
