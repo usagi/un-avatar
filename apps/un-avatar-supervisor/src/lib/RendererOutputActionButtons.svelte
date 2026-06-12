@@ -6,9 +6,7 @@
 	export let renderer: Pick<RendererOutputData, "spout_enabled">;
 	export let runtimeStatus: RendererOutputStatus | null;
 	export let disabled = false;
-	export let canMatchSpoutToWindow = false;
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onMatchSpoutToWindow: RendererPaneActions["onMatchSpoutToWindow"];
 </script>
 
 <div class="runtime-button-row">
@@ -23,5 +21,4 @@
 	</label>
 	<button {disabled} onclick={() => onSetSpoutOutput(true, { width: 1280, height: 720 }, "720p")}>720p</button>
 	<button {disabled} onclick={() => onSetSpoutOutput(true, { width: 1920, height: 1080 }, "1080p")}>1080p</button>
-	<button disabled={disabled || !canMatchSpoutToWindow} onclick={onMatchSpoutToWindow}>{$_("renderers.controls.match_window")}</button>
 </div>

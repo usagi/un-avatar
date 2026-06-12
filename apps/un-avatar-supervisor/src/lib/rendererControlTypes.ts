@@ -74,10 +74,3 @@ export function rendererCameraStatusValues(camera: RendererCameraSnapshot): { fo
 		radius: camera.radius.toFixed(2),
 	};
 }
-
-export function rendererSurfaceSize(
-	status: Pick<RendererRuntimeStatus, "surface_width" | "surface_height"> | null
-): { width: number; height: number } | null {
-	if (!status?.surface_width || !status.surface_height) return null;
-	return { width: status.surface_width, height: status.surface_height };
-}

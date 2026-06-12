@@ -115,7 +115,6 @@
 		rendererSsaoPayload,
 		rendererWindowPayload,
 	} from "./lib/runtimePayloads";
-	import { rendererSurfaceSize } from "./lib/rendererControlTypes";
 	import { defaultSpringBoneCategoryOverrides } from "./lib/springBonePresets";
 	import {
 		loadColorDisplayMode,
@@ -2371,15 +2370,6 @@
 		}
 	}
 
-	async function matchRendererSpoutToWindow(renderer: RendererInstance | null, status: RendererRuntimeStatus | null): Promise<void> {
-		const size = rendererSurfaceSize(status);
-		if (!size) {
-			message = "Window size is not available yet";
-			return;
-		}
-		await setRendererSpoutOutput(renderer, true, size, "match window");
-	}
-
 	async function setRendererWindow(
 		renderer: RendererInstance | null,
 		patch: {
@@ -2834,17 +2824,12 @@
 						profileCount={avatarSettings.length}
 						profileGroupCount={profileGroups.length}
 						{busy}
-						canMatchSpoutToWindow={Boolean(rendererSurfaceSize(selectedRuntimeStatus))}
 						{colorDisplayMode}
 						{expressionOverrides}
 						bind:expressionFilter
 						onSetSpoutOutput={(enabled, size, label) => {
 							if (!selectedRenderer) return;
 							return setRendererSpoutOutput(selectedRenderer, enabled, size, label);
-						}}
-						onMatchSpoutToWindow={() => {
-							if (!selectedRenderer) return;
-							return matchRendererSpoutToWindow(selectedRenderer, selectedRuntimeStatus);
 						}}
 						onSetWindow={(patch, label) => {
 							if (!selectedRenderer) return;

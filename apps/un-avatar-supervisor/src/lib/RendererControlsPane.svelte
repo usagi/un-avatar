@@ -12,10 +12,8 @@
 	export let renderer: RendererControlsData;
 	export let runtimeStatus: RendererControlsStatus | null;
 	export let busy = false;
-	export let canMatchSpoutToWindow = false;
 	export let colorDisplayMode: ColorDisplayMode;
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onMatchSpoutToWindow: RendererPaneActions["onMatchSpoutToWindow"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
 	export let onRestoreWindow: RendererPaneActions["onRestoreWindow"];
@@ -31,7 +29,7 @@
 </script>
 
 <div class="renderer-pane-scroll renderer-control-list">
-	<RendererOutputControls {renderer} {runtimeStatus} {busy} {canMatchSpoutToWindow} {onSetSpoutOutput} {onMatchSpoutToWindow} />
+	<RendererOutputControls {renderer} {runtimeStatus} {busy} {onSetSpoutOutput} />
 	<RendererWindowControls {renderer} {runtimeStatus} {busy} {onSetWindow} {onSaveWindow} {onRestoreWindow} />
 	<RendererDisplayControls {renderer} {runtimeStatus} {busy} {onSetShowAxes} {onSetShowBoneColliders} {onSetCameraLock} />
 	<RendererWardrobeMenuControls {renderer} {runtimeStatus} {busy} {onActivateWardrobeMenuCandidate} />

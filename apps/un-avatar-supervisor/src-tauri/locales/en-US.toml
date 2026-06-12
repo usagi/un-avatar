@@ -734,7 +734,6 @@ show_bone_colliders_title = "Show bone-based colliders (%{count})"
 [renderers.controls]
 output = "Output"
 spout = "Spout2"
-match_window = "Match window"
 window = "Window"
 window_appearance = "Appearance"
 window_behavior = "Input / launch"

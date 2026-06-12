@@ -12,12 +12,10 @@
 	export let runtimeStatus: RendererRuntimeStatus | null;
 	export let rendererPaneTab: RendererPaneTab;
 	export let busy = false;
-	export let canMatchSpoutToWindow = false;
 	export let colorDisplayMode: ColorDisplayMode;
 	export let expressionOverrides: ExpressionOverrides = {};
 	export let expressionFilter = "";
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onMatchSpoutToWindow: RendererPaneActions["onMatchSpoutToWindow"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
 	export let onRestoreWindow: RendererPaneActions["onRestoreWindow"];
@@ -43,10 +41,8 @@
 		{renderer}
 		{runtimeStatus}
 		{busy}
-		{canMatchSpoutToWindow}
 		{colorDisplayMode}
 		{onSetSpoutOutput}
-		{onMatchSpoutToWindow}
 		{onSetWindow}
 		{onSaveWindow}
 		{onRestoreWindow}

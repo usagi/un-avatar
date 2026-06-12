@@ -8,9 +8,7 @@
 	export let renderer: RendererOutputData;
 	export let runtimeStatus: RuntimeOutputStatusData | null;
 	export let busy = false;
-	export let canMatchSpoutToWindow = false;
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onMatchSpoutToWindow: RendererPaneActions["onMatchSpoutToWindow"];
 
 	$: rendererRunning = renderer.pid != null;
 </script>
@@ -20,12 +18,5 @@
 		<h3>{$_("renderers.controls.output")}</h3>
 		<span>{runtimeOutputLabel(renderer, runtimeStatus)}</span>
 	</div>
-	<RendererOutputActionButtons
-		{renderer}
-		{runtimeStatus}
-		disabled={busy || !rendererRunning}
-		{canMatchSpoutToWindow}
-		{onSetSpoutOutput}
-		{onMatchSpoutToWindow}
-	/>
+	<RendererOutputActionButtons {renderer} {runtimeStatus} disabled={busy || !rendererRunning} {onSetSpoutOutput} />
 </section>

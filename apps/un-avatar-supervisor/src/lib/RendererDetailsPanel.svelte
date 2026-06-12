@@ -21,12 +21,10 @@
 	export let profileCount = 0;
 	export let profileGroupCount = 0;
 	export let busy = false;
-	export let canMatchSpoutToWindow = false;
 	export let colorDisplayMode: ColorDisplayMode;
 	export let expressionOverrides: ExpressionOverrides = {};
 	export let expressionFilter = "";
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onMatchSpoutToWindow: RendererPaneActions["onMatchSpoutToWindow"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
 	export let onRestoreWindow: RendererPaneActions["onRestoreWindow"];
@@ -57,12 +55,10 @@
 			{runtimeStatus}
 			{rendererPaneTab}
 			{busy}
-			{canMatchSpoutToWindow}
 			{colorDisplayMode}
 			{expressionOverrides}
 			bind:expressionFilter
 			{onSetSpoutOutput}
-			{onMatchSpoutToWindow}
 			{onSetWindow}
 			{onSaveWindow}
 			{onRestoreWindow}

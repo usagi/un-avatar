@@ -4,7 +4,6 @@ import type { RendererWindowPatch } from "./rendererTypes";
 
 export type RendererPaneActions = {
 	onSetSpoutOutput: (enabled: boolean, size: { width: number; height: number } | null, label?: string) => void | Promise<void>;
-	onMatchSpoutToWindow: () => void | Promise<void>;
 	onSetWindow: (patch: RendererWindowPatch, label: string) => void | Promise<void>;
 	onSaveWindow: () => void | Promise<void>;
 	onRestoreWindow: () => void | Promise<void>;

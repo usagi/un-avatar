@@ -746,7 +746,6 @@ show_bone_colliders_title = "ボーンベースコライダー表示 (%{count})"
 [renderers.controls]
 output = "出力"
 spout = "Spout2"
-match_window = "ウィンドウに合わせる"
 window = "ウィンドウ"
 borderless = "枠なし"
 transparent = "透過"
