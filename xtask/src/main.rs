@@ -1893,6 +1893,7 @@ fn print_run_renderer_usage() {
 	--wardrobe-set は profile/manifest を上書き保存せず、この起動だけ renderer の wardrobe set を指定する。\n\
 	例: cargo xtask run-renderer --profile model1\n\
 	    cargo xtask run-renderer --profile mizuki-split --wardrobe-set field_drape\n\
+	    cargo xtask run-renderer --profile mizuki-split --wardrobe-set field_drape -- --prewarm-scene-cache\n\
 	    cargo xtask run-renderer --profile model2 -- --debug-material-dump"
 	);
 }

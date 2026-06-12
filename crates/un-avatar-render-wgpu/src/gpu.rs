@@ -2323,10 +2323,26 @@ fn startup_texture_target_size_for_window_options(opts: &AvatarWindowOptions) ->
 	}
 }
 
-pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<(), String> {
+#[derive(Clone, Copy)]
+pub(crate) enum GpuSceneWarmupPurpose {
+	Benchmark,
+	PrewarmSceneCache,
+}
+
+impl GpuSceneWarmupPurpose {
+	fn label(self) -> &'static str {
+		match self {
+			Self::Benchmark => "gpu scene benchmark",
+			Self::PrewarmSceneCache => "scene cache prewarm",
+		}
+	}
+}
+
+pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuSceneWarmupPurpose) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
-		return Err("gpu scene benchmark: --gltf or manifest avatar_path is required".to_string());
+		return Err(format!("{}: --gltf or manifest avatar_path is required", purpose.label()));
 	};
+	let label = purpose.label();
 	let started = Instant::now();
 	let import_started = Instant::now();
 	let document = model_loader::load_document_profiled(
@@ -2335,9 +2351,9 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		opts.contact_parameter_emission,
 		opts.processed_texture_cache,
 	)
-	.map_err(|e| format!("gpu scene benchmark: model import failed: {}: {e}", path.display()))?;
+	.map_err(|e| format!("{label}: model import failed: {}: {e}", path.display()))?;
 	eprintln!(
-		"un-avatar-renderer: gpu scene benchmark import path={} elapsed={:.1}ms",
+		"un-avatar-renderer: {label} import path={} elapsed={:.1}ms",
 		path.display(),
 		import_started.elapsed().as_secs_f64() * 1000.0
 	);
@@ -2352,7 +2368,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		compatible_surface: None,
 		force_fallback_adapter: false,
 	}))
-	.map_err(|e| format!("gpu scene benchmark: request_adapter: {e}"))?;
+	.map_err(|e| format!("{label}: request_adapter: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
 	let adapter_features = adapter.features();
@@ -2375,13 +2391,13 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 		memory_hints: Default::default(),
 		..Default::default()
 	}))
-	.map_err(|e| format!("gpu scene benchmark: request_device: {e}"))?;
+	.map_err(|e| format!("{label}: request_device: {e}"))?;
 	device.on_uncaptured_error(Arc::new(|error| {
 		eprintln!("un-avatar-renderer: uncaptured wgpu error: {error}");
 	}));
 	let pipeline_cache = PersistentPipelineCache::load(&device, &adapter.get_info());
 	eprintln!(
-		"un-avatar-renderer: gpu scene benchmark adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
+		"un-avatar-renderer: {label} adapter/device backend={render_backend:?} tier={:?} elapsed={:.1}ms",
 		mesh_shader_plan.tier,
 		adapter_started.elapsed().as_secs_f64() * 1000.0
 	);
@@ -2424,7 +2440,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 	};
 	let prepared = context.prepare_document_scene(document, &options, |progress| {
 		eprintln!(
-			"un-avatar-renderer: gpu scene benchmark progress phase={} {}/{} {} ({:.1}ms)",
+			"un-avatar-renderer: {label} progress phase={} {}/{} {} ({:.1}ms)",
 			progress.phase,
 			progress.current,
 			progress.total,
@@ -2434,7 +2450,7 @@ pub(crate) fn benchmark_gpu_scene_startup(opts: &AvatarWindowOptions) -> Result<
 	})?;
 	drop(prepared);
 	eprintln!(
-		"un-avatar-renderer: gpu scene benchmark scene elapsed={:.1}ms total={:.1}ms",
+		"un-avatar-renderer: {label} scene elapsed={:.1}ms total={:.1}ms",
 		scene_started.elapsed().as_secs_f64() * 1000.0,
 		started.elapsed().as_secs_f64() * 1000.0
 	);

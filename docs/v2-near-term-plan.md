@@ -61,7 +61,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
    - resize / runtime option change で後から必要になった pipeline はその時点で作る。起動時に未使用 shader を compile しない。
 2. Pipeline cache / prewarm
    - Vulkan `PipelineCache` は既に導入済み。透明 window など backend 制約で Vulkan cache を使えない場合は UI / profile diagnostics に明示する。
-   - Supervisor / renderer warmup mode は、実用前に共有 pipeline cache を作る用途として扱う。warmup は通常起動の見た目品質を落とす代替ではない。
+   - Supervisor / renderer warmup mode は、実用前に共有 pipeline cache と texture / compressed texture cache を作る用途として扱う。warmup は通常起動の見た目品質を落とす代替ではない。Renderer CLI は `--prewarm-scene-cache` で、ウィンドウなしに対象profile / wardrobe setのGPU sceneを構築して終了できる。
 3. Texture upload / source cache
    - inactive wardrobe image decode は defer 済み。次は deferred cubemap conversion、source-native upload、processed texture cache の役割を分離する。
    - decoded 済み画像の encoded source bytes は保持せず、deferred placeholder のみ lazy decode 用に保持する方針を維持する。

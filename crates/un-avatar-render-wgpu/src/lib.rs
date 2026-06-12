@@ -4628,6 +4628,11 @@ pub fn run_cli() -> Result<(), RunError> {
 		validate_startup: bool,
 		#[arg(long, hide = true)]
 		bench_gpu_scene: bool,
+		#[arg(
+			long,
+			help = "モデルのGPU sceneをウィンドウなしで構築し、texture / compressed texture / pipeline cacheを生成して終了する"
+		)]
+		prewarm_scene_cache: bool,
 		#[arg(long, hide = true)]
 		prewarm_shaders: bool,
 		#[arg(long, hide = true)]
@@ -5032,7 +5037,11 @@ pub fn run_cli() -> Result<(), RunError> {
 		return Ok(());
 	}
 	if cli.bench_gpu_scene {
-		gpu::benchmark_gpu_scene_startup(&opts).map_err(RunError::EventLoop)?;
+		gpu::warmup_gpu_scene_startup(&opts, gpu::GpuSceneWarmupPurpose::Benchmark).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
+	if cli.prewarm_scene_cache {
+		gpu::warmup_gpu_scene_startup(&opts, gpu::GpuSceneWarmupPurpose::PrewarmSceneCache).map_err(RunError::EventLoop)?;
 		return Ok(());
 	}
 	if cli.prewarm_shaders {
