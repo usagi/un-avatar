@@ -31,6 +31,7 @@ pub(crate) struct TextureCacheEvent {
 	pub(crate) miss: bool,
 	pub(crate) write: bool,
 	pub(crate) read_elapsed: Duration,
+	pub(crate) read_bytes: u64,
 }
 
 impl TextureCacheEvent {
@@ -39,6 +40,7 @@ impl TextureCacheEvent {
 		miss: false,
 		write: false,
 		read_elapsed: Duration::ZERO,
+		read_bytes: 0,
 	};
 }
 
@@ -950,7 +952,7 @@ fn write_cache_file(path: &Path, write_contents: impl FnOnce(&mut BufWriter<fs::
 	renamed
 }
 
-fn read_processed_texture_cache(path: &Path, key: u64) -> Option<ProcessedTexture> {
+fn read_processed_texture_cache(path: &Path, key: u64) -> Option<(ProcessedTexture, u64)> {
 	let mut file = BufReader::new(fs::File::open(path).ok()?);
 	if &read_exact_array::<8>(&mut file)? != PROCESSED_TEXTURE_CACHE_MAGIC {
 		return None;
@@ -965,6 +967,7 @@ fn read_processed_texture_cache(path: &Path, key: u64) -> Option<ProcessedTextur
 		return None;
 	}
 	let mut mips = Vec::with_capacity(mip_count);
+	let mut read_bytes = 0u64;
 	for _ in 0..mip_count {
 		let mip_width = read_u32_le(&mut file)?.max(1);
 		let mip_height = read_u32_le(&mut file)?.max(1);
@@ -975,9 +978,10 @@ fn read_processed_texture_cache(path: &Path, key: u64) -> Option<ProcessedTextur
 		}
 		let mut data = vec![0u8; len];
 		file.read_exact(&mut data).ok()?;
+		read_bytes = read_bytes.saturating_add(len as u64);
 		mips.push((mip_width, mip_height, data));
 	}
-	Some(ProcessedTexture { width, height, mips })
+	Some((ProcessedTexture { width, height, mips }, read_bytes))
 }
 
 fn write_processed_texture_cache(path: &Path, key: u64, texture: &ProcessedTexture) -> bool {
@@ -1118,7 +1122,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 	};
 	let path = cache_dir.join(format!("{key:016x}.utxc"));
 	let read_started = Instant::now();
-	if let Some(texture) = read_processed_texture_cache(&path, key) {
+	if let Some((texture, read_bytes)) = read_processed_texture_cache(&path, key) {
 		return (
 			texture,
 			TextureCacheEvent {
@@ -1126,6 +1130,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 				miss: false,
 				write: false,
 				read_elapsed: read_started.elapsed(),
+				read_bytes,
 			},
 		);
 	}
@@ -1139,6 +1144,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 			miss: true,
 			write,
 			read_elapsed: read_started.elapsed(),
+			read_bytes: 0,
 		},
 	)
 }
@@ -1725,6 +1731,7 @@ fn texture_upload_payload_with_progress(
 							miss: false,
 							write: false,
 							read_elapsed: Duration::ZERO,
+							read_bytes: 0,
 						},
 					);
 				}
@@ -1744,6 +1751,7 @@ fn texture_upload_payload_with_progress(
 					miss: true,
 					write,
 					read_elapsed: Duration::ZERO,
+					read_bytes: 0,
 				},
 			);
 		}
@@ -2098,10 +2106,11 @@ mod tests {
 		let _ = fs::remove_file(&path);
 
 		assert!(write_processed_texture_cache(&path, key, &texture));
-		let loaded = read_processed_texture_cache(&path, key).expect("cache should load");
+		let (loaded, read_bytes) = read_processed_texture_cache(&path, key).expect("cache should load");
 		assert_eq!((loaded.width, loaded.height), (2, 2));
 		assert_eq!(loaded.mips.len(), 2);
 		assert_eq!(loaded.mips[1].2, vec![128, 128, 255, 255]);
+		assert_eq!(read_bytes, loaded.mips.iter().map(|(_, _, data)| data.len() as u64).sum::<u64>());
 
 		let _ = fs::remove_file(path);
 	}

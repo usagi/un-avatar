@@ -845,6 +845,7 @@ struct TexturePrepareSummary {
 	cache_hits: u32,
 	cache_misses: u32,
 	cache_writes: u32,
+	cache_read_bytes: u64,
 	compressed_cache_hits: u32,
 	compressed_cache_misses: u32,
 	compressed_cache_writes: u32,
@@ -887,6 +888,7 @@ impl TexturePrepareSummary {
 		if cache_event.write {
 			self.cache_writes += 1;
 		}
+		self.cache_read_bytes = self.cache_read_bytes.saturating_add(cache_event.read_bytes);
 		if compressed_cache_event.hit {
 			self.compressed_cache_hits += 1;
 		}
@@ -921,7 +923,7 @@ impl TexturePrepareSummary {
 			return;
 		}
 		eprintln!(
-			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms processed_cache={}/{}/{} compressed_cache={}/{}/{}",
+			"un-avatar-renderer: gpu scene texture prepare summary: total={total_ms:.1}ms images={} resident={} deferred={} resident_elapsed={:.1}ms deferred_elapsed={:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms processed_cache={}/{}/{} processed_cache_read_mb={:.1} compressed_cache={}/{}/{}",
 			self.images,
 			self.resident_images,
 			self.deferred_images,
@@ -938,6 +940,7 @@ impl TexturePrepareSummary {
 			self.cache_hits,
 			self.cache_misses,
 			self.cache_writes,
+			self.cache_read_bytes as f64 / (1024.0 * 1024.0),
 			self.compressed_cache_hits,
 			self.compressed_cache_misses,
 			self.compressed_cache_writes,
@@ -8545,6 +8548,7 @@ impl SceneMeshes {
 									miss: false,
 									write: false,
 									read_elapsed: Duration::ZERO,
+									read_bytes: 0,
 								},
 								lookup.processed_width,
 								lookup.processed_height,
@@ -8867,6 +8871,7 @@ impl SceneMeshes {
 								miss: false,
 								write: false,
 								read_elapsed: Duration::ZERO,
+								read_bytes: 0,
 							},
 							lookup.processed_width,
 							lookup.processed_height,

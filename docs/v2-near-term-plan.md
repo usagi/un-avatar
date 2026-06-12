@@ -67,7 +67,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
    - decoded 済み画像の encoded source bytes は保持せず、deferred placeholder のみ lazy decode 用に保持する方針を維持する。
    - 2026-06-13 の `mizuki-split / field_drape` 比較では processed texture cache 有効時は `texture prepare total=1.1-1.3s`、`processed_cache=40/0/0`、`compressed_cache=19/0/0`。`--no-processed-texture-cache` は `texture prepare total=5.8s` まで悪化したため、cache read が見えても既定無効化はしない。次に削るなら cache artifact の read 量 / upload 量 / active resident texture 数を分けて測る。
    - 2026-06-13 に GLB import の initial resident image decode を lazy 化。`mizuki-split / field_drape` は `gltf_import_slice image_decode_ms=0`、`texture prepare total=1.10-1.17s`、`rgba=0ms`、`processed_cache=39/0/0`、`compressed_cache=21/0/0`、`bench-gpu-scene total=3.67s`。冷 cache / cache 無効の診断用に `UN_AVATAR_EAGER_INITIAL_IMAGE_DECODE` で従来の eager decode へ戻せる。
-   - processed cache hit の read timing を分離した結果、`texture prepare total=1.07s` の内訳は `cache_read=834ms`、`processed=0.3ms`、`upload=210ms`。次の起動短縮対象は処理計算ではなく、cache artifact の read 量 / ファイル形式 / resident texture 数 / upload call 数。
+   - processed cache hit の read timing を分離した結果、`texture prepare total=1.03-1.07s` の内訳は `cache_read=805-834ms`、`processed=0.3ms`、`upload=206-210ms`、`processed_cache_read_mb=2503MB`。次の起動短縮対象は処理計算ではなく、cache artifact の read 量 / ファイル形式 / resident texture 数 / upload call 数。
 4. Runtime CPU
    - world matrix rebuild、UNPhysics / UNDynamics step、wardrobe residency refresh、fur card encode など、毎 frame 全体走査になっている箇所を dirty / active scope へ寄せる。
    - Runtime CPU の判断では swapchain / vsync 待ちを実処理 CPU と混ぜない。Renderer title / runtime status の `cpu_ms` は `cpu_record_ms - frame_surface_acquire_ms` の busy estimate とし、surface wait は別 field / title の `wait` として見る。
