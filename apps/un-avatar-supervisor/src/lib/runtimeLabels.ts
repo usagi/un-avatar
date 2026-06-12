@@ -20,6 +20,7 @@ export type RuntimeQualityStatusLabelData = {
 	connected: boolean;
 	surface_width: number | null;
 	surface_height: number | null;
+	window_inner_size?: [number, number] | null;
 	aa: string | null;
 	texture_resolution_limit: string | null;
 	texture_compression: string | null;
@@ -70,7 +71,8 @@ export type RendererHealthStatusData = RuntimeStartupStatusLabelData &
 	Pick<RuntimeSpoutStatusLabelData, "spout_available" | "spout_enabled" | "spout_last_send_ok" | "spout_name">;
 
 export type RuntimeOutputStatusData = RuntimeConnectionStatusLabelData &
-	Pick<RuntimeSpoutStatusLabelData, "spout_available" | "spout_enabled" | "spout_name">;
+	Pick<RuntimeSpoutStatusLabelData, "spout_available" | "spout_enabled" | "spout_name"> &
+	Partial<Pick<RuntimeSpoutStatusLabelData, "spout_sender_width" | "spout_sender_height">>;
 
 export type RuntimeSummaryStatusData = RuntimeQualityStatusLabelData & RuntimeSpoutStatusLabelData;
 
@@ -110,6 +112,9 @@ export type RuntimeStatusLabels = {
 };
 
 export function runtimeResolution(status: RuntimeQualityStatusLabelData | null): string {
+	if (status?.window_inner_size?.[0] && status.window_inner_size[1]) {
+		return `${status.window_inner_size[0]} x ${status.window_inner_size[1]}`;
+	}
 	if (!status?.surface_width || !status.surface_height) return "--";
 	return `${status.surface_width} x ${status.surface_height}`;
 }
@@ -196,7 +201,11 @@ export function rendererHealthLabel(
 export function runtimeOutputLabel(renderer: OutputLabelData, status: RuntimeOutputStatusData | null | undefined): string {
 	if (!status?.connected) return outputLabel(renderer);
 	if (renderer.spout_enabled && !status.spout_available) return "Spout2 unavailable";
-	return status.spout_enabled ? (status.spout_name ? `Spout2 / ${status.spout_name}` : "Spout2") : "Window";
+	if (!status.spout_enabled) return "Window";
+	const name = status.spout_name ? ` / ${status.spout_name}` : "";
+	const size =
+		status.spout_sender_width && status.spout_sender_height ? ` / ${status.spout_sender_width} x ${status.spout_sender_height}` : "";
+	return `Spout2${name}${size}`;
 }
 
 export function spoutHealthLabel(status: RuntimeSpoutStatusLabelData | null, pendingLabel: string): string {
