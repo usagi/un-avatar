@@ -1525,7 +1525,7 @@ fn build_texture_upload_payload_gpu(
 	TextureUploadPayload { kind, mips }
 }
 
-fn compressed_upload_kind_for_texture(
+pub(crate) fn compressed_upload_kind_for_texture(
 	processed: &ProcessedTexture,
 	mode: TextureCompressionMode,
 	advanced: &TextureCompressionAdvancedOptions,

@@ -5599,15 +5599,11 @@ impl GpuSceneBuildContext {
 			if options.debug_material_dump {
 				log_material_skin_report(&document);
 			}
-			let mut gpu_texture_compression = if options.block_compression_encoder == BlockCompressionEncoder::Gpu
+			let gpu_texture_compression_enabled = options.block_compression_encoder == BlockCompressionEncoder::Gpu
 				&& !matches!(
 					options.texture_compression,
 					TextureCompressionMode::Source | TextureCompressionMode::Compat
-				) {
-				Some(crate::texture_pipeline::create_vulkan_gpu_texture_compression_context()?)
-			} else {
-				None
-			};
+				);
 			let mut sm = SceneMeshes::new(
 				&device,
 				&queue,
@@ -5628,7 +5624,7 @@ impl GpuSceneBuildContext {
 				options.texture_compression_astc_supported,
 				options.texture_compression_etc2_supported,
 				options.processed_texture_cache,
-				gpu_texture_compression.as_mut(),
+				gpu_texture_compression_enabled,
 				&mut progress,
 			)?;
 			if !sm.is_empty() {

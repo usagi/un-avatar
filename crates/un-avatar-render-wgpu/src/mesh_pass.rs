@@ -23,10 +23,10 @@ use crate::skin_tone::{
 	skin_tone_texture_kinds_for_scene, SkinToneMatchingDebug,
 };
 use crate::texture_pipeline::{
-	compressed_cache_lookup_from_source, compression_preference_for_role, estimated_processed_mip_count, load_or_build_processed_texture,
-	mip_level_count, read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
-	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
-	TextureUploadPayload,
+	compressed_cache_lookup_from_source, compressed_upload_kind_for_texture, compression_preference_for_role,
+	create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count, load_or_build_processed_texture, mip_level_count,
+	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
+	texture_upload_payload, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind, TextureUploadPayload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -6770,7 +6770,7 @@ impl SceneMeshes {
 		texture_compression_astc_supported: bool,
 		texture_compression_etc2_supported: bool,
 		processed_texture_cache: bool,
-		mut gpu_texture_compression: Option<&mut GpuTextureCompressionContext>,
+		gpu_texture_compression_enabled: bool,
 		mut progress: impl FnMut(SceneMeshBuildProgress),
 	) -> Result<Self, String> {
 		let texture_roles = texture_roles_for_scene(scene);
@@ -7179,6 +7179,7 @@ impl SceneMeshes {
 		let mut image_views: Vec<wgpu::TextureView> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_slots: Vec<SceneImageTextureSlot> = Vec::with_capacity(scene.images.len());
 		let mut image_texture_residency = Vec::with_capacity(scene.images.len());
+		let mut gpu_texture_compression = None;
 		let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
 		let material_slot_residency = scene
 			.materials
@@ -7353,6 +7354,20 @@ impl SceneMeshes {
 					);
 					let processed_w = processed.width;
 					let processed_h = processed.height;
+					if gpu_texture_compression_enabled
+						&& gpu_texture_compression.is_none()
+						&& compressed_upload_kind_for_texture(
+							&processed,
+							texture_compression,
+							texture_compression_advanced,
+							role,
+							texture_compression_bc_supported,
+						)
+						.is_some()
+					{
+						report("gpu-upload", "Preparing GPU texture compression".to_string());
+						gpu_texture_compression = Some(create_vulkan_gpu_texture_compression_context()?);
+					}
 					let (payload, compressed_cache_event) = texture_upload_payload(
 						processed,
 						texture_compression,
@@ -7361,7 +7376,7 @@ impl SceneMeshes {
 						texture_compression_bc_supported,
 						block_compression_encoder,
 						block_compression_cpu_threads,
-						gpu_texture_compression.as_deref_mut(),
+						gpu_texture_compression.as_mut(),
 						processed_texture_cache,
 						compressed_cache_lookup.as_ref(),
 						compressed_cache_lookup.is_some(),
