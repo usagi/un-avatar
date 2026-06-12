@@ -6441,6 +6441,7 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 	let mut support_kind_mismatches = 0usize;
 	let mut unsupported_types = BTreeMap::<String, usize>::new();
 	let mut unsupported_active_types = BTreeMap::<String, usize>::new();
+	let mut approximate_active_types = BTreeMap::<String, usize>::new();
 	for component in components {
 		let component_disabled = component.get("enabled").and_then(Value::as_bool) == Some(false);
 		if component_disabled {
@@ -6462,7 +6463,12 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		}
 		match local_support_kind {
 			"resolver" => resolver_supported += 1,
-			"approximate" => approximate_supported += 1,
+			"approximate" => {
+				approximate_supported += 1;
+				if !component_disabled {
+					*approximate_active_types.entry(short_type.to_string()).or_default() += 1;
+				}
+			}
 			"metadata" => metadata_supported += 1,
 			"runtime_action" => runtime_action_supported += 1,
 			_ => {
@@ -6483,6 +6489,12 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 			detail: Some(format!(
 				"{count} unsupported Modular Avatar component(s) were preserved as source payload but not applied"
 			)),
+		});
+	}
+	for (short_type, count) in &approximate_active_types {
+		report.approximations.push(Approximation {
+			feature: format!("ModularAvatar.{short_type}"),
+			detail: Some(modular_avatar_approximation_detail(short_type, *count)),
 		});
 	}
 	if support_kind_mismatches > 0 {
@@ -6507,6 +6519,19 @@ fn report_unavatar_modular_avatar_component_catalog(components: &[Value], report
 		support_kind_mismatches,
 		unsupported_types
 	));
+}
+
+fn modular_avatar_approximation_detail(short_type: &str, count: usize) -> String {
+	let scope = match short_type {
+		"ModularAvatarBlendshapeSync" => "static default-weight propagation and linear runtime expression bindings",
+		"ModularAvatarMergeArmature" => "resolver-side bone/skin merge subset",
+		"ModularAvatarMeshCutter" => "enabled static vertex-filter deletion only; ReactiveObject dynamic gating is not evaluated",
+		"ModularAvatarMeshSettings" => "renderer metadata subset",
+		"ModularAvatarScaleAdjuster" => "resolver-side transform/scale subset",
+		"ModularAvatarShapeChanger" => "enabled static set/delete payloads only; ReactiveObject dynamic gating is not evaluated",
+		_ => "preserved/applied subset only",
+	};
+	format!("{count} active approximate component(s); {scope}")
 }
 
 fn unavatar_modular_avatar_component_inverted(component: &Value) -> bool {
@@ -13882,6 +13907,18 @@ mod tests {
 		assert!(message.contains("ModularAvatarWorldScaleObject:1"));
 		assert!(message.contains("MAMoveIndependently:1"));
 		assert!(message.contains("ModularAvatarUnknownDisabled:1"));
+		let approximations = report
+			.approximations
+			.iter()
+			.map(|approximation| (approximation.feature.as_str(), approximation.detail.as_deref().unwrap_or("")))
+			.collect::<Vec<_>>();
+		assert_eq!(approximations.len(), 2);
+		assert!(approximations.iter().any(|(feature, detail)| {
+			*feature == "ModularAvatar.ModularAvatarMeshCutter" && detail.contains("dynamic gating is not evaluated")
+		}));
+		assert!(approximations.iter().any(|(feature, detail)| {
+			*feature == "ModularAvatar.ModularAvatarScaleAdjuster" && detail.contains("resolver-side transform/scale subset")
+		}));
 		let unsupported_features = report
 			.lost_features
 			.iter()
@@ -13936,6 +13973,10 @@ mod tests {
 				&& diagnostic.text.contains("supportKind mismatch")
 				&& diagnostic.text.contains("count=1")
 		}));
+		assert!(report
+			.approximations
+			.iter()
+			.any(|approximation| approximation.feature == "ModularAvatar.ModularAvatarMeshCutter"));
 		assert!(report.lost_features.is_empty());
 	}
 
