@@ -7,7 +7,7 @@ use std::{
 	path::{Path, PathBuf},
 	sync::atomic::{AtomicBool, Ordering},
 	thread,
-	time::{Duration, SystemTime, UNIX_EPOCH},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use image::imageops::FilterType;
@@ -30,6 +30,7 @@ pub(crate) struct TextureCacheEvent {
 	pub(crate) hit: bool,
 	pub(crate) miss: bool,
 	pub(crate) write: bool,
+	pub(crate) read_elapsed: Duration,
 }
 
 impl TextureCacheEvent {
@@ -37,6 +38,7 @@ impl TextureCacheEvent {
 		hit: false,
 		miss: false,
 		write: false,
+		read_elapsed: Duration::ZERO,
 	};
 }
 
@@ -1115,6 +1117,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 		);
 	};
 	let path = cache_dir.join(format!("{key:016x}.utxc"));
+	let read_started = Instant::now();
 	if let Some(texture) = read_processed_texture_cache(&path, key) {
 		return (
 			texture,
@@ -1122,6 +1125,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 				hit: true,
 				miss: false,
 				write: false,
+				read_elapsed: read_started.elapsed(),
 			},
 		);
 	}
@@ -1134,6 +1138,7 @@ pub(crate) fn load_or_build_processed_texture_with_rgba<'a>(
 			hit: false,
 			miss: true,
 			write,
+			read_elapsed: read_started.elapsed(),
 		},
 	)
 }
@@ -1719,6 +1724,7 @@ fn texture_upload_payload_with_progress(
 							hit: true,
 							miss: false,
 							write: false,
+							read_elapsed: Duration::ZERO,
 						},
 					);
 				}
@@ -1737,6 +1743,7 @@ fn texture_upload_payload_with_progress(
 					hit: false,
 					miss: true,
 					write,
+					read_elapsed: Duration::ZERO,
 				},
 			);
 		}

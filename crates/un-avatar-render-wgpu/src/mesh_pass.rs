@@ -873,8 +873,9 @@ impl TexturePrepareSummary {
 		self.source_elapsed += timings.source;
 		self.rgba_elapsed += timings.rgba;
 		self.cache_lookup_elapsed += timings.cache_lookup;
-		self.cache_read_elapsed += timings.cache_read;
-		self.processed_elapsed += timings.processed;
+		let processed_cache_read_elapsed = cache_event.read_elapsed;
+		self.cache_read_elapsed += timings.cache_read + processed_cache_read_elapsed;
+		self.processed_elapsed += timings.processed.saturating_sub(processed_cache_read_elapsed);
 		self.payload_elapsed += timings.payload;
 		self.upload_elapsed += timings.upload;
 		if cache_event.hit {
@@ -906,8 +907,8 @@ impl TexturePrepareSummary {
 				stage_ms(timings.source),
 				stage_ms(timings.rgba),
 				stage_ms(timings.cache_lookup),
-				stage_ms(timings.cache_read),
-				stage_ms(timings.processed),
+				stage_ms(timings.cache_read + processed_cache_read_elapsed),
+				stage_ms(timings.processed.saturating_sub(processed_cache_read_elapsed)),
 				stage_ms(timings.payload),
 				stage_ms(timings.upload),
 			);
@@ -8543,6 +8544,7 @@ impl SceneMeshes {
 									hit: true,
 									miss: false,
 									write: false,
+									read_elapsed: Duration::ZERO,
 								},
 								lookup.processed_width,
 								lookup.processed_height,
@@ -8864,6 +8866,7 @@ impl SceneMeshes {
 								hit: true,
 								miss: false,
 								write: false,
+								read_elapsed: Duration::ZERO,
 							},
 							lookup.processed_width,
 							lookup.processed_height,
