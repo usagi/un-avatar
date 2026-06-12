@@ -12,7 +12,8 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
+	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
+	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, Approximation, ReportStatus,
 	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
 	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaDynamicsWritebackMode,
 	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
@@ -9800,6 +9801,56 @@ mod tests {
 			.groups
 			.iter()
 			.all(|group| group.source_kind == UnaDynamicsSourceKind::VrcPhysBone));
+	}
+
+	#[test]
+	fn unavatar_dynamics_writeback_target_counts_follow_lowered_chains() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 3]),
+				test_scene_node("node_mid", vec![2]),
+				test_scene_node("node_tip", Vec::new()),
+				test_scene_node("node_leaf", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_mid", "path": "Root/Mid"},
+					{"nodeId": "node_tip", "path": "Root/Mid/Tip"},
+					{"nodeId": "node_leaf", "path": "Root/Leaf"}
+				],
+				"dynamics": [{
+					"id": "branched_stretch",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"writebackMode": "rotation_translation",
+						"maxStretch": 0.25
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+		let mut counts: Vec<(Vec<usize>, usize, usize)> = settings
+			.groups
+			.iter()
+			.map(|group| {
+				(
+					group.bone_node_indices.clone(),
+					una_dynamics_translation_writeback_candidate_count(&scene, group.writeback_mode, &group.bone_node_indices),
+					una_dynamics_translation_writeback_target_count(&scene, group.writeback_mode, &group.bone_node_indices),
+				)
+			})
+			.collect();
+		counts.sort_by(|a, b| a.0.cmp(&b.0));
+
+		assert_eq!(counts, vec![(vec![0, 1, 2], 2, 1), (vec![0, 3], 1, 0)]);
 	}
 
 	#[test]
