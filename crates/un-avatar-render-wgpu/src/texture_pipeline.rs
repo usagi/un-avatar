@@ -805,6 +805,7 @@ const COMPRESSED_TEXTURE_CACHE_VERSION: u64 = 5;
 const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV64_PRIME: u64 = 0x100000001b3;
 const PARALLEL_TEXTURE_MIN_ROWS_PER_WORKER: u32 = 64;
+const TEXTURE_CACHE_READ_BUFFER_BYTES: usize = 1024 * 1024;
 
 fn fnv1a64_update(mut hash: u64, bytes: &[u8]) -> u64 {
 	for byte in bytes {
@@ -956,7 +957,7 @@ fn write_cache_file(path: &Path, write_contents: impl FnOnce(&mut BufWriter<fs::
 }
 
 fn read_processed_texture_cache(path: &Path, key: u64) -> Option<(ProcessedTexture, u64)> {
-	let mut file = BufReader::new(fs::File::open(path).ok()?);
+	let mut file = BufReader::with_capacity(TEXTURE_CACHE_READ_BUFFER_BYTES, fs::File::open(path).ok()?);
 	if &read_exact_array::<8>(&mut file)? != PROCESSED_TEXTURE_CACHE_MAGIC {
 		return None;
 	}
@@ -1005,7 +1006,7 @@ fn write_processed_texture_cache(path: &Path, key: u64, texture: &ProcessedTextu
 }
 
 pub(crate) fn read_compressed_texture_cache(path: &Path, key: u64, expected_kind: TextureUploadKind) -> Option<TextureUploadPayload> {
-	let mut file = BufReader::new(fs::File::open(path).ok()?);
+	let mut file = BufReader::with_capacity(TEXTURE_CACHE_READ_BUFFER_BYTES, fs::File::open(path).ok()?);
 	if &read_exact_array::<8>(&mut file)? != COMPRESSED_TEXTURE_CACHE_MAGIC {
 		return None;
 	}
