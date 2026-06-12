@@ -67,6 +67,8 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
    - decoded 済み画像の encoded source bytes は保持せず、deferred placeholder のみ lazy decode 用に保持する方針を維持する。
 4. Runtime CPU
    - world matrix rebuild、UNPhysics / UNDynamics step、wardrobe residency refresh、fur card encode など、毎 frame 全体走査になっている箇所を dirty / active scope へ寄せる。
+   - Runtime CPU の判断では swapchain / vsync 待ちを実処理 CPU と混ぜない。Renderer title / runtime status の `cpu_ms` は `cpu_record_ms - frame_surface_acquire_ms` の busy estimate とし、surface wait は別 field / title の `wait` として見る。
+   - 定常 frame の標準 probe は `cargo xtask run-renderer --release --profile mizuki-split --wardrobe-set field_drape -- --bench-frames 180 --no-fps-title`。2026-06-13 時点の Vulkan/MSAA/balanced/profile 解像度では `fps_avg=60.0`、`cpu_no_surface_avg=1.4-1.5ms`、`surface=14.1-14.3ms`、`gpu_avg<1ms`。この条件で `cpu_record_avg` が約 16ms に見えるのはほぼ surface acquire wait であり、CPU 最適化対象ではない。
    - full Animator graph、dynamic reactive mesh gating、VRC Constraints solver integration は未設計領域として、速度目的のついで実装はしない。
 5. Skin tone / optional analysis
    - skin tone matching、diagnostic dump、debug summaries は active / resident texture と明示 option に限定し、通常起動 path へ重い解析を混ぜない。
