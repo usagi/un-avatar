@@ -205,10 +205,6 @@ pub(crate) struct AvatarEffectsManifest {
 	pub outline_lighting_mix: Option<f32>,
 	pub outline_roundness: Option<f32>,
 	pub outline: Option<AvatarOutlineManifest>,
-	pub rim: Option<AvatarRimManifest>,
-	pub matcap: Option<AvatarMatcapManifest>,
-	pub specular: Option<AvatarSpecularManifest>,
-	pub ambient_occlusion: Option<AvatarAmbientOcclusionManifest>,
 	pub contact_shadow: Option<ContactShadowManifest>,
 }
 
@@ -232,37 +228,6 @@ pub(crate) struct AvatarOutlineManifest {
 	pub color: Option<[f32; 3]>,
 	pub lighting_mix: Option<f32>,
 	pub roundness: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarRimManifest {
-	pub policy: Option<String>,
-	pub color: Option<[f32; 3]>,
-	pub intensity: Option<f32>,
-	pub lighting_mix: Option<f32>,
-	pub fresnel_power: Option<f32>,
-	pub lift: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarMatcapManifest {
-	pub scale: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarSpecularManifest {
-	pub enabled: Option<bool>,
-	pub intensity: Option<f32>,
-	pub power: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarAmbientOcclusionManifest {
-	pub strength: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
