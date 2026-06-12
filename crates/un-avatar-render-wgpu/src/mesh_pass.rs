@@ -899,10 +899,11 @@ impl TexturePrepareSummary {
 			self.compressed_cache_writes += 1;
 		}
 		let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
-		if elapsed_ms >= 50.0 {
+		let read_mb = cache_event.read_bytes as f64 / (1024.0 * 1024.0);
+		if elapsed_ms >= 50.0 || read_mb >= 64.0 {
 			let stage_ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0;
 			eprintln!(
-				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms",
+				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms read_mb={read_mb:.1}",
 				image_index,
 				resident,
 				stage_ms(timings.cube),
