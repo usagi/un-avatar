@@ -3,7 +3,10 @@
 use std::{
 	borrow::Cow,
 	collections::{BTreeMap, BTreeSet},
-	time::{Duration, Instant},
+	fs,
+	io::{BufReader, BufWriter, Read, Write},
+	path::{Path, PathBuf},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -770,6 +773,9 @@ pub(crate) struct TextureUploadSummary {
 	pub deferred_cubemap_upload_count: u32,
 	pub cubemap_converted_count: u32,
 	pub cubemap_fallback_count: u32,
+	pub cubemap_cache_hits: u32,
+	pub cubemap_cache_misses: u32,
+	pub cubemap_cache_writes: u32,
 	pub compression_mode: TextureCompressionMode,
 	pub compression_bc_supported: bool,
 	pub compression_astc_supported: bool,
@@ -4351,6 +4357,13 @@ struct CubeUpload {
 	layout: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct CubeUploadCacheEvent {
+	hit: bool,
+	miss: bool,
+	write: bool,
+}
+
 #[derive(Clone)]
 struct CubeMipUpload {
 	face_size: u32,
@@ -4378,6 +4391,208 @@ impl CubeSourceLayout {
 			Self::VerticalCross => "vertical_cross",
 		}
 	}
+}
+
+impl CubeSourceLayout {
+	fn cache_tag(self) -> u8 {
+		match self {
+			Self::Latlong => 1,
+			Self::SphereMap => 2,
+			Self::HorizontalStrip => 3,
+			Self::VerticalStrip => 4,
+			Self::HorizontalCross => 5,
+			Self::VerticalCross => 6,
+		}
+	}
+}
+
+const CUBE_TEXTURE_CACHE_MAGIC: &[u8; 8] = b"UNACUB1\0";
+const CUBE_TEXTURE_CACHE_VERSION: u64 = 1;
+const CUBE_CACHE_FNV64_OFFSET: u64 = 0xcbf29ce484222325;
+const CUBE_CACHE_FNV64_PRIME: u64 = 0x100000001b3;
+
+fn cube_cache_hash_update(mut hash: u64, bytes: &[u8]) -> u64 {
+	for byte in bytes {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(CUBE_CACHE_FNV64_PRIME);
+	}
+	hash
+}
+
+fn cube_texture_cache_key(
+	image: &UnaImageRgba,
+	source: &UnaImageSourceMetadata,
+	layout: CubeSourceLayout,
+	face_size: u32,
+	srgb: bool,
+) -> u64 {
+	let mut hash = CUBE_CACHE_FNV64_OFFSET;
+	hash = cube_cache_hash_update(hash, b"un-avatar-cube-texture-cache");
+	hash = cube_cache_hash_update(hash, &CUBE_TEXTURE_CACHE_VERSION.to_le_bytes());
+	hash = cube_cache_hash_update(hash, &image.width.to_le_bytes());
+	hash = cube_cache_hash_update(hash, &image.height.to_le_bytes());
+	hash = cube_cache_hash_update(hash, &face_size.to_le_bytes());
+	hash = cube_cache_hash_update(hash, &[layout.cache_tag(), u8::from(srgb)]);
+	hash = cube_cache_hash_update(hash, &source.byte_length.to_le_bytes());
+	hash = cube_cache_hash_update(hash, &source.source_hash.to_le_bytes());
+	for value in [
+		source.mime_type.as_deref(),
+		source.uri.as_deref(),
+		source.texture_shape.as_deref(),
+		source.source_layout.as_deref(),
+		source.unity_generate_cubemap.as_deref(),
+	]
+	.into_iter()
+	.flatten()
+	{
+		hash = cube_cache_hash_update(hash, value.as_bytes());
+		hash = cube_cache_hash_update(hash, &[0]);
+	}
+	hash
+}
+
+fn cube_texture_cache_dir() -> Option<PathBuf> {
+	if let Some(path) = std::env::var_os("UN_AVATAR_TEXTURE_CACHE_DIR") {
+		return Some(PathBuf::from(path));
+	}
+	#[cfg(windows)]
+	{
+		std::env::var_os("LOCALAPPDATA")
+			.map(PathBuf::from)
+			.map(|p| p.join("UN Avatar").join("texture-cache").join("v1"))
+	}
+	#[cfg(not(windows))]
+	{
+		std::env::var_os("XDG_CACHE_HOME")
+			.map(PathBuf::from)
+			.or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+			.map(|p| p.join("un-avatar").join("texture-cache").join("v1"))
+	}
+}
+
+fn cube_texture_cache_path(key: u64) -> Option<PathBuf> {
+	cube_texture_cache_dir().map(|dir| dir.join(format!("{key:016x}.ucube")))
+}
+
+fn cube_cache_temp_path(path: &Path) -> PathBuf {
+	let stamp = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|duration| duration.as_nanos())
+		.unwrap_or(0);
+	let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("cache");
+	path.with_file_name(format!("{file_name}.{}.{}.tmp", std::process::id(), stamp))
+}
+
+fn cube_read_exact_array<const N: usize>(reader: &mut impl Read) -> Option<[u8; N]> {
+	let mut bytes = [0u8; N];
+	reader.read_exact(&mut bytes).ok()?;
+	Some(bytes)
+}
+
+fn cube_read_u32_le(reader: &mut impl Read) -> Option<u32> {
+	Some(u32::from_le_bytes(cube_read_exact_array(reader)?))
+}
+
+fn cube_read_u64_le(reader: &mut impl Read) -> Option<u64> {
+	Some(u64::from_le_bytes(cube_read_exact_array(reader)?))
+}
+
+fn cube_write_u32_le(writer: &mut impl Write, value: u32) -> std::io::Result<()> {
+	writer.write_all(&value.to_le_bytes())
+}
+
+fn cube_write_u64_le(writer: &mut impl Write, value: u64) -> std::io::Result<()> {
+	writer.write_all(&value.to_le_bytes())
+}
+
+fn cube_write_cache_file(path: &Path, write_contents: impl FnOnce(&mut BufWriter<fs::File>) -> std::io::Result<()>) -> bool {
+	let Some(parent) = path.parent() else { return false };
+	if fs::create_dir_all(parent).is_err() {
+		return false;
+	}
+	let temp_path = cube_cache_temp_path(path);
+	let write_result = (|| -> std::io::Result<()> {
+		let mut writer = BufWriter::new(fs::File::create(&temp_path)?);
+		write_contents(&mut writer)?;
+		writer.flush()
+	})();
+	if write_result.is_err() {
+		let _ = fs::remove_file(&temp_path);
+		return false;
+	}
+	if fs::rename(&temp_path, path).is_ok() {
+		return true;
+	}
+	let _ = fs::remove_file(path);
+	let renamed = fs::rename(&temp_path, path).is_ok();
+	if !renamed {
+		let _ = fs::remove_file(&temp_path);
+	}
+	renamed
+}
+
+fn read_cube_texture_cache(path: &Path, key: u64) -> Option<CubeUpload> {
+	let mut file = BufReader::new(fs::File::open(path).ok()?);
+	if &cube_read_exact_array::<8>(&mut file)? != CUBE_TEXTURE_CACHE_MAGIC {
+		return None;
+	}
+	if cube_read_u64_le(&mut file)? != key {
+		return None;
+	}
+	let face_size = cube_read_u32_le(&mut file)?.max(1);
+	let layout_tag = cube_read_exact_array::<1>(&mut file)?[0];
+	let layout = match layout_tag {
+		1 => CubeSourceLayout::Latlong,
+		2 => CubeSourceLayout::SphereMap,
+		3 => CubeSourceLayout::HorizontalStrip,
+		4 => CubeSourceLayout::VerticalStrip,
+		5 => CubeSourceLayout::HorizontalCross,
+		6 => CubeSourceLayout::VerticalCross,
+		_ => return None,
+	};
+	let mip_count = cube_read_u32_le(&mut file)? as usize;
+	if mip_count == 0 || mip_count > 32 {
+		return None;
+	}
+	let mut mips = Vec::with_capacity(mip_count);
+	for _ in 0..mip_count {
+		let mip_face_size = cube_read_u32_le(&mut file)?.max(1);
+		let len = cube_read_u64_le(&mut file)? as usize;
+		let expected = (mip_face_size as usize)
+			.checked_mul(mip_face_size as usize)?
+			.checked_mul(6)?
+			.checked_mul(8)?;
+		if len != expected {
+			return None;
+		}
+		let mut data_rgba16f = vec![0u8; len];
+		file.read_exact(&mut data_rgba16f).ok()?;
+		mips.push(CubeMipUpload {
+			face_size: mip_face_size,
+			data_rgba16f,
+		});
+	}
+	Some(CubeUpload {
+		face_size,
+		mips,
+		layout: layout.name(),
+	})
+}
+
+fn write_cube_texture_cache(path: &Path, key: u64, layout: CubeSourceLayout, upload: &CubeUpload) -> bool {
+	cube_write_cache_file(path, |writer| {
+		writer.write_all(CUBE_TEXTURE_CACHE_MAGIC)?;
+		cube_write_u64_le(writer, key)?;
+		cube_write_u32_le(writer, upload.face_size)?;
+		writer.write_all(&[layout.cache_tag()])?;
+		cube_write_u32_le(writer, upload.mips.len() as u32)?;
+		for mip in &upload.mips {
+			cube_write_u32_le(writer, mip.face_size)?;
+			cube_write_u64_le(writer, mip.data_rgba16f.len() as u64)?;
+			writer.write_all(&mip.data_rgba16f)?;
+		}
+		Ok(())
+	})
 }
 
 fn texture_source_is_cube(source: Option<&UnaImageSourceMetadata>) -> bool {
@@ -4427,9 +4642,33 @@ fn cube_source_layout(image: &UnaImageRgba, source: Option<&UnaImageSourceMetada
 	None
 }
 
-fn cube_upload_from_image(image: &UnaImageRgba, source: Option<&UnaImageSourceMetadata>) -> Option<CubeUpload> {
+fn cube_upload_from_image(
+	image: &UnaImageRgba,
+	source: Option<&UnaImageSourceMetadata>,
+	cache_enabled: bool,
+) -> Option<(CubeUpload, CubeUploadCacheEvent)> {
 	let (layout, face_size) = cube_source_layout(image, source)?;
 	let srgb = texture_source_is_srgb(source);
+	let cache_lookup = cache_enabled
+		.then(|| {
+			let source = source?;
+			let key = cube_texture_cache_key(image, source, layout, face_size, srgb);
+			let path = cube_texture_cache_path(key)?;
+			Some((key, path))
+		})
+		.flatten();
+	if let Some((key, path)) = cache_lookup.as_ref() {
+		if let Some(upload) = read_cube_texture_cache(path, *key) {
+			return Some((
+				upload,
+				CubeUploadCacheEvent {
+					hit: true,
+					miss: false,
+					write: false,
+				},
+			));
+		}
+	}
 	let mut base_rgba = Vec::with_capacity(face_size as usize * face_size as usize * 6);
 	for face in 0..6 {
 		for y in 0..face_size {
@@ -4449,11 +4688,22 @@ fn cube_upload_from_image(image: &UnaImageRgba, source: Option<&UnaImageSourceMe
 			}
 		}
 	}
-	Some(CubeUpload {
+	let upload = CubeUpload {
 		face_size,
 		mips: build_cube_mips_rgba16f(face_size, base_rgba),
 		layout: layout.name(),
-	})
+	};
+	let write = cache_lookup
+		.as_ref()
+		.is_some_and(|(key, path)| write_cube_texture_cache(path, *key, layout, &upload));
+	Some((
+		upload,
+		CubeUploadCacheEvent {
+			hit: false,
+			miss: cache_lookup.is_some(),
+			write,
+		},
+	))
 }
 
 fn build_cube_mips_rgba16f(face_size: u32, base_rgba: Vec<[f32; 4]>) -> Vec<CubeMipUpload> {
@@ -7901,8 +8151,17 @@ impl SceneMeshes {
 			if texture_source_is_cube(source_metadata) {
 				texture_summary.cubemap_count += 1;
 			}
-			if let Some(cube_upload) = cube_upload_from_image(im, source_metadata) {
+			if let Some((cube_upload, cube_cache_event)) = cube_upload_from_image(im, source_metadata, processed_texture_cache) {
 				texture_summary.cubemap_converted_count += 1;
+				if cube_cache_event.hit {
+					texture_summary.cubemap_cache_hits += 1;
+				}
+				if cube_cache_event.miss {
+					texture_summary.cubemap_cache_misses += 1;
+				}
+				if cube_cache_event.write {
+					texture_summary.cubemap_cache_writes += 1;
+				}
 				let cube_bytes = cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
 				let mut slot = SceneCubeTextureSlot::new(cube_upload);
 				if cube_resident {
@@ -10886,6 +11145,26 @@ mod tests {
 		assert_eq!(mips[0].data_rgba16f.len(), 6 * 2 * 2 * 8);
 		assert_eq!(mips[1].face_size, 1);
 		assert_eq!(mips[1].data_rgba16f.len(), 6 * 8);
+	}
+
+	#[test]
+	fn cubemap_cache_roundtrips_upload_mips() {
+		let key = 0x1234_5678_9abc_def0;
+		let path = std::env::temp_dir().join(format!("un-avatar-cubemap-cache-test-{}-{key:016x}.ucube", std::process::id()));
+		let upload = CubeUpload {
+			face_size: 2,
+			mips: build_cube_mips_rgba16f(2, vec![[1.0, 0.5, 0.25, 1.0]; 6 * 2 * 2]),
+			layout: CubeSourceLayout::HorizontalStrip.name(),
+		};
+
+		assert!(write_cube_texture_cache(&path, key, CubeSourceLayout::HorizontalStrip, &upload));
+		let loaded = read_cube_texture_cache(&path, key).expect("cubemap cache should load");
+		let _ = std::fs::remove_file(&path);
+
+		assert_eq!(loaded.face_size, upload.face_size);
+		assert_eq!(loaded.layout, upload.layout);
+		assert_eq!(loaded.mips.len(), upload.mips.len());
+		assert_eq!(loaded.mips[0].data_rgba16f, upload.mips[0].data_rgba16f);
 	}
 
 	#[test]
