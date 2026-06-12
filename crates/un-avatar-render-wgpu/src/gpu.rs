@@ -3971,7 +3971,7 @@ impl GpuState {
 				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
 			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) =
-				sm.apply_image_texture_view_residency(&self.device, &self.queue, &image_load_indices, &image_unload_indices);
+				sm.apply_image_texture_view_residency(&self.device, &self.queue, runtime.scene, &image_load_indices, &image_unload_indices);
 			self.last_image_texture_scoped_load_count = image_texture_bind_load_count;
 			self.last_image_texture_scoped_unload_count = image_texture_bind_unload_count;
 			self.last_cubemap_scoped_load_count = cubemap_load_count;

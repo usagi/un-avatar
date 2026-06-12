@@ -26,7 +26,8 @@ use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compressed_upload_kind_for_texture, compression_preference_for_role,
 	create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count, load_or_build_processed_texture, mip_level_count,
 	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
-	texture_upload_payload, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind, TextureUploadPayload,
+	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
+	TextureUploadPayload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -2044,6 +2045,21 @@ enum SceneImageTextureUpload {
 		width: u32,
 		height: u32,
 	},
+	Lazy(SceneImageTextureLazyUpload),
+}
+
+struct SceneImageTextureLazyUpload {
+	image_index: usize,
+	role: TextureRole,
+	mipmap_filter: TextureMipmapFilter,
+	texture_max_dimension: Option<u32>,
+	texture_compression: TextureCompressionMode,
+	block_compression_encoder: BlockCompressionEncoder,
+	block_compression_cpu_threads: usize,
+	processed_texture_cache: bool,
+	texture_compression_advanced: TextureCompressionAdvancedOptions,
+	texture_compression_bc_supported: bool,
+	gpu_texture_compression_enabled: bool,
 }
 
 struct SceneImageTextureSlot {
@@ -2061,9 +2077,22 @@ impl SceneImageTextureSlot {
 		}
 	}
 
-	fn ensure_uploaded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<wgpu::TextureView> {
+	fn ensure_uploaded(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: Option<&UnaSceneSnapshot>,
+		gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+	) -> Option<wgpu::TextureView> {
 		if let Some(view) = &self.view {
 			return Some(view.clone());
+		}
+		if let SceneImageTextureUpload::Lazy(lazy) = &self.upload {
+			let scene = scene?;
+			let image = scene.images.get(lazy.image_index)?;
+			let source_metadata = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
+			let upload = build_scene_image_texture_upload(image, source_metadata, lazy, gpu_texture_compression)?;
+			self.upload = upload;
 		}
 		let texture = match &self.upload {
 			SceneImageTextureUpload::Source(upload) => create_source_image_texture(device, queue, upload),
@@ -2073,6 +2102,7 @@ impl SceneImageTextureSlot {
 				width,
 				height,
 			} => create_payload_image_texture(device, queue, payload, *format, *width, *height),
+			SceneImageTextureUpload::Lazy(_) => return None,
 		};
 		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 		self.texture = Some(texture);
@@ -2168,6 +2198,7 @@ pub(crate) struct SceneMeshes {
 	active_skin_palette_indices: Vec<usize>,
 	image_texture_residency: Vec<bool>,
 	material_slot_residency: Vec<bool>,
+	lazy_gpu_texture_compression: Option<GpuTextureCompressionContext>,
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	visibility_scratch: Vec<bool>,
@@ -2960,6 +2991,105 @@ fn texture_mip_copy_layout(kind: TextureUploadKind, width: u32, height: u32) -> 
 		TextureUploadKind::Bc1Srgb => (width.div_ceil(4) * 8, height.div_ceil(4)),
 		TextureUploadKind::Bc5Unorm | TextureUploadKind::Bc7Srgb => (width.div_ceil(4) * 16, height.div_ceil(4)),
 	}
+}
+
+fn build_scene_image_texture_upload(
+	im: &UnaImageRgba,
+	source_metadata: Option<&UnaImageSourceMetadata>,
+	lazy: &SceneImageTextureLazyUpload,
+	gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+) -> Option<SceneImageTextureUpload> {
+	if lazy.texture_max_dimension.is_none() && lazy.texture_compression != TextureCompressionMode::Compat {
+		if let Some(source_upload) = source_texture_upload(im) {
+			return Some(SceneImageTextureUpload::Source(source_upload));
+		}
+	}
+	let src_w = im.width.max(1);
+	let src_h = im.height.max(1);
+	let rgba_compat = im.rgba8_compat_pixels();
+	let rgba = rgba_compat.as_ref();
+	let source_key = source_metadata.map_or_else(
+		|| texture_cache_key(src_w, src_h, lazy.texture_max_dimension, lazy.role, lazy.mipmap_filter, rgba),
+		|source| texture_cache_key_from_source_metadata(src_w, src_h, lazy.texture_max_dimension, lazy.role, lazy.mipmap_filter, source),
+	);
+	let compressed_cache_lookup = lazy.processed_texture_cache.then(|| {
+		compressed_cache_lookup_from_source(
+			rgba,
+			src_w,
+			src_h,
+			lazy.texture_max_dimension,
+			lazy.role,
+			lazy.texture_compression,
+			&lazy.texture_compression_advanced,
+			lazy.texture_compression_bc_supported,
+			source_key,
+		)
+	});
+	let compressed_cache_lookup = compressed_cache_lookup.flatten();
+	let compressed_cache_hit = compressed_cache_lookup.as_ref().and_then(|lookup| {
+		read_compressed_texture_cache(&lookup.path, lookup.key, lookup.kind)
+			.map(|payload| (payload, lookup.processed_width, lookup.processed_height))
+	});
+	let (payload, processed_w, processed_h) = if let Some((payload, processed_w, processed_h)) = compressed_cache_hit {
+		(payload, processed_w, processed_h)
+	} else {
+		let (processed, _) = load_or_build_processed_texture(
+			rgba,
+			src_w,
+			src_h,
+			lazy.texture_max_dimension,
+			lazy.role,
+			lazy.mipmap_filter,
+			lazy.processed_texture_cache,
+			source_key,
+		);
+		let processed_w = processed.width;
+		let processed_h = processed.height;
+		if lazy.gpu_texture_compression_enabled
+			&& gpu_texture_compression.is_none()
+			&& compressed_upload_kind_for_texture(
+				&processed,
+				lazy.texture_compression,
+				&lazy.texture_compression_advanced,
+				lazy.role,
+				lazy.texture_compression_bc_supported,
+			)
+			.is_some()
+		{
+			*gpu_texture_compression = create_vulkan_gpu_texture_compression_context().ok();
+		}
+		let (payload, _) = texture_upload_payload(
+			processed,
+			lazy.texture_compression,
+			&lazy.texture_compression_advanced,
+			lazy.role,
+			lazy.texture_compression_bc_supported,
+			lazy.block_compression_encoder,
+			lazy.block_compression_cpu_threads,
+			gpu_texture_compression.as_mut(),
+			lazy.processed_texture_cache,
+			compressed_cache_lookup.as_ref(),
+			compressed_cache_lookup.is_some(),
+		);
+		(payload, processed_w, processed_h)
+	};
+	let (w, h) = payload
+		.mips
+		.first()
+		.map_or((processed_w, processed_h), |mip| (mip.width, mip.height));
+	let format = match payload.kind {
+		TextureUploadKind::Rgba if rgba_upload_uses_linear_format(lazy.role, source_metadata) => wgpu::TextureFormat::Rgba8Unorm,
+		TextureUploadKind::Rgba => wgpu::TextureFormat::Rgba8UnormSrgb,
+		TextureUploadKind::Bc1Srgb => wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+		TextureUploadKind::Bc5Unorm => wgpu::TextureFormat::Bc5RgUnorm,
+		TextureUploadKind::Bc7Srgb => wgpu::TextureFormat::Bc7RgbaUnormSrgb,
+	};
+	Some(SceneImageTextureUpload::Payload {
+		payload,
+		format,
+		width: w,
+		height: h,
+	})
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7274,7 +7404,7 @@ impl SceneMeshes {
 					);
 					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
 					if image_resident {
-						if let Some(view) = slot.ensure_uploaded(device, queue) {
+						if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
 							image_views.push(view);
 						} else {
 							image_views.push(transparent_black_view.clone());
@@ -7293,6 +7423,36 @@ impl SceneMeshes {
 					image_texture_slots.push(slot);
 					continue;
 				}
+			}
+			if !image_resident && skin_tone_override.is_none() && !texture_source_is_cube(source_metadata) {
+				let processed_w = texture_max_dimension.map_or(src_w, |max_dimension| src_w.min(max_dimension));
+				let processed_h = texture_max_dimension.map_or(src_h, |max_dimension| src_h.min(max_dimension));
+				let estimated_mip_bytes = (src_w as u64)
+					.saturating_mul(src_h as u64)
+					.saturating_mul(4)
+					.saturating_mul(estimated_processed_mip_count(src_w, src_h, texture_max_dimension, role) as u64);
+				texture_summary.record_image(src_w, src_h, processed_w, processed_h, estimated_mip_bytes, false);
+				report(
+					"gpu-upload",
+					format!("Deferring lazy texture {}/{} ({role:?})", image_index + 1, scene.images.len()),
+				);
+				image_views.push(transparent_black_view.clone());
+				image_texture_slots.push(SceneImageTextureSlot::new(SceneImageTextureUpload::Lazy(
+					SceneImageTextureLazyUpload {
+						image_index,
+						role,
+						mipmap_filter,
+						texture_max_dimension,
+						texture_compression,
+						block_compression_encoder,
+						block_compression_cpu_threads,
+						processed_texture_cache,
+						texture_compression_advanced: texture_compression_advanced.clone(),
+						texture_compression_bc_supported,
+						gpu_texture_compression_enabled,
+					},
+				)));
+				continue;
 			}
 			let rgba_compat = im.rgba8_compat_pixels();
 			let rgba = skin_tone_override.unwrap_or(rgba_compat.as_ref());
@@ -7457,7 +7617,7 @@ impl SceneMeshes {
 				height: h,
 			});
 			if image_resident {
-				if let Some(view) = slot.ensure_uploaded(device, queue) {
+				if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
 					image_views.push(view);
 				} else {
 					image_views.push(transparent_black_view.clone());
@@ -7965,6 +8125,7 @@ impl SceneMeshes {
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			image_texture_residency,
 			material_slot_residency,
+			lazy_gpu_texture_compression: gpu_texture_compression,
 			texture_summary,
 			runtime_requirements: draw_state.runtime_requirements,
 			visibility_scratch: Vec::new(),
@@ -7976,7 +8137,7 @@ impl SceneMeshes {
 		let active_gaps = scene_meshes.active_residency_gaps();
 		if !active_gaps.inactive_image_texture_indices.is_empty() || !active_gaps.inactive_material_slot_indices.is_empty() {
 			scene_meshes.promote_image_texture_residency(&active_gaps.inactive_image_texture_indices);
-			scene_meshes.apply_image_texture_view_residency(device, queue, &active_gaps.inactive_image_texture_indices, &[]);
+			scene_meshes.apply_image_texture_view_residency(device, queue, scene, &active_gaps.inactive_image_texture_indices, &[]);
 			scene_meshes.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
 			scene_meshes.rebuild_material_bind_groups(device);
 		}
@@ -8861,6 +9022,7 @@ impl SceneMeshes {
 		&mut self,
 		device: &wgpu::Device,
 		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
 		load_indices: &[usize],
 		unload_indices: &[usize],
 	) -> (usize, usize, usize, usize) {
@@ -8870,7 +9032,7 @@ impl SceneMeshes {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
 				continue;
 			};
-			let Some(source_view) = slot.ensure_uploaded(device, queue) else {
+			let Some(source_view) = slot.ensure_uploaded(device, queue, Some(scene), &mut self.lazy_gpu_texture_compression) else {
 				continue;
 			};
 			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
