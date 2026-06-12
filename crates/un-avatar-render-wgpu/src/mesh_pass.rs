@@ -468,6 +468,18 @@ fn baseline_fallback_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
+		"textureSample(emission2nd_tex, emissive_samp, emission2nd_uv)",
+		"vec4<f32>(1.0, 1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
+		"textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv)",
+		"vec4<f32>(1.0, 1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
+		"textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb",
+		"vec3<f32>(1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
 		"\t\t\tif (drawu.emission2nd_params.x > 0.5) {\n\t\t\t\tlet emission2nd_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_uv_offset_scale, drawu.emission2nd_uv_anim_params);\n\t\t\t\tlet emission2nd_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission2nd_blend_mask_uv_offset_scale, drawu.emission2nd_blend_mask_uv_anim_params);\n\t\t\t\tvar emission2nd_sample = textureSample(emission2nd_tex, emissive_samp, emission2nd_uv) * drawu.emission2nd_color;\n\t\t\t\temission2nd_sample = emission2nd_sample * textureSample(emission2nd_blend_mask_tex, emissive_samp, emission2nd_mask_uv);\n\t\t\t\tif (drawu.emission2nd_grad_params.x > 0.5) {\n\t\t\t\t\tlet grad_u = fract(drawu.emission2nd_grad_params.y * frame.time_params.x);\n\t\t\t\t\temission2nd_sample.rgb = emission2nd_sample.rgb * textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb;\n\t\t\t\t}\n\t\t\t\temission2nd_sample.rgb = mix(emission2nd_sample.rgb, emission2nd_sample.rgb * inv_lighting, clamp(drawu.emission2nd_grad_params.z, 0.0, 1.0));\n\t\t\t\tlet emission2nd_rgb = mix(emission2nd_sample.rgb, emission2nd_sample.rgb * base, clamp(drawu.emission2nd_params.y, 0.0, 1.0));\n\t\t\t\tlet emission2nd_blink = lil_calc_blink(drawu.emission2nd_blink_params);\n\t\t\t\tlet emission2nd_blend = clamp(drawu.emission2nd_params.x * drawu.emission2nd_params.z * emission2nd_blink * emission2nd_sample.a, 0.0, 1.0);\n\t\t\t\tlit = lil_blend_color(lit, emission2nd_rgb, emission2nd_blend, drawu.emission2nd_params.w);\n\t\t\t}\n",
 		"",
 	);
@@ -496,7 +508,7 @@ fn baseline_fallback_mesh_shader_source() -> String {
 		"",
 	);
 	shader = shader.replace(
-		"\tif (drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
+		"\tif (UNTOON_FEATURE_NORMAL_SECOND > 0.5 && drawu.normal2nd_params.x > 0.5) {\n\t\tlet normal2nd_base_uv = lil_select_uv(drawu.normal2nd_params.z, uv, uv1, uv2, uv3);\n\t\tlet normal2nd_uv = normal2nd_base_uv * drawu.normal2nd_uv_offset_scale.zw + drawu.normal2nd_uv_offset_scale.xy;\n\t\tlet normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;\n\t\tlet scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;\n\t\tlet tn2 = lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask);\n\t\ttn = vec3<f32>(tn.xy + tn2.xy, tn.z * tn2.z);\n\t}\n",
 		"",
 	);
 	shader = shader.replace(
@@ -1010,6 +1022,101 @@ enum DrawPipelineKind {
 	LilToonGemPre,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct UntoonShaderFeatures {
+	liltoon: bool,
+	main_layers: bool,
+	alpha_mask: bool,
+	dissolve: bool,
+	parallax: bool,
+	id_mask: bool,
+	udim_discard: bool,
+	audio_link: bool,
+	shadow_layers: bool,
+	matcap: bool,
+	matcap_second: bool,
+	matcap_custom_normal: bool,
+	reflection: bool,
+	reflection_cube: bool,
+	anisotropy: bool,
+	rim: bool,
+	rim_shade: bool,
+	backlight: bool,
+	glitter: bool,
+	emission: bool,
+	emission_second: bool,
+	distance_fade: bool,
+	fur: bool,
+	gem: bool,
+	refraction: bool,
+	normal_second: bool,
+}
+
+impl UntoonShaderFeatures {
+	fn include(&mut self, other: Self) {
+		self.liltoon |= other.liltoon;
+		self.main_layers |= other.main_layers;
+		self.alpha_mask |= other.alpha_mask;
+		self.dissolve |= other.dissolve;
+		self.parallax |= other.parallax;
+		self.id_mask |= other.id_mask;
+		self.udim_discard |= other.udim_discard;
+		self.audio_link |= other.audio_link;
+		self.shadow_layers |= other.shadow_layers;
+		self.matcap |= other.matcap;
+		self.matcap_second |= other.matcap_second;
+		self.matcap_custom_normal |= other.matcap_custom_normal;
+		self.reflection |= other.reflection;
+		self.reflection_cube |= other.reflection_cube;
+		self.anisotropy |= other.anisotropy;
+		self.rim |= other.rim;
+		self.rim_shade |= other.rim_shade;
+		self.backlight |= other.backlight;
+		self.glitter |= other.glitter;
+		self.emission |= other.emission;
+		self.emission_second |= other.emission_second;
+		self.distance_fade |= other.distance_fade;
+		self.fur |= other.fur;
+		self.gem |= other.gem;
+		self.refraction |= other.refraction;
+		self.normal_second |= other.normal_second;
+	}
+
+	fn shader_constants(self) -> Vec<(&'static str, f64)> {
+		[
+			("UNTOON_FEATURE_LILTOON", self.liltoon),
+			("UNTOON_FEATURE_MAIN_LAYERS", self.main_layers),
+			("UNTOON_FEATURE_ALPHA_MASK", self.alpha_mask),
+			("UNTOON_FEATURE_DISSOLVE", self.dissolve),
+			("UNTOON_FEATURE_PARALLAX", self.parallax),
+			("UNTOON_FEATURE_ID_MASK", self.id_mask),
+			("UNTOON_FEATURE_UDIM_DISCARD", self.udim_discard),
+			("UNTOON_FEATURE_AUDIO_LINK", self.audio_link),
+			("UNTOON_FEATURE_SHADOW_LAYERS", self.shadow_layers),
+			("UNTOON_FEATURE_MATCAP", self.matcap),
+			("UNTOON_FEATURE_MATCAP_SECOND", self.matcap_second),
+			("UNTOON_FEATURE_MATCAP_CUSTOM_NORMAL", self.matcap_custom_normal),
+			("UNTOON_FEATURE_REFLECTION", self.reflection),
+			("UNTOON_FEATURE_REFLECTION_CUBE", self.reflection_cube),
+			("UNTOON_FEATURE_ANISOTROPY", self.anisotropy),
+			("UNTOON_FEATURE_RIM", self.rim),
+			("UNTOON_FEATURE_RIM_SHADE", self.rim_shade),
+			("UNTOON_FEATURE_BACKLIGHT", self.backlight),
+			("UNTOON_FEATURE_GLITTER", self.glitter),
+			("UNTOON_FEATURE_EMISSION", self.emission),
+			("UNTOON_FEATURE_EMISSION_SECOND", self.emission_second),
+			("UNTOON_FEATURE_DISTANCE_FADE", self.distance_fade),
+			("UNTOON_FEATURE_FUR", self.fur),
+			("UNTOON_FEATURE_GEM", self.gem),
+			("UNTOON_FEATURE_REFRACTION", self.refraction),
+			("UNTOON_FEATURE_NORMAL_SECOND", self.normal_second),
+		]
+		.into_iter()
+		.map(|(name, enabled)| (name, if enabled { 1.0 } else { 0.0 }))
+		.collect()
+	}
+}
+
 #[derive(Clone, Debug)]
 struct DrawBatch {
 	pipeline: DrawPipelineKind,
@@ -1354,6 +1461,7 @@ pub(crate) struct SceneMeshRuntimeRequirements {
 	pub(crate) audio_link_texture: bool,
 	pub(crate) screen_refraction: bool,
 	pub(crate) fur: bool,
+	toon_shader_features: UntoonShaderFeatures,
 }
 
 impl SceneMeshRuntimeRequirements {
@@ -1361,6 +1469,7 @@ impl SceneMeshRuntimeRequirements {
 		self.audio_link_texture |= other.audio_link_texture;
 		self.screen_refraction |= other.screen_refraction;
 		self.fur |= other.fur;
+		self.toon_shader_features.include(other.toon_shader_features);
 	}
 }
 
@@ -1578,6 +1687,86 @@ fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShad
 	})
 }
 
+fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonShaderFeatures {
+	if opts.force_simple_basecolor || !shading.is_toon_like() {
+		return UntoonShaderFeatures::default();
+	}
+	if let Some(liltoon_like) = material.liltoon_like_runtime() {
+		let has_main_layer_dissolve = liltoon_like.main_color.second_dissolve.mask_texture_index.is_some()
+			|| liltoon_like.main_color.second_dissolve.noise_mask_texture_index.is_some()
+			|| liltoon_like.main_color.third_dissolve.mask_texture_index.is_some()
+			|| liltoon_like.main_color.third_dissolve.noise_mask_texture_index.is_some();
+		let has_dissolve = liltoon_like.dissolve.mask_texture_index.is_some()
+			|| liltoon_like.dissolve.noise_mask_texture_index.is_some()
+			|| liltoon_like.dissolve.params_factor[0].abs() > 0.00001
+			|| has_main_layer_dissolve;
+		let main_layers = liltoon_like.main_color.second_enabled_factor > 0.5
+			|| liltoon_like.main_color.third_enabled_factor > 0.5
+			|| liltoon_like.main_color.gradation_enabled_factor > 0.5
+			|| liltoon_like.main_color.main_color_adjust_mask_texture_index.is_some();
+		let matcap = liltoon_like.matcap.enabled_factor > 0.5 || liltoon_like.matcap.texture_index.is_some();
+		let matcap_second = liltoon_like.matcap.second_enabled_factor > 0.5 || liltoon_like.matcap.second_texture_index.is_some();
+		let reflection = liltoon_like.reflection.enabled_factor > 0.5 || liltoon_like.reflection.color_texture_index.is_some();
+		let reflection_cube = liltoon_like.uses_reflection_source_cube() && liltoon_like.reflection.cube_texture_index.is_some();
+		let anisotropy = liltoon_like.reflection.anisotropy_enabled_factor > 0.5
+			|| liltoon_like.reflection.anisotropy_tangent_texture_index.is_some()
+			|| liltoon_like.reflection.anisotropy_scale_mask_texture_index.is_some()
+			|| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index.is_some();
+		let rim = liltoon_like.rim.enabled_factor > 0.5 || liltoon_like.rim.texture_index.is_some();
+		let emission = liltoon_like.emission.enabled_factor > 0.5 || liltoon_like.emission.texture_index.is_some();
+		let emission_second = liltoon_like.emission.second_enabled_factor > 0.5 || liltoon_like.emission.second_texture_index.is_some();
+		UntoonShaderFeatures {
+			liltoon: true,
+			main_layers,
+			alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
+			dissolve: has_dissolve,
+			parallax: liltoon_like.parallax.enabled_factor > 0.5 || liltoon_like.parallax.texture_index.is_some(),
+			id_mask: liltoon_like.id_mask.compile_factor > 0.5,
+			udim_discard: liltoon_like.udim_discard.compile_factor > 0.5,
+			audio_link: material_needs_audio_link_texture(material, shading),
+			shadow_layers: liltoon_like.shadow.enabled_factor > 0.5
+				|| liltoon_like.shadow.color_texture_index.is_some()
+				|| liltoon_like.shadow.second_color_texture_index.is_some()
+				|| liltoon_like.shadow.third_color_texture_index.is_some(),
+			matcap,
+			matcap_second,
+			matcap_custom_normal: liltoon_like.matcap.custom_normal_factor > 0.5 || liltoon_like.matcap.second_custom_normal_factor > 0.5,
+			reflection,
+			reflection_cube,
+			anisotropy,
+			rim,
+			rim_shade: liltoon_like.rim.shade_enabled_factor > 0.5 || liltoon_like.rim.shade_mask_texture_index.is_some(),
+			backlight: liltoon_like.backlight.enabled_factor > 0.5 || liltoon_like.backlight.texture_index.is_some(),
+			glitter: liltoon_like.glitter.enabled_factor > 0.5
+				|| liltoon_like.glitter.color_texture_index.is_some()
+				|| liltoon_like.glitter.shape_texture_index.is_some(),
+			emission,
+			emission_second,
+			distance_fade: liltoon_like.rendering.distance_fade_color_factor[3] > 0.00001
+				|| liltoon_like.rendering.distance_fade_rim_color_factor[3] > 0.00001
+				|| liltoon_like.rendering.distance_fade_mode_factor > 0.5,
+			fur: material_has_fur(material, shading, opts),
+			gem: liltoon_like.is_gem_profile(),
+			refraction: liltoon_like.needs_screen_refraction(),
+			normal_second: liltoon_like.normal.second_enabled_factor > 0.5 || liltoon_like.normal.second_texture_index.is_some(),
+		}
+	} else {
+		let mtoon = material.mtoon_like_runtime();
+		UntoonShaderFeatures {
+			liltoon: false,
+			shadow_layers: true,
+			matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
+			reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
+			reflection_cube: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
+			rim: mtoon.is_some_and(|mtoon| {
+				mtoon.rim_multiply_texture_index.is_some() || mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001)
+			}),
+			emission: material.emissive_texture_index.is_some() || material.emissive_factor.iter().any(|value| value.abs() > 0.00001),
+			..Default::default()
+		}
+	}
+}
+
 fn material_runtime_requirements(
 	material: &UnaMaterialPbr,
 	shading: UnaShadingModel,
@@ -1587,6 +1776,7 @@ fn material_runtime_requirements(
 		audio_link_texture: material_needs_audio_link_texture(material, shading),
 		screen_refraction: material_needs_screen_refraction(material),
 		fur: material_has_fur(material, shading, opts),
+		toon_shader_features: material_untoon_shader_features(material, shading, opts),
 	}
 }
 
@@ -1746,6 +1936,57 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 	state.active_skin_palette_indices.sort_unstable();
 	state.active_skin_palette_indices.dedup();
 	state
+}
+
+fn draw_untoon_shader_features(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> UntoonShaderFeatures {
+	material_untoon_shader_features(&draw.material, effective_mesh_shading(draw, opts), opts)
+}
+
+fn include_draw_features_for_pipeline(
+	pipeline_features: &mut BTreeMap<DrawPipelineKind, UntoonShaderFeatures>,
+	pipeline: DrawPipelineKind,
+	draw: &MeshDraw,
+	opts: &SceneMeshLoadOpts,
+) {
+	pipeline_features
+		.entry(pipeline)
+		.or_default()
+		.include(draw_untoon_shader_features(draw, opts));
+}
+
+fn draw_pipeline_shader_features(
+	draws: &[MeshDraw],
+	draw_state: &SceneMeshDrawState,
+	opts: &SceneMeshLoadOpts,
+) -> BTreeMap<DrawPipelineKind, UntoonShaderFeatures> {
+	let mut pipeline_features = BTreeMap::new();
+	for batch in draw_state.opaque_batches.iter().chain(draw_state.blended_batches.iter()) {
+		for &draw_index in &batch.draw_indices {
+			if let Some(draw) = draws.get(draw_index) {
+				include_draw_features_for_pipeline(&mut pipeline_features, batch.pipeline, draw, opts);
+			}
+		}
+	}
+	for &draw_index in &draw_state.transparent_backpass_draw_indices {
+		let Some(draw) = draws.get(draw_index) else {
+			continue;
+		};
+		let zwrite = draw
+			.material
+			.liltoon_like_runtime()
+			.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+		include_draw_features_for_pipeline(
+			&mut pipeline_features,
+			if zwrite {
+				DrawPipelineKind::TransparentToonBackpass
+			} else {
+				DrawPipelineKind::TransparentToonBackpassNoZWrite
+			},
+			draw,
+			opts,
+		);
+	}
+	pipeline_features
 }
 
 enum SceneImageTextureUpload {
@@ -6203,8 +6444,14 @@ impl SceneMeshes {
 		vertex_entry: &'static str,
 		fragment_entry: &'static str,
 		render_state: MeshPipelineRenderState,
+		shader_features: UntoonShaderFeatures,
 	) -> wgpu::RenderPipeline {
 		let alpha_to_coverage_enabled = render_state.alpha_coverage.enabled();
+		let shader_constants = shader_features.shader_constants();
+		let compilation_options = wgpu::PipelineCompilationOptions {
+			constants: &shader_constants,
+			..Default::default()
+		};
 		device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 			label: Some(label),
 			layout: Some(pipeline_layout),
@@ -6212,13 +6459,13 @@ impl SceneMeshes {
 			vertex: wgpu::VertexState {
 				module: shader,
 				entry_point: Some(vertex_entry),
-				compilation_options: Default::default(),
+				compilation_options: compilation_options.clone(),
 				buffers: std::slice::from_ref(vb_layout),
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: shader,
 				entry_point: Some(fragment_entry),
-				compilation_options: Default::default(),
+				compilation_options,
 				targets: &[Some(wgpu::ColorTargetState {
 					format,
 					blend: render_state.color_blend,
@@ -6254,6 +6501,7 @@ impl SceneMeshes {
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
 		kind: DrawPipelineKind,
 		sample_count: u32,
+		shader_features: UntoonShaderFeatures,
 	) -> wgpu::RenderPipeline {
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
 		let premultiplied_blend = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
@@ -6365,6 +6613,7 @@ impl SceneMeshes {
 			vertex_entry,
 			fragment_entry,
 			render_state,
+			shader_features,
 		)
 	}
 
@@ -7368,6 +7617,9 @@ impl SceneMeshes {
 			&& !opts.debug_bind_pose
 			&& !opts.debug_primitive_colors;
 		let needs_fur_pipelines = !draw_state.fur_draw_indices.is_empty();
+		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &draw_state, &opts);
+		let mut fur_shader_features = draw_state.runtime_requirements.toon_shader_features;
+		fur_shader_features.fur = needs_fur_pipelines;
 		let pipeline_count = required_pipeline_kinds
 			.len()
 			.saturating_add(usize::from(needs_outline_pipeline))
@@ -7385,6 +7637,7 @@ impl SceneMeshes {
 				"vs_outline",
 				"fs_outline",
 				MeshPipelineRenderState::outline(sample_count),
+				UntoonShaderFeatures::default(),
 			)
 		});
 		let compute_fur_cards_compute_pipeline =
@@ -7400,6 +7653,7 @@ impl SceneMeshes {
 				"vs_compute_fur_cards_pre",
 				"fs_fur_toon_pre",
 				MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+				fur_shader_features,
 			)
 		});
 		let pipeline_compute_fur_cards_toon = needs_fur_pipelines.then(|| {
@@ -7413,14 +7667,25 @@ impl SceneMeshes {
 				"vs_compute_fur_cards",
 				"fs_fur_toon",
 				MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
+				fur_shader_features,
 			)
 		});
 		let pipelines = required_pipeline_kinds
 			.into_iter()
 			.map(|kind| {
+				let shader_features = pipeline_shader_features.get(&kind).copied().unwrap_or_default();
 				(
 					kind,
-					Self::create_draw_pipeline(device, &pipeline_layout, &shader, format, &vb_layout, kind, sample_count),
+					Self::create_draw_pipeline(
+						device,
+						&pipeline_layout,
+						&shader,
+						format,
+						&vb_layout,
+						kind,
+						sample_count,
+						shader_features,
+					),
 				)
 			})
 			.collect::<BTreeMap<_, _>>();
@@ -8977,7 +9242,12 @@ mod tests {
 			"vs_outline",
 			"fs_outline",
 			MeshPipelineRenderState::outline(1),
+			UntoonShaderFeatures::default(),
 		);
+		let mut toon_features = UntoonShaderFeatures::default();
+		toon_features.liltoon = true;
+		toon_features.shadow_layers = true;
+		toon_features.fur = true;
 		let _opaque_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
 			&pipeline_layout,
@@ -8988,6 +9258,7 @@ mod tests {
 			"vs_main",
 			"fs_toon",
 			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+			toon_features,
 		);
 		let _compute_fur_cards_pre_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
@@ -8999,6 +9270,7 @@ mod tests {
 			"vs_compute_fur_cards_pre",
 			"fs_fur_toon_pre",
 			MeshPipelineRenderState::mesh_main(None, true, 1).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
+			toon_features,
 		);
 		let _compute_fur_cards_toon = SceneMeshes::create_mesh_pipeline(
 			&device,
@@ -9010,6 +9282,7 @@ mod tests {
 			"vs_compute_fur_cards",
 			"fs_fur_toon",
 			MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, 1),
+			toon_features,
 		);
 	}
 
@@ -9773,6 +10046,33 @@ mod tests {
 		assert!(merged.audio_link_texture);
 		assert!(merged.screen_refraction);
 		assert!(merged.fur);
+	}
+
+	#[test]
+	fn mtoon_compatibility_maps_to_untoon_features_without_liltoon_branch() {
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			emissive_texture_index: Some(4),
+			mtoon: Some(UnaMtoonMaterial {
+				matcap_texture_index: Some(1),
+				reflection_cube_texture_index: Some(2),
+				rim_multiply_texture_index: Some(3),
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let features = material_untoon_shader_features(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+
+		assert!(!features.liltoon);
+		assert!(features.shadow_layers);
+		assert!(features.matcap);
+		assert!(features.reflection);
+		assert!(features.reflection_cube);
+		assert!(features.rim);
+		assert!(features.emission);
+		assert!(!features.main_layers);
+		assert!(!features.audio_link);
 	}
 
 	#[test]

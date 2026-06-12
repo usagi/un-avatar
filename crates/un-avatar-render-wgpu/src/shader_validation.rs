@@ -120,8 +120,8 @@ mod tests {
 			"MatCap custom normal maps must use their texture slot transform"
 		);
 		assert!(
-			mesh.contains("if (drawu.matcap_bump_params.x > 0.5)")
-				&& mesh.contains("if (drawu.matcap2_bump_params.x > 0.5)")
+			mesh.contains("if (UNTOON_FEATURE_MATCAP_CUSTOM_NORMAL > 0.5 && drawu.matcap_bump_params.x > 0.5)")
+				&& mesh.contains("if (UNTOON_FEATURE_MATCAP_CUSTOM_NORMAL > 0.5 && drawu.matcap2_bump_params.x > 0.5)")
 				&& mesh.contains("drawu.matcap_bump_params.y")
 				&& mesh.contains("drawu.matcap2_bump_params.y"),
 			"MatCap custom normal flags and bump scales must reach the MatCap normal path"
@@ -690,7 +690,7 @@ mod tests {
 		assert!(
 			mesh.contains("fn liltoon_environment_reflection")
 				&& mesh.contains("let fallback_env = liltoon_environment_reflection(perceptual_roughness);")
-				&& mesh.contains("let uses_source_cube = drawu.rendering_ext_params.y > 0.5;"),
+				&& mesh.contains("let uses_source_cube = drawu.rendering_ext_params.y > 0.5 && UNTOON_FEATURE_REFLECTION_CUBE > 0.5;"),
 			"lilToon reflection without _ReflectionCubeOverride must use environment reflection instead of black cube"
 		);
 		assert!(
@@ -771,10 +771,10 @@ mod tests {
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh
-			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && !is_liltoon_gem && !is_fur_pass")
+			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), is_liltoon && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_liltoon_gem && !is_fur_pass")
 			.expect("lilToon rim shade application");
 		let backlight = mesh
-			.find("if (is_liltoon && !is_liltoon_gem && drawu.backlight_params.x > 0.5)")
+			.find("if (is_liltoon && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_liltoon_gem && drawu.backlight_params.x > 0.5)")
 			.expect("lilToon backlight block");
 		let reflection = backlight
 			+ mesh[backlight..]
@@ -784,7 +784,7 @@ mod tests {
 				.expect("lilToon reflection blend block");
 		let matcap = reflection
 			+ mesh[reflection..]
-				.find("if (drawu.matcap_params.x > 0.0)")
+				.find("if (UNTOON_FEATURE_MATCAP > 0.5 && drawu.matcap_params.x > 0.0)")
 				.expect("lilToon matcap block");
 		assert!(
 			rim_shade < backlight && backlight < reflection && reflection < matcap,
