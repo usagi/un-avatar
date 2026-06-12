@@ -3882,6 +3882,9 @@ impl UnaSceneSnapshot {
 		for group in &owned_active_groups {
 			remaining_active_groups.remove(group);
 		}
+		if remaining_active_groups.remove("") {
+			owned_active_groups.insert(String::new());
+		}
 		UnaSceneScopedAssetSelection {
 			owned_active_groups: owned_active_groups.into_iter().collect(),
 			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),

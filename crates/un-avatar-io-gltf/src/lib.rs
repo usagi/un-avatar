@@ -2845,13 +2845,13 @@ fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &
 		return Vec::new();
 	};
 	let mut seen = BTreeSet::new();
-	set.get("assetGroups")
+	let mut groups = set
+		.get("assetGroups")
 		.or_else(|| set.get("asset_groups"))
 		.and_then(Value::as_array)
 		.into_iter()
 		.flatten()
 		.filter_map(Value::as_str)
-		.filter(|group| !group.is_empty())
 		.filter_map(|group| {
 			if seen.insert(group.to_string()) {
 				Some(group.to_string())
@@ -2859,7 +2859,11 @@ fn unavatar_wardrobe_set_asset_groups(unavatar: &UnaUnavatarExtension, set_id: &
 				None
 			}
 		})
-		.collect()
+		.collect::<Vec<_>>();
+	if groups.is_empty() && unavatar_base_wardrobe_set(unavatar).is_some_and(|(base_id, _)| base_id == set_id) {
+		groups.push(String::new());
+	}
+	groups
 }
 
 fn merged_wardrobe_asset_groups(base: &[String], selected: &[String]) -> Vec<String> {
@@ -2912,8 +2916,7 @@ fn unavatar_asset_group_ownership_entry(value: &Value) -> Option<UnaSceneAssetGr
 		.get("groupId")
 		.or_else(|| value.get("group_id"))
 		.or_else(|| value.get("id"))
-		.and_then(Value::as_str)
-		.filter(|value| !value.is_empty())?
+		.and_then(Value::as_str)?
 		.to_string();
 	let mesh_primitives = value
 		.get("meshPrimitives")
@@ -16952,6 +16955,113 @@ mod tests {
 				&& diagnostic.text.contains("assetGroupOwnershipAmbiguities detected")
 		});
 		assert!(has_warning);
+	}
+
+	#[test]
+	fn wardrobe_asset_groups_preserve_empty_base_group() {
+		let mut doc = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				asset_group_ownership: vec![
+					UnaSceneAssetGroupOwnership {
+						group_id: "".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 0,
+							primitive_index: 0,
+						}],
+						materials: vec![1],
+						images: vec![2],
+						..Default::default()
+					},
+					UnaSceneAssetGroupOwnership {
+						group_id: "outfit:coat".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 1,
+							primitive_index: 0,
+						}],
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let base = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
+		assert_eq!(base.active_asset_groups, vec!["".to_string()]);
+		assert_eq!(base.scoped_active_asset_group_count, 1);
+		assert!(base.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(base.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(base.scoped_resident_material_count, 1);
+		assert_eq!(base.scoped_resident_image_count, 1);
+
+		let coat = apply_unavatar_wardrobe_set(&mut doc, "coat").expect("apply coat wardrobe");
+		assert_eq!(coat.active_asset_groups, vec!["".to_string(), "outfit:coat".to_string()]);
+		assert_eq!(coat.scoped_active_asset_group_count, 2);
+		assert!(coat.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(coat.scoped_resident_mesh_primitive_count, 2);
+	}
+
+	#[test]
+	fn wardrobe_empty_base_asset_groups_normalize_to_empty_base_group() {
+		let mut doc = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				asset_group_ownership: vec![UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					mesh_primitives: vec![UnaMeshPrimitiveKey {
+						mesh_index: 1,
+						primitive_index: 0,
+					}],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"assetGroups": [],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let base = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
+		assert_eq!(base.active_asset_groups, vec!["".to_string()]);
+		assert_eq!(base.scoped_active_asset_group_count, 1);
+		assert!(base.scoped_missing_active_asset_groups.is_empty());
+
+		let coat = apply_unavatar_wardrobe_set(&mut doc, "coat").expect("apply coat wardrobe");
+		assert_eq!(coat.active_asset_groups, vec!["".to_string(), "outfit:coat".to_string()]);
+		assert_eq!(coat.scoped_active_asset_group_count, 2);
+		assert!(coat.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(coat.scoped_resident_mesh_primitive_count, 1);
 	}
 
 	#[test]
