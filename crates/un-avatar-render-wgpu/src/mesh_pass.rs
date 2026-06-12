@@ -8431,7 +8431,7 @@ impl SceneMeshes {
 			.len()
 			.saturating_add(usize::from(needs_outline_pipeline))
 			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
-		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(1);
+		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(4);
 		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let pipeline_start = Instant::now();
 		let render_pipeline_start = Instant::now();
@@ -8638,12 +8638,40 @@ impl SceneMeshes {
 			opts,
 		};
 		let active_gaps = scene_meshes.active_residency_gaps();
+		report("gpu-upload", total_steps, "Resolving active asset residency".to_string());
 		if !active_gaps.inactive_image_texture_indices.is_empty() || !active_gaps.inactive_material_slot_indices.is_empty() {
+			let active_residency_start = Instant::now();
 			scene_meshes.promote_image_texture_residency(&active_gaps.inactive_image_texture_indices);
+			report(
+				"gpu-upload",
+				total_steps,
+				format!(
+					"Uploading active deferred textures image={} material={}",
+					active_gaps.inactive_image_texture_indices.len(),
+					active_gaps.inactive_material_slot_indices.len()
+				),
+			);
+			let texture_residency_start = Instant::now();
 			scene_meshes.apply_image_texture_view_residency(device, queue, scene, &active_gaps.inactive_image_texture_indices, &[]);
+			log_slow_gpu_scene_step("active image texture residency upload", texture_residency_start.elapsed());
+			report(
+				"gpu-upload",
+				total_steps,
+				format!(
+					"Rebuilding active material bindings material={}",
+					active_gaps.inactive_material_slot_indices.len()
+				),
+			);
+			let material_residency_start = Instant::now();
 			scene_meshes.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
 			scene_meshes.rebuild_material_bind_groups(device);
+			log_slow_gpu_scene_step("active material residency rebuild", material_residency_start.elapsed());
+			log_slow_gpu_scene_step("active asset residency completion", active_residency_start.elapsed());
+		} else {
+			report("gpu-upload", total_steps, "Active asset residency ready".to_string());
+			report("gpu-upload", total_steps, "Active material bindings ready".to_string());
 		}
+		report("gpu-upload", total_steps, "GPU scene meshes ready".to_string());
 		Ok(scene_meshes)
 	}
 

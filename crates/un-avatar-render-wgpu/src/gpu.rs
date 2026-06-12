@@ -17,7 +17,7 @@ use serde_json::Value;
 use un_avatar_core::{
 	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
 	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
+	UnaRuntimeDynamicsCounts, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
@@ -2191,6 +2191,13 @@ fn restored_dynamics_source_ids(restored: &[un_avatar_core::UnaEvaluationRestore
 		}
 	}
 	source_ids.into_iter().collect()
+}
+
+fn log_slow_gpu_scene_context_step(label: impl std::fmt::Display, elapsed: Duration) {
+	let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+	if elapsed_ms >= 50.0 {
+		eprintln!("un-avatar-renderer: gpu scene {label}: {elapsed_ms:.1}ms");
+	}
 }
 
 pub(crate) struct GpuSceneBuildContext {
@@ -5071,10 +5078,8 @@ impl GpuState {
 		plan
 	}
 
-	pub(crate) fn resolver_cache_key(&self) -> Option<UnaRuntimeResolverCacheKey> {
-		let doc_arc = self.document.as_ref()?;
-		let doc = doc_arc.read().ok()?;
-		Some(doc.runtime_model().resolver_cache_key())
+	pub(crate) fn document_arc(&self) -> Option<Arc<RwLock<UnaDocument>>> {
+		self.document.clone()
 	}
 
 	pub(crate) fn last_action_id(&self) -> Option<String> {
@@ -5649,6 +5654,7 @@ impl GpuState {
 		prepared: PreparedDocumentScene,
 		options: DocumentAttachOptions,
 	) -> Result<(), String> {
+		let attach_start = Instant::now();
 		let DocumentAttachOptions {
 			vmc_address,
 			unmotion_zenoh,
@@ -5660,17 +5666,21 @@ impl GpuState {
 			spring_bone_physics,
 			..
 		} = options;
+		let options_elapsed = attach_start.elapsed();
 		self.runtime_dynamics_enabled = enable_spring_bones;
 		self.runtime_bone_collider_config = bone_colliders;
 		self.runtime_dynamics_physics = spring_bone_physics;
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
+		let apply_initial_values_start = Instant::now();
 		prepared
 			.document
 			.write()
 			.map_err(|_| "document: RwLock poisoned".to_string())?
 			.runtime_model_mut()
 			.apply_runtime_parameter_initial_values();
+		log_slow_gpu_scene_context_step("attach initial runtime parameters", apply_initial_values_start.elapsed());
+		let state_assign_start = Instant::now();
 		self.document = Some(prepared.document);
 		self.invalidate_applied_document_state();
 		self.scene_meshes = prepared.scene_meshes;
@@ -5680,15 +5690,24 @@ impl GpuState {
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
 		self.apply_runtime_requirements(prepared.runtime_requirements, audio_link);
+		log_slow_gpu_scene_context_step("attach prepared state assignment", state_assign_start.elapsed());
 		if dynamics_enable_all_on_launch {
+			let dynamics_start = Instant::now();
 			if let Err(e) = self.set_all_runtime_dynamics_enabled(true) {
 				eprintln!("un-avatar-renderer: enable all dynamics on launch skipped: {e}");
 			}
+			log_slow_gpu_scene_context_step("attach enable all dynamics", dynamics_start.elapsed());
 		}
+		let motion_receiver_start = Instant::now();
 		self.reconfigure_motion_receivers(vmc_address, unmotion_zenoh, debug_vmc)?;
+		log_slow_gpu_scene_context_step("attach motion receiver reconfigure", motion_receiver_start.elapsed());
+		let globals_start = Instant::now();
 		let (gw, gh) = self.render_pixel_dims();
 		self.globals_uploaded = None;
 		self.write_globals(gw, gh);
+		log_slow_gpu_scene_context_step("attach globals upload", globals_start.elapsed());
+		log_slow_gpu_scene_context_step("attach options destructure", options_elapsed);
+		log_slow_gpu_scene_context_step("attach prepared document total", attach_start.elapsed());
 		Ok(())
 	}
 }
@@ -5761,10 +5780,26 @@ impl GpuSceneBuildContext {
 			)?;
 			if !sm.is_empty() {
 				texture_summary = Some(sm.texture_summary());
+				progress(SceneMeshBuildProgress {
+					phase: "gpu-upload",
+					current: 1,
+					total: 1,
+					message: "Preparing initial scene transforms".to_string(),
+				});
+				let initial_draw_start = Instant::now();
+				let world_start = Instant::now();
 				let world = crate::scene_transform::scene_world_matrices(runtime.scene);
+				log_slow_gpu_scene_context_step("initial scene world matrices", world_start.elapsed());
+				let expression_start = Instant::now();
 				let expression_weights = active_expression_weights_for_doc(false, &document);
+				log_slow_gpu_scene_context_step("initial expression weights", expression_start.elapsed());
+				let residency_start = Instant::now();
 				sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
+				log_slow_gpu_scene_context_step("initial asset residency refresh", residency_start.elapsed());
+				let transform_start = Instant::now();
 				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
+				log_slow_gpu_scene_context_step("initial draw transform upload", transform_start.elapsed());
+				log_slow_gpu_scene_context_step("initial draw state preparation", initial_draw_start.elapsed());
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
@@ -5772,7 +5807,9 @@ impl GpuSceneBuildContext {
 				scene_meshes = Some(sm);
 			}
 		}
+		let pipeline_cache_store_start = Instant::now();
 		pipeline_cache.store();
+		log_slow_gpu_scene_context_step("pipeline cache store", pipeline_cache_store_start.elapsed());
 		let document_wrapped = Arc::new(RwLock::new(document));
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,

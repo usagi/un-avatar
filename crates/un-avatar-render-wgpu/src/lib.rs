@@ -28,7 +28,10 @@ use std::{
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
-	sync::{Arc, Mutex},
+	sync::{
+		atomic::{AtomicU64, Ordering},
+		Arc, Mutex,
+	},
 	thread,
 	time::{Duration, Instant},
 };
@@ -77,6 +80,13 @@ impl std::error::Error for RunError {}
 /// `RendererControlEvent` の同期 command 結果をコントロールチャネルへ返すための共有スロット。
 type CommandResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
 type SceneStateResultSlot = Arc<Mutex<Option<String>>>;
+
+fn log_slow_renderer_step(label: impl std::fmt::Display, elapsed: Duration) {
+	let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+	if elapsed_ms >= 50.0 {
+		eprintln!("un-avatar-renderer: renderer {label}: {elapsed_ms:.1}ms");
+	}
+}
 
 const SCENE_STATE_SPLASH: &str = "splash";
 const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
@@ -1313,6 +1323,7 @@ struct AvatarApp {
 	started_at: Instant,
 	fps_smooth: f32,
 	runtime_status_frame_seq: Cell<u32>,
+	resolver_cache_key_generation: Arc<AtomicU64>,
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
@@ -1369,6 +1380,7 @@ impl AvatarApp {
 			started_at: Instant::now(),
 			fps_smooth: 60.0,
 			runtime_status_frame_seq: Cell::new(0),
+			resolver_cache_key_generation: Arc::new(AtomicU64::new(0)),
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
@@ -1811,13 +1823,31 @@ impl AvatarApp {
 		}
 	}
 
-	fn update_runtime_resolver_cache_key(&self, key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>) {
-		let Some(status) = &self.runtime_status else {
+	fn update_runtime_resolver_cache_key_deferred(&self) {
+		let Some(status) = self.runtime_status.clone() else {
 			return;
 		};
+		let Some(document) = self.gpu.as_ref().and_then(GpuState::document_arc) else {
+			return;
+		};
+		let generation = self.resolver_cache_key_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+		let latest_generation = Arc::clone(&self.resolver_cache_key_generation);
 		if let Ok(mut status) = status.lock() {
-			status.resolver_cache_key = key;
+			status.resolver_cache_key = None;
 		}
+		let _ = thread::Builder::new()
+			.name("un-avatar-resolver-cache-key".to_string())
+			.spawn(move || {
+				let start = Instant::now();
+				let key = document.read().ok().map(|doc| doc.runtime_model().resolver_cache_key());
+				if latest_generation.load(Ordering::Acquire) != generation {
+					return;
+				}
+				if let Ok(mut status) = status.lock() {
+					status.resolver_cache_key = key;
+				}
+				log_slow_renderer_step("deferred resolver cache key", start.elapsed());
+			});
 	}
 
 	fn update_runtime_last_action(&self, action_id: Option<String>) {
@@ -1843,7 +1873,7 @@ impl AvatarApp {
 			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
 			self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
 			self.update_runtime_wardrobe_asset_upload(self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default());
-			self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
+			self.update_runtime_resolver_cache_key_deferred();
 		}
 		self.update_runtime_last_action(Some(activation.action_id.clone()));
 		self.update_runtime_parameters(activation.parameter_values.clone());
@@ -2655,7 +2685,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					self.update_runtime_wardrobe_asset_upload(
 						self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default(),
 					);
-					self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
+					self.update_runtime_resolver_cache_key_deferred();
 					self.request_redraw();
 				}
 				if let Ok(mut guard) = result.lock() {
@@ -3092,16 +3122,20 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				options,
 				fallback_texture_summary,
 			} => {
+				let startup_scene_ready_start = Instant::now();
 				let Some(win) = self.window.as_ref().cloned() else {
 					return;
 				};
+				let attach_start = Instant::now();
 				let attach_result = self
 					.gpu
 					.as_mut()
 					.ok_or_else(|| "GPU state is not initialized".to_string())
 					.and_then(|gpu| gpu.attach_prepared_document(prepared, options));
+				log_slow_renderer_step("startup scene attach", attach_start.elapsed());
 				match attach_result {
 					Ok(()) => {
+						let runtime_actions_start = Instant::now();
 						let startup_activations = match self.gpu.as_mut() {
 							Some(gpu) => match gpu.evaluate_runtime_parameter_actions() {
 								Ok(activations) => activations,
@@ -3113,6 +3147,8 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							},
 							None => Vec::new(),
 						};
+						log_slow_renderer_step("startup runtime action evaluation", runtime_actions_start.elapsed());
+						let status_update_start = Instant::now();
 						let actual_texture_summary = self
 							.gpu
 							.as_ref()
@@ -3120,21 +3156,56 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							.or(Some(fallback_texture_summary));
 						self.startup_pending_document = false;
 						self.clear_startup_progress();
+						let step_start = Instant::now();
 						self.update_runtime_texture_summary(actual_texture_summary);
-						self.update_runtime_wardrobe_set(self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set()));
-						self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
-						self.update_runtime_wardrobe_asset_upload(
-							self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default(),
-						);
-						self.update_runtime_resolver_cache_key(self.gpu.as_ref().and_then(|gpu| gpu.resolver_cache_key()));
-						self.update_runtime_last_action(self.gpu.as_ref().and_then(|gpu| gpu.last_action_id()));
-						self.update_runtime_parameters(self.gpu.as_ref().map(|gpu| gpu.runtime_parameter_values()).unwrap_or_default());
+						log_slow_renderer_step("startup status texture summary", step_start.elapsed());
+						let step_start = Instant::now();
+						let active_wardrobe_set = self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set());
+						log_slow_renderer_step("startup collect active wardrobe set", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_wardrobe_set(active_wardrobe_set);
+						log_slow_renderer_step("startup status wardrobe set", step_start.elapsed());
+						let step_start = Instant::now();
+						let active_asset_groups = self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default();
+						log_slow_renderer_step("startup collect active asset groups", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_asset_groups(active_asset_groups);
+						log_slow_renderer_step("startup status asset groups", step_start.elapsed());
+						let step_start = Instant::now();
+						let wardrobe_asset_upload = self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default();
+						log_slow_renderer_step("startup collect wardrobe asset upload", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_wardrobe_asset_upload(wardrobe_asset_upload);
+						log_slow_renderer_step("startup status wardrobe asset upload", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_resolver_cache_key_deferred();
+						log_slow_renderer_step("startup defer resolver cache key", step_start.elapsed());
+						let step_start = Instant::now();
+						let last_action_id = self.gpu.as_ref().and_then(|gpu| gpu.last_action_id());
+						log_slow_renderer_step("startup collect last action", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_last_action(last_action_id);
+						log_slow_renderer_step("startup status last action", step_start.elapsed());
+						let step_start = Instant::now();
+						let runtime_parameter_values = self.gpu.as_ref().map(|gpu| gpu.runtime_parameter_values()).unwrap_or_default();
+						log_slow_renderer_step("startup collect runtime parameters", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_parameters(runtime_parameter_values);
+						log_slow_renderer_step("startup status runtime parameters", step_start.elapsed());
 						for activation in &startup_activations {
+							let step_start = Instant::now();
 							self.apply_runtime_activation_status(activation);
+							log_slow_renderer_step("startup status runtime activation", step_start.elapsed());
 						}
+						let step_start = Instant::now();
 						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
+						log_slow_renderer_step("startup status spout", step_start.elapsed());
+						log_slow_renderer_step("startup runtime status update", status_update_start.elapsed());
+						let title_start = Instant::now();
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
+						log_slow_renderer_step("startup title/redraw request", title_start.elapsed());
+						log_slow_renderer_step("startup scene ready handling total", startup_scene_ready_start.elapsed());
 					}
 					Err(e) => {
 						self.set_startup_failed(e.clone());
