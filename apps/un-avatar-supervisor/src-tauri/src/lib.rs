@@ -1059,25 +1059,6 @@ enum RendererControlCommand {
 		lighting_mix: Option<f32>,
 		roundness: Option<f32>,
 	},
-	SetAvatarRim {
-		policy: Option<String>,
-		color: Option<[f32; 3]>,
-		intensity: Option<f32>,
-		lighting_mix: Option<f32>,
-		fresnel_power: Option<f32>,
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		enabled: Option<bool>,
-		intensity: Option<f32>,
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		strength: Option<f32>,
-	},
 	SetLighting {
 		environment_enabled: Option<bool>,
 		environment_color: Option<[f32; 3]>,
@@ -2013,10 +1994,6 @@ pub fn run() {
 			set_renderer_all_dynamics_enabled,
 			set_renderer_primary_motion_source,
 			set_renderer_avatar_outline,
-			set_renderer_avatar_rim,
-			set_renderer_avatar_matcap,
-			set_renderer_avatar_specular,
-			set_renderer_avatar_ambient_occlusion,
 			set_renderer_lighting,
 			set_renderer_environment_color,
 			set_renderer_bloom,
@@ -3915,26 +3892,6 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			apply_avatar_outline_to_matching_renderers,
 		),
 		(
-			"effects.avatar.rim.",
-			"apply avatar rim to running renderers",
-			apply_avatar_rim_to_matching_renderers,
-		),
-		(
-			"effects.avatar.matcap.",
-			"apply avatar matcap to running renderers",
-			apply_avatar_matcap_to_matching_renderers,
-		),
-		(
-			"effects.avatar.specular.",
-			"apply avatar specular to running renderers",
-			apply_avatar_specular_to_matching_renderers,
-		),
-		(
-			"effects.avatar.ambient_occlusion.",
-			"apply avatar ambient occlusion to running renderers",
-			apply_avatar_ambient_occlusion_to_matching_renderers,
-		),
-		(
 			"environment.color.",
 			"apply environment color to running renderers",
 			apply_environment_color_to_matching_renderers,
@@ -4220,75 +4177,6 @@ fn apply_avatar_effect_setting_value(manifest: &mut toml::Value, field: &str, va
 			field,
 			0.0..=1.0,
 			"[0.0, 1.0]",
-		),
-		"effects.avatar.rim.policy" => {
-			set_nested_string(manifest, &["effects", "avatar", "rim", "policy"], json_rim_policy(&value, field)?)
-		}
-		"effects.avatar.rim.color" => set_nested_rgb_array(manifest, &["effects", "avatar", "rim", "color"], json_rgb(&value, field)?),
-		"effects.avatar.rim.intensity" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "intensity"],
-			&value,
-			field,
-			0.0..=4.0,
-			"[0.0, 4.0]",
-		),
-		"effects.avatar.rim.lighting_mix" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "lighting_mix"],
-			&value,
-			field,
-			0.0..=1.0,
-			"[0.0, 1.0]",
-		),
-		"effects.avatar.rim.fresnel_power" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "fresnel_power"],
-			&value,
-			field,
-			0.00001..=32.0,
-			"[0.00001, 32.0]",
-		),
-		"effects.avatar.rim.lift" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "lift"],
-			&value,
-			field,
-			-1.0..=1.0,
-			"[-1.0, 1.0]",
-		),
-		"effects.avatar.matcap.scale" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "matcap", "scale"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
-		),
-		"effects.avatar.specular.enabled" => set_nested_json_bool(manifest, &["effects", "avatar", "specular", "enabled"], &value, field),
-		"effects.avatar.specular.intensity" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "specular", "intensity"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
-		),
-		"effects.avatar.specular.power" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "specular", "power"],
-			&value,
-			field,
-			1.0..=128.0,
-			"[1.0, 128.0]",
-		),
-		"effects.avatar.ambient_occlusion.strength" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "ambient_occlusion", "strength"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
 		),
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
@@ -5235,72 +5123,6 @@ fn set_renderer_avatar_outline(
 			roundness,
 		},
 	)
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn set_renderer_avatar_rim(
-	id: u32,
-	policy: Option<String>,
-	color: Option<[f32; 3]>,
-	intensity: Option<f32>,
-	lighting_mix: Option<f32>,
-	fresnel_power: Option<f32>,
-	lift: Option<f32>,
-	state: State<'_, Mutex<SupervisorState>>,
-) -> Result<(), String> {
-	if let Some(policy) = policy.as_deref() {
-		match policy {
-			"authored" | "off" | "override" => {}
-			_ => return Err(format!("invalid avatar rim policy: {policy}")),
-		}
-	}
-	validate_optional_f32_range(intensity, "avatar rim intensity", 0.0..=4.0, "0..=4")?;
-	validate_optional_f32_range(lighting_mix, "avatar rim lighting_mix", 0.0..=1.0, "0..=1")?;
-	validate_optional_f32_range(fresnel_power, "avatar rim fresnel_power", 0.00001..=32.0, "0.00001..=32")?;
-	validate_optional_f32_range(lift, "avatar rim lift", -1.0..=1.0, "-1..=1")?;
-	let color = color.map(clamp_rgb);
-	send_renderer_command_by_id(
-		id,
-		state.inner(),
-		RendererControlCommand::SetAvatarRim {
-			policy,
-			color,
-			intensity,
-			lighting_mix,
-			fresnel_power,
-			lift,
-		},
-	)
-}
-
-#[tauri::command]
-fn set_renderer_avatar_matcap(id: u32, scale: Option<f32>, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	validate_optional_f32_range(scale, "avatar matcap scale", 0.0..=2.0, "0..=2")?;
-	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetAvatarMatcap { scale })
-}
-
-#[tauri::command]
-fn set_renderer_avatar_specular(
-	id: u32,
-	enabled: Option<bool>,
-	intensity: Option<f32>,
-	power: Option<f32>,
-	state: State<'_, Mutex<SupervisorState>>,
-) -> Result<(), String> {
-	validate_optional_f32_range(intensity, "avatar specular intensity", 0.0..=2.0, "0..=2")?;
-	validate_optional_f32_range(power, "avatar specular power", 1.0..=128.0, "1..=128")?;
-	send_renderer_command_by_id(
-		id,
-		state.inner(),
-		RendererControlCommand::SetAvatarSpecular { enabled, intensity, power },
-	)
-}
-
-#[tauri::command]
-fn set_renderer_avatar_ambient_occlusion(id: u32, strength: Option<f32>, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	validate_optional_f32_range(strength, "avatar ambient occlusion strength", 0.0..=2.0, "0..=2")?;
-	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetAvatarAmbientOcclusion { strength })
 }
 
 #[tauri::command]
@@ -6448,53 +6270,6 @@ fn apply_avatar_outline_to_matching_renderers(setting: &AvatarSetting, state: &M
 			color: setting.outline_color,
 			lighting_mix: setting.outline_lighting_mix,
 			roundness: setting.outline_roundness,
-		},
-	)
-}
-
-fn apply_avatar_rim_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarRim {
-			policy: Some(setting.rim_policy.clone()),
-			color: setting.rim_color,
-			intensity: setting.rim_intensity,
-			lighting_mix: setting.rim_lighting_mix,
-			fresnel_power: setting.rim_fresnel_power,
-			lift: setting.rim_lift,
-		},
-	)
-}
-
-fn apply_avatar_matcap_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarMatcap {
-			scale: Some(setting.matcap_scale),
-		},
-	)
-}
-
-fn apply_avatar_specular_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarSpecular {
-			enabled: Some(setting.specular_enabled),
-			intensity: Some(setting.specular_intensity),
-			power: Some(setting.specular_power),
-		},
-	)
-}
-
-fn apply_avatar_ambient_occlusion_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarAmbientOcclusion {
-			strength: Some(setting.ambient_occlusion_strength),
 		},
 	)
 }
@@ -8458,11 +8233,6 @@ fn validate_bloom_quality(value: &str) -> Result<String, String> {
 fn json_outline_policy(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let raw = json_string(value, field)?;
 	normalize_outline_policy(&raw).ok_or_else(|| format!("{field} must be one of authored, off, override"))
-}
-
-fn json_rim_policy(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	let raw = json_string(value, field)?;
-	normalize_rim_policy(&raw).ok_or_else(|| format!("{field} must be one of authored, off, override"))
 }
 
 fn json_outline_type(value: &serde_json::Value, field: &str) -> Result<String, String> {
@@ -10520,101 +10290,6 @@ id = "test"
 	}
 
 	#[test]
-	fn avatar_matcap_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.matcap.scale", serde_json::json!(1.35)).unwrap();
-
-		let matcap = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("matcap"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.matcap table");
-		assert!((matcap.get("scale").and_then(toml::Value::as_float).unwrap_or_default() - 1.35).abs() < 1e-6);
-	}
-
-	#[test]
-	fn avatar_specular_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.enabled", serde_json::json!(true)).unwrap();
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.intensity", serde_json::json!(0.5)).unwrap();
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.power", serde_json::json!(32.0)).unwrap();
-
-		let specular = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("specular"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.specular table");
-		assert_eq!(specular.get("enabled").and_then(toml::Value::as_bool), Some(true));
-		assert!((specular.get("intensity").and_then(toml::Value::as_float).unwrap_or_default() - 0.5).abs() < 1e-6);
-		assert!((specular.get("power").and_then(toml::Value::as_float).unwrap_or_default() - 32.0).abs() < 1e-6);
-	}
-
-	#[test]
-	fn avatar_ambient_occlusion_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(
-			&mut manifest,
-			&setting,
-			"effects.avatar.ambient_occlusion.strength",
-			serde_json::json!(1.4),
-		)
-		.unwrap();
-
-		let ambient_occlusion = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("ambient_occlusion"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.ambient_occlusion table");
-		assert!(
-			(ambient_occlusion
-				.get("strength")
-				.and_then(toml::Value::as_float)
-				.unwrap_or_default()
-				- 1.4)
-				.abs() < 1e-6
-		);
-	}
-
-	#[test]
 	fn bloom_setting_updates_write_expected_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -11098,68 +10773,6 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"set_contact_shadow","enabled":true,"strength":0.4,"radius":0.7,"softness":2.0,"height":0.02}"#
-		);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_matcap_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(address, &RendererControlCommand::SetAvatarMatcap { scale: Some(1.35) }).unwrap();
-		assert_eq!(server.join().unwrap().trim(), r#"{"command":"set_avatar_matcap","scale":1.35}"#);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_specular_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(
-			address,
-			&RendererControlCommand::SetAvatarSpecular {
-				enabled: Some(true),
-				intensity: Some(0.5),
-				power: Some(32.0),
-			},
-		)
-		.unwrap();
-		assert_eq!(
-			server.join().unwrap().trim(),
-			r#"{"command":"set_avatar_specular","enabled":true,"intensity":0.5,"power":32.0}"#
-		);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_ambient_occlusion_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(address, &RendererControlCommand::SetAvatarAmbientOcclusion { strength: Some(1.4) }).unwrap();
-		assert_eq!(
-			server.join().unwrap().trim(),
-			r#"{"command":"set_avatar_ambient_occlusion","strength":1.4}"#
 		);
 	}
 

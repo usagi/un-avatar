@@ -5,17 +5,6 @@ export type ProfileLookSetting = {
 	outline_color: [number, number, number] | null;
 	outline_lighting_mix: number | null;
 	outline_roundness: number | null;
-	rim_policy: string;
-	rim_color: [number, number, number] | null;
-	rim_intensity: number | null;
-	rim_lighting_mix: number | null;
-	rim_fresnel_power: number | null;
-	rim_lift: number | null;
-	matcap_scale: number;
-	specular_enabled: boolean;
-	specular_intensity: number;
-	specular_power: number;
-	ambient_occlusion_strength: number;
 	contact_shadow_enabled: boolean;
 	contact_shadow_strength: number;
 	contact_shadow_radius: number;

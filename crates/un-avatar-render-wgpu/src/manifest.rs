@@ -3,9 +3,7 @@ use std::{fs, net::SocketAddr, path::Path};
 use serde::Deserialize;
 
 use crate::{
-	mesh_pass::{
-		AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlinePolicy, AvatarRimPolicy, AvatarSpecularOptions,
-	},
+	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
 		AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
 		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
@@ -747,18 +745,6 @@ impl AvatarEffectsManifest {
 		if let Some(outline) = self.outline {
 			outline.apply_to(diagnostics);
 		}
-		if let Some(rim) = self.rim {
-			rim.apply_to(diagnostics);
-		}
-		if let Some(matcap) = self.matcap {
-			matcap.apply_to(diagnostics);
-		}
-		if let Some(specular) = self.specular {
-			specular.apply_to(diagnostics);
-		}
-		if let Some(ambient_occlusion) = self.ambient_occlusion {
-			ambient_occlusion.apply_to(diagnostics);
-		}
 		if let Some(contact_shadow) = self.contact_shadow {
 			contact_shadow.apply_to(&mut opts.contact_shadow);
 		}
@@ -788,60 +774,6 @@ impl AvatarOutlineManifest {
 	}
 }
 
-impl AvatarRimManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		if let Some(policy) = self.policy.as_deref().and_then(parse_rim_policy) {
-			diagnostics.avatar_rim.policy = policy;
-		}
-		if let Some(color) = self.color {
-			diagnostics.avatar_rim.color = Some(clamp_rgb(color));
-		}
-		if let Some(intensity) = self.intensity {
-			diagnostics.avatar_rim.intensity = Some(intensity.clamp(0.0, 4.0));
-		}
-		if let Some(lighting_mix) = self.lighting_mix {
-			diagnostics.avatar_rim.lighting_mix = Some(lighting_mix.clamp(0.0, 1.0));
-		}
-		if let Some(power) = self.fresnel_power {
-			diagnostics.avatar_rim.fresnel_power = Some(power.max(0.00001));
-		}
-		if let Some(lift) = self.lift {
-			diagnostics.avatar_rim.lift = Some(lift.clamp(-1.0, 1.0));
-		}
-	}
-}
-
-impl AvatarMatcapManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		if let Some(scale) = self.scale {
-			diagnostics.avatar_matcap = AvatarMatcapOptions {
-				scale: scale.clamp(0.0, 2.0),
-			};
-		}
-	}
-}
-
-impl AvatarSpecularManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		diagnostics.avatar_specular = AvatarSpecularOptions {
-			enabled: self.enabled.unwrap_or(diagnostics.avatar_specular.enabled),
-			intensity: self.intensity.unwrap_or(diagnostics.avatar_specular.intensity).clamp(0.0, 2.0),
-			power: self.power.unwrap_or(diagnostics.avatar_specular.power).clamp(1.0, 128.0),
-		};
-	}
-}
-
-impl AvatarAmbientOcclusionManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		diagnostics.avatar_ambient_occlusion = AvatarAmbientOcclusionOptions {
-			strength: self
-				.strength
-				.unwrap_or(diagnostics.avatar_ambient_occlusion.strength)
-				.clamp(0.0, 2.0),
-		};
-	}
-}
-
 impl ContactShadowManifest {
 	fn apply_to(self, contact_shadow: &mut ContactShadowOptions) {
 		if let Some(enabled) = self.enabled {
@@ -867,15 +799,6 @@ fn parse_outline_policy(value: &str) -> Option<AvatarOutlinePolicy> {
 		"authored" => Some(AvatarOutlinePolicy::Authored),
 		"off" | "none" | "disabled" => Some(AvatarOutlinePolicy::Off),
 		"override" | "custom" => Some(AvatarOutlinePolicy::Override),
-		_ => None,
-	}
-}
-
-fn parse_rim_policy(value: &str) -> Option<AvatarRimPolicy> {
-	match value.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some(AvatarRimPolicy::Authored),
-		"off" | "none" | "disabled" => Some(AvatarRimPolicy::Off),
-		"override" | "custom" => Some(AvatarRimPolicy::Override),
 		_ => None,
 	}
 }
@@ -1461,11 +1384,11 @@ constraint_iterations = 6
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.color, Some([0.02, 0.01, 0.03]));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.lighting_mix, Some(0.25));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.roundness, Some(0.5));
-		assert_eq!(opts.mesh_diagnostics.avatar_matcap.scale, 1.35);
-		assert!(opts.mesh_diagnostics.avatar_specular.enabled);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.intensity, 0.5);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.power, 32.0);
-		assert_eq!(opts.mesh_diagnostics.avatar_ambient_occlusion.strength, 1.4);
+		assert_eq!(opts.mesh_diagnostics.avatar_matcap.scale, 1.0);
+		assert!(!opts.mesh_diagnostics.avatar_specular.enabled);
+		assert_eq!(opts.mesh_diagnostics.avatar_specular.intensity, 0.25);
+		assert_eq!(opts.mesh_diagnostics.avatar_specular.power, 24.0);
+		assert_eq!(opts.mesh_diagnostics.avatar_ambient_occlusion.strength, 1.0);
 		assert!(opts.contact_shadow.enabled);
 		assert_eq!(opts.contact_shadow.strength, 0.4);
 		assert_eq!(opts.contact_shadow.radius, 0.7);

@@ -153,17 +153,6 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	outline_color: [number, number, number] | null;
 	outline_lighting_mix: number | null;
 	outline_roundness: number | null;
-	rim_policy: string;
-	rim_color: [number, number, number] | null;
-	rim_intensity: number | null;
-	rim_lighting_mix: number | null;
-	rim_fresnel_power: number | null;
-	rim_lift: number | null;
-	matcap_scale: number;
-	specular_enabled: boolean;
-	specular_intensity: number;
-	specular_power: number;
-	ambient_occlusion_strength: number;
 	lighting_environment_enabled: boolean;
 	lighting_environment_color: [number, number, number];
 	lighting_environment_intensity: number;

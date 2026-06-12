@@ -80,7 +80,7 @@ Outline policy:
 Supervisor look policy:
 
 - v2 Supervisor では material authored outline と区別するため、画面空間の全体囲みは `Silhouette Outline` / `シルエットアウトライン` と呼ぶ。`Outline` 単独表記は material ごとの authored outline と紛らわしいため避ける。
-- Authored outline / Rim / MatCap / Specular / AO は UNToon material へ正規化された source-authored parameter として扱う。v1 のように Supervisor profile から全 material へ同じ width / color / rim / matcap / specular / AO 値を押し付ける設定は v2 の標準 UI から廃止する。
+- Authored outline / Rim / MatCap / Specular / AO は UNToon material へ正規化された source-authored parameter として扱う。v1 のように Supervisor profile から全 material へ同じ width / color / rim / matcap / specular / AO 値を押し付ける設定は v2 の標準 UI / Supervisor runtime command / renderer manifest application から廃止する。既存 manifest に残る `[effects.avatar.rim]` / `[effects.avatar.matcap]` / `[effects.avatar.specular]` / `[effects.avatar.ambient_occlusion]` は読み込みを壊さず無視する。
 - Profile で直接扱う look controls は、Silhouette Outline、Bloom、SSAO、Contact shadow、color grading、背景などの screen / output / viewer-space effect を中心にする。material の authored value を壊す override は diagnostic / migration 互換に限定し、通常設定へ昇格しない。
 
 Output / preview policy:
@@ -121,7 +121,7 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 初期 behavior:
 
 - 選択された wardrobe operations を runtime resolved state へ適用する。
-- process reload なしで visible draw set、関連 morph weights、material overrides を更新する。
+- process reload なしで visible draw set、関連 morph weights、wardrobe operation 由来の per-material overrides を更新する。これは deprecated profile-wide material override とは別物として扱う。
 - 可能な範囲で upload 済み asset を再利用する。
 - runtime status に active set を出す。
 - hot switch path が成熟するまでは、現在の startup path を fallback として残す。

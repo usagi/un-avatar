@@ -109,17 +109,6 @@ let avatarSettings = [
 		outline_color: null,
 		outline_lighting_mix: null,
 		outline_roundness: null,
-		rim_policy: "authored",
-		rim_color: null,
-		rim_intensity: null,
-		rim_lighting_mix: null,
-		rim_fresnel_power: null,
-		rim_lift: null,
-		matcap_scale: 1,
-		specular_enabled: false,
-		specular_intensity: 0.25,
-		specular_power: 24,
-		ambient_occlusion_strength: 1,
 		lighting_environment_enabled: true,
 		lighting_environment_color: [1, 1, 1],
 		lighting_environment_intensity: 0.35,
@@ -234,17 +223,6 @@ let avatarSettings = [
 		outline_color: null,
 		outline_lighting_mix: null,
 		outline_roundness: null,
-		rim_policy: "authored",
-		rim_color: null,
-		rim_intensity: null,
-		rim_lighting_mix: null,
-		rim_fresnel_power: null,
-		rim_lift: null,
-		matcap_scale: 1,
-		specular_enabled: false,
-		specular_intensity: 0.25,
-		specular_power: 24,
-		ambient_occlusion_strength: 1,
 		lighting_environment_enabled: true,
 		lighting_environment_color: [1, 1, 1],
 		lighting_environment_intensity: 0.35,
@@ -436,21 +414,6 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "effects.post.bloom.enabled") {
 					setting.bloom_enabled = Boolean(args.value);
-				}
-				if (setting && field === "effects.avatar.matcap.scale") {
-					setting.matcap_scale = Number(args.value ?? 1);
-				}
-				if (setting && field === "effects.avatar.specular.enabled") {
-					setting.specular_enabled = Boolean(args.value);
-				}
-				if (setting && field === "effects.avatar.specular.intensity") {
-					setting.specular_intensity = Number(args.value ?? 0.25);
-				}
-				if (setting && field === "effects.avatar.specular.power") {
-					setting.specular_power = Number(args.value ?? 24);
-				}
-				if (setting && field === "effects.avatar.ambient_occlusion.strength") {
-					setting.ambient_occlusion_strength = Number(args.value ?? 1);
 				}
 				if (setting && field === "effects.post.bloom.strength") {
 					setting.bloom_strength = Number(args.value ?? 0.35);
