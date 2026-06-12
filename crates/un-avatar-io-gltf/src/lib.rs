@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
@@ -10002,6 +10002,31 @@ struct PrimitiveVertexPayload {
 	default_morph_weights: Vec<f32>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PrimitiveReadProfile {
+	cache_clone: Duration,
+	positions: Duration,
+	joints_weights: Duration,
+	attributes: Duration,
+	indices: Duration,
+	morphs: Duration,
+	defaults: Duration,
+	cache_insert: Duration,
+}
+
+impl PrimitiveReadProfile {
+	fn add(&mut self, other: Self) {
+		self.cache_clone += other.cache_clone;
+		self.positions += other.positions;
+		self.joints_weights += other.joints_weights;
+		self.attributes += other.attributes;
+		self.indices += other.indices;
+		self.morphs += other.morphs;
+		self.defaults += other.defaults;
+		self.cache_insert += other.cache_insert;
+	}
+}
+
 fn accessor_index(accessor: Option<gltf::Accessor<'_>>) -> Option<usize> {
 	accessor.map(|accessor| accessor.index())
 }
@@ -10067,7 +10092,7 @@ fn read_primitive(
 	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
 	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	_report: &mut ImportReport,
-) -> Result<Option<(UnaMeshBuffers, bool, bool)>, ImportError> {
+) -> Result<Option<(UnaMeshBuffers, bool, bool, PrimitiveReadProfile)>, ImportError> {
 	if prim.mode() != gltf::mesh::Mode::Triangles {
 		_report.approximations.push(Approximation {
 			feature: "primitive.mode".into(),
@@ -10077,24 +10102,42 @@ fn read_primitive(
 	}
 
 	let payload_key = primitive_vertex_payload_key(&prim, mesh_weights, mesh_target_names);
-	let cache_reusable = vertex_payload_key_counts.get(&payload_key).copied().unwrap_or(0) > 1;
+	let cache_disabled = std::env::var_os("UN_AVATAR_DISABLE_IMPORT_VERTEX_PAYLOAD_CACHE").is_some();
+	let cache_min_uses = std::env::var("UN_AVATAR_IMPORT_VERTEX_PAYLOAD_CACHE_MIN_USES")
+		.ok()
+		.and_then(|value| value.parse::<usize>().ok())
+		.unwrap_or(2)
+		.max(2);
+	let cache_reusable = !cache_disabled && vertex_payload_key_counts.get(&payload_key).copied().unwrap_or(0) >= cache_min_uses;
 	let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.as_ref()));
 	if cache_reusable {
+		let cache_clone_started = Instant::now();
 		if let Some(payload) = vertex_payload_cache.get(&payload_key).cloned() {
+			let cache_clone = cache_clone_started.elapsed();
+			let indices_started = Instant::now();
 			let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
+			let indices_elapsed = indices_started.elapsed();
 			let material_index = prim.material().index();
 			return Ok(Some((
 				mesh_buffers_from_vertex_payload(payload, indices, material_index, vertex_payload_id),
 				true,
 				cache_reusable,
+				PrimitiveReadProfile {
+					cache_clone,
+					indices: indices_elapsed,
+					..Default::default()
+				},
 			)));
 		}
 	}
 	let Some(iter_pos) = reader.read_positions() else {
 		return Err(ImportError::Message("POSITION アクセサがありません".into()));
 	};
+	let positions_started = Instant::now();
 	let positions: Vec<[f32; 3]> = iter_pos.collect();
+	let positions_elapsed = positions_started.elapsed();
 
+	let joints_weights_started = Instant::now();
 	let joints_weights = match (reader.read_joints(0), reader.read_weights(0)) {
 		(Some(jr), Some(wr)) => {
 			let mut joints: Vec<[u16; 4]> = jr.into_u16().collect();
@@ -10134,7 +10177,9 @@ fn read_primitive(
 			));
 		}
 	};
+	let joints_weights_elapsed = joints_weights_started.elapsed();
 
+	let attributes_started = Instant::now();
 	let normals = reader.read_normals().map(|it| it.collect());
 	let tangents = reader.read_tangents().map(|it| it.collect());
 	let tex_coords_0 = reader.read_tex_coords(0).map(|tc| tc.into_f32().collect());
@@ -10142,10 +10187,14 @@ fn read_primitive(
 	let tex_coords_2 = reader.read_tex_coords(2).map(|tc| tc.into_f32().collect());
 	let tex_coords_3 = reader.read_tex_coords(3).map(|tc| tc.into_f32().collect());
 	let colors_0 = reader.read_colors(0).map(|colors| colors.into_rgba_f32().collect());
+	let attributes_elapsed = attributes_started.elapsed();
+	let indices_started = Instant::now();
 	let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
+	let indices_elapsed = indices_started.elapsed();
 	let material_index = prim.material().index();
 	let (joints, weights) = joints_weights;
 
+	let morphs_started = Instant::now();
 	let morph_target_iter = reader.read_morph_targets();
 	let (morph_target_lower, morph_target_upper) = morph_target_iter.size_hint();
 	let mut morph_targets: Vec<UnaMorphTargetDeltas> = Vec::with_capacity(morph_target_upper.unwrap_or(morph_target_lower));
@@ -10181,7 +10230,9 @@ fn read_primitive(
 			normal_deltas,
 		});
 	}
+	let morphs_elapsed = morphs_started.elapsed();
 
+	let defaults_started = Instant::now();
 	let mut default_morph_weights: Vec<f32> = mesh_weights.map(|w| w.to_vec()).unwrap_or_default();
 	if morph_targets.is_empty() {
 		default_morph_weights.clear();
@@ -10197,6 +10248,7 @@ fn read_primitive(
 	} else {
 		Vec::new()
 	};
+	let defaults_elapsed = defaults_started.elapsed();
 
 	let payload = PrimitiveVertexPayload {
 		positions,
@@ -10213,14 +10265,26 @@ fn read_primitive(
 		morph_target_names,
 		default_morph_weights,
 	};
+	let cache_insert_started = Instant::now();
 	if cache_reusable {
 		vertex_payload_cache.insert(payload_key, payload.clone());
 	}
+	let cache_insert_elapsed = cache_insert_started.elapsed();
 
 	Ok(Some((
 		mesh_buffers_from_vertex_payload(payload, indices, material_index, vertex_payload_id),
 		false,
 		cache_reusable,
+		PrimitiveReadProfile {
+			positions: positions_elapsed,
+			joints_weights: joints_weights_elapsed,
+			attributes: attributes_elapsed,
+			indices: indices_elapsed,
+			morphs: morphs_elapsed,
+			defaults: defaults_elapsed,
+			cache_insert: cache_insert_elapsed,
+			..Default::default()
+		},
 	)))
 }
 
@@ -10374,6 +10438,7 @@ fn scene_snapshot_from_gltf_inner(
 	let mut mesh_vertex_count = 0usize;
 	let mut mesh_index_count = 0usize;
 	let mut mesh_morph_target_count = 0usize;
+	let mut mesh_read_profile = PrimitiveReadProfile::default();
 	for mesh in document.meshes() {
 		let mid = mesh.index();
 		let mw = mesh.weights();
@@ -10384,7 +10449,7 @@ fn scene_snapshot_from_gltf_inner(
 			let vertex_payload_id = vertex_payload_key_ids
 				.get(&primitive_vertex_payload_key(&prim, mw, &target_names))
 				.copied();
-			if let Some((buf, cache_hit, cacheable)) = read_primitive(
+			if let Some((buf, cache_hit, cacheable, primitive_profile)) = read_primitive(
 				prim,
 				buffers,
 				mw,
@@ -10394,6 +10459,7 @@ fn scene_snapshot_from_gltf_inner(
 				&vertex_payload_key_counts,
 				report,
 			)? {
+				mesh_read_profile.add(primitive_profile);
 				mesh_primitive_count += 1;
 				mesh_cacheable_primitive_count += usize::from(cacheable);
 				mesh_vertex_payload_cache_hits += usize::from(cache_hit);
@@ -10418,6 +10484,17 @@ fn scene_snapshot_from_gltf_inner(
 	record_scene_snapshot_profile_step(report, profile, "read_meshes", step_started);
 	report.push_info(format!(
 		"glTF scene profile: read_meshes.primitives={mesh_primitive_count} cacheable={mesh_cacheable_primitive_count} vertex_payload_cache_hits={mesh_vertex_payload_cache_hits} vertices={mesh_vertex_count} indices={mesh_index_count} morph_targets={mesh_morph_target_count}"
+	));
+	report.push_info(format!(
+		"glTF scene profile: read_meshes.stage_ms cache_clone={} positions={} joints_weights={} attributes={} indices={} morphs={} defaults={} cache_insert={}",
+		mesh_read_profile.cache_clone.as_millis(),
+		mesh_read_profile.positions.as_millis(),
+		mesh_read_profile.joints_weights.as_millis(),
+		mesh_read_profile.attributes.as_millis(),
+		mesh_read_profile.indices.as_millis(),
+		mesh_read_profile.morphs.as_millis(),
+		mesh_read_profile.defaults.as_millis(),
+		mesh_read_profile.cache_insert.as_millis()
 	));
 
 	let step_started = Instant::now();
