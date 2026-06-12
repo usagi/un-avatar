@@ -1103,6 +1103,9 @@ struct AvatarSetting {
 	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
 	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
 	dynamics_enable_all_on_launch: bool,
+	/// VRC Contact Receiver の runtime parameter emission を有効化するか。
+	/// manifest `[physics.contacts] parameter_emission` に対応。既定 false。
+	contact_parameter_emission: bool,
 	spring_bone_physics_configured: bool,
 	spring_bone_simulation_hz: f32,
 	spring_bone_substeps: u32,
@@ -1320,6 +1323,7 @@ struct DebugSettings {
 
 struct PhysicsSettings {
 	dynamics_enable_all_on_launch: bool,
+	contact_parameter_emission: bool,
 	spring_bone_physics_configured: bool,
 	spring_bone_simulation_hz: f32,
 	spring_bone_substeps: u32,
@@ -1615,8 +1619,16 @@ struct ManifestDebug {
 #[serde(default)]
 struct ManifestPhysics {
 	bone_colliders: Option<ManifestBoneColliders>,
+	contacts: Option<ManifestContactsPhysics>,
 	dynamics: Option<ManifestDynamicsPhysics>,
 	spring_bone: Option<ManifestSpringBonePhysics>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestContactsPhysics {
+	parameter_emission: Option<bool>,
+	parameter_emission_enabled: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -3946,7 +3958,11 @@ fn apply_avatar_setting_value(
 		field if field.starts_with("effects.post.") => {
 			apply_post_effect_setting_value(manifest, field, value)?;
 		}
-		"spring_bones" | "physics.dynamics.enable_all_on_launch" | "physics.spring_bone.simulation_hz" | "physics.spring_bone.substeps" => {
+		"spring_bones"
+		| "physics.contacts.parameter_emission"
+		| "physics.dynamics.enable_all_on_launch"
+		| "physics.spring_bone.simulation_hz"
+		| "physics.spring_bone.substeps" => {
 			apply_physics_setting_value(manifest, setting, field, value)?;
 		}
 		field if field.starts_with("physics.") => {
@@ -4483,6 +4499,9 @@ fn apply_physics_setting_value(
 ) -> Result<(), String> {
 	match field {
 		"spring_bones" => set_nested_json_bool(manifest, &["spring_bones"], &value, field),
+		"physics.contacts.parameter_emission" => {
+			set_nested_json_bool(manifest, &["physics", "contacts", "parameter_emission"], &value, field)
+		}
 		"physics.dynamics.enable_all_on_launch" => {
 			set_nested_json_bool(manifest, &["physics", "dynamics", "enable_all_on_launch"], &value, field)
 		}
@@ -6797,6 +6816,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		// 既定 true（VRM 揺れもの表現は基本機能）。manifest で明示的に false を書いたときだけ OFF。
 		spring_bones: manifest.spring_bones.unwrap_or(true),
 		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
+		contact_parameter_emission: physics.contact_parameter_emission,
 		spring_bone_physics_configured: physics.spring_bone_physics_configured,
 		spring_bone_simulation_hz: physics.spring_bone_simulation_hz,
 		spring_bone_substeps: physics.spring_bone_substeps,
@@ -7969,11 +7989,15 @@ fn debug_settings(debug: Option<&ManifestDebug>) -> DebugSettings {
 
 fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&PathBuf>, manifest_path: &Path) -> PhysicsSettings {
 	let bone_colliders = physics.and_then(|physics| physics.bone_colliders.as_ref());
+	let contacts = physics.and_then(|physics| physics.contacts.as_ref());
 	let dynamics = physics.and_then(|physics| physics.dynamics.as_ref());
 	let spring_bone_physics = physics.and_then(|physics| physics.spring_bone.as_ref());
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
 		dynamics_enable_all_on_launch: dynamics.and_then(|dynamics| dynamics.enable_all_on_launch).unwrap_or(false),
+		contact_parameter_emission: contacts
+			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
+			.unwrap_or(false),
 		spring_bone_physics_configured: spring_bone_physics.is_some(),
 		spring_bone_simulation_hz: spring_bone_physics
 			.and_then(|physics| physics.simulation_hz)
@@ -9723,6 +9747,49 @@ id = "test"
 		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
 		let _ = fs::remove_file(path);
 		assert!(parsed.dynamics_enable_all_on_launch);
+	}
+
+	#[test]
+	fn contact_parameter_emission_setting_round_trips_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		assert!(!setting.contact_parameter_emission);
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.contacts.parameter_emission",
+			serde_json::json!(true),
+		)
+		.unwrap();
+		assert_eq!(
+			manifest
+				.get("physics")
+				.and_then(toml::Value::as_table)
+				.and_then(|physics| physics.get("contacts"))
+				.and_then(toml::Value::as_table)
+				.and_then(|contacts| contacts.get("parameter_emission"))
+				.and_then(toml::Value::as_bool),
+			Some(true)
+		);
+
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-contact-emission-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(&path, toml::to_string(&manifest).unwrap()).unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.contact_parameter_emission);
 	}
 
 	#[test]

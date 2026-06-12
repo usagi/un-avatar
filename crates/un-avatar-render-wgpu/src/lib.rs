@@ -1958,6 +1958,7 @@ impl AvatarApp {
 			return;
 		};
 		let wardrobe_set = self.opts.wardrobe_set.clone();
+		let contact_parameter_emission = self.opts.contact_parameter_emission;
 		self.startup_pending_document = true;
 		self.set_startup_progress("model", 0, 0, "Loading model");
 		let spawn_result = thread::Builder::new().name("un-avatar-startup-load".to_string()).spawn(move || {
@@ -1968,7 +1969,7 @@ impl AvatarApp {
 				total: 0,
 				message: startup_message("Loading model", startup_started),
 			});
-			let document = match model_loader::load_document(&path, wardrobe_set.as_deref()) {
+			let document = match model_loader::load_document(&path, wardrobe_set.as_deref(), contact_parameter_emission) {
 				Ok(document) => document,
 				Err(e) => {
 					let _ = proxy.send_event(RendererControlEvent::StartupFailed {
@@ -4683,6 +4684,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		lighting: LightingOptions::default(),
 		bloom: BloomOptions::default(),
 		aa: cli.aa,
+		contact_parameter_emission: false,
 		texture_resolution_limit: cli.texture_resolution_limit,
 		texture_compression: cli.texture_compression,
 		mipmap_filter: cli.mipmap_filter,
@@ -4821,7 +4823,7 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		if !path.is_file() {
 			return Err(format!("startup validation: model not found: {}", path.display()));
 		}
-		model_loader::load_document(path, opts.wardrobe_set.as_deref())
+		model_loader::load_document(path, opts.wardrobe_set.as_deref(), opts.contact_parameter_emission)
 			.map(|_| ())
 			.map_err(|e| format!("startup validation: model import failed: {}: {e}", path.display()))
 	} else {
@@ -4833,7 +4835,7 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err("skin tone matching dump: --gltf or manifest avatar_path is required".to_string());
 	};
-	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref())
+	let document = model_loader::load_document(path, opts.wardrobe_set.as_deref(), opts.contact_parameter_emission)
 		.map_err(|e| format!("skin tone matching dump: model import failed: {}: {e}", path.display()))?;
 	let runtime_model = document.runtime_model();
 	let Some(scene) = runtime_model.scene() else {

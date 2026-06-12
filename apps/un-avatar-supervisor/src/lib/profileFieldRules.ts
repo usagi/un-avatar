@@ -9,6 +9,7 @@ export function isLaunchTimeRendererField(field: string): boolean {
 		field.startsWith("environment.") ||
 		field.startsWith("expression.") ||
 		field.startsWith("motion.") ||
+		field.startsWith("physics.contacts.") ||
 		field.startsWith("output.")
 	);
 }
@@ -49,6 +50,7 @@ export function profileFieldLabel(field: string): string {
 	if (field.startsWith("expression.")) return "Expression settings";
 	if (field.startsWith("window.")) return "Window settings";
 	if (field.startsWith("motion.")) return "Motion settings";
+	if (field.startsWith("physics.contacts.")) return "Contact settings";
 	if (field.startsWith("physics.dynamics.")) return "Dynamics settings";
 	if (field.startsWith("output.")) return "Output settings";
 	return "This setting";

@@ -548,6 +548,8 @@ pub struct AvatarWindowOptions {
 	pub ssao: SsaoOptions,
 	/// Lightweight avatar contact shadow drawn under the model origin.
 	pub contact_shadow: ContactShadowOptions,
+	/// Explicit opt-in for VRC Contact Receiver parameter emission.
+	pub contact_parameter_emission: bool,
 	/// Anti-aliasing mode. OFF keeps the direct path; FXAA uses a fullscreen post pass.
 	pub aa: AaMode,
 	/// Optional load-time texture clamp. Default OFF preserves source texture fidelity.
@@ -681,6 +683,7 @@ impl Default for AvatarWindowOptions {
 			bloom: BloomOptions::default(),
 			ssao: SsaoOptions::default(),
 			contact_shadow: ContactShadowOptions::default(),
+			contact_parameter_emission: false,
 			aa: AaMode::Off,
 			texture_resolution_limit: TextureResolutionLimit::Off,
 			texture_compression: TextureCompressionMode::Balanced,

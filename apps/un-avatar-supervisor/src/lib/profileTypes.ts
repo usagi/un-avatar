@@ -100,6 +100,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	primary_motion_source: PrimaryMotionSource;
 	spring_bones: boolean;
 	dynamics_enable_all_on_launch: boolean;
+	contact_parameter_emission: boolean;
 	spring_bone_physics_configured: boolean;
 	spring_bone_simulation_hz: number;
 	spring_bone_substeps: number;
@@ -249,6 +250,7 @@ export type MotionSetting = Pick<
 	| "look_at_clamp_deg"
 	| "spring_bones"
 	| "dynamics_enable_all_on_launch"
+	| "contact_parameter_emission"
 	| "spring_bone_category_overrides"
 	| "apply_vmc_root_translation"
 	| "bone_colliders_enabled"

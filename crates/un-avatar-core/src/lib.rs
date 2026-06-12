@@ -3509,6 +3509,37 @@ impl UnaUnavatarExtension {
 				.and_then(Value::as_bool)
 				.unwrap_or(false)
 	}
+
+	pub fn enable_contact_parameter_emission_runtime_override(&mut self) {
+		if !self.source.is_object() {
+			self.source = serde_json::json!({});
+		}
+		let source = self.source.as_object_mut().expect("source object");
+		let runtime = source.entry("runtime").or_insert_with(|| serde_json::json!({}));
+		if !runtime.is_object() {
+			*runtime = serde_json::json!({});
+		}
+		let runtime = runtime.as_object_mut().expect("runtime object");
+		let contacts = runtime.entry("contacts").or_insert_with(|| serde_json::json!({}));
+		if !contacts.is_object() {
+			*contacts = serde_json::json!({});
+		}
+		contacts
+			.as_object_mut()
+			.expect("contacts object")
+			.insert("parameter_emission_enabled".to_string(), Value::Bool(true));
+	}
+}
+
+impl UnaDocument {
+	pub fn enable_contact_parameter_emission_runtime_override(&mut self) {
+		self.unavatar
+			.get_or_insert_with(|| UnaUnavatarExtension {
+				spec_version: "0.1".to_string(),
+				source: serde_json::json!({}),
+			})
+			.enable_contact_parameter_emission_runtime_override();
+	}
 }
 
 fn unavatar_capability_enabled(source: &Value, names: &[&str]) -> bool {
@@ -8186,6 +8217,31 @@ mod tests {
 			"contacts": {"parameterEmissionEnabled": true}
 		});
 		assert!(document.runtime_model().contact_parameter_emission_enabled());
+	}
+
+	#[test]
+	fn contact_parameter_emission_runtime_override_sets_runtime_contacts_flag() {
+		let mut document = UnaDocument {
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({"contacts": {"parameterEmissionEnabled": false}}),
+			}),
+			..Default::default()
+		};
+		assert!(!document.runtime_model().contact_parameter_emission_enabled());
+
+		document.enable_contact_parameter_emission_runtime_override();
+		assert!(document.runtime_model().contact_parameter_emission_enabled());
+		assert_eq!(
+			document
+				.unavatar
+				.as_ref()
+				.and_then(|unavatar| unavatar.source.get("runtime"))
+				.and_then(|runtime| runtime.get("contacts"))
+				.and_then(|contacts| contacts.get("parameter_emission_enabled"))
+				.and_then(Value::as_bool),
+			Some(true)
+		);
 	}
 
 	#[test]

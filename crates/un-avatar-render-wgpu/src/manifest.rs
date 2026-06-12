@@ -293,7 +293,15 @@ pub(crate) struct AudioLinkManifest {
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct PhysicsManifest {
 	pub bone_colliders: Option<BoneCollidersManifest>,
+	pub contacts: Option<ContactsPhysicsManifest>,
 	pub spring_bone: Option<SpringBonePhysicsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct ContactsPhysicsManifest {
+	pub parameter_emission: Option<bool>,
+	pub parameter_emission_enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1018,8 +1026,19 @@ impl PhysicsManifest {
 		if let Some(bone_colliders) = self.bone_colliders {
 			bone_colliders.apply_to(&mut opts.bone_colliders);
 		}
+		if let Some(contacts) = self.contacts {
+			contacts.apply_to(opts);
+		}
 		if let Some(spring_bone) = self.spring_bone {
 			opts.spring_bone_physics = spring_bone.normalized();
+		}
+	}
+}
+
+impl ContactsPhysicsManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(enabled) = self.parameter_emission.or(self.parameter_emission_enabled) {
+			opts.contact_parameter_emission = enabled;
 		}
 	}
 }
@@ -1339,6 +1358,9 @@ head = 1.0
 head = 180
 hands = 70
 
+[physics.contacts]
+parameter_emission = true
+
 [physics.spring_bone]
 simulation_hz = 240
 substeps = 2
@@ -1434,6 +1456,7 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.head, 180.0);
 		assert_eq!(opts.bone_colliders.radius_mm.hands, 70.0);
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
+		assert!(opts.contact_parameter_emission);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);
 		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");

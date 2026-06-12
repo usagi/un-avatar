@@ -6,7 +6,11 @@
 
 	export let setting: Pick<
 		MotionSetting,
-		"spring_bones" | "dynamics_enable_all_on_launch" | "spring_bone_category_overrides" | "apply_vmc_root_translation"
+		| "spring_bones"
+		| "dynamics_enable_all_on_launch"
+		| "contact_parameter_emission"
+		| "spring_bone_category_overrides"
+		| "apply_vmc_root_translation"
 	>;
 	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
@@ -26,6 +30,13 @@
 		hint={$_("profiles.hints.motion.dynamics_enable_all_on_launch")}
 		checked={setting.dynamics_enable_all_on_launch}
 		onChange={(checked) => onUpdateSettingValue("physics.dynamics.enable_all_on_launch", checked)}
+	/>
+	<ProfileToggleField
+		label={$_("profiles.editor.contact_parameter_emission")}
+		phaseTag="Contacts"
+		hint={$_("profiles.hints.motion.contact_parameter_emission")}
+		checked={setting.contact_parameter_emission}
+		onChange={(checked) => onUpdateSettingValue("physics.contacts.parameter_emission", checked)}
 	/>
 	<ProfileSpringBoneOverrides
 		overrides={setting.spring_bone_category_overrides}

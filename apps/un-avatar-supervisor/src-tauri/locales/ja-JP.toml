@@ -296,6 +296,7 @@ look_at_clamp_deg = "クランプ角度 (deg)"
 spring_bone = "SpringBone（揺れもの）"
 spring_bone_hint = "VRM SpringBone を毎フレーム物理シミュレーションします。完全に静止させたい場合以外は ON 推奨です。"
 dynamics_enable_all_on_launch = "起動時に全 Dynamics を有効化"
+contact_parameter_emission = "Contact parameter emission"
 spring_bone_mode = "SpringBone mode"
 spring_bone_mode_hint = "この部位の SpringBone を VRM authored 値のまま使うか、Verlet / XPBD で部位別に上書きするかを選びます。"
 spring_bone_mode_authored_verlet = "Authored: Verlet/PBD"
@@ -477,6 +478,7 @@ look_at = "LookAt: VRM 1.0 LookAt の簡易クランプです。視線 bone の 
 look_at_clamp_deg = "クランプ角度 (deg): 視線 yaw/pitch の上限角度です。0 から 90 度の範囲で指定します。OFF 中でも保存され、ON にすると使われます。"
 spring_bone = "SpringBone: VRM の揺れもの物理を動かします。髪や衣装を自然に動かしたい場合は ON 推奨です。"
 dynamics_enable_all_on_launch = "起動時に全 Dynamics を有効化: Renderer 起動後、すべての UNAvatar dynamics group を明示的に ON へ上書きします。PhysBone 系 group が安全のため既定 OFF で export される信頼済みアバター向けです。"
+contact_parameter_emission = "Contact parameter emission: VRC Contact Receiver probe の結果を runtime parameter へ書く明示 opt-in です。その parameter で action を動かす場合だけ ON にします。"
 vmc_root_translation = "VMC Root 移動: VMC の Root translation を scene root に反映します。フルボディでルート移動も扱う場合だけ ON にします。"
 
 [profiles.hints.output]

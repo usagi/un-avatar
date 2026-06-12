@@ -89,7 +89,7 @@ pub(crate) fn apply_requested_wardrobe_set(document: &mut UnaDocument, wardrobe_
 	}
 }
 
-pub(crate) fn load_document(path: &Path, wardrobe_set: Option<&str>) -> Result<Arc<UnaDocument>, String> {
+pub(crate) fn load_document(path: &Path, wardrobe_set: Option<&str>, contact_parameter_emission: bool) -> Result<Arc<UnaDocument>, String> {
 	let mut ctx = ImportContext {
 		asset_root: path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
 		temp_dir: std::env::temp_dir(),
@@ -124,6 +124,9 @@ pub(crate) fn load_document(path: &Path, wardrobe_set: Option<&str>) -> Result<A
 		Ok(res) => {
 			let mut document = res.document;
 			apply_requested_wardrobe_set(&mut document, wardrobe_set);
+			if contact_parameter_emission {
+				document.enable_contact_parameter_emission_runtime_override();
+			}
 			Ok(Arc::new(document))
 		}
 		Err(e) => Err(format!("model import: {e}")),
