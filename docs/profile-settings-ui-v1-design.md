@@ -188,6 +188,8 @@ Advanced Controls:
 
 Notes:
 
+- This document records the v1 UI shape. In v2, material authored Outline / Rim / MatCap / Specular / AO are preserved as per-material UNToon parameters, not exposed as profile-wide overrides. The old global controls that push one value set into every material are deprecated.
+- The v1 screen-space avatar outline override is renamed `Silhouette Outline` in v2. It is a UN Avatar viewer/post effect, not lilToon/MToon authored material outline.
 - `MToon controls` という subsection は Advanced 側に置く。Simple preset 名は MToon 固有語にしない。
 - 将来 PBR では同じ Quick Set を PBR 側パラメーターへ map する。
 - `Offline RT` は runtime renderer とは性質が違うため、将来は style option ではなく export/render job として扱う可能性もある。UI 上は同じ `Rendering style` の文脈に置けるよう余地を残す。

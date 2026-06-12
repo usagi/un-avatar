@@ -5,9 +5,7 @@
 	import ProfileLookColorPanel from "./ProfileLookColorPanel.svelte";
 	import ProfileLookOutlinePanel from "./ProfileLookOutlinePanel.svelte";
 	import ProfileLookRecommendationRow from "./ProfileLookRecommendationRow.svelte";
-	import ProfileLookRimPanel from "./ProfileLookRimPanel.svelte";
 	import ProfileLookShadowsPanel from "./ProfileLookShadowsPanel.svelte";
-	import ProfileLookSurfacePanel from "./ProfileLookSurfacePanel.svelte";
 	import type { ColorModeChangeHandler } from "./profileColorActions";
 	import type { ProfileLookSetting } from "./profileLookTypes";
 	import type { ColorDisplayMode } from "./storageState";
@@ -32,8 +30,6 @@
 		<ProfileLookRecommendationRow {busy} {onApplyLookRecommendation} />
 	</div>
 	<ProfileLookOutlinePanel {setting} {busy} {colorDisplayMode} {onColorModeChange} {onUpdateSettingValue} />
-	<ProfileLookRimPanel {setting} {busy} {colorDisplayMode} {onColorModeChange} {onUpdateSettingValue} />
-	<ProfileLookSurfacePanel {setting} {busy} {onUpdateSettingValue} />
 	<ProfileLookShadowsPanel {setting} {busy} {onUpdateSettingValue} />
 	<ProfileLookColorPanel {setting} {busy} {onUpdateSettingValue} />
 	<ProfileLookBloomPanel {setting} {busy} {onUpdateSettingValue} />

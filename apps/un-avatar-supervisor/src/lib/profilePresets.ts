@@ -35,7 +35,6 @@ export const RENDER_QUALITY_RECOMMENDATIONS: Record<RenderQualityRecommendation,
 export const LOOK_RECOMMENDATIONS: Record<LookRecommendation, readonly ProfilePresetUpdate[]> = {
 	natural: [
 		["effects.avatar.outline.policy", "authored"],
-		["effects.avatar.rim.policy", "authored"],
 		["effects.avatar.contact_shadow.enabled", false],
 		["effects.post.ssao.enabled", false],
 		["environment.color.look", "neutral"],
@@ -59,8 +58,6 @@ export const LOOK_RECOMMENDATIONS: Record<LookRecommendation, readonly ProfilePr
 	pop: [
 		["effects.avatar.outline.policy", "override"],
 		["effects.avatar.outline.width", 0.0045],
-		["effects.avatar.rim.policy", "override"],
-		["effects.avatar.rim.intensity", 0.25],
 		["effects.avatar.contact_shadow.enabled", true],
 		["environment.color.look", "pop"],
 		["environment.color.intensity", 0.45],
@@ -72,8 +69,6 @@ export const LOOK_RECOMMENDATIONS: Record<LookRecommendation, readonly ProfilePr
 	],
 	soft: [
 		["effects.avatar.outline.policy", "authored"],
-		["effects.avatar.rim.policy", "override"],
-		["effects.avatar.rim.intensity", 0.18],
 		["effects.avatar.contact_shadow.enabled", true],
 		["effects.avatar.contact_shadow.strength", 0.2],
 		["effects.post.ssao.enabled", true],

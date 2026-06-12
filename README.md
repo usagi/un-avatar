@@ -29,7 +29,7 @@ U.N. Avatar はアバターを軽快にレンダリングする「仮想アバ�
 - 軽量で高速: Renderer は Supervisor と別プロセスで動作し、GPU skinning / GPU morph / texture cache / texture compression などで実行時の負荷を抑えます。
 - 配信に使いやすい: 透過ウィンドウと Spout2 出力を標準的な出力として対応、配信アプリとの組み合わせが容易で軽快です。
 - 複数運用しやすい: 複数のプロファイルを設定分けし、複数の Renderer を同時に稼働可能なので、複数アバターを同時に使ったり、同じモーションで別アバターを同時表示したりできます。
-- 見た目を整えやすい: AA、texture policy、背景色、肌色合わせ、Bloom、SSAO、Contact shadow、Outline、MatCap、Specular、Rim、Lighting などをプロファイルごとに設定できます。
+- 見た目を整えやすい: AA、texture policy、背景色、肌色合わせ、Bloom、SSAO、Contact shadow、シルエットアウトライン、Lighting などをプロファイルごとに設定できます。MatCap、Specular、Rim、material outline などはモデル authored value を UNToon material として尊重します。
 - 安定性と軽快さ: Rust と wgpu で堅牢さと一般性を両立したネイティブコードの Renderer プロセス本体は軽量で効率よく安定して動作し、Tauri/WebView で作られた Supervisor GUI プロセスは扱いやすく高度な表現でプロファイルや Renderer の管理を便利に行えます。
 
 ## 一般的な使い方

@@ -77,6 +77,12 @@ Outline policy:
 - v1 の `AvatarOutlinePolicy::Override` による画面空間シルエット囲みは lilToon authored outline ではない。これは UN Avatar 独自の post effect / user override として残す場合も、lilToon compatibility path とは分離する。
 - PostProcess lazy creation では、authored geometry outline と avatar silhouette post outline を別機能として扱い、post outline が OFF なら avatar outline post pipelines を作らない。
 
+Supervisor look policy:
+
+- v2 Supervisor では material authored outline と区別するため、画面空間の全体囲みは `Silhouette Outline` / `シルエットアウトライン` と呼ぶ。`Outline` 単独表記は material ごとの authored outline と紛らわしいため避ける。
+- Authored outline / Rim / MatCap / Specular / AO は UNToon material へ正規化された source-authored parameter として扱う。v1 のように Supervisor profile から全 material へ同じ width / color / rim / matcap / specular / AO 値を押し付ける設定は v2 の標準 UI から廃止する。
+- Profile で直接扱う look controls は、Silhouette Outline、Bloom、SSAO、Contact shadow、color grading、背景などの screen / output / viewer-space effect を中心にする。material の authored value を壊す override は diagnostic / migration 互換に限定し、通常設定へ昇格しない。
+
 ## UNPhysics / UNDynamics Runtime Normalization
 
 SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。
