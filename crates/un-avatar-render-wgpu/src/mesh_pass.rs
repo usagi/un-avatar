@@ -849,6 +849,47 @@ struct TexturePrepareSummary {
 	compressed_cache_hits: u32,
 	compressed_cache_misses: u32,
 	compressed_cache_writes: u32,
+	roles: [TexturePrepareRoleSummary; TEXTURE_PREPARE_ROLE_COUNT],
+}
+
+const TEXTURE_PREPARE_ROLE_COUNT: usize = 8;
+
+#[derive(Clone, Copy, Default)]
+struct TexturePrepareRoleSummary {
+	images: u32,
+	resident_images: u32,
+	cache_read_elapsed: Duration,
+	upload_elapsed: Duration,
+	cache_read_bytes: u64,
+	cache_hits: u32,
+	compressed_cache_hits: u32,
+}
+
+fn texture_prepare_role_index(role: TextureRole) -> usize {
+	match role {
+		TextureRole::Face => 0,
+		TextureRole::Eyes => 1,
+		TextureRole::Clothing => 2,
+		TextureRole::Normal => 3,
+		TextureRole::Occlusion => 4,
+		TextureRole::Emissive => 5,
+		TextureRole::GenericColor => 6,
+		TextureRole::Data => 7,
+	}
+}
+
+fn texture_prepare_role_label(index: usize) -> &'static str {
+	match index {
+		0 => "Face",
+		1 => "Eyes",
+		2 => "Clothing",
+		3 => "Normal",
+		4 => "Occlusion",
+		5 => "Emissive",
+		6 => "GenericColor",
+		7 => "Data",
+		_ => "Unknown",
+	}
 }
 
 impl TexturePrepareSummary {
@@ -879,8 +920,17 @@ impl TexturePrepareSummary {
 		self.processed_elapsed += timings.processed.saturating_sub(processed_cache_read_elapsed);
 		self.payload_elapsed += timings.payload;
 		self.upload_elapsed += timings.upload;
+		let role_summary = &mut self.roles[texture_prepare_role_index(role)];
+		role_summary.images += 1;
+		if resident {
+			role_summary.resident_images += 1;
+		}
+		role_summary.cache_read_elapsed += timings.cache_read + processed_cache_read_elapsed;
+		role_summary.upload_elapsed += timings.upload;
+		role_summary.cache_read_bytes = role_summary.cache_read_bytes.saturating_add(cache_event.read_bytes);
 		if cache_event.hit {
 			self.cache_hits += 1;
+			role_summary.cache_hits += 1;
 		}
 		if cache_event.miss {
 			self.cache_misses += 1;
@@ -891,6 +941,7 @@ impl TexturePrepareSummary {
 		self.cache_read_bytes = self.cache_read_bytes.saturating_add(cache_event.read_bytes);
 		if compressed_cache_event.hit {
 			self.compressed_cache_hits += 1;
+			role_summary.compressed_cache_hits += 1;
 		}
 		if compressed_cache_event.miss {
 			self.compressed_cache_misses += 1;
@@ -946,6 +997,28 @@ impl TexturePrepareSummary {
 			self.compressed_cache_misses,
 			self.compressed_cache_writes,
 		);
+		let role_parts: Vec<String> = self
+			.roles
+			.iter()
+			.enumerate()
+			.filter(|(_, role)| role.images > 0)
+			.map(|(index, role)| {
+				format!(
+					"{}={}/{} read={:.1}MB/{:.1}ms upload={:.1}ms cache_hits={} compressed_hits={}",
+					texture_prepare_role_label(index),
+					role.resident_images,
+					role.images,
+					role.cache_read_bytes as f64 / (1024.0 * 1024.0),
+					role.cache_read_elapsed.as_secs_f64() * 1000.0,
+					role.upload_elapsed.as_secs_f64() * 1000.0,
+					role.cache_hits,
+					role.compressed_cache_hits,
+				)
+			})
+			.collect();
+		if !role_parts.is_empty() {
+			eprintln!("un-avatar-renderer: gpu scene texture prepare roles: {}", role_parts.join(" "));
+		}
 	}
 }
 
