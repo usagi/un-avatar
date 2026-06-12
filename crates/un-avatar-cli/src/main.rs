@@ -2189,6 +2189,22 @@ fn dynamics_group_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String
 	groups.iter().take(4).map(dynamics_group_sample_label).collect()
 }
 
+fn dynamics_unsupported_writeback_groups(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<&DiagnoseDynamicsGroupSummary> {
+	groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.collect()
+}
+
+fn dynamics_unsupported_writeback_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String> {
+	groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.take(4)
+		.map(dynamics_group_sample_label)
+		.collect()
+}
+
 fn dynamics_group_sample_label(group: &DiagnoseDynamicsGroupSummary) -> String {
 	let id = if group.source_id.is_empty() {
 		format!("group[{}]", group.index)
@@ -4365,6 +4381,15 @@ fn build_diagnose_report(
 			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={}{}",
 			dynamics_source_features.stretch_limit_count,
 			dynamics_counts.stretch_limit_groups,
+			format_warning_samples(&samples)
+		));
+	}
+	let unsupported_writeback_groups = dynamics_unsupported_writeback_groups(&dynamics_groups);
+	if !unsupported_writeback_groups.is_empty() {
+		let samples = dynamics_unsupported_writeback_samples(&dynamics_groups);
+		warnings.push(format!(
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={}{}",
+			unsupported_writeback_groups.len(),
 			format_warning_samples(&samples)
 		));
 	}
@@ -7399,6 +7424,7 @@ mod tests {
 						enabled: true,
 						source_id: "physbone:hair".into(),
 						bone_node_indices: vec![0, 1],
+						writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 						limit: Some(un_avatar_core::UnaDynamicsLimit {
 							limit_type: "angle".into(),
 							max_angle_x: 45.0,
@@ -7511,6 +7537,9 @@ mod tests {
 			.warnings
 			.iter()
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && w.contains("physbone:hair@root")));
+		assert!(report.warnings.iter().any(|w| w
+			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
+			&& w.contains("physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
 			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));

@@ -3249,6 +3249,15 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			format_runtime_warning_samples(&samples)
 		));
 	}
+	let unsupported_writeback_groups = runtime_dynamics_unsupported_writeback_group_count(status);
+	if unsupported_writeback_groups > 0 {
+		let samples = runtime_dynamics_unsupported_writeback_samples(status);
+		warnings.push(format!(
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={}{}",
+			unsupported_writeback_groups,
+			format_runtime_warning_samples(&samples)
+		));
+	}
 	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
 		let samples = runtime_dynamics_interaction_hook_samples(status);
 		warnings.push(format!(
@@ -3295,6 +3304,24 @@ fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> V
 				.max_stretch
 				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
 		})
+		.take(4)
+		.map(runtime_dynamics_group_sample_label)
+		.collect()
+}
+
+fn runtime_dynamics_unsupported_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.count()
+}
+
+fn runtime_dynamics_unsupported_writeback_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
 		.take(4)
 		.map(runtime_dynamics_group_sample_label)
 		.collect()
@@ -4976,7 +5003,7 @@ mod tests {
 			max_angle_x: Some(45.0),
 			max_angle_z: Some(45.0),
 			max_stretch: Some(0.25),
-			writeback_mode: Default::default(),
+			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 			allow_grabbing: None,
 			allow_posing: None,
 			interaction_parameter: String::new(),
@@ -5035,7 +5062,7 @@ mod tests {
 		status.contact_parameter_emission_enabled = false;
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 5);
+		assert_eq!(warnings.len(), 6);
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics groups are present but none are currently enabled")
 				&& warning.contains("samples=[physbone:hair@root/hair]")
@@ -5044,6 +5071,9 @@ mod tests {
 			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
 				&& warning.contains("physbone:hair@root/hair")
 		));
+		assert!(warnings.iter().any(|warning| warning
+			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
+			&& warning.contains("physbone:hair@root/hair")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
 			&& warning.contains("samples=[physbone:hair@root/hair]")));
