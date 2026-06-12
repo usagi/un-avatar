@@ -4416,6 +4416,12 @@ fn build_diagnose_report(
 		));
 	}
 	let dynamics_counts = runtime_dynamics.counts();
+	let unsupported_writeback_groups = dynamics_unsupported_writeback_groups(&dynamics_groups);
+	let rotation_translation_writeback_group_count = unsupported_writeback_groups.len();
+	let translation_writeback_candidate_count = dynamics_translation_writeback_candidate_total(&unsupported_writeback_groups);
+	let translation_writeback_target_count = dynamics_translation_writeback_target_total(&unsupported_writeback_groups);
+	let stretch_translation_writeback_group_count = dynamics_stretch_translation_writeback_group_count(&dynamics_groups);
+	let stretch_translation_writeback_target_group_count = dynamics_stretch_translation_writeback_target_group_count(&dynamics_groups);
 	if dynamics_counts.groups > 0 && dynamics_counts.enabled_groups == 0 {
 		let samples = dynamics_group_samples(&dynamics_groups);
 		warnings.push(format!(
@@ -4429,18 +4435,13 @@ fn build_diagnose_report(
 	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
 		let samples = dynamics_stretch_limit_samples(&dynamics_groups);
 		warnings.push(format!(
-			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={}{}",
+			"dynamics stretch limits are metadata-only in the current solver; source_stretch_limits={} runtime_stretch_limit_groups={} writeback_target_groups={}{}",
 			dynamics_source_features.stretch_limit_count,
 			dynamics_counts.stretch_limit_groups,
+			stretch_translation_writeback_target_group_count,
 			format_warning_samples(&samples)
 		));
 	}
-	let unsupported_writeback_groups = dynamics_unsupported_writeback_groups(&dynamics_groups);
-	let rotation_translation_writeback_group_count = unsupported_writeback_groups.len();
-	let translation_writeback_candidate_count = dynamics_translation_writeback_candidate_total(&unsupported_writeback_groups);
-	let translation_writeback_target_count = dynamics_translation_writeback_target_total(&unsupported_writeback_groups);
-	let stretch_translation_writeback_group_count = dynamics_stretch_translation_writeback_group_count(&dynamics_groups);
-	let stretch_translation_writeback_target_group_count = dynamics_stretch_translation_writeback_target_group_count(&dynamics_groups);
 	if !unsupported_writeback_groups.is_empty() {
 		let samples = dynamics_unsupported_writeback_samples(&dynamics_groups);
 		warnings.push(format!(
@@ -7606,7 +7607,9 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && w.contains("physbone:hair@root")));
+			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver")
+				&& w.contains("writeback_target_groups=1")
+				&& w.contains("physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
 			&& w.contains("candidate_joints=1")

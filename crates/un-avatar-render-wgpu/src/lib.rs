@@ -3253,8 +3253,9 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	if status.dynamics_stretch_limit_group_count > 0 {
 		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
-			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={}{}",
+			"dynamics stretch limits are metadata-only in the current solver; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
 			status.dynamics_stretch_limit_group_count,
+			status.dynamics_stretch_translation_writeback_target_group_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -5147,6 +5148,7 @@ mod tests {
 		));
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics stretch limits are metadata-only in the current solver")
+				&& warning.contains("writeback_target_groups=1")
 				&& warning.contains("physbone:hair@root/hair")
 		));
 		assert!(warnings.iter().any(|warning| warning
