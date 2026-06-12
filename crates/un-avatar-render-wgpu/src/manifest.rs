@@ -36,7 +36,6 @@ pub(crate) struct RendererManifest {
 	pub motion: Option<MotionManifest>,
 	pub audio_link: Option<AudioLinkManifest>,
 	pub physics: Option<PhysicsManifest>,
-	pub spring_bones: Option<bool>,
 	pub aa: Option<AaMode>,
 	pub render_quality: Option<RenderQualityManifest>,
 	pub environment: Option<EnvironmentManifest>,
@@ -492,9 +491,6 @@ impl RendererManifest {
 		}
 		if let Some(audio_link) = self.audio_link {
 			audio_link.apply_to(opts);
-		}
-		if let Some(spring_bones) = self.spring_bones {
-			opts.enable_spring_bones = spring_bones;
 		}
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
@@ -1499,13 +1495,27 @@ constraint_iterations = 6
 	}
 
 	#[test]
-	fn toml_manifest_prefers_v2_unphysics_enabled_over_legacy_spring_bones() {
+	fn toml_manifest_ignores_legacy_spring_bones_for_unphysics_enabled() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
 spring_bones = false
 
 [physics.dynamics]
 enabled = true
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert!(opts.enable_spring_bones);
+	}
+
+	#[test]
+	fn toml_manifest_requires_v2_unphysics_enabled_to_disable_dynamics() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+spring_bones = false
 "#,
 		)
 		.unwrap();

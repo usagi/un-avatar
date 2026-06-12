@@ -1110,7 +1110,7 @@ struct AvatarSetting {
 	/// 値は `"vmc"` / `"unmotion_zenoh"`。未指定時は VMC（Phase 1 からの既存挙動）。
 	primary_motion_source: String,
 	/// UNPhysics / UNDynamics の runtime solver を有効化するか。
-	/// 新形式は manifest `[physics.dynamics] enabled`、旧互換として top-level `spring_bones` も読む。
+	/// manifest `[physics.dynamics] enabled` に対応。
 	spring_bones: bool,
 	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
 	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
@@ -1887,9 +1887,6 @@ struct AvatarManifestSummary {
 	camera: Option<ManifestCameraSetting>,
 	environment: Option<ManifestEnvironment>,
 	effects: Option<ManifestEffects>,
-	/// 旧互換: UNPhysics / UNDynamics master enable の古い top-level bool。
-	/// 新規保存は `[physics.dynamics] enabled` を使う。
-	spring_bones: Option<bool>,
 }
 
 pub fn run() {
@@ -6831,7 +6828,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		look_at_enabled: motion.look_at_enabled,
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
-		spring_bones: physics.dynamics_enabled.or(manifest.spring_bones).unwrap_or(true),
+		spring_bones: physics.dynamics_enabled.unwrap_or(true),
 		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		contact_parameter_emission: physics.contact_parameter_emission,
 		spring_bone_physics_configured: physics.spring_bone_physics_configured,
@@ -9800,7 +9797,7 @@ id = "test"
 	}
 
 	#[test]
-	fn read_avatar_setting_prefers_v2_unphysics_enabled_over_legacy_spring_bones() {
+	fn read_avatar_setting_ignores_legacy_spring_bones_for_unphysics_enabled() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unphysics-enabled-test-{}-{}.toml",
 			std::process::id(),
@@ -9816,6 +9813,28 @@ id = "test"
 
 [physics.dynamics]
 enabled = true
+"#,
+		)
+		.unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.spring_bones);
+	}
+
+	#[test]
+	fn read_avatar_setting_requires_v2_unphysics_enabled_to_disable_dynamics() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unphysics-ignores-legacy-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
 "#,
 		)
 		.unwrap();
