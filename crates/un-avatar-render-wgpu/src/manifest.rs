@@ -1308,6 +1308,11 @@ name = "UN Avatar Spout2"
 width = 1920
 height = 1080
 
+[window]
+width = 640
+height = 360
+minimized = true
+
 [debug]
 vmc = true
 scene = true
@@ -1435,6 +1440,9 @@ constraint_iterations = 6
 		assert_eq!(opts.spout.name, "UN Avatar Spout2");
 		assert_eq!(opts.spout.width, Some(1920));
 		assert_eq!(opts.spout.height, Some(1080));
+		assert_eq!(opts.window_width, 640);
+		assert_eq!(opts.window_height, 360);
+		assert!(opts.start_minimized);
 		assert!(opts.debug.vmc);
 		assert!(opts.debug.scene);
 		assert!(opts.disable_expression_morphs);

@@ -9958,6 +9958,38 @@ id = "test"
 	}
 
 	#[test]
+	fn spout2_only_profile_updates_write_expected_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.enabled", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.width", serde_json::json!(1920)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.height", serde_json::json!(1080)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.width", serde_json::json!(640)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.height", serde_json::json!(360)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.minimized", serde_json::json!(true)).unwrap();
+
+		let output = manifest.get("output").and_then(toml::Value::as_table).unwrap();
+		let spout2 = output.get("spout2").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(spout2.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout2.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout2.get("height").and_then(toml::Value::as_integer), Some(1080));
+
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
+		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
+		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
 	fn read_avatar_setting_ignores_legacy_spring_bones_for_unphysics_enabled() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unphysics-enabled-test-{}-{}.toml",
