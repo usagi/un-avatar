@@ -15,8 +15,8 @@ use std::{
 use glam::{Mat4, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
-	UnaDocument, UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
+	una_dynamics_translation_writeback_candidate_count, UnaDocument, UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect,
+	UnaRuntimeActionQuery, UnaRuntimeActionTrigger, UnaRuntimeDynamicsCounts, UnaRuntimeResolverCacheKey, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
@@ -1177,8 +1177,8 @@ fn contact_parameter_emission_status_summary(doc: &UnaDocument) -> RuntimeContac
 
 fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus> {
 	let runtime_model = doc.runtime_model();
+	let scene = runtime_model.scene();
 	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
-	let skinned_joint_nodes = runtime_model.scene().map(scene_skinned_joint_nodes).unwrap_or_default();
 	let dynamics = runtime_model.dynamics();
 	dynamics
 		.dynamics_groups()
@@ -1223,11 +1223,11 @@ fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus>
 				max_angle_z: group.limit.map(|limit| limit.max_angle_z),
 				max_stretch: group.limit.map(|limit| limit.max_stretch),
 				writeback_mode: group.writeback_mode,
-				translation_writeback_candidate_count: dynamics_translation_writeback_candidate_count(
-					group.writeback_mode,
-					group.chain.bone_node_indices,
-					&skinned_joint_nodes,
-				),
+				translation_writeback_candidate_count: scene
+					.map(|scene| {
+						una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, group.chain.bone_node_indices)
+					})
+					.unwrap_or(0),
 				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
 				interaction_parameter: group
@@ -1363,25 +1363,6 @@ fn scene_node_paths_by_index(scene: &UnaSceneSnapshot) -> Vec<Option<String>> {
 		visit(scene, root, "", &mut out);
 	}
 	out
-}
-
-fn scene_skinned_joint_nodes(scene: &UnaSceneSnapshot) -> BTreeSet<usize> {
-	scene.skins.iter().flat_map(|skin| skin.joint_nodes.iter().copied()).collect()
-}
-
-fn dynamics_translation_writeback_candidate_count(
-	writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
-	bone_node_indices: &[usize],
-	skinned_joint_nodes: &BTreeSet<usize>,
-) -> usize {
-	if writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation {
-		return 0;
-	}
-	bone_node_indices
-		.iter()
-		.skip(1)
-		.filter(|node| !skinned_joint_nodes.contains(node))
-		.count()
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {

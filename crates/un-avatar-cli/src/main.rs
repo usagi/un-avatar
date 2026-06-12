@@ -15,9 +15,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use un_avatar_core::{
-	modular_avatar_component_support_kind, morph_weights_for_primitive, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis,
-	UnaImagePixelFormat, UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind,
-	UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count, UnaAlphaMode,
+	UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger,
+	UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -2038,25 +2038,6 @@ fn scene_node_paths_by_index(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<Op
 	out
 }
 
-fn scene_skinned_joint_nodes(scene: &un_avatar_core::UnaSceneSnapshot) -> BTreeSet<usize> {
-	scene.skins.iter().flat_map(|skin| skin.joint_nodes.iter().copied()).collect()
-}
-
-fn dynamics_translation_writeback_candidate_count(
-	writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
-	bone_node_indices: &[usize],
-	skinned_joint_nodes: &BTreeSet<usize>,
-) -> usize {
-	if writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation {
-		return 0;
-	}
-	bone_node_indices
-		.iter()
-		.skip(1)
-		.filter(|node| !skinned_joint_nodes.contains(node))
-		.count()
-}
-
 fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<bool> {
 	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
 		let Some(node) = scene.nodes.get(idx) else { return };
@@ -2086,7 +2067,6 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 		return Vec::new();
 	}
 	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
-	let skinned_joint_nodes = scene_skinned_joint_nodes(runtime.scene);
 	groups
 		.iter()
 		.enumerate()
@@ -2121,10 +2101,10 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 				max_angle_z: group.limit.as_ref().map(|limit| limit.max_angle_z),
 				max_stretch: group.limit.as_ref().map(|limit| limit.max_stretch),
 				writeback_mode: group.writeback_mode,
-				translation_writeback_candidate_count: dynamics_translation_writeback_candidate_count(
+				translation_writeback_candidate_count: una_dynamics_translation_writeback_candidate_count(
+					runtime.scene,
 					group.writeback_mode,
 					&group.bone_node_indices,
-					&skinned_joint_nodes,
 				),
 				allow_grabbing: group.interaction.as_ref().and_then(|interaction| interaction.allow_grabbing),
 				allow_posing: group.interaction.as_ref().and_then(|interaction| interaction.allow_posing),

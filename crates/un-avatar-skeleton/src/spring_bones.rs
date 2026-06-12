@@ -28,11 +28,14 @@
 //! - dt 可変だと Verlet 速度 `curr - prev` が前フレームの dt 分の変位を表すため発散していた
 //!   → `accumulator` で固定 dt サブステップ化 (`FIXED_DT = 1/60s`)。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaDynamicsGroup, UnaDynamicsLimit, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings};
+use un_avatar_core::{
+	una_dynamics_translation_writeback_candidate_count, UnaDynamicsGroup, UnaDynamicsLimit, UnaRuntimeDynamics, UnaSceneNode,
+	UnaSceneSnapshot, UnaSpringBoneSettings,
+};
 
 use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
 
@@ -389,10 +392,6 @@ fn write_world_from_snapshot(scene: &UnaSceneSnapshot, world: &mut Vec<Mat4>) {
 	}
 }
 
-fn skinned_joint_nodes(scene: &UnaSceneSnapshot) -> BTreeSet<usize> {
-	scene.skins.iter().flat_map(|skin| skin.joint_nodes.iter().copied()).collect()
-}
-
 fn normalize_category_id(value: &str) -> String {
 	value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
 }
@@ -519,7 +518,6 @@ impl SpringBoneSimulator {
 		}
 		let physics = physics.normalized();
 		let world0 = world_from_snapshot(scene);
-		let skinned_joint_nodes = skinned_joint_nodes(scene);
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
@@ -596,8 +594,8 @@ impl SpringBoneSimulator {
 					.filter(|value| value.is_finite())
 					.unwrap_or(g.parameters.hit_radius)
 					.max(0.0);
-				let translation_writeback_allowed = g.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
-					&& !skinned_joint_nodes.contains(&child);
+				let translation_writeback_allowed =
+					una_dynamics_translation_writeback_candidate_count(scene, g.writeback_mode, &[parent, child]) > 0;
 				joints.push(JointRuntime {
 					parent_node: parent,
 					child_node: child,

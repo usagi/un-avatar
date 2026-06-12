@@ -1151,6 +1151,26 @@ impl UnaDynamicsWritebackMode {
 	}
 }
 
+pub fn una_dynamics_translation_writeback_candidate_count(
+	scene: &UnaSceneSnapshot,
+	writeback_mode: UnaDynamicsWritebackMode,
+	bone_node_indices: &[usize],
+) -> usize {
+	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation {
+		return 0;
+	}
+	let skinned_joint_nodes = scene
+		.skins
+		.iter()
+		.flat_map(|skin| skin.joint_nodes.iter().copied())
+		.collect::<BTreeSet<_>>();
+	bone_node_indices
+		.iter()
+		.skip(1)
+		.filter(|node| !skinned_joint_nodes.contains(node))
+		.count()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnaDynamicsGroup<'a> {
 	pub source_kind: UnaDynamicsSourceKind,
@@ -8681,6 +8701,26 @@ mod tests {
 		)
 		.expect("explicit writeback mode");
 		assert_eq!(group.writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
+	}
+
+	#[test]
+	fn dynamics_translation_writeback_candidates_exclude_skinned_joints() {
+		let scene = UnaSceneSnapshot {
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1, 3],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(
+			una_dynamics_translation_writeback_candidate_count(&scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1, 2, 3, 4],),
+			2
+		);
+		assert_eq!(
+			una_dynamics_translation_writeback_candidate_count(&scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 2, 4]),
+			0
+		);
 	}
 
 	#[test]
