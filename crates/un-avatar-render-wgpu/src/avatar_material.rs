@@ -3,7 +3,7 @@
 use un_avatar_core::{UnaAlphaMode, UnaMaterialPbr, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot};
 
 use crate::debug_dump::eye_area_material_name;
-use crate::mesh_pass::{AvatarOutlinePolicy, AvatarRimPolicy, SceneMeshLoadOpts};
+use crate::mesh_pass::{AvatarOutlinePolicy, SceneMeshLoadOpts};
 use crate::texture_pipeline::TextureRole;
 
 pub(crate) const DEFAULT_AVATAR_OUTLINE_WIDTH_METERS: f32 = 0.003;
@@ -72,50 +72,34 @@ pub(crate) fn material_name_is_face_skin_or_mouth(name: &str) -> bool {
 		|| name.contains("舌")
 }
 
-pub(crate) fn material_rim_strength_multiplier(mat: &UnaMaterialPbr, override_rim: bool) -> f32 {
+pub(crate) fn material_rim_strength_multiplier(mat: &UnaMaterialPbr) -> f32 {
 	let name = mat.name.as_deref().unwrap_or("").to_ascii_lowercase();
 	if eye_area_material_name(mat.name.as_deref()) || material_name_is_face_skin_or_mouth(&name) {
 		return 0.0;
 	}
 	match mat.alpha_mode {
 		UnaAlphaMode::Opaque => 1.0,
-		UnaAlphaMode::Mask => {
-			if override_rim {
-				1.0
-			} else {
-				0.35
-			}
-		}
+		UnaAlphaMode::Mask => 0.35,
 		UnaAlphaMode::Blend => 0.0,
 	}
 }
 
 pub(crate) fn effective_mtoon_rim(mat: &UnaMaterialPbr, mtoon: &UnaMtoonMaterial, opts: &SceneMeshLoadOpts) -> ([f32; 3], f32, f32, f32) {
-	let override_rim = opts.avatar_rim.policy == AvatarRimPolicy::Override;
-	let strength = material_rim_strength_multiplier(mat, override_rim);
-	match opts.avatar_rim.policy {
-		AvatarRimPolicy::Authored => (
-			[
-				mtoon.parametric_rim_color_factor[0] * strength,
-				mtoon.parametric_rim_color_factor[1] * strength,
-				mtoon.parametric_rim_color_factor[2] * strength,
-			],
-			mtoon.rim_lighting_mix_factor,
-			mtoon.parametric_rim_fresnel_power_factor,
-			mtoon.parametric_rim_lift_factor,
-		),
-		AvatarRimPolicy::Off => ([0.0, 0.0, 0.0], 0.0, 1.0, 0.0),
-		AvatarRimPolicy::Override => {
-			let color = opts.avatar_rim.color.unwrap_or([0.85, 0.92, 1.0]);
-			let intensity = opts.avatar_rim.intensity.unwrap_or(0.35).clamp(0.0, 4.0) * strength;
-			(
-				[color[0] * intensity, color[1] * intensity, color[2] * intensity],
-				opts.avatar_rim.lighting_mix.unwrap_or(0.0).clamp(0.0, 1.0),
-				opts.avatar_rim.fresnel_power.unwrap_or(3.0).max(0.00001),
-				opts.avatar_rim.lift.unwrap_or(0.0).clamp(-1.0, 1.0),
-			)
-		}
-	}
+	let strength = if opts.debug_disable_rim_lighting {
+		0.0
+	} else {
+		material_rim_strength_multiplier(mat)
+	};
+	(
+		[
+			mtoon.parametric_rim_color_factor[0] * strength,
+			mtoon.parametric_rim_color_factor[1] * strength,
+			mtoon.parametric_rim_color_factor[2] * strength,
+		],
+		mtoon.rim_lighting_mix_factor,
+		mtoon.parametric_rim_fresnel_power_factor,
+		mtoon.parametric_rim_lift_factor,
+	)
 }
 
 fn mark_texture_role(roles: &mut [TextureRole], index: Option<usize>, role: TextureRole) {
@@ -357,13 +341,13 @@ mod tests {
 	fn rim_strength_suppresses_sensitive_face_eye_and_mouth_materials() {
 		let mut mat = UnaMaterialPbr::default();
 		mat.name = Some("Face".to_string());
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 0.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 0.0);
 		mat.name = Some("EyeHighlight".to_string());
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 0.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 0.0);
 		mat.name = Some("mouth_inner".to_string());
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 0.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 0.0);
 		mat.name = Some("Jacket".to_string());
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 1.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 1.0);
 	}
 
 	#[test]
@@ -373,11 +357,10 @@ mod tests {
 			alpha_mode: UnaAlphaMode::Mask,
 			..Default::default()
 		};
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 0.35);
-		assert_eq!(material_rim_strength_multiplier(&mat, true), 1.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 0.35);
 
 		mat.alpha_mode = UnaAlphaMode::Blend;
-		assert_eq!(material_rim_strength_multiplier(&mat, false), 0.0);
+		assert_eq!(material_rim_strength_multiplier(&mat), 0.0);
 	}
 
 	#[test]

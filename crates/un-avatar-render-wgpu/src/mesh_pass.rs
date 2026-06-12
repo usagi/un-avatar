@@ -71,75 +71,6 @@ impl Default for AvatarOutlineOptions {
 	}
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AvatarRimPolicy {
-	Authored,
-	Off,
-	Override,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AvatarRimOptions {
-	pub policy: AvatarRimPolicy,
-	pub color: Option<[f32; 3]>,
-	pub intensity: Option<f32>,
-	pub lighting_mix: Option<f32>,
-	pub fresnel_power: Option<f32>,
-	pub lift: Option<f32>,
-}
-
-impl Default for AvatarRimOptions {
-	fn default() -> Self {
-		Self {
-			policy: AvatarRimPolicy::Authored,
-			color: None,
-			intensity: None,
-			lighting_mix: None,
-			fresnel_power: None,
-			lift: None,
-		}
-	}
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AvatarMatcapOptions {
-	pub scale: f32,
-}
-
-impl Default for AvatarMatcapOptions {
-	fn default() -> Self {
-		Self { scale: 1.0 }
-	}
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AvatarSpecularOptions {
-	pub enabled: bool,
-	pub intensity: f32,
-	pub power: f32,
-}
-
-impl Default for AvatarSpecularOptions {
-	fn default() -> Self {
-		Self {
-			enabled: false,
-			intensity: 0.25,
-			power: 24.0,
-		}
-	}
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AvatarAmbientOcclusionOptions {
-	pub strength: f32,
-}
-
-impl Default for AvatarAmbientOcclusionOptions {
-	fn default() -> Self {
-		Self { strength: 1.0 }
-	}
-}
-
 /// CPU・シェーダ共通のメッシュ表示オプション（切り分け用フラグ含む）。
 #[derive(Clone, Debug, Default)]
 pub struct SceneMeshLoadOpts {
@@ -185,14 +116,6 @@ pub struct SceneMeshLoadOpts {
 	pub disable_fur: bool,
 	/// アバター用途の outline override。既定は VRM / MToon authored outline を尊重する。
 	pub avatar_outline: AvatarOutlineOptions,
-	/// アバター用途の rim light override。既定は VRM / MToon authored rim を尊重する。
-	pub avatar_rim: AvatarRimOptions,
-	/// アバター用途の matcap 強度倍率。既定 1.0 は authored 値そのまま。
-	pub avatar_matcap: AvatarMatcapOptions,
-	/// アバター用途の合成 specular accent。既定 OFF。
-	pub avatar_specular: AvatarSpecularOptions,
-	/// authored occlusion texture の効き。既定 1.0 は authored 値そのまま。
-	pub avatar_ambient_occlusion: AvatarAmbientOcclusionOptions,
 	/// 顔と体で別テクスチャの肌色差が首境界に出るモデル向けの実験的なロード時補正。
 	pub skin_tone_matching: bool,
 }
@@ -5363,7 +5286,7 @@ fn mesh_draw_material_gpu_with_profiles(
 	if opts.debug_primitive_colors {
 		flags |= 2;
 	}
-	if opts.debug_disable_rim_lighting && opts.avatar_rim.policy != AvatarRimPolicy::Override {
+	if opts.debug_disable_rim_lighting {
 		flags |= 4;
 	}
 	if opts.debug_force_shading_shift_zero {
@@ -5396,11 +5319,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		flags |= 1024;
 	}
 	let (rim_color, rim_lighting_mix, rim_power, rim_lift) = effective_mtoon_rim(mat, mtoon, opts);
-	let rim_texture_mix = if opts.avatar_rim.policy == AvatarRimPolicy::Override {
-		0.0
-	} else {
-		1.0
-	};
+	let rim_texture_mix = 1.0;
 	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile) {
 		flags |= MAT_UNTOON_GEM_PROFILE;
 	}
@@ -6607,12 +6526,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		shadow2_params,
 		shadow3_color,
 		shadow3_params,
-		matcap_factor: [
-			matcap_color[0],
-			matcap_color[1],
-			matcap_color[2],
-			opts.avatar_matcap.scale.clamp(0.0, 2.0),
-		],
+		matcap_factor: [matcap_color[0], matcap_color[1], matcap_color[2], 1.0],
 		matcap_params,
 		matcap_ext_params,
 		matcap_bump_params,
@@ -6639,7 +6553,7 @@ fn mesh_draw_material_gpu_with_profiles(
 			rim_color_gpu[0],
 			rim_color_gpu[1],
 			rim_color_gpu[2],
-			(mat.occlusion_texture_strength * opts.avatar_ambient_occlusion.strength).clamp(0.0, 2.0),
+			mat.occlusion_texture_strength.clamp(0.0, 2.0),
 		],
 		rim_params,
 		rim_control,
@@ -6739,25 +6653,12 @@ fn mesh_draw_material_gpu_with_profiles(
 		rendering_ext_params,
 		transparency_params,
 		material_ext_params,
-		emissive_factor: [
-			mat.emissive_factor[0],
-			mat.emissive_factor[1],
-			mat.emissive_factor[2],
-			if opts.avatar_specular.enabled {
-				opts.avatar_specular.power.clamp(1.0, 128.0)
-			} else {
-				24.0
-			},
-		],
+		emissive_factor: [mat.emissive_factor[0], mat.emissive_factor[1], mat.emissive_factor[2], 24.0],
 		uv_anim_params: [
 			mtoon.uv_animation_scroll_x_speed_factor,
 			mtoon.uv_animation_scroll_y_speed_factor,
 			mtoon.uv_animation_rotation_speed_factor,
-			if opts.avatar_specular.enabled {
-				opts.avatar_specular.intensity.clamp(0.0, 2.0)
-			} else {
-				0.0
-			},
+			0.0,
 		],
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,

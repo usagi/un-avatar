@@ -1384,11 +1384,6 @@ constraint_iterations = 6
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.color, Some([0.02, 0.01, 0.03]));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.lighting_mix, Some(0.25));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.roundness, Some(0.5));
-		assert_eq!(opts.mesh_diagnostics.avatar_matcap.scale, 1.0);
-		assert!(!opts.mesh_diagnostics.avatar_specular.enabled);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.intensity, 0.25);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.power, 24.0);
-		assert_eq!(opts.mesh_diagnostics.avatar_ambient_occlusion.strength, 1.0);
 		assert!(opts.contact_shadow.enabled);
 		assert_eq!(opts.contact_shadow.strength, 0.4);
 		assert_eq!(opts.contact_shadow.radius, 0.7);

@@ -39,10 +39,7 @@ use std::{
 pub use debug_log::WindowDebugOptions;
 pub use gpu::FrameTimings;
 use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
-pub use mesh_pass::{
-	AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, AvatarRimOptions,
-	AvatarRimPolicy, AvatarSpecularOptions, SceneMeshLoadOpts,
-};
+pub use mesh_pass::{AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshLoadOpts};
 pub use options::{
 	AaMode, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions,
 	DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend, SpoutWindowOptions,
@@ -4744,10 +4741,6 @@ pub fn run_cli() -> Result<(), RunError> {
 			debug_base_texture_only: cli.debug_base_texture_only,
 			disable_fur: cli.debug_disable_fur,
 			avatar_outline: Default::default(),
-			avatar_rim: Default::default(),
-			avatar_matcap: Default::default(),
-			avatar_specular: Default::default(),
-			avatar_ambient_occlusion: Default::default(),
 			skin_tone_matching: cli.skin_tone_matching,
 		},
 		contact_shadow: Default::default(),
