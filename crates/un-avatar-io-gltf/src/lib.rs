@@ -93,6 +93,61 @@ fn collect_images(images_data: Vec<gltf::image::Data>, report: &mut ImportReport
 	Ok(out)
 }
 
+fn import_gltf_slice_parallel_images(
+	slice: &[u8],
+) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), ImportError> {
+	let gltf = gltf::Gltf::from_slice(slice).map_err(|e| ImportError::Message(e.to_string()))?;
+	let document = gltf.document;
+	let buffers = gltf::import_buffers(&document, None, gltf.blob).map_err(|e| ImportError::Message(e.to_string()))?;
+	let image_count = document.images().count();
+	if image_count == 0 {
+		return Ok((document, buffers, Vec::new()));
+	}
+
+	let worker_count = std::thread::available_parallelism()
+		.map(|n| n.get())
+		.unwrap_or(1)
+		.clamp(1, 8)
+		.min(image_count);
+	let chunk_size = image_count.div_ceil(worker_count);
+	let decoded_chunks = std::thread::scope(|scope| {
+		let mut handles = Vec::with_capacity(worker_count);
+		for start in (0..image_count).step_by(chunk_size) {
+			let end = (start + chunk_size).min(image_count);
+			let document = &document;
+			let buffers = &buffers;
+			handles.push(scope.spawn(move || {
+				let mut decoded = Vec::with_capacity(end - start);
+				for (index, image) in document.images().enumerate().skip(start).take(end - start) {
+					let data = gltf::image::Data::from_source(image.source(), None, buffers).map_err(|e| e.to_string())?;
+					decoded.push((index, data));
+				}
+				Ok::<Vec<(usize, gltf::image::Data)>, String>(decoded)
+			}));
+		}
+
+		let mut decoded_chunks = Vec::with_capacity(handles.len());
+		for handle in handles {
+			decoded_chunks.push(handle.join().map_err(|_| "glTF image decode worker panicked".to_owned())??);
+		}
+		Ok::<Vec<Vec<(usize, gltf::image::Data)>>, String>(decoded_chunks)
+	})
+	.map_err(ImportError::Message)?;
+
+	let mut images = vec![None; image_count];
+	for decoded in decoded_chunks {
+		for (index, data) in decoded {
+			images[index] = Some(data);
+		}
+	}
+	let images = images
+		.into_iter()
+		.enumerate()
+		.map(|(index, data)| data.ok_or_else(|| ImportError::Message(format!("glTF image {index} was not decoded"))))
+		.collect::<Result<Vec<_>, _>>()?;
+	Ok((document, buffers, images))
+}
+
 fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Option<UnaImageSourceMetadata>> {
 	let samplers = image_samplers_from_document(document);
 	document
@@ -1324,6 +1379,57 @@ fn unavatar_node_registry_paths(unavatar: Option<&UnaUnavatarExtension>) -> BTre
 		.collect()
 }
 
+struct WardrobeLookupContext {
+	node_ids: BTreeMap<String, usize>,
+	registry_paths: BTreeMap<String, String>,
+	paths: BTreeMap<String, usize>,
+	normalized_paths: BTreeMap<String, Vec<usize>>,
+	paths_by_index: Vec<Option<String>>,
+	parent_by_index: Vec<Option<usize>>,
+	registry_source_normalized_paths_by_index: Vec<Option<String>>,
+}
+
+impl WardrobeLookupContext {
+	fn new(scene: &UnaSceneSnapshot, unavatar: Option<&UnaUnavatarExtension>) -> Self {
+		let node_ids = scene_node_ids(scene);
+		let registry_paths = unavatar_node_registry_paths(unavatar);
+		let paths = scene_node_paths(scene);
+		let normalized_paths = scene_node_normalized_paths(scene);
+		let mut paths_by_index = vec![None; scene.nodes.len()];
+		for (path, idx) in &paths {
+			if let Some(slot) = paths_by_index.get_mut(*idx) {
+				*slot = Some(path.clone());
+			}
+		}
+		let mut parent_by_index = vec![None; scene.nodes.len()];
+		for (parent, node) in scene.nodes.iter().enumerate() {
+			for &child in &node.children {
+				if let Some(slot) = parent_by_index.get_mut(child) {
+					*slot = Some(parent);
+				}
+			}
+		}
+		let registry_source_normalized_paths_by_index = scene
+			.nodes
+			.iter()
+			.map(|node| {
+				let source_node_id = node.source_node_id.as_deref()?;
+				let source_path = registry_paths.get(source_node_id)?;
+				Some(normalize_unavatar_path(source_path))
+			})
+			.collect();
+		Self {
+			node_ids,
+			registry_paths,
+			paths,
+			normalized_paths,
+			paths_by_index,
+			parent_by_index,
+			registry_source_normalized_paths_by_index,
+		}
+	}
+}
+
 fn operation_target_node_id(op: &Value) -> Option<&str> {
 	op.get("target")
 		.and_then(|t| t.get("nodeId"))
@@ -1359,15 +1465,6 @@ fn lookup_operation_targets_all(
 		}
 	}
 	lookup_scene_path_all(paths, normalized_paths, operation_target_path(op))
-}
-
-fn normalized_path_is_same_or_descendant(path: &str, ancestor: &str) -> bool {
-	if ancestor.is_empty() {
-		return false;
-	}
-	let path = normalize_unavatar_path(path);
-	let ancestor = normalize_unavatar_path(ancestor);
-	path == ancestor || path.starts_with(&format!("{ancestor}/"))
 }
 
 fn operation_target_registry_path<'a>(registry_paths: &'a BTreeMap<String, String>, op: &'a Value) -> &'a str {
@@ -1411,28 +1508,29 @@ fn collect_current_subtree(scene: &UnaSceneSnapshot, root: usize, out: &mut BTre
 	}
 }
 
-fn lookup_operation_subtree_targets_all(
-	scene: &UnaSceneSnapshot,
-	node_ids: &BTreeMap<String, usize>,
-	registry_paths: &BTreeMap<String, String>,
-	paths: &BTreeMap<String, usize>,
-	normalized_paths: &BTreeMap<String, Vec<usize>>,
-	op: &Value,
-) -> Vec<usize> {
+fn normalized_path_is_same_or_descendant_normalized(path: &str, ancestor: &str) -> bool {
+	!ancestor.is_empty() && (path == ancestor || path.strip_prefix(ancestor).is_some_and(|rest| rest.starts_with('/')))
+}
+
+fn lookup_operation_subtree_targets_all_with_lookup(scene: &UnaSceneSnapshot, lookup: &WardrobeLookupContext, op: &Value) -> Vec<usize> {
 	let mut out = BTreeSet::new();
-	for root in lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op) {
+	for root in lookup_operation_targets_all(
+		&lookup.node_ids,
+		&lookup.registry_paths,
+		&lookup.paths,
+		&lookup.normalized_paths,
+		op,
+	) {
 		collect_current_subtree(scene, root, &mut out);
 	}
-	let target_path = operation_target_registry_path(registry_paths, op);
+	let target_path = operation_target_registry_path(&lookup.registry_paths, op);
 	if !target_path.is_empty() {
-		for (idx, node) in scene.nodes.iter().enumerate() {
-			let Some(source_node_id) = node.source_node_id.as_deref() else {
+		let target_path = normalize_unavatar_path(target_path);
+		for (idx, source_path) in lookup.registry_source_normalized_paths_by_index.iter().enumerate() {
+			let Some(source_path) = source_path.as_deref() else {
 				continue;
 			};
-			let Some(source_path) = registry_paths.get(source_node_id) else {
-				continue;
-			};
-			if normalized_path_is_same_or_descendant(source_path, target_path) {
+			if normalized_path_is_same_or_descendant_normalized(source_path, &target_path) {
 				out.insert(idx);
 			}
 		}
@@ -2573,16 +2671,35 @@ fn refresh_wardrobe_apply_report_scoped_assets(document: &UnaDocument, report: &
 	report.scoped_resident_dynamics_count = selection.dynamics_source_ids.len();
 }
 
+fn wardrobe_profile_enabled() -> bool {
+	std::env::var_os("UN_AVATAR_PROFILE_WARDROBE").is_some()
+}
+
+fn log_wardrobe_profile_step(step: &str, started: Instant) {
+	if wardrobe_profile_enabled() {
+		eprintln!(
+			"un-avatar-renderer: wardrobe profile step={step} elapsed={:.1}ms",
+			started.elapsed().as_secs_f64() * 1000.0
+		);
+	}
+}
+
 fn apply_unavatar_wardrobe_operations(
 	scene: &mut UnaSceneSnapshot,
 	dynamics: Option<&mut UnaRuntimeDynamicsMut<'_>>,
 	operations: &[Value],
 	unavatar: Option<&UnaUnavatarExtension>,
 ) -> WardrobeApplyReport {
-	let node_ids = scene_node_ids(scene);
-	let registry_paths = unavatar_node_registry_paths(unavatar);
-	let paths = scene_node_paths(scene);
-	let normalized_paths = scene_node_normalized_paths(scene);
+	let lookup = WardrobeLookupContext::new(scene, unavatar);
+	apply_unavatar_wardrobe_operations_with_lookup(scene, dynamics, operations, &lookup)
+}
+
+fn apply_unavatar_wardrobe_operations_with_lookup(
+	scene: &mut UnaSceneSnapshot,
+	dynamics: Option<&mut UnaRuntimeDynamicsMut<'_>>,
+	operations: &[Value],
+	lookup: &WardrobeLookupContext,
+) -> WardrobeApplyReport {
 	let mut report = WardrobeApplyReport::default();
 	let mut dynamics = dynamics;
 	for op in operations {
@@ -2593,7 +2710,7 @@ fn apply_unavatar_wardrobe_operations(
 				let Some(visible) = op.get("visible").and_then(|v| v.as_bool()) else {
 					continue;
 				};
-				let indices = lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op);
+				let indices = lookup_operation_subtree_targets_all_with_lookup(scene, lookup, op);
 				if !indices.is_empty() {
 					for idx in indices {
 						if let Some(node) = scene.nodes.get_mut(idx) {
@@ -2610,7 +2727,13 @@ fn apply_unavatar_wardrobe_operations(
 				let Some(visible) = op.get("visible").and_then(|v| v.as_bool()) else {
 					continue;
 				};
-				let indices = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+				let indices = lookup_operation_targets_all(
+					&lookup.node_ids,
+					&lookup.registry_paths,
+					&lookup.paths,
+					&lookup.normalized_paths,
+					op,
+				);
 				if !indices.is_empty() {
 					for idx in indices {
 						if let Some(node) = scene.nodes.get_mut(idx) {
@@ -2630,7 +2753,13 @@ fn apply_unavatar_wardrobe_operations(
 				let Some(name) = op.get("name").and_then(|v| v.as_str()) else {
 					continue;
 				};
-				if let Some(idx) = lookup_operation_target(&node_ids, &registry_paths, &paths, &normalized_paths, op) {
+				if let Some(idx) = lookup_operation_target(
+					&lookup.node_ids,
+					&lookup.registry_paths,
+					&lookup.paths,
+					&lookup.normalized_paths,
+					op,
+				) {
 					if apply_blend_shape_weight(scene, idx, name, value as f32) {
 						report.blendshape_applied += 1;
 					} else if value.abs() <= 0.001 {
@@ -4215,43 +4344,31 @@ fn current_state_operation_is_inherited_hidden_under_base(
 	})
 }
 
-fn base_operation_is_inherited_hidden_under_base(
+fn normalized_path_is_strict_descendant_of_any(path: &str, normalized_ancestors: &[String]) -> bool {
+	let path = normalize_unavatar_path(path);
+	normalized_ancestors
+		.iter()
+		.any(|ancestor| !ancestor.is_empty() && ancestor != &path && path.strip_prefix(ancestor).is_some_and(|rest| rest.starts_with('/')))
+}
+
+fn base_operation_is_inherited_hidden_under_base_resolved(
 	op: &Value,
-	base_hidden_paths: &[String],
-	node_ids: &BTreeMap<String, usize>,
-	registry_paths: &BTreeMap<String, String>,
-	paths: &BTreeMap<String, usize>,
-	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	base_hidden_normalized_paths: &[String],
+	resolved: &[usize],
 	paths_by_index: &[Option<String>],
 ) -> bool {
-	let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
-	if !matches!(
-		ty,
-		"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
-	) || op.get("visible").and_then(|v| v.as_bool()) != Some(false)
-	{
-		return false;
-	}
 	let path = operation_target_path(op);
 	if path.is_empty() {
 		return false;
 	}
-	let resolved = lookup_operation_targets_all(node_ids, registry_paths, paths, normalized_paths, op);
 	if resolved.is_empty() {
-		return base_hidden_paths.iter().any(|hidden| {
-			let hidden = normalize_unavatar_path(hidden);
-			let path = normalize_unavatar_path(path);
-			hidden != path && !hidden.is_empty() && path.starts_with(&format!("{hidden}/"))
-		});
+		return normalized_path_is_strict_descendant_of_any(path, base_hidden_normalized_paths);
 	}
 	resolved.iter().all(|idx| {
-		paths_by_index.get(*idx).and_then(|p| p.as_deref()).is_some_and(|resolved_path| {
-			base_hidden_paths.iter().any(|hidden| {
-				let hidden = normalize_unavatar_path(hidden);
-				let resolved_path = normalize_unavatar_path(resolved_path);
-				hidden != resolved_path && !hidden.is_empty() && resolved_path.starts_with(&format!("{hidden}/"))
-			})
-		})
+		paths_by_index
+			.get(*idx)
+			.and_then(|p| p.as_deref())
+			.is_some_and(|resolved_path| normalized_path_is_strict_descendant_of_any(resolved_path, base_hidden_normalized_paths))
 	})
 }
 
@@ -7035,10 +7152,16 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
 		return Err("document has no scene".to_string());
 	};
+	let lookup = WardrobeLookupContext::new(runtime.scene, Some(&unavatar));
+	let step_started = Instant::now();
 	reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
+	log_wardrobe_profile_step("reset_runtime_dynamics_enabled", step_started);
 	if base_id.as_deref() == Some(set_id) {
-		let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar)
+		let step_started = Instant::now();
+		let Some((base_operations, _skipped, reset_operations)) =
+			filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup)
 		else {
+			log_wardrobe_profile_step("filtered_base_operations_none", step_started);
 			drop(runtime);
 			document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 			document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
@@ -7046,42 +7169,73 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 				active_asset_groups: document.runtime_model().active_asset_groups().to_vec(),
 				..Default::default()
 			};
+			let step_started = Instant::now();
 			refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
+			log_wardrobe_profile_step("refresh_scoped_assets", step_started);
 			return Ok(report);
 		};
+		log_wardrobe_profile_step("filtered_base_operations", step_started);
+		let step_started = Instant::now();
 		reset_scene_visibility(runtime.scene);
-		let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
-		let mut report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
+		log_wardrobe_profile_step("reset_scene_visibility", step_started);
+		let step_started = Instant::now();
+		let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, &lookup);
+		log_wardrobe_profile_step("apply_base_reset_operations", step_started);
+		let step_started = Instant::now();
+		let mut report =
+			apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &base_operations, &lookup);
+		log_wardrobe_profile_step("apply_base_operations", step_started);
 		report.active_asset_groups = active_asset_groups.clone();
 		drop(runtime);
 		document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 		document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
+		let step_started = Instant::now();
 		refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
+		log_wardrobe_profile_step("refresh_scoped_assets", step_started);
 		return Ok(report);
 	}
 	if base_id.as_deref() != Some(set_id) {
-		if let Some((base_operations, _skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(runtime.scene, &unavatar) {
+		let step_started = Instant::now();
+		if let Some((base_operations, _skipped, reset_operations)) =
+			filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup)
+		{
+			log_wardrobe_profile_step("filtered_base_operations", step_started);
+			let step_started = Instant::now();
 			reset_scene_visibility(runtime.scene);
-			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, Some(&unavatar));
-			let _ = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), &base_operations, Some(&unavatar));
+			log_wardrobe_profile_step("reset_scene_visibility", step_started);
+			let step_started = Instant::now();
+			let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, &lookup);
+			log_wardrobe_profile_step("apply_base_reset_operations", step_started);
+			let step_started = Instant::now();
+			let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &base_operations, &lookup);
+			log_wardrobe_profile_step("apply_base_operations", step_started);
+		} else {
+			log_wardrobe_profile_step("filtered_base_operations_none", step_started);
 		}
 	}
-	let mut report = apply_unavatar_wardrobe_operations(runtime.scene, Some(&mut runtime.dynamics), operations, Some(&unavatar));
+	let step_started = Instant::now();
+	let mut report = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), operations, &lookup);
+	log_wardrobe_profile_step("apply_selected_operations", step_started);
 	report.active_asset_groups = active_asset_groups.clone();
 	drop(runtime);
 	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 	document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
+	let step_started = Instant::now();
 	refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
+	log_wardrobe_profile_step("refresh_scoped_assets", step_started);
 	Ok(report)
 }
 
 fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnavatarExtension, report: &mut ImportReport) {
-	let Some((filtered_operations, skipped, reset_operations)) = filtered_unavatar_base_wardrobe_operations(scene, unavatar) else {
+	let lookup = WardrobeLookupContext::new(scene, Some(unavatar));
+	let Some((filtered_operations, skipped, reset_operations)) =
+		filtered_unavatar_base_wardrobe_operations_with_lookup(scene, unavatar, &lookup)
+	else {
 		return;
 	};
 	reset_scene_visibility(scene);
-	let _ = apply_unavatar_wardrobe_operations(scene, None, &reset_operations, Some(unavatar));
-	let applied = apply_unavatar_wardrobe_operations(scene, None, &filtered_operations, Some(unavatar));
+	let _ = apply_unavatar_wardrobe_operations_with_lookup(scene, None, &reset_operations, &lookup);
+	let applied = apply_unavatar_wardrobe_operations_with_lookup(scene, None, &filtered_operations, &lookup);
 	if applied.visibility_applied > 0
 		|| applied.visibility_missing > 0
 		|| applied.blendshape_applied > 0
@@ -7274,48 +7428,38 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 		.collect()
 }
 
-fn filtered_unavatar_base_wardrobe_operations(
+fn filtered_unavatar_base_wardrobe_operations_with_lookup(
 	scene: &UnaSceneSnapshot,
 	unavatar: &UnaUnavatarExtension,
+	lookup: &WardrobeLookupContext,
 ) -> Option<(Vec<Value>, usize, Vec<Value>)> {
 	let (_, operations) = unavatar_base_wardrobe_set(unavatar)?;
-	let node_ids = scene_node_ids(scene);
-	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
-	let paths = scene_node_paths(scene);
-	let normalized_paths = scene_node_normalized_paths(scene);
-	let mut paths_by_index = vec![None; scene.nodes.len()];
-	for (path, idx) in &paths {
-		if let Some(slot) = paths_by_index.get_mut(*idx) {
-			*slot = Some(path.clone());
-		}
-	}
-	let mut parent_by_index = vec![None; scene.nodes.len()];
-	for (parent, node) in scene.nodes.iter().enumerate() {
-		for &child in &node.children {
-			if let Some(slot) = parent_by_index.get_mut(child) {
-				*slot = Some(parent);
+	let mut base_hidden_indices = BTreeSet::new();
+	let mut base_hidden_paths = Vec::new();
+	for op in operations
+		.iter()
+		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
+	{
+		let resolved = lookup_operation_subtree_targets_all_with_lookup(scene, lookup, op);
+		if resolved.is_empty() {
+			let path = operation_target_path(op);
+			if !path.is_empty() {
+				base_hidden_paths.push(path.to_string());
+			}
+		} else {
+			for idx in resolved {
+				base_hidden_indices.insert(idx);
+				if let Some(path) = lookup.paths_by_index.get(idx).and_then(|p| p.clone()) {
+					if !path.is_empty() {
+						base_hidden_paths.push(path);
+					}
+				}
 			}
 		}
 	}
-	let base_hidden_indices = operations
+	let base_hidden_normalized_paths = base_hidden_paths
 		.iter()
-		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
-		.flat_map(|op| lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op))
-		.collect::<BTreeSet<_>>();
-	let base_hidden_paths = operations
-		.iter()
-		.filter(|op| op.get("visible").and_then(|v| v.as_bool()) == Some(false))
-		.flat_map(|op| {
-			let resolved = lookup_operation_subtree_targets_all(scene, &node_ids, &registry_paths, &paths, &normalized_paths, op);
-			if resolved.is_empty() {
-				vec![operation_target_path(op).to_string()]
-			} else {
-				resolved
-					.into_iter()
-					.filter_map(|idx| paths_by_index.get(idx).and_then(|p| p.clone()))
-					.collect::<Vec<_>>()
-			}
-		})
+		.map(|path| normalize_unavatar_path(path))
 		.filter(|path| !path.is_empty())
 		.collect::<Vec<_>>();
 	let mut filtered_operations = Vec::with_capacity(operations.len());
@@ -7323,36 +7467,52 @@ fn filtered_unavatar_base_wardrobe_operations(
 	for op in operations {
 		let mut skip_inherited_hidden = false;
 		let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
-		if matches!(
+		let is_hidden_visibility = matches!(
 			ty,
 			"subtreeEnabled" | "subtreeVisibility" | "nodeEnabled" | "nodeVisibility" | "rendererEnabled" | "rendererVisibility"
-		) && op.get("visible").and_then(|v| v.as_bool()) == Some(false)
-		{
-			let resolved = lookup_operation_targets_all(&node_ids, &registry_paths, &paths, &normalized_paths, op);
+		) && op.get("visible").and_then(|v| v.as_bool()) == Some(false);
+		let mut resolved_visibility_targets = None;
+		if is_hidden_visibility {
+			let resolved = lookup_operation_targets_all(
+				&lookup.node_ids,
+				&lookup.registry_paths,
+				&lookup.paths,
+				&lookup.normalized_paths,
+				op,
+			);
 			if !resolved.is_empty()
 				&& resolved.iter().all(|idx| {
-					let mut parent = parent_by_index.get(*idx).copied().flatten();
+					let mut parent = lookup.parent_by_index.get(*idx).copied().flatten();
 					while let Some(parent_idx) = parent {
 						if base_hidden_indices.contains(&parent_idx) {
 							return true;
 						}
-						parent = parent_by_index.get(parent_idx).copied().flatten();
+						parent = lookup.parent_by_index.get(parent_idx).copied().flatten();
 					}
 					false
 				}) {
 				skip_inherited_hidden = true;
 			}
+			resolved_visibility_targets = Some(resolved);
 		}
 		if !skip_inherited_hidden {
-			skip_inherited_hidden = base_operation_is_inherited_hidden_under_base(
-				op,
-				&base_hidden_paths,
-				&node_ids,
-				&registry_paths,
-				&paths,
-				&normalized_paths,
-				&paths_by_index,
-			);
+			if is_hidden_visibility {
+				let resolved = resolved_visibility_targets.unwrap_or_else(|| {
+					lookup_operation_targets_all(
+						&lookup.node_ids,
+						&lookup.registry_paths,
+						&lookup.paths,
+						&lookup.normalized_paths,
+						op,
+					)
+				});
+				skip_inherited_hidden = base_operation_is_inherited_hidden_under_base_resolved(
+					op,
+					&base_hidden_normalized_paths,
+					&resolved,
+					&lookup.paths_by_index,
+				);
+			}
 		}
 		if skip_inherited_hidden {
 			let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
@@ -9667,7 +9827,7 @@ pub fn scene_snapshot_from_gltf(
 	image_data: Vec<gltf::image::Data>,
 	report: &mut ImportReport,
 ) -> Result<UnaSceneSnapshot, ImportError> {
-	scene_snapshot_from_gltf_inner(document, buffers, image_data, report, false)
+	scene_snapshot_from_gltf_inner(document, buffers, image_data, None, report, false)
 }
 
 pub fn scene_snapshot_from_gltf_profiled(
@@ -9676,7 +9836,7 @@ pub fn scene_snapshot_from_gltf_profiled(
 	image_data: Vec<gltf::image::Data>,
 	report: &mut ImportReport,
 ) -> Result<UnaSceneSnapshot, ImportError> {
-	scene_snapshot_from_gltf_inner(document, buffers, image_data, report, true)
+	scene_snapshot_from_gltf_inner(document, buffers, image_data, None, report, true)
 }
 
 fn log_scene_snapshot_profile_step(step: &str, started: Instant) {
@@ -9698,6 +9858,7 @@ fn scene_snapshot_from_gltf_inner(
 	document: &gltf::Document,
 	buffers: &[gltf::buffer::Data],
 	image_data: Vec<gltf::image::Data>,
+	precomputed_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>>,
 	report: &mut ImportReport,
 	profile: bool,
 ) -> Result<UnaSceneSnapshot, ImportError> {
@@ -9709,8 +9870,14 @@ fn scene_snapshot_from_gltf_inner(
 	record_scene_snapshot_profile_step(report, profile, "build_materials", step_started);
 
 	let step_started = Instant::now();
-	let image_sources = collect_image_source_metadata(document, buffers);
-	record_scene_snapshot_profile_step(report, profile, "collect_image_source_metadata", step_started);
+	let image_sources = if let Some(image_sources) = precomputed_image_sources {
+		record_scene_snapshot_profile_step(report, profile, "reuse_image_source_metadata", step_started);
+		image_sources
+	} else {
+		let image_sources = collect_image_source_metadata(document, buffers);
+		record_scene_snapshot_profile_step(report, profile, "collect_image_source_metadata", step_started);
+		image_sources
+	};
 	let step_started = Instant::now();
 	let images = collect_images(image_data, report).map_err(ImportError::Message)?;
 	record_scene_snapshot_profile_step(report, profile, "collect_images", step_started);
@@ -9916,7 +10083,7 @@ impl AvatarImporter for GltfImporter {
 						normalized_owned
 					));
 					let import_slice_started = Instant::now();
-					let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+					let imported = import_gltf_slice_parallel_images(import_bytes.as_ref())?;
 					import_profile_messages.push(format!(
 						"glTF import profile: gltf_import_slice_ms={}",
 						import_slice_started.elapsed().as_millis()
@@ -9990,7 +10157,7 @@ impl AvatarImporter for GltfImporter {
 					normalized_owned
 				));
 				let import_slice_started = Instant::now();
-				let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+				let imported = import_gltf_slice_parallel_images(import_bytes.as_ref())?;
 				import_profile_messages.push(format!(
 					"glTF import profile: gltf_import_slice_ms={}",
 					import_slice_started.elapsed().as_millis()
@@ -10012,14 +10179,11 @@ impl AvatarImporter for GltfImporter {
 		));
 
 		let scene_started = Instant::now();
-		let mut scene = scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?;
+		let mut scene = scene_snapshot_from_gltf_inner(&document, &buffers, image_data, original_image_sources.take(), &mut report, false)?;
 		report.push_info(format!(
 			"glTF import profile: scene_snapshot_ms={}",
 			scene_started.elapsed().as_millis()
 		));
-		if let Some(original_image_sources) = original_image_sources {
-			scene.image_sources = original_image_sources;
-		}
 		let mut texture_asset_map = BTreeMap::new();
 		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin.as_deref()) {
 			texture_asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);

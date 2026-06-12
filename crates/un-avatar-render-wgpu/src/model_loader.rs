@@ -151,6 +151,17 @@ fn log_import_report_warnings(report: &ImportReport) {
 	}
 }
 
+fn log_import_report_profile(report: &ImportReport) {
+	for message in &report.messages {
+		if message.starts_with("glTF import profile:")
+			|| message.starts_with("glTF scene profile:")
+			|| message.starts_with(".unavatar textureAssets:")
+		{
+			eprintln!("un-avatar-renderer: {message}");
+		}
+	}
+}
+
 pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
 	let set_id = require_wardrobe_set_id(wardrobe_set)?;
 	let report =
@@ -281,6 +292,9 @@ fn load_document_inner(
 		Ok(res) => {
 			let step_started = Instant::now();
 			log_import_report_warnings(&res.report);
+			if profile {
+				log_import_report_profile(&res.report);
+			}
 			if profile {
 				log_import_profile_step(path, "report_warnings", step_started);
 			}
