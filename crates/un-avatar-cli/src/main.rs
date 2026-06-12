@@ -1209,10 +1209,11 @@ fn import_probe_for_path(path: &Path, bytes: Option<Arc<[u8]>>) -> ImportProbe {
 
 fn import_input_for_path(path: &Path, format_id: &FormatId, bytes: Option<Arc<[u8]>>) -> ImportInput {
 	match (format_id.0.as_str(), bytes) {
-		("io.un-avatar.vrm" | "io.un-avatar.gltf", Some(bytes)) => ImportInput::Bytes {
+		("io.un-avatar.vrm", Some(bytes)) => ImportInput::Bytes {
 			bytes,
 			path_hint: Some(path.to_path_buf()),
 		},
+		("io.un-avatar.gltf", _) => ImportInput::Path(path.to_path_buf()),
 		_ => ImportInput::Path(path.to_path_buf()),
 	}
 }

@@ -408,6 +408,7 @@ fn append_unavatar_texture_assets(
 	bin: &[u8],
 	report: &mut ImportReport,
 ) -> BTreeMap<String, usize> {
+	let started = Instant::now();
 	let mut map = BTreeMap::new();
 	let Some(assets) = root
 		.get("extensions")
@@ -418,6 +419,8 @@ fn append_unavatar_texture_assets(
 	else {
 		return map;
 	};
+	let mut source_bytes = 0u64;
+	let mut decoded_pixels = 0u64;
 	for asset in assets {
 		let id = asset.get("id").and_then(Value::as_str).unwrap_or("");
 		if id.is_empty() {
@@ -443,6 +446,8 @@ fn append_unavatar_texture_assets(
 				continue;
 			}
 		};
+		source_bytes += bytes.len() as u64;
+		decoded_pixels += u64::from(decoded.width) * u64::from(decoded.height);
 		let image_index = scene.images.len();
 		scene.images.push(decoded);
 		scene.image_sources.push(Some(UnaImageSourceMetadata {
@@ -463,6 +468,13 @@ fn append_unavatar_texture_assets(
 		}));
 		map.insert(id.to_string(), image_index);
 	}
+	report.push_info(format!(
+		".unavatar textureAssets: decoded={} source_bytes={} decoded_pixels={} decode_ms={}",
+		map.len(),
+		source_bytes,
+		decoded_pixels,
+		started.elapsed().as_millis()
+	));
 	map
 }
 
@@ -2414,8 +2426,8 @@ fn expression_catalog_from_morph_target_names(
 					continue;
 				}
 				let exact_allowed = allowed_names.is_some_and(|allowed_names| allowed_names.contains(name));
-				let normalized_allowed = allowed_normalized_names
-					.is_some_and(|allowed_names| allowed_names.contains(&normalize_expression_match_key(name)));
+				let normalized_allowed =
+					allowed_normalized_names.is_some_and(|allowed_names| allowed_names.contains(&normalize_expression_match_key(name)));
 				if (allowed_names.is_some() || allowed_normalized_names.is_some()) && !exact_allowed && !normalized_allowed {
 					continue;
 				}
@@ -9866,47 +9878,128 @@ impl AvatarImporter for GltfImporter {
 		let mut root_json: Option<Value> = None;
 		let mut original_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>> = None;
 		let mut original_glb_bin: Option<Vec<u8>> = None;
+		let import_started = Instant::now();
+		let mut import_profile_messages = Vec::new();
 		let (path_hint, document, buffers, image_data) = match input {
 			ImportInput::Path(path) => {
 				let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
 				if matches!(extension.as_deref(), Some("unavatar" | "glb")) {
+					let read_started = Instant::now();
 					let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("{}: {e}", path.display())))?;
+					import_profile_messages.push(format!(
+						"glTF import profile: file_read_bytes={} file_read_ms={}",
+						bytes.len(),
+						read_started.elapsed().as_millis()
+					));
 					if bytes.starts_with(b"glTF") {
+						let glb_started = Instant::now();
 						let (root, bin) = read_glb_json_and_bin(&bytes)?;
+						import_profile_messages.push(format!(
+							"glTF import profile: glb_json_bin_copy_ms={} bin_bytes={}",
+							glb_started.elapsed().as_millis(),
+							bin.len()
+						));
+						let source_started = Instant::now();
 						original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin));
+						import_profile_messages.push(format!(
+							"glTF import profile: image_source_metadata_ms={}",
+							source_started.elapsed().as_millis()
+						));
 						original_glb_bin = Some(bin);
 						root_json = Some(root);
 					} else if extension.as_deref() == Some("unavatar") {
+						let json_started = Instant::now();
 						root_json = Some(gltf_root_json_from_bytes(&bytes)?);
+						import_profile_messages.push(format!("glTF import profile: root_json_ms={}", json_started.elapsed().as_millis()));
 					}
+					let normalize_started = Instant::now();
 					let import_bytes = normalize_webp_glb_for_gltf_import(&bytes)?;
+					let normalized_owned = matches!(&import_bytes, Cow::Owned(_));
+					import_profile_messages.push(format!(
+						"glTF import profile: webp_normalize_ms={} rebuilt_glb={}",
+						normalize_started.elapsed().as_millis(),
+						normalized_owned
+					));
+					let import_slice_started = Instant::now();
 					let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+					import_profile_messages.push(format!(
+						"glTF import profile: gltf_import_slice_ms={}",
+						import_slice_started.elapsed().as_millis()
+					));
 					(Some(path), imported.0, imported.1, imported.2)
 				} else if path
 					.extension()
 					.and_then(|e| e.to_str())
 					.is_some_and(|e| e.eq_ignore_ascii_case("gltf"))
 				{
+					let read_started = Instant::now();
 					let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("{}: {e}", path.display())))?;
+					import_profile_messages.push(format!(
+						"glTF import profile: file_read_bytes={} file_read_ms={}",
+						bytes.len(),
+						read_started.elapsed().as_millis()
+					));
+					let json_started = Instant::now();
 					root_json = Some(gltf_root_json_from_bytes(&bytes)?);
+					import_profile_messages.push(format!("glTF import profile: root_json_ms={}", json_started.elapsed().as_millis()));
+					let import_started = Instant::now();
 					let imported = gltf::import(&path).map_err(|e| ImportError::Message(e.to_string()))?;
+					import_profile_messages.push(format!(
+						"glTF import profile: gltf_import_path_ms={}",
+						import_started.elapsed().as_millis()
+					));
 					(Some(path), imported.0, imported.1, imported.2)
 				} else {
+					let import_started = Instant::now();
 					let imported = gltf::import(&path).map_err(|e| ImportError::Message(e.to_string()))?;
+					import_profile_messages.push(format!(
+						"glTF import profile: gltf_import_path_ms={}",
+						import_started.elapsed().as_millis()
+					));
 					(Some(path), imported.0, imported.1, imported.2)
 				}
 			}
 			ImportInput::Bytes { bytes, path_hint } => {
 				if bytes.as_ref().starts_with(b"glTF") {
+					let glb_started = Instant::now();
 					let (root, bin) = read_glb_json_and_bin(bytes.as_ref())?;
+					import_profile_messages.push(format!(
+						"glTF import profile: in_memory_bytes={} glb_json_bin_copy_ms={} bin_bytes={}",
+						bytes.len(),
+						glb_started.elapsed().as_millis(),
+						bin.len()
+					));
+					let source_started = Instant::now();
 					original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin));
+					import_profile_messages.push(format!(
+						"glTF import profile: image_source_metadata_ms={}",
+						source_started.elapsed().as_millis()
+					));
 					original_glb_bin = Some(bin);
 					root_json = Some(root);
 				} else {
+					let json_started = Instant::now();
 					root_json = Some(gltf_root_json_from_bytes(bytes.as_ref())?);
+					import_profile_messages.push(format!(
+						"glTF import profile: in_memory_bytes={} root_json_ms={}",
+						bytes.len(),
+						json_started.elapsed().as_millis()
+					));
 				}
+				let normalize_started = Instant::now();
 				let import_bytes = normalize_webp_glb_for_gltf_import(bytes.as_ref())?;
+				let normalized_owned = matches!(&import_bytes, Cow::Owned(_));
+				import_profile_messages.push(format!(
+					"glTF import profile: webp_normalize_ms={} rebuilt_glb={}",
+					normalize_started.elapsed().as_millis(),
+					normalized_owned
+				));
+				let import_slice_started = Instant::now();
 				let imported = gltf::import_slice(import_bytes.as_ref()).map_err(|e| ImportError::Message(e.to_string()))?;
+				import_profile_messages.push(format!(
+					"glTF import profile: gltf_import_slice_ms={}",
+					import_slice_started.elapsed().as_millis()
+				));
 				(path_hint, imported.0, imported.1, imported.2)
 			}
 		};
@@ -9915,8 +10008,20 @@ impl AvatarImporter for GltfImporter {
 			source_format: Some(self.descriptor().id.clone()),
 			..Default::default()
 		};
+		for message in import_profile_messages {
+			report.push_info(message);
+		}
+		report.push_info(format!(
+			"glTF import profile: pre_scene_import_ms={}",
+			import_started.elapsed().as_millis()
+		));
 
+		let scene_started = Instant::now();
 		let mut scene = scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?;
+		report.push_info(format!(
+			"glTF import profile: scene_snapshot_ms={}",
+			scene_started.elapsed().as_millis()
+		));
 		if let Some(original_image_sources) = original_image_sources {
 			scene.image_sources = original_image_sources;
 		}
@@ -10000,19 +10105,26 @@ impl AvatarImporter for GltfImporter {
 			report.push_info(format!(".unavatar: UN_avatar specVersion={}", unavatar.spec_version));
 		}
 
-		Ok(ImportResult {
-			document: UnaDocument {
-				scene: Some(scene),
-				unavatar,
-				humanoid_profile,
-				expression_weights: expression_catalog.as_ref().map(|_| UnaExpressionWeights::default()),
-				expression_catalog,
-				runtime_actions,
-				spring_bones,
-				..Default::default()
-			},
-			report,
-		})
+		let base_runtime_wardrobe = unavatar.as_ref().and_then(|unavatar| {
+			unavatar_base_wardrobe_set(unavatar)
+				.map(|(base_id, _)| (base_id.to_string(), unavatar_wardrobe_set_asset_groups(unavatar, base_id)))
+		});
+		let mut document = UnaDocument {
+			scene: Some(scene),
+			unavatar,
+			humanoid_profile,
+			expression_weights: expression_catalog.as_ref().map(|_| UnaExpressionWeights::default()),
+			expression_catalog,
+			runtime_actions,
+			spring_bones,
+			..Default::default()
+		};
+		if let Some((base_id, asset_groups)) = base_runtime_wardrobe {
+			document.runtime_model_mut().set_active_wardrobe_set(Some(base_id));
+			document.runtime_model_mut().set_active_asset_groups(asset_groups);
+		}
+
+		Ok(ImportResult { document, report })
 	}
 }
 

@@ -977,7 +977,7 @@ struct SceneAssetResidencySets {
 
 impl SceneAssetResidencySets {
 	fn for_scene(scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> Self {
-		if scene.asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
+		if scene.asset_group_ownership.is_empty() {
 			return Self {
 				all_resident: true,
 				..Default::default()
@@ -994,6 +994,10 @@ impl SceneAssetResidencySets {
 			sets.owned_materials.extend(group.materials.iter().copied());
 			sets.owned_images.extend(group.images.iter().copied());
 		}
+		if active_asset_groups.is_empty() {
+			sets.add_visible_scene_residency(scene);
+			return sets;
+		}
 		let selection = scene.scoped_asset_selection(active_asset_groups);
 		sets.resident_mesh_primitives.extend(
 			selection
@@ -1004,6 +1008,30 @@ impl SceneAssetResidencySets {
 		sets.resident_materials.extend(selection.materials);
 		sets.resident_images.extend(selection.images);
 		sets
+	}
+
+	fn add_visible_scene_residency(&mut self, scene: &UnaSceneSnapshot) {
+		for node in &scene.nodes {
+			if !node.visible {
+				continue;
+			}
+			let Some(mesh_index) = node.mesh else {
+				continue;
+			};
+			let Some(mesh) = scene.meshes.get(mesh_index) else {
+				continue;
+			};
+			for (primitive_index, primitive) in mesh.iter().enumerate() {
+				self.resident_mesh_primitives.insert((mesh_index, primitive_index));
+				let Some(material_index) = primitive.material_index else {
+					continue;
+				};
+				self.resident_materials.insert(material_index);
+				if let Some(material) = scene.materials.get(material_index) {
+					self.resident_images.extend(material_texture_indices(material));
+				}
+			}
+		}
 	}
 
 	fn mesh_primitive_resident(&self, mesh_index: usize, primitive_index: usize) -> bool {
@@ -9078,8 +9106,72 @@ mod tests {
 		assert!(residency.image_resident(0));
 		assert!(residency.image_resident(5));
 		assert!(!residency.image_resident(6));
-		let all_resident = SceneAssetResidencySets::for_scene(&scene, &[]);
-		assert!(all_resident.mesh_primitive_resident(2, 0));
+		let visible_fallback = SceneAssetResidencySets::for_scene(&scene, &[]);
+		assert!(!visible_fallback.mesh_primitive_resident(2, 0));
+	}
+
+	#[test]
+	fn mesh_primitive_asset_residency_uses_visible_fallback_without_active_groups() {
+		let scene = UnaSceneSnapshot {
+			meshes: vec![vec![un_avatar_core::UnaMeshBuffers {
+				name: None,
+				vertex_payload_id: None,
+				positions: vec![[0.0, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: None,
+				weights: None,
+				indices: None,
+				material_index: Some(2),
+				morph_targets: Vec::new(),
+				morph_target_names: Vec::new(),
+				default_morph_weights: Vec::new(),
+			}]],
+			materials: vec![
+				UnaMaterialPbr::default(),
+				UnaMaterialPbr::default(),
+				UnaMaterialPbr {
+					base_color_texture_index: Some(7),
+					..Default::default()
+				},
+			],
+			nodes: vec![un_avatar_core::UnaSceneNode {
+				name: None,
+				source_node_id: None,
+				resolved_node_id: None,
+				visible: true,
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: Vec::new(),
+				mesh: Some(0),
+				skin: None,
+				probe_anchor_node: None,
+				local_bounds: None,
+			}],
+			asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+				group_id: "outfit:hidden".to_string(),
+				mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+					mesh_index: 1,
+					primitive_index: 0,
+				}],
+				materials: vec![3],
+				images: vec![8],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let residency = SceneAssetResidencySets::for_scene(&scene, &[]);
+
+		assert!(residency.mesh_primitive_resident(0, 0));
+		assert!(!residency.mesh_primitive_resident(1, 0));
+		assert!(residency.material_resident(2));
+		assert!(!residency.material_resident(3));
+		assert!(residency.image_resident(7));
+		assert!(!residency.image_resident(8));
 	}
 
 	#[test]
