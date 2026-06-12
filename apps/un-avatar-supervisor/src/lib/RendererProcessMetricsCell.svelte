@@ -25,6 +25,12 @@
 		</div>
 	{/if}
 	<small>{$_("renderers.metrics.cpu")} {runtimeMetric(status?.cpu_ms, " ms")}</small>
+	<small
+		title={`total ${runtimeMetric(status?.frame_cpu_total_ms, " ms")} / motion ${runtimeMetric(status?.frame_motion_apply_ms, " ms")} / dynamics ${runtimeMetric(status?.frame_dynamics_step_ms, " ms")} / draw ${runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / encode ${runtimeMetric(status?.frame_command_encode_ms, " ms")} / submit ${runtimeMetric(status?.frame_submit_present_ms, " ms")} / spout ${runtimeMetric(status?.frame_spout_cpu_ms, " ms")} / contact ${runtimeMetric(status?.frame_contact_eval_ms, " ms")} / action ${runtimeMetric(status?.frame_runtime_action_eval_ms, " ms")}`}
+	>
+		frame {runtimeMetric(status?.frame_cpu_total_ms, " ms")} / draw {runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} /
+		enc {runtimeMetric(status?.frame_command_encode_ms, " ms")}
+	</small>
 	{#if startupLabel}
 		<div class="startup-progress" class:indeterminate={!status?.startup_progress || status.startup_progress[1] <= 0}>
 			<span style={`width: ${startupProgressPercent(status).toFixed(1)}%`}></span>

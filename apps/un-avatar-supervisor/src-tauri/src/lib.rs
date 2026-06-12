@@ -231,7 +231,16 @@ struct RendererRuntimeStatus {
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
 	frame_cpu_total_ms: Option<f32>,
+	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
+	frame_globals_ms: Option<f32>,
+	frame_surface_acquire_ms: Option<f32>,
+	frame_target_prepare_ms: Option<f32>,
+	frame_draw_state_refresh_ms: Option<f32>,
+	frame_bone_collider_debug_ms: Option<f32>,
+	frame_command_encode_ms: Option<f32>,
+	frame_submit_present_ms: Option<f32>,
+	frame_spout_cpu_ms: Option<f32>,
 	frame_contact_eval_ms: Option<f32>,
 	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
@@ -546,7 +555,25 @@ struct RendererRuntimeTelemetry {
 	#[serde(default)]
 	frame_cpu_total_ms: Option<f32>,
 	#[serde(default)]
+	frame_motion_apply_ms: Option<f32>,
+	#[serde(default)]
 	frame_dynamics_step_ms: Option<f32>,
+	#[serde(default)]
+	frame_globals_ms: Option<f32>,
+	#[serde(default)]
+	frame_surface_acquire_ms: Option<f32>,
+	#[serde(default)]
+	frame_target_prepare_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_state_refresh_ms: Option<f32>,
+	#[serde(default)]
+	frame_bone_collider_debug_ms: Option<f32>,
+	#[serde(default)]
+	frame_command_encode_ms: Option<f32>,
+	#[serde(default)]
+	frame_submit_present_ms: Option<f32>,
+	#[serde(default)]
+	frame_spout_cpu_ms: Option<f32>,
 	#[serde(default)]
 	frame_contact_eval_ms: Option<f32>,
 	#[serde(default)]
@@ -5775,7 +5802,16 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
 		frame_cpu_total_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_cpu_total_ms),
+		frame_motion_apply_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_motion_apply_ms),
 		frame_dynamics_step_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_dynamics_step_ms),
+		frame_globals_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_globals_ms),
+		frame_surface_acquire_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_surface_acquire_ms),
+		frame_target_prepare_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_target_prepare_ms),
+		frame_draw_state_refresh_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_state_refresh_ms),
+		frame_bone_collider_debug_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_bone_collider_debug_ms),
+		frame_command_encode_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_command_encode_ms),
+		frame_submit_present_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_submit_present_ms),
+		frame_spout_cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_spout_cpu_ms),
 		frame_contact_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_contact_eval_ms),
 		frame_runtime_action_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_runtime_action_eval_ms),
 		gpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.gpu_ms),

@@ -1555,7 +1555,16 @@ impl AvatarApp {
 			status.fps = Some(self.fps_smooth);
 			status.cpu_ms = Some(timings.cpu_record_ms);
 			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
+			status.frame_motion_apply_ms = Some(timings.motion_apply_ms);
 			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
+			status.frame_globals_ms = Some(timings.frame_globals_ms);
+			status.frame_surface_acquire_ms = Some(timings.surface_acquire_ms);
+			status.frame_target_prepare_ms = Some(timings.target_prepare_ms);
+			status.frame_draw_state_refresh_ms = Some(timings.draw_state_refresh_ms);
+			status.frame_bone_collider_debug_ms = Some(timings.bone_collider_debug_ms);
+			status.frame_command_encode_ms = Some(timings.command_encode_ms);
+			status.frame_submit_present_ms = Some(timings.submit_present_ms);
+			status.frame_spout_cpu_ms = Some(timings.spout_cpu_ms);
 			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
 			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
@@ -3518,7 +3527,16 @@ struct RendererRuntimeSnapshot {
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
 	frame_cpu_total_ms: Option<f32>,
+	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
+	frame_globals_ms: Option<f32>,
+	frame_surface_acquire_ms: Option<f32>,
+	frame_target_prepare_ms: Option<f32>,
+	frame_draw_state_refresh_ms: Option<f32>,
+	frame_bone_collider_debug_ms: Option<f32>,
+	frame_command_encode_ms: Option<f32>,
+	frame_submit_present_ms: Option<f32>,
+	frame_spout_cpu_ms: Option<f32>,
 	frame_contact_eval_ms: Option<f32>,
 	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
@@ -3754,7 +3772,16 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		fps: None,
 		cpu_ms: None,
 		frame_cpu_total_ms: None,
+		frame_motion_apply_ms: None,
 		frame_dynamics_step_ms: None,
+		frame_globals_ms: None,
+		frame_surface_acquire_ms: None,
+		frame_target_prepare_ms: None,
+		frame_draw_state_refresh_ms: None,
+		frame_bone_collider_debug_ms: None,
+		frame_command_encode_ms: None,
+		frame_submit_present_ms: None,
+		frame_spout_cpu_ms: None,
 		frame_contact_eval_ms: None,
 		frame_runtime_action_eval_ms: None,
 		gpu_ms: None,

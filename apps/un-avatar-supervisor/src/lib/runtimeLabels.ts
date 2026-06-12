@@ -81,7 +81,16 @@ export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 		fps: number | null;
 		cpu_ms: number | null;
 		frame_cpu_total_ms?: number | null;
+		frame_motion_apply_ms?: number | null;
 		frame_dynamics_step_ms?: number | null;
+		frame_globals_ms?: number | null;
+		frame_surface_acquire_ms?: number | null;
+		frame_target_prepare_ms?: number | null;
+		frame_draw_state_refresh_ms?: number | null;
+		frame_bone_collider_debug_ms?: number | null;
+		frame_command_encode_ms?: number | null;
+		frame_submit_present_ms?: number | null;
+		frame_spout_cpu_ms?: number | null;
 		frame_contact_eval_ms?: number | null;
 		frame_runtime_action_eval_ms?: number | null;
 		gpu_ms: number | null;

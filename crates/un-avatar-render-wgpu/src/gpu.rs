@@ -2218,7 +2218,16 @@ pub struct FrameTimings {
 	pub wall_since_last_ms: f32,
 	pub cpu_record_ms: f32,
 	pub cpu_total_ms: f32,
+	pub motion_apply_ms: f32,
 	pub dynamics_step_ms: f32,
+	pub frame_globals_ms: f32,
+	pub surface_acquire_ms: f32,
+	pub target_prepare_ms: f32,
+	pub draw_state_refresh_ms: f32,
+	pub bone_collider_debug_ms: f32,
+	pub command_encode_ms: f32,
+	pub submit_present_ms: f32,
+	pub spout_cpu_ms: f32,
 	pub contact_eval_ms: f32,
 	pub runtime_action_eval_ms: f32,
 	pub gpu_ms: f32,
@@ -6138,7 +6147,9 @@ impl GpuState {
 			}
 		}
 		let dt = wall_since_last.as_secs_f32();
+		let t_motion0 = Instant::now();
 		self.apply_pending_motion_frames();
+		let motion_apply_ms = t_motion0.elapsed().as_secs_f32() * 1000.0;
 		let t_dynamics0 = Instant::now();
 		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
@@ -6149,8 +6160,11 @@ impl GpuState {
 		}
 		let dynamics_step_ms = t_dynamics0.elapsed().as_secs_f32() * 1000.0;
 		let (gw, gh) = self.render_pixel_dims();
+		let t_globals0 = Instant::now();
 		self.write_frame_globals(gw, gh, true);
+		let frame_globals_ms = t_globals0.elapsed().as_secs_f32() * 1000.0;
 
+		let t_surface0 = Instant::now();
 		let frame = match self.surface.get_current_texture() {
 			wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
 			wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
@@ -6164,6 +6178,7 @@ impl GpuState {
 				return None;
 			}
 		};
+		let surface_acquire_ms = t_surface0.elapsed().as_secs_f32() * 1000.0;
 		let frame_width = frame.texture.width();
 		let frame_height = frame.texture.height();
 		if frame_width == 0 || frame_height == 0 {
@@ -6205,6 +6220,7 @@ impl GpuState {
 		let needs_screen_refraction = self.scene_meshes.as_ref().is_some_and(SceneMeshes::needs_screen_refraction);
 		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction;
 		let use_msaa = matches!(self.aa, AaMode::Msaa);
+		let t_target0 = Instant::now();
 		if use_post {
 			if let Some(post) = &mut self.post_process {
 				post.resize_to(&self.device, gw, gh, self.config.format);
@@ -6212,6 +6228,7 @@ impl GpuState {
 				self.post_process = Some(PostProcess::new(&self.device, gw, gh, self.config.format));
 			}
 		}
+		let target_prepare_ms = t_target0.elapsed().as_secs_f32() * 1000.0;
 		if needs_screen_refraction {
 			if let Some(grab) = &mut self.screen_grab_target {
 				grab.resize_to(&self.device, gw, gh, self.config.format);
@@ -6241,9 +6258,12 @@ impl GpuState {
 		let scene_pose_may_change =
 			self.dynamics_sim.is_some() || document_revision != self.applied_document_revision || expression_overrides_changed;
 		let mut world_scratch_current = false;
+		let t_draw_state0 = Instant::now();
 		if draw_scene && scene_pose_may_change {
 			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
 		}
+		let draw_state_refresh_ms = t_draw_state0.elapsed().as_secs_f32() * 1000.0;
+		let t_collider_debug0 = Instant::now();
 		if self.show_bone_colliders && draw_scene {
 			if world_scratch_current {
 				self.rebuild_bone_collider_debug_vertices_from_world();
@@ -6253,6 +6273,7 @@ impl GpuState {
 		} else {
 			self.bone_collider_vertex_count = 0;
 		}
+		let bone_collider_debug_ms = t_collider_debug0.elapsed().as_secs_f32() * 1000.0;
 
 		#[cfg(windows)]
 		let final_target_view = if use_spout {
@@ -6291,6 +6312,7 @@ impl GpuState {
 			(&swap_view, &self.depth_view)
 		};
 
+		let t_encode0 = Instant::now();
 		let mut encoder = self
 			.device
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
@@ -6594,12 +6616,16 @@ impl GpuState {
 
 		let t_before_submit = Instant::now();
 		self.queue.submit(std::iter::once(encoder.finish()));
+		let command_encode_ms = (t_before_submit - t_encode0).as_secs_f32() * 1000.0;
+		let mut submit_present_ms = t_before_submit.elapsed().as_secs_f32() * 1000.0;
 		if let (Some(ts), Some(idx)) = (self.gpu_timestamps.as_mut(), timestamp_write_idx) {
 			ts.after_submit(idx);
 		}
 
+		let mut spout_cpu_ms = 0.0;
 		#[cfg(windows)]
 		if use_spout {
+			let t_spout0 = Instant::now();
 			let sp = self.spout.as_mut().expect("spout is initialized while active");
 			// 1) 前フレーム以降に map が完了したスロットがあれば Spout2 に送る（非ブロッキング）。
 			sp.send_mapped_rgba(&self.device);
@@ -6618,15 +6644,27 @@ impl GpuState {
 				.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("spout-blit") });
 			sp.encode_blit(&mut enc3, &swap_view, clear_color);
 			self.queue.submit(std::iter::once(enc3.finish()));
+			spout_cpu_ms = t_spout0.elapsed().as_secs_f32() * 1000.0;
 		}
 
+		let t_present0 = Instant::now();
 		frame.present();
+		submit_present_ms += t_present0.elapsed().as_secs_f32() * 1000.0;
 
 		Some(FrameTimings {
 			wall_since_last_ms: wall_since_last.as_secs_f32() * 1000.0,
 			cpu_record_ms: (t_before_submit - t_cpu0).as_secs_f32() * 1000.0,
 			cpu_total_ms: t_cpu0.elapsed().as_secs_f32() * 1000.0,
+			motion_apply_ms,
 			dynamics_step_ms,
+			frame_globals_ms,
+			surface_acquire_ms,
+			target_prepare_ms,
+			draw_state_refresh_ms,
+			bone_collider_debug_ms,
+			command_encode_ms,
+			submit_present_ms,
+			spout_cpu_ms,
 			contact_eval_ms: 0.0,
 			runtime_action_eval_ms: 0.0,
 			gpu_ms: self.gpu_timestamps.as_ref().and_then(|ts| ts.last_gpu_ms()).unwrap_or(0.0),
