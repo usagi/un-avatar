@@ -3252,9 +3252,11 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	let unsupported_writeback_groups = runtime_dynamics_unsupported_writeback_group_count(status);
 	if unsupported_writeback_groups > 0 {
 		let samples = runtime_dynamics_unsupported_writeback_samples(status);
+		let candidate_joints = runtime_dynamics_unsupported_writeback_candidate_count(status);
 		warnings.push(format!(
-			"dynamics rotation_translation writeback is not implemented in the current solver; groups={}{}",
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={}{}",
 			unsupported_writeback_groups,
+			candidate_joints,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -3325,6 +3327,15 @@ fn runtime_dynamics_unsupported_writeback_samples(status: &RendererRuntimeSnapsh
 		.take(4)
 		.map(runtime_dynamics_group_sample_label)
 		.collect()
+}
+
+fn runtime_dynamics_unsupported_writeback_candidate_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode != un_avatar_core::UnaDynamicsWritebackMode::RotationOnly)
+		.map(|group| group.translation_writeback_candidate_count)
+		.sum()
 }
 
 fn runtime_dynamics_group_sample_label(group: &crate::gpu::RuntimeDynamicsGroupStatus) -> String {
@@ -5074,6 +5085,7 @@ mod tests {
 		));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
+			&& warning.contains("candidate_joints=1")
 			&& warning.contains("physbone:hair@root/hair")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")

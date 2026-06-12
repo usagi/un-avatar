@@ -2231,6 +2231,10 @@ fn dynamics_unsupported_writeback_samples(groups: &[DiagnoseDynamicsGroupSummary
 		.collect()
 }
 
+fn dynamics_translation_writeback_candidate_total(groups: &[&DiagnoseDynamicsGroupSummary]) -> usize {
+	groups.iter().map(|group| group.translation_writeback_candidate_count).sum()
+}
+
 fn dynamics_group_sample_label(group: &DiagnoseDynamicsGroupSummary) -> String {
 	let id = if group.source_id.is_empty() {
 		format!("group[{}]", group.index)
@@ -4413,9 +4417,11 @@ fn build_diagnose_report(
 	let unsupported_writeback_groups = dynamics_unsupported_writeback_groups(&dynamics_groups);
 	if !unsupported_writeback_groups.is_empty() {
 		let samples = dynamics_unsupported_writeback_samples(&dynamics_groups);
+		let candidate_joints = dynamics_translation_writeback_candidate_total(&unsupported_writeback_groups);
 		warnings.push(format!(
-			"dynamics rotation_translation writeback is not implemented in the current solver; groups={}{}",
+			"dynamics rotation_translation writeback is not implemented in the current solver; groups={} candidate_joints={}{}",
 			unsupported_writeback_groups.len(),
+			candidate_joints,
 			format_warning_samples(&samples)
 		));
 	}
@@ -7566,6 +7572,7 @@ mod tests {
 			.any(|w| w.contains("dynamics stretch limits are metadata-only in the current solver") && w.contains("physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics rotation_translation writeback is not implemented in the current solver")
+			&& w.contains("candidate_joints=1")
 			&& w.contains("physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
