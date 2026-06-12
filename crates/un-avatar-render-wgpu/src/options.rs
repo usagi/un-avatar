@@ -528,6 +528,8 @@ pub struct AvatarWindowOptions {
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
+	/// CLI benchmark: after startup completes, collect this many rendered frames, print timing summary, then exit.
+	pub bench_frames: Option<u32>,
 	/// VMC Marionette 待受 UDP アドレス。`Humanoid` とシーンがあるモデルで骨・式（名前一致時）を更新。
 	pub vmc_address: Option<SocketAddr>,
 	/// UNMotion/Zenoh 経由でのモーションフレーム受信設定 (Phase 2)。
@@ -675,6 +677,7 @@ impl Default for AvatarWindowOptions {
 			wardrobe_set: None,
 			icon_path: None,
 			show_fps_in_title: true,
+			bench_frames: None,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),
 			audio_link: AudioLinkOptions::default(),

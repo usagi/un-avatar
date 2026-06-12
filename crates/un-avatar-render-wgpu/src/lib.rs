@@ -1198,6 +1198,7 @@ struct AvatarApp {
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
+	frame_bench: Option<FrameBenchState>,
 	pending_surface_size: Option<(u32, u32)>,
 	last_resize_at: Option<Instant>,
 	right_dragging: bool,
@@ -1213,6 +1214,209 @@ struct AvatarApp {
 	close_hotkey: Option<CloseHotkey>,
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
+}
+
+#[derive(Clone, Debug)]
+struct FrameBenchState {
+	target_frames: u32,
+	warmup_frames: u32,
+	skipped_frames: u32,
+	frames: u32,
+	wall_ms: FrameBenchMetric,
+	cpu_record_ms: FrameBenchMetric,
+	cpu_record_no_surface_ms: FrameBenchMetric,
+	cpu_total_ms: FrameBenchMetric,
+	motion_apply_ms: FrameBenchMetric,
+	dynamics_step_ms: FrameBenchMetric,
+	frame_globals_ms: FrameBenchMetric,
+	surface_acquire_ms: FrameBenchMetric,
+	target_prepare_ms: FrameBenchMetric,
+	draw_state_refresh_ms: FrameBenchMetric,
+	draw_doc_lock_ms: FrameBenchMetric,
+	draw_expression_select_ms: FrameBenchMetric,
+	draw_update_total_ms: FrameBenchMetric,
+	scene_world_ms: FrameBenchMetric,
+	draw_skin_palette_ms: FrameBenchMetric,
+	draw_skin_palette_write_ms: FrameBenchMetric,
+	draw_fur_source_vertices_ms: FrameBenchMetric,
+	draw_expression_values_ms: FrameBenchMetric,
+	draw_morph_weights_ms: FrameBenchMetric,
+	draw_transform_loop_ms: FrameBenchMetric,
+	bone_collider_debug_ms: FrameBenchMetric,
+	command_encode_ms: FrameBenchMetric,
+	submit_present_ms: FrameBenchMetric,
+	spout_cpu_ms: FrameBenchMetric,
+	contact_eval_ms: FrameBenchMetric,
+	runtime_action_eval_ms: FrameBenchMetric,
+	gpu_ms: FrameBenchMetric,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameBenchMetric {
+	sum: f32,
+	max: f32,
+}
+
+impl FrameBenchMetric {
+	fn push(&mut self, value: f32) {
+		self.sum += value;
+		self.max = self.max.max(value);
+	}
+
+	fn avg(self, frames: u32) -> f32 {
+		if frames == 0 {
+			0.0
+		} else {
+			self.sum / frames as f32
+		}
+	}
+}
+
+impl FrameBenchState {
+	fn new(target_frames: u32) -> Self {
+		Self {
+			target_frames: target_frames.max(1),
+			warmup_frames: 5,
+			skipped_frames: 0,
+			frames: 0,
+			wall_ms: FrameBenchMetric::default(),
+			cpu_record_ms: FrameBenchMetric::default(),
+			cpu_record_no_surface_ms: FrameBenchMetric::default(),
+			cpu_total_ms: FrameBenchMetric::default(),
+			motion_apply_ms: FrameBenchMetric::default(),
+			dynamics_step_ms: FrameBenchMetric::default(),
+			frame_globals_ms: FrameBenchMetric::default(),
+			surface_acquire_ms: FrameBenchMetric::default(),
+			target_prepare_ms: FrameBenchMetric::default(),
+			draw_state_refresh_ms: FrameBenchMetric::default(),
+			draw_doc_lock_ms: FrameBenchMetric::default(),
+			draw_expression_select_ms: FrameBenchMetric::default(),
+			draw_update_total_ms: FrameBenchMetric::default(),
+			scene_world_ms: FrameBenchMetric::default(),
+			draw_skin_palette_ms: FrameBenchMetric::default(),
+			draw_skin_palette_write_ms: FrameBenchMetric::default(),
+			draw_fur_source_vertices_ms: FrameBenchMetric::default(),
+			draw_expression_values_ms: FrameBenchMetric::default(),
+			draw_morph_weights_ms: FrameBenchMetric::default(),
+			draw_transform_loop_ms: FrameBenchMetric::default(),
+			bone_collider_debug_ms: FrameBenchMetric::default(),
+			command_encode_ms: FrameBenchMetric::default(),
+			submit_present_ms: FrameBenchMetric::default(),
+			spout_cpu_ms: FrameBenchMetric::default(),
+			contact_eval_ms: FrameBenchMetric::default(),
+			runtime_action_eval_ms: FrameBenchMetric::default(),
+			gpu_ms: FrameBenchMetric::default(),
+		}
+	}
+
+	fn push(&mut self, timings: &FrameTimings) -> bool {
+		if self.skipped_frames < self.warmup_frames {
+			self.skipped_frames = self.skipped_frames.saturating_add(1);
+			return false;
+		}
+		self.frames = self.frames.saturating_add(1);
+		self.wall_ms.push(timings.wall_since_last_ms);
+		self.cpu_record_ms.push(timings.cpu_record_ms);
+		self.cpu_record_no_surface_ms
+			.push((timings.cpu_record_ms - timings.surface_acquire_ms).max(0.0));
+		self.cpu_total_ms.push(timings.cpu_total_ms);
+		self.motion_apply_ms.push(timings.motion_apply_ms);
+		self.dynamics_step_ms.push(timings.dynamics_step_ms);
+		self.frame_globals_ms.push(timings.frame_globals_ms);
+		self.surface_acquire_ms.push(timings.surface_acquire_ms);
+		self.target_prepare_ms.push(timings.target_prepare_ms);
+		self.draw_state_refresh_ms.push(timings.draw_state_refresh_ms);
+		self.draw_doc_lock_ms.push(timings.draw_doc_lock_ms);
+		self.draw_expression_select_ms.push(timings.draw_expression_select_ms);
+		self.draw_update_total_ms.push(timings.draw_update_total_ms);
+		self.scene_world_ms.push(timings.scene_world_ms);
+		self.draw_skin_palette_ms.push(timings.draw_skin_palette_ms);
+		self.draw_skin_palette_write_ms.push(timings.draw_skin_palette_write_ms);
+		self.draw_fur_source_vertices_ms.push(timings.draw_fur_source_vertices_ms);
+		self.draw_expression_values_ms.push(timings.draw_expression_values_ms);
+		self.draw_morph_weights_ms.push(timings.draw_morph_weights_ms);
+		self.draw_transform_loop_ms.push(timings.draw_transform_loop_ms);
+		self.bone_collider_debug_ms.push(timings.bone_collider_debug_ms);
+		self.command_encode_ms.push(timings.command_encode_ms);
+		self.submit_present_ms.push(timings.submit_present_ms);
+		self.spout_cpu_ms.push(timings.spout_cpu_ms);
+		self.contact_eval_ms.push(timings.contact_eval_ms);
+		self.runtime_action_eval_ms.push(timings.runtime_action_eval_ms);
+		self.gpu_ms.push(timings.gpu_ms);
+		self.frames >= self.target_frames
+	}
+
+	fn log_summary(&self) {
+		let frames = self.frames.max(1);
+		let fps = if self.wall_ms.avg(frames) > 0.01 {
+			1000.0 / self.wall_ms.avg(frames)
+		} else {
+			0.0
+		};
+		eprintln!(
+			"un-avatar-renderer: frame bench frames={} warmup={} fps_avg={:.1} wall_avg={:.2}ms wall_max={:.2}ms cpu_record_avg={:.2}ms cpu_record_max={:.2}ms cpu_no_surface_avg={:.2}ms cpu_no_surface_max={:.2}ms cpu_total_avg={:.2}ms cpu_total_max={:.2}ms gpu_avg={:.2}ms gpu_max={:.2}ms",
+			self.frames,
+			self.skipped_frames,
+			fps,
+			self.wall_ms.avg(frames),
+			self.wall_ms.max,
+			self.cpu_record_ms.avg(frames),
+			self.cpu_record_ms.max,
+			self.cpu_record_no_surface_ms.avg(frames),
+			self.cpu_record_no_surface_ms.max,
+			self.cpu_total_ms.avg(frames),
+			self.cpu_total_ms.max,
+			self.gpu_ms.avg(frames),
+			self.gpu_ms.max,
+		);
+		eprintln!(
+			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
+			self.motion_apply_ms.avg(frames),
+			self.motion_apply_ms.max,
+			self.dynamics_step_ms.avg(frames),
+			self.dynamics_step_ms.max,
+			self.frame_globals_ms.avg(frames),
+			self.frame_globals_ms.max,
+			self.surface_acquire_ms.avg(frames),
+			self.surface_acquire_ms.max,
+			self.target_prepare_ms.avg(frames),
+			self.target_prepare_ms.max,
+			self.draw_state_refresh_ms.avg(frames),
+			self.draw_state_refresh_ms.max,
+			self.draw_doc_lock_ms.avg(frames),
+			self.draw_doc_lock_ms.max,
+			self.draw_expression_select_ms.avg(frames),
+			self.draw_expression_select_ms.max,
+			self.draw_update_total_ms.avg(frames),
+			self.draw_update_total_ms.max,
+			self.scene_world_ms.avg(frames),
+			self.scene_world_ms.max,
+			self.draw_skin_palette_ms.avg(frames),
+			self.draw_skin_palette_ms.max,
+			self.draw_skin_palette_write_ms.avg(frames),
+			self.draw_skin_palette_write_ms.max,
+			self.draw_fur_source_vertices_ms.avg(frames),
+			self.draw_fur_source_vertices_ms.max,
+			self.draw_expression_values_ms.avg(frames),
+			self.draw_expression_values_ms.max,
+			self.draw_morph_weights_ms.avg(frames),
+			self.draw_morph_weights_ms.max,
+			self.draw_transform_loop_ms.avg(frames),
+			self.draw_transform_loop_ms.max,
+			self.bone_collider_debug_ms.avg(frames),
+			self.bone_collider_debug_ms.max,
+			self.command_encode_ms.avg(frames),
+			self.command_encode_ms.max,
+			self.submit_present_ms.avg(frames),
+			self.submit_present_ms.max,
+			self.spout_cpu_ms.avg(frames),
+			self.spout_cpu_ms.max,
+			self.contact_eval_ms.avg(frames),
+			self.contact_eval_ms.max,
+			self.runtime_action_eval_ms.avg(frames),
+			self.runtime_action_eval_ms.max,
+		);
+	}
 }
 
 impl AvatarApp {
@@ -1237,6 +1441,7 @@ impl AvatarApp {
 			}
 		};
 		let camera_locked = opts.camera_locked;
+		let frame_bench = opts.bench_frames.map(FrameBenchState::new);
 		Self {
 			opts,
 			title_base,
@@ -1255,6 +1460,7 @@ impl AvatarApp {
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
+			frame_bench,
 			pending_surface_size: None,
 			last_resize_at: None,
 			right_dragging: false,
@@ -2128,21 +2334,21 @@ impl AvatarApp {
 		}
 	}
 
-	fn render_frame(&mut self) {
+	fn render_frame(&mut self) -> bool {
 		let now = Instant::now();
 		let wall = now.saturating_duration_since(self.last_wall);
 		self.last_wall = now;
 
 		let Some(win) = self.window.as_ref().cloned() else {
-			return;
+			return false;
 		};
 		if self.apply_pending_reconfigure(now, win.as_ref()) {
 			win.request_redraw();
-			return;
+			return false;
 		}
 		self.advance_camera_transition(now);
 		let Some(gpu) = self.gpu.as_mut() else {
-			return;
+			return false;
 		};
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
@@ -2161,7 +2367,7 @@ impl AvatarApp {
 		};
 		let Some(mut timings) = gpu.render_frame(win.as_ref(), self.opts.clear_color, wall_clamped, startup_splash) else {
 			win.request_redraw();
-			return;
+			return false;
 		};
 		let (parameter_updates, runtime_parameter_activations) = {
 			let t_contact0 = Instant::now();
@@ -2227,7 +2433,17 @@ impl AvatarApp {
 			}
 		}
 
+		if self.startup_progress.is_none() && self.startup_failed.is_none() {
+			if let Some(bench) = self.frame_bench.as_mut() {
+				if bench.push(&timings) {
+					bench.log_summary();
+					return true;
+				}
+			}
+		}
+
 		win.request_redraw();
+		false
 	}
 
 	fn close_hotkey_matches(&self, key: &Key) -> bool {
@@ -2372,7 +2588,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.update_runtime_focus_status();
 			}
 			WindowEvent::RedrawRequested => {
-				self.render_frame();
+				if self.render_frame() {
+					event_loop.exit();
+				}
 			}
 			WindowEvent::MouseInput { state, button, .. } => {
 				if button == MouseButton::Left && state == ElementState::Pressed && !self.opts.decorations {
@@ -2961,7 +3179,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				total,
 				message,
 			} => {
-				self.set_startup_progress(phase, current, total, message);
+				if self.startup_pending_document {
+					self.set_startup_progress(phase, current, total, message);
+				}
 			}
 			RendererControlEvent::StartupReady { document, texture_summary } => {
 				if let Err(e) = self.start_async_scene_build(document, texture_summary) {
@@ -4433,6 +4653,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		ca: f64,
 		#[arg(long, help = "タイトルバーへの FPS・計測表示を出さない（ウィンドウタイトルは --title 固定）")]
 		no_fps_title: bool,
+		#[arg(long, value_name = "N", help = "ロード完了後 N フレームの timing を stderr へ出力して終了する")]
+		bench_frames: Option<u32>,
 		#[arg(
 			long,
 			value_name = "PATH",
@@ -4654,6 +4876,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		// CLI からは位置指定なし。manifest 経由で指定された場合のみ apply される。
 		window_position: None,
 		show_fps_in_title: !cli.no_fps_title,
+		bench_frames: cli.bench_frames,
 		gltf_path: cli.gltf,
 		wardrobe_set: cli.wardrobe_set,
 		icon_path: cli.icon,
@@ -4882,6 +5105,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if !cli.show_fps_in_title {
 		opts.show_fps_in_title = false;
+	}
+	if cli.bench_frames.is_some() {
+		opts.bench_frames = cli.bench_frames;
 	}
 	if cli.vmc_address.is_some() {
 		opts.vmc_address = cli.vmc_address;
