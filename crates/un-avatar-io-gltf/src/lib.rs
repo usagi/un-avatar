@@ -10221,6 +10221,7 @@ struct PrimitiveVertexPayload {
 #[derive(Clone, Copy, Debug, Default)]
 struct PrimitiveReadProfile {
 	cache_clone: Duration,
+	cache_take: Duration,
 	positions: Duration,
 	joints_weights: Duration,
 	attributes: Duration,
@@ -10233,6 +10234,7 @@ struct PrimitiveReadProfile {
 impl PrimitiveReadProfile {
 	fn add(&mut self, other: Self) {
 		self.cache_clone += other.cache_clone;
+		self.cache_take += other.cache_take;
 		self.positions += other.positions;
 		self.joints_weights += other.joints_weights;
 		self.attributes += other.attributes;
@@ -10325,6 +10327,7 @@ fn read_primitive(
 	mesh_target_names: &[String],
 	payload_key: PrimitiveVertexPayloadKey,
 	vertex_payload_id: Option<u64>,
+	vertex_payload_cache_last_use: bool,
 	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
 	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	cache_config: PrimitiveVertexPayloadCacheConfig,
@@ -10343,21 +10346,35 @@ fn read_primitive(
 	let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.as_ref()));
 	if cache_reusable {
 		let cache_clone_started = Instant::now();
-		if let Some(payload) = vertex_payload_cache.get(&payload_key).cloned() {
-			let cache_clone = cache_clone_started.elapsed();
+		let payload = if vertex_payload_cache_last_use {
+			vertex_payload_cache.remove(&payload_key).map(|payload| (payload, true))
+		} else {
+			vertex_payload_cache.get(&payload_key).cloned().map(|payload| (payload, false))
+		};
+		if let Some((payload, cache_take)) = payload {
+			let cache_elapsed = cache_clone_started.elapsed();
 			let indices_started = Instant::now();
 			let indices = reader.read_indices().map(|idx| idx.into_u32().collect());
 			let indices_elapsed = indices_started.elapsed();
 			let material_index = prim.material().index();
+			let profile = if cache_take {
+				PrimitiveReadProfile {
+					cache_take: cache_elapsed,
+					indices: indices_elapsed,
+					..Default::default()
+				}
+			} else {
+				PrimitiveReadProfile {
+					cache_clone: cache_elapsed,
+					indices: indices_elapsed,
+					..Default::default()
+				}
+			};
 			return Ok(Some((
 				mesh_buffers_from_vertex_payload(payload, indices, material_index, vertex_payload_id),
 				true,
 				cache_reusable,
-				PrimitiveReadProfile {
-					cache_clone,
-					indices: indices_elapsed,
-					..Default::default()
-				},
+				profile,
 			)));
 		}
 	}
@@ -10497,7 +10514,7 @@ fn read_primitive(
 		default_morph_weights,
 	};
 	let cache_insert_started = Instant::now();
-	if cache_reusable {
+	if cache_reusable && !vertex_payload_cache_last_use {
 		vertex_payload_cache.insert(payload_key, payload.clone());
 	}
 	let cache_insert_elapsed = cache_insert_started.elapsed();
@@ -10670,6 +10687,7 @@ fn scene_snapshot_from_gltf_inner(
 		}
 	}
 	let mut vertex_payload_cache = BTreeMap::new();
+	let mut vertex_payload_remaining_counts = vertex_payload_key_counts.clone();
 	let mut mesh_primitive_count = 0usize;
 	let mut mesh_cacheable_primitive_count = 0usize;
 	let mut mesh_vertex_payload_cache_hits = 0usize;
@@ -10686,6 +10704,13 @@ fn scene_snapshot_from_gltf_inner(
 			let primitive_index = prim.index();
 			let payload_key = primitive_vertex_payload_key(&prim, mw, &target_names);
 			let vertex_payload_id = vertex_payload_key_ids.get(&payload_key).copied();
+			let vertex_payload_cache_last_use = if vertex_payload_id.is_some() {
+				let remaining = vertex_payload_remaining_counts.entry(payload_key.clone()).or_default();
+				*remaining = remaining.saturating_sub(1);
+				*remaining == 0
+			} else {
+				false
+			};
 			if let Some((buf, cache_hit, cacheable, primitive_profile)) = read_primitive(
 				prim,
 				buffers,
@@ -10693,6 +10718,7 @@ fn scene_snapshot_from_gltf_inner(
 				&target_names,
 				payload_key,
 				vertex_payload_id,
+				vertex_payload_cache_last_use,
 				&mut vertex_payload_cache,
 				&vertex_payload_key_counts,
 				vertex_payload_cache_config,
@@ -10725,8 +10751,9 @@ fn scene_snapshot_from_gltf_inner(
 		"glTF scene profile: read_meshes.primitives={mesh_primitive_count} cacheable={mesh_cacheable_primitive_count} vertex_payload_cache_hits={mesh_vertex_payload_cache_hits} vertices={mesh_vertex_count} indices={mesh_index_count} morph_targets={mesh_morph_target_count}"
 	));
 	report.push_info(format!(
-		"glTF scene profile: read_meshes.stage_ms cache_clone={} positions={} joints_weights={} attributes={} indices={} morphs={} defaults={} cache_insert={}",
+		"glTF scene profile: read_meshes.stage_ms cache_clone={} cache_take={} positions={} joints_weights={} attributes={} indices={} morphs={} defaults={} cache_insert={}",
 		mesh_read_profile.cache_clone.as_millis(),
+		mesh_read_profile.cache_take.as_millis(),
 		mesh_read_profile.positions.as_millis(),
 		mesh_read_profile.joints_weights.as_millis(),
 		mesh_read_profile.attributes.as_millis(),
