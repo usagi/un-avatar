@@ -1932,6 +1932,10 @@
 			message = $_("profiles.messages.thumbnail_requires_tauri");
 			return;
 		}
+		if (looksLikeUnavatarPath(avatarPath)) {
+			await openUnavatarProfileIconPicker(avatarPath, settingId, rendererToRestart);
+			return;
+		}
 		if (manageBusy) busy = true;
 		try {
 			message = $_("profiles.messages.saving_thumbnail_icon");
@@ -1948,6 +1952,71 @@
 			if (!manageBusy) throw error;
 		} finally {
 			if (manageBusy) busy = false;
+		}
+	}
+
+	async function openUnavatarProfileIconPicker(
+		avatarPath: string,
+		settingId: string,
+		rendererToRestart: RendererInstance | null
+	): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = $_("profiles.messages.thumbnail_requires_tauri");
+			return;
+		}
+		busy = true;
+		try {
+			const metadata = await readUnavatarMetadataForPath(avatarPath, selectedSetting);
+			const firstPreview = metadata?.preview_images[0]?.data_url ?? metadata?.preview_sets[0]?.preview_images[0]?.data_url ?? null;
+			if (!metadata || !firstPreview) {
+				message = $_("profiles.messages.no_unavatar_preview_icon");
+				return;
+			}
+			unavatarProfileIconCrop = {
+				enabled: false,
+				imageDataUrl: firstPreview,
+				zoom: 1,
+				offsetX: 0,
+				offsetY: 0,
+			};
+			unavatarMetadataModal = {
+				metadata,
+				pendingPath: null,
+				settingId,
+				rendererToRestart,
+				iconSelectionOnly: true,
+			};
+			message = $_("profiles.messages.choose_unavatar_sample_icon");
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function saveUnavatarProfileIconFromModal(): Promise<void> {
+		const modal = unavatarMetadataModal;
+		if (!modal || !unavatarProfileIconCrop.enabled || !unavatarProfileIconCrop.imageDataUrl) return;
+		busy = true;
+		try {
+			const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
+				settingId: modal.settingId,
+				imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
+				crop: {
+					zoom: Number(unavatarProfileIconCrop.zoom) || 1,
+					offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
+					offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
+				},
+			});
+			unavatarMetadataModal = null;
+			replaceAvatarSetting(setting);
+			bumpProfileIconRevision(setting.icon_path);
+			queueRendererRestart(modal.rendererToRestart, "icon_path");
+			message = $_("profiles.messages.updated_thumbnail_icon");
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
 		}
 	}
 
@@ -3297,6 +3366,7 @@
 			bind:profileIconCrop={unavatarProfileIconCrop}
 			onClose={closeUnavatarMetadataModal}
 			onAcceptAndUse={acceptUnavatarMetadataAndUse}
+			onSaveProfileIcon={saveUnavatarProfileIconFromModal}
 		/>
 	{/if}
 </main>

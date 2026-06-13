@@ -30,6 +30,7 @@ export type UnavatarPreviewSet = {
 export type UnavatarMetadataDialogState = {
 	metadata: UnavatarMetadataInfo;
 	pendingPath: string | null;
+	iconSelectionOnly?: boolean;
 };
 
 export type UnavatarProfileIconCrop = {

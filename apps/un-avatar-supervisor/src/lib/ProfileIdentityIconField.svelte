@@ -2,12 +2,16 @@
 	import { _ } from "svelte-i18n";
 	import { FolderOpen } from "lucide-svelte";
 	import type { IdentitySetting, ProfileSettingValue } from "./profileTypes";
+	import { looksLikeUnavatarPath } from "./unavatarMetadata";
 
 	export let setting: Pick<IdentitySetting, "icon_path" | "avatar_path">;
 	export let busy = false;
 	export let onBrowseIcon: () => void | Promise<void>;
 	export let onApplyAvatarThumbnail: () => void | Promise<void>;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
+
+	$: avatarPath = setting.avatar_path ?? "";
+	$: isUnavatar = looksLikeUnavatarPath(avatarPath);
 </script>
 
 <div class="path-field icon-path-field" data-hint={$_("profiles.hints.identity.icon")}>
@@ -24,8 +28,9 @@
 	<button
 		type="button"
 		class="field-button thumbnail-icon-button"
-		disabled={busy || !setting.avatar_path}
+		disabled={busy || !avatarPath}
 		onclick={() => onApplyAvatarThumbnail()}
-		title={$_("profiles.editor.load_avatar_thumbnail_icon_hint")}>{$_("profiles.editor.load_avatar_thumbnail_icon")}</button
+		title={isUnavatar ? $_("profiles.editor.choose_unavatar_sample_icon_hint") : $_("profiles.editor.load_avatar_thumbnail_icon_hint")}
+		>{isUnavatar ? $_("profiles.editor.choose_unavatar_sample_icon") : $_("profiles.editor.load_avatar_thumbnail_icon")}</button
 	>
 </div>

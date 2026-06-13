@@ -7,6 +7,7 @@
 	export let profileIconCrop: UnavatarProfileIconCrop;
 	export let onClose: () => void | Promise<void>;
 	export let onAcceptAndUse: () => void | Promise<void>;
+	export let onSaveProfileIcon: () => void | Promise<void>;
 
 	$: metadata = modal.metadata;
 	$: title = metadata.name?.trim() || metadata.file_name;
@@ -114,7 +115,7 @@
 						src={selectedPreview.data_url}
 						alt=""
 					/>
-					{#if modal.pendingPath && profileIconCrop.enabled}
+					{#if selectedPreview && profileIconCrop.enabled}
 						<span
 							class="unavatar-icon-mask"
 							style={`width: ${maskSize}; left: ${maskLeft}; top: ${maskTop};`}
@@ -125,7 +126,7 @@
 			{:else}
 				<div class="vrm-metadata-sigil">UN</div>
 			{/if}
-			{#if modal.pendingPath && selectedPreview}
+			{#if selectedPreview}
 				<div class="unavatar-icon-crop-panel">
 					<label class="unavatar-icon-crop-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
 						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
@@ -203,6 +204,8 @@
 				<button class="secondary" onclick={() => onClose()}>{modal.pendingPath ? $_("common.cancel") : $_("common.close")}</button>
 				{#if modal.pendingPath}
 					<button class="primary" disabled={busy} onclick={() => onAcceptAndUse()}>{$_("unavatar_rights.accept_and_use")}</button>
+				{:else if modal.iconSelectionOnly}
+					<button class="primary" disabled={busy || !profileIconCrop.enabled || !profileIconCrop.imageDataUrl} onclick={() => onSaveProfileIcon()}>{$_("unavatar_rights.save_profile_icon")}</button>
 				{/if}
 			</footer>
 		</div>
