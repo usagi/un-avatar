@@ -12511,6 +12511,78 @@ mod tests {
 	}
 
 	#[test]
+	fn imports_unavatar_texture_asset_from_path_without_retaining_encoded_bytes() {
+		let mut png = Vec::new();
+		image::codecs::png::PngEncoder::new(&mut png)
+			.write_image(&[8, 16, 24, 255], 1, 1, image::ColorType::Rgba8.into())
+			.unwrap();
+		let mut bin = vec![0; 12];
+		let png_offset = bin.len();
+		bin.extend_from_slice(&png);
+		let json = format!(
+			r#"{{
+				"asset": {{"version": "2.0"}},
+				"scene": 0,
+				"scenes": [{{"nodes": [0]}}],
+				"meshes": [{{
+					"primitives": [{{
+						"attributes": {{"POSITION": 0}}
+					}}]
+				}}],
+				"accessors": [
+					{{"bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3", "min": [0, 0, 0], "max": [0, 0, 0]}}
+				],
+				"bufferViews": [
+					{{"buffer": 0, "byteOffset": 0, "byteLength": 12}},
+					{{"buffer": 0, "byteOffset": {png_offset}, "byteLength": {png_len}}}
+				],
+				"buffers": [{{"byteLength": {bin_len}}}],
+				"nodes": [
+					{{"name": "root", "mesh": 0}}
+				],
+				"extensionsUsed": ["UN_avatar"],
+				"extensions": {{
+					"UN_avatar": {{
+						"specVersion": "0.1-preview",
+						"textureAssets": [{{
+							"id": "mask-png",
+							"name": "mask",
+							"mimeType": "image/png",
+							"bufferView": 1
+						}}]
+					}}
+				}}
+			}}"#,
+			png_offset = png_offset,
+			png_len = png.len(),
+			bin_len = bin.len()
+		);
+		let bytes = glb_bytes_with_bin(&json, &bin);
+		let path = std::env::temp_dir().join(format!("un-avatar-texture-asset-path-{}.unavatar", std::process::id()));
+		std::fs::write(&path, bytes).unwrap();
+
+		let imp = GltfImporter;
+		let mut ctx = ImportContext::dummy();
+		let got = imp.import(&mut ctx, ImportInput::Path(path.clone()), ImportOptions).unwrap();
+		let _ = std::fs::remove_file(&path);
+
+		let scene = got.document.scene.as_ref().unwrap();
+		assert_eq!(scene.images.len(), 1);
+		assert_eq!(scene.images[0].pixels, vec![8, 16, 24, 255]);
+		let source = scene.image_sources[0].as_ref().unwrap();
+		assert_eq!(source.source_file_path.as_deref(), Some(path.as_path()));
+		assert!(source.byte_offset.is_some());
+		assert_eq!(source.byte_length, png.len() as u64);
+		assert_eq!(source.source_hash, source_hash64(&png));
+		assert!(source.encoded_bytes.is_none());
+		assert!(got
+			.report
+			.messages
+			.iter()
+			.any(|message| message.contains(".unavatar textureAssets:") && message.contains("file_backed=true")));
+	}
+
+	#[test]
 	fn imports_unavatar_reflection_texture_asset_ref() {
 		let exr_image = image::Rgba32FImage::from_raw(1, 1, vec![1.0, 0.5, 0.25, 1.0]).unwrap();
 		let mut exr = Vec::new();
