@@ -651,9 +651,7 @@ fn sort_dedup_string_index_lookup(entries: &mut StringIndexLookup) {
 }
 
 fn precompute_root_base(input: RetargetCompileInput<'_>) -> Option<NodeTransformBinding> {
-	let Some(scene) = input.scene else {
-		return None;
-	};
+	let scene = input.scene?;
 	let roots = scene.resolved_roots();
 	let node_index = *roots.first()?;
 	node_base_transform_from_scene(scene, input.rest_nodes, node_index).map(|base| NodeTransformBinding { node_index, base })
