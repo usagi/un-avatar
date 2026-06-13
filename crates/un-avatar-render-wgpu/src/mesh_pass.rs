@@ -1664,7 +1664,9 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 			push_texture_index(&mut indices, liltoon.dissolve.mask_texture_index);
 			push_texture_index(&mut indices, liltoon.dissolve.noise_mask_texture_index);
 		}
-		push_texture_index(&mut indices, liltoon.parallax.texture_index);
+		if lil_enabled(liltoon.parallax.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.parallax.texture_index);
+		}
 		if lil_enabled(liltoon.fur.enabled_factor) {
 			push_texture_index(&mut indices, liltoon.fur.vector_texture_index);
 			push_texture_index(&mut indices, liltoon.fur.length_mask_texture_index);
@@ -2210,7 +2212,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			main_layers,
 			alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
 			dissolve: has_dissolve,
-			parallax: liltoon_like.parallax.enabled_factor > 0.5 || liltoon_like.parallax.texture_index.is_some(),
+			parallax: lil_enabled(liltoon_like.parallax.enabled_factor),
 			id_mask: liltoon_like.id_mask.compile_factor > 0.5,
 			udim_discard: liltoon_like.udim_discard.compile_factor > 0.5,
 			audio_link: material_needs_audio_link_texture(material, shading),
@@ -6992,10 +6994,7 @@ fn mesh_draw_material_gpu_with_profiles(
 	let parallax_params = liltoon_like
 		.map(|u| {
 			[
-				u.parallax
-					.enabled_factor
-					.max(if u.parallax.texture_index.is_some() { 1.0 } else { 0.0 })
-					.clamp(0.0, 1.0),
+				u.parallax.enabled_factor.clamp(0.0, 1.0),
 				u.parallax.pom_enabled_factor.clamp(0.0, 1.0),
 				u.parallax.scale_factor,
 				u.parallax.offset_factor,
@@ -11222,6 +11221,7 @@ mod tests {
 		liltoon.fur.mask_texture_index = Some(13);
 		liltoon.reflection.cube_texture_index = Some(14);
 		liltoon.reflection.cube_override_factor = 1.0;
+		liltoon.parallax.texture_index = Some(15);
 		let mut mat = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			base_color_texture_index: Some(3),
@@ -11237,8 +11237,9 @@ mod tests {
 		liltoon.emission.enabled_factor = 1.0;
 		liltoon.fur.enabled_factor = 1.0;
 		liltoon.reflection.enabled_factor = 1.0;
+		liltoon.parallax.enabled_factor = 1.0;
 
-		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13]);
+		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13, 15]);
 		assert_eq!(material_cube_texture_indices(&mat), vec![14]);
 	}
 
@@ -11255,6 +11256,7 @@ mod tests {
 		liltoon.backlight.texture_index = Some(16);
 		liltoon.glitter.color_texture_index = Some(17);
 		liltoon.normal.second_texture_index = Some(18);
+		liltoon.parallax.texture_index = Some(19);
 		let mut mat = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon),
@@ -11271,6 +11273,7 @@ mod tests {
 		assert!(!features.backlight);
 		assert!(!features.glitter);
 		assert!(!features.normal_second);
+		assert!(!features.parallax);
 
 		let liltoon = mat.liltoon_like.as_mut().unwrap();
 		liltoon.shadow.enabled_factor = 1.0;
@@ -11282,6 +11285,7 @@ mod tests {
 		liltoon.backlight.enabled_factor = 1.0;
 		liltoon.glitter.enabled_factor = 1.0;
 		liltoon.normal.second_enabled_factor = 1.0;
+		liltoon.parallax.enabled_factor = 1.0;
 
 		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
 		assert!(features.shadow_layers);
@@ -11293,6 +11297,7 @@ mod tests {
 		assert!(features.backlight);
 		assert!(features.glitter);
 		assert!(features.normal_second);
+		assert!(features.parallax);
 	}
 
 	#[test]
@@ -13836,6 +13841,7 @@ mod tests {
 	#[test]
 	fn liltoon_source_reflection_cube_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.reflection.enabled_factor = 1.0;
 		liltoon_like.reflection.cube_texture_index = Some(7);
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like.clone()),
