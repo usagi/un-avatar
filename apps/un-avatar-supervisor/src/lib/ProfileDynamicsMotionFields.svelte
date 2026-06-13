@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import ProfileSpringBoneOverrides from "./ProfileSpringBoneOverrides.svelte";
+	import ProfileDynamicsOverrides from "./ProfileDynamicsOverrides.svelte";
 	import ProfileToggleField from "./ProfileToggleField.svelte";
 	import type { MotionSetting, ProfileSettingValue } from "./profileTypes";
 
@@ -38,9 +38,9 @@
 		checked={setting.contact_parameter_emission}
 		onChange={(checked) => onUpdateSettingValue("physics.contacts.parameter_emission", checked)}
 	/>
-	<ProfileSpringBoneOverrides
+	<ProfileDynamicsOverrides
 		overrides={setting.spring_bone_category_overrides}
-		springBonesEnabled={setting.spring_bones}
+		dynamicsEnabled={setting.spring_bones}
 		{busy}
 		{onUpdateSettingValue}
 	/>

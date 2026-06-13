@@ -2,9 +2,9 @@
 	import type { MotionSetting, ProfileSettingValue } from "./profileTypes";
 	import { _ } from "svelte-i18n";
 	import ProfileBoneColliderSettings from "./ProfileBoneColliderSettings.svelte";
+	import ProfileDynamicsMotionFields from "./ProfileDynamicsMotionFields.svelte";
 	import ProfileLookAtMotionFields from "./ProfileLookAtMotionFields.svelte";
 	import ProfileMotionChannels from "./ProfileMotionChannels.svelte";
-	import ProfileSpringBoneMotionFields from "./ProfileSpringBoneMotionFields.svelte";
 
 	export let setting: MotionSetting;
 	export let busy = false;
@@ -26,6 +26,6 @@
 
 	<ProfileLookAtMotionFields {setting} {busy} {onUpdateSettingValue} />
 
-	<ProfileSpringBoneMotionFields {setting} {busy} {onUpdateSettingValue} />
+	<ProfileDynamicsMotionFields {setting} {busy} {onUpdateSettingValue} />
 	<ProfileBoneColliderSettings {setting} {busy} {onUpdateSettingValue} />
 </section>

@@ -1,4 +1,4 @@
-export type SpringBoneCategoryOverrideSetting = {
+export type DynamicsCategoryOverrideSetting = {
 	category: string;
 	name: string;
 	mode: "authored" | "override_verlet" | "override_xpbd";
@@ -16,13 +16,13 @@ export type SpringBoneCategoryOverrideSetting = {
 	authored_xpbd_compliance: number;
 };
 
-export const SPRING_BONE_MODE_OPTIONS = [
+export const DYNAMICS_MODE_OPTIONS = [
 	["authored", "profiles.editor.spring_bone_mode_authored_verlet"],
 	["override_verlet", "profiles.editor.spring_bone_mode_override_verlet"],
 	["override_xpbd", "profiles.editor.spring_bone_mode_override_xpbd"],
 ] as const;
 
-export const SPRING_BONE_DAMPING_FIELD = {
+export const DYNAMICS_DAMPING_FIELD = {
 	key: "damping_half_life_ms",
 	labelKey: "profiles.editor.spring_bone_damping",
 	hintKey: "profiles.editor.spring_bone_damping_hint",
@@ -31,7 +31,7 @@ export const SPRING_BONE_DAMPING_FIELD = {
 	step: 1,
 } as const;
 
-export const SPRING_BONE_XPBD_FIELDS = [
+export const DYNAMICS_XPBD_FIELDS = [
 	{
 		key: "xpbd_compliance",
 		labelKey: "profiles.editor.spring_bone_xpbd_compliance",
@@ -50,7 +50,7 @@ export const SPRING_BONE_XPBD_FIELDS = [
 	},
 ] as const;
 
-export const SPRING_BONE_VERLET_FIELDS = [
+export const DYNAMICS_VERLET_FIELDS = [
 	{
 		key: "stiffness_hz",
 		labelKey: "profiles.editor.spring_bone_verlet_stiffness",
@@ -61,7 +61,7 @@ export const SPRING_BONE_VERLET_FIELDS = [
 	},
 ] as const;
 
-export function defaultSpringBoneCategoryOverrides(): SpringBoneCategoryOverrideSetting[] {
+export function defaultDynamicsCategoryOverrides(): DynamicsCategoryOverrideSetting[] {
 	return ["hair", "ears", "tail", "cloth", "accessory", "other"].map((category) => ({
 		category,
 		name: category
@@ -84,7 +84,7 @@ export function defaultSpringBoneCategoryOverrides(): SpringBoneCategoryOverride
 	}));
 }
 
-export function springBoneRecommendedPresets(category: string): string[] {
+export function dynamicsRecommendedPresets(category: string): string[] {
 	switch (category) {
 		case "hair":
 		case "ears":
@@ -98,7 +98,7 @@ export function springBoneRecommendedPresets(category: string): string[] {
 	}
 }
 
-export function springBonePresetLabel(category: string, preset: string, translate: (key: string) => string): string {
+export function dynamicsPresetLabel(category: string, preset: string, translate: (key: string) => string): string {
 	const key = `profiles.editor.spring_bone_preset_${category}_${preset}`;
 	const translated = translate(key);
 	return translated === key ? preset : translated;

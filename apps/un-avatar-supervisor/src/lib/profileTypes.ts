@@ -2,7 +2,7 @@ import type { SettingSummaryLabelData } from "./profileLabels";
 import type { LightingDiagramSource } from "./profileDiagrams";
 import type { CameraDiagramSource } from "./profileDiagrams";
 import type { PrimaryMotionSource } from "./rendererTypes";
-import type { SpringBoneCategoryOverrideSetting } from "./springBonePresets";
+import type { DynamicsCategoryOverrideSetting } from "./dynamicsPresets";
 
 export type ProfileSettingValue = boolean | string | number | string[] | number[] | null;
 
@@ -106,7 +106,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	spring_bone_physics_configured: boolean;
 	spring_bone_simulation_hz: number;
 	spring_bone_substeps: number;
-	spring_bone_category_overrides: SpringBoneCategoryOverrideSetting[];
+	spring_bone_category_overrides: DynamicsCategoryOverrideSetting[];
 	apply_vmc_root_translation: boolean;
 	camera_target: [number, number, number] | null;
 	camera_longitude_deg: number | null;

@@ -3,7 +3,7 @@ import enLocaleToml from "../src-tauri/locales/en-US.toml?raw";
 import jaLocaleToml from "../src-tauri/locales/ja-JP.toml?raw";
 import { hasTauriRuntime } from "./lib/environment";
 import { defaultTextureCompressionAdvanced } from "./lib/qualityOptions";
-import { defaultSpringBoneCategoryOverrides } from "./lib/springBonePresets";
+import { defaultDynamicsCategoryOverrides } from "./lib/dynamicsPresets";
 
 type LocaleBundle = {
 	locale: string;
@@ -61,7 +61,7 @@ let avatarSettings = [
 		spring_bone_physics_configured: false,
 		spring_bone_simulation_hz: 60,
 		spring_bone_substeps: 1,
-		spring_bone_category_overrides: defaultSpringBoneCategoryOverrides(),
+		spring_bone_category_overrides: defaultDynamicsCategoryOverrides(),
 		apply_vmc_root_translation: false,
 		camera_target: null,
 		camera_longitude_deg: null,
@@ -175,7 +175,7 @@ let avatarSettings = [
 		spring_bone_physics_configured: false,
 		spring_bone_simulation_hz: 60,
 		spring_bone_substeps: 1,
-		spring_bone_category_overrides: defaultSpringBoneCategoryOverrides(),
+		spring_bone_category_overrides: defaultDynamicsCategoryOverrides(),
 		apply_vmc_root_translation: false,
 		camera_target: null,
 		camera_longitude_deg: null,

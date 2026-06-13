@@ -3890,17 +3890,17 @@ dd {
 	font-weight: 700;
 }
 
-.spring-bone-overrides {
+.dynamics-overrides {
 	display: grid;
 	gap: 8px;
 }
 
-.spring-bone-override-list {
+.dynamics-override-list {
 	display: grid;
 	gap: 8px;
 }
 
-.spring-bone-override-row {
+.dynamics-override-row {
 	display: grid;
 	grid-template-columns: minmax(120px, 0.8fr) repeat(3, minmax(150px, 1fr)) auto;
 	align-items: end;
@@ -3911,14 +3911,14 @@ dd {
 	background: color-mix(in srgb, var(--panel-subtle) 55%, transparent);
 }
 
-.spring-bone-override-title {
+.dynamics-override-title {
 	display: grid;
 	gap: 2px;
 	align-self: center;
 	min-width: 0;
 }
 
-.spring-bone-override-title strong {
+.dynamics-override-title strong {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
@@ -3927,7 +3927,7 @@ dd {
 	white-space: nowrap;
 }
 
-.spring-bone-override-title small {
+.dynamics-override-title small {
 	min-width: 18px;
 	padding: 1px 5px;
 	border: 1px solid var(--border-strong);
@@ -3938,13 +3938,13 @@ dd {
 	text-align: center;
 }
 
-.spring-bone-override-title span {
+.dynamics-override-title span {
 	color: var(--muted);
 	font-size: 11px;
 	font-weight: 700;
 }
 
-.spring-bone-preset-actions {
+.dynamics-preset-actions {
 	grid-column: 1 / -1;
 	display: flex;
 	flex-wrap: wrap;
@@ -3953,14 +3953,14 @@ dd {
 	padding-top: 2px;
 }
 
-.spring-bone-preset-actions > span {
+.dynamics-preset-actions > span {
 	color: var(--muted);
 	font-size: 11px;
 	font-weight: 700;
 	margin-right: 2px;
 }
 
-.spring-bone-preset-actions button {
+.dynamics-preset-actions button {
 	min-height: 26px;
 	padding: 3px 9px;
 	font-size: 12px;

@@ -113,7 +113,7 @@
 		rendererSsaoPayload,
 		rendererWindowPayload,
 	} from "./lib/runtimePayloads";
-	import { defaultSpringBoneCategoryOverrides } from "./lib/springBonePresets";
+	import { defaultDynamicsCategoryOverrides } from "./lib/dynamicsPresets";
 	import {
 		loadColorDisplayMode,
 		loadLaunchTargetId,
@@ -481,7 +481,7 @@
 			spring_bone_physics_configured: false,
 			spring_bone_simulation_hz: 60,
 			spring_bone_substeps: 1,
-			spring_bone_category_overrides: defaultSpringBoneCategoryOverrides(),
+			spring_bone_category_overrides: defaultDynamicsCategoryOverrides(),
 			apply_vmc_root_translation: false,
 			camera_target: null,
 			camera_longitude_deg: null,
@@ -599,7 +599,7 @@
 			spring_bone_physics_configured: false,
 			spring_bone_simulation_hz: 60,
 			spring_bone_substeps: 1,
-			spring_bone_category_overrides: defaultSpringBoneCategoryOverrides(),
+			spring_bone_category_overrides: defaultDynamicsCategoryOverrides(),
 			apply_vmc_root_translation: false,
 			camera_target: null,
 			camera_longitude_deg: null,
