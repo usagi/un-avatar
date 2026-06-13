@@ -1945,6 +1945,9 @@ pub fn run() {
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
 	tauri::Builder::default()
+		.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+			show_main_window(app);
+		}))
 		.plugin(tauri_plugin_notification::init())
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))

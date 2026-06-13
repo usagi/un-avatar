@@ -42,6 +42,7 @@ tauri = { version = "2.11.1", features = [
  "image-png",
 ] }
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-single-instance = "2.4.2"
 toml = { workspace = true }
 un-avatar-core = { path = "../../../crates/un-avatar-core" }
 un-avatar-io-vrm = { path = "../../../crates/un-avatar-io-vrm" }
