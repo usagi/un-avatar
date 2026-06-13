@@ -297,3 +297,12 @@ v2 初回リリース候補は、完璧な VRC clone ではなく、実用時に
 - `.unavatar` / VRC model の未対応範囲は、無言 fallback ではなく diagnostics と runtime status に出す。特に full Animator graph、dynamic reactive mesh gating、PhysBone suffix value emission、VRC Constraints solver integration は未完了として扱う。
 - 速度改善は `mizuki-split` class の benchmark、renderer log summary、または明確な不要 work の削除を根拠にする。見た目品質や VRAM 効率を落とす可能性がある変更は、既定化前に profile option / cache prewarm / visual check の扱いを決める。
 - Windows 配布は portable zip を正本にし、installer と Authenticode 署名は v2 未対応・対応未定のまま扱う。
+
+## v1 to v2 Profile Migration Policy
+
+開発中だけの互換と、v1 ユーザーが v2 へ移行するための互換は分ける。
+
+- 開発中だけの互換は、現行 exporter / renderer / Supervisor が参照しなくなった時点で削除する。`.una` / `un-avatar-io-una`、acceptance manifest の古い別名、renderer control command `set_spring_bones` は削除済み。
+- v1 user profile の root key 互換は読み込みでは残す。ただし Supervisor が profile を保存、duplicate、thumbnail 更新、または path 更新する時点で v2 key へ移す。既存 v2 key がある場合は v2 key を優先し、legacy root key は削除する。
+- 現在の migration 対象は root `aa` -> `[render_quality].aa`、`icon_path` / `transparent` / `input_passthrough` / `decorations` -> `[window]`、`vmc_address` / `vmc_port` -> `[motion.vmc_udp]`、`spout` -> `[output.spout2]`、`spring_bones` -> `[physics.dynamics].enabled`。
+- `texture_compression = "auto" | "advanced"` と SpringBone solver alias `compat_univrm` / `compat_euler` は、旧 profile の読み込み経路として残す。Supervisor が該当 field を保存する場合は v2 正本名へ正規化する。
