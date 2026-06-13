@@ -4906,6 +4906,8 @@ fn set_renderer_camera_orbit(
 }
 
 #[tauri::command]
+// Tauri command parameters mirror the frontend invoke payload; grouping them would break the public command shape.
+#[allow(clippy::too_many_arguments)]
 fn set_renderer_camera_state(
 	id: u32,
 	target: Option<[f32; 3]>,
@@ -10470,11 +10472,11 @@ id = "test"
 
 	fn write_glb_with_json_and_bin(path: &Path, json: &str, bin_len: usize) {
 		let mut json_bytes = json.as_bytes().to_vec();
-		while json_bytes.len() % 4 != 0 {
+		while !json_bytes.len().is_multiple_of(4) {
 			json_bytes.push(b' ');
 		}
 		let mut bin = vec![0u8; bin_len];
-		while bin.len() % 4 != 0 {
+		while !bin.len().is_multiple_of(4) {
 			bin.push(0);
 		}
 		let total_len = 12 + 8 + json_bytes.len() + 8 + bin.len();

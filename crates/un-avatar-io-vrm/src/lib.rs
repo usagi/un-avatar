@@ -613,7 +613,6 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		uv_animation_scroll_x_speed_factor: obj_f32(obj, &["uvAnimationScrollXSpeedFactor"], 0.0),
 		uv_animation_scroll_y_speed_factor: obj_f32(obj, &["uvAnimationScrollYSpeedFactor"], 0.0),
 		uv_animation_rotation_speed_factor: obj_f32(obj, &["uvAnimationRotationSpeedFactor"], 0.0),
-		..Default::default()
 	})
 }
 
@@ -2265,6 +2264,7 @@ mod tests {
 		use un_avatar_core::{UnaMeshBuffers, UnaMorphTargetDeltas};
 		let prim_with_4 = || UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![],
 			normals: None,
 			tangents: None,
@@ -2326,6 +2326,7 @@ mod tests {
 		use un_avatar_core::{UnaMeshBuffers, UnaMorphTargetDeltas};
 		let prim_n = |n: usize| UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![],
 			normals: None,
 			tangents: None,

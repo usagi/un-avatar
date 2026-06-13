@@ -1045,17 +1045,21 @@ fn adapt_unavatar_unmotion_finger_axis(
 	(rest_rotation.inverse() * parent_space_delta * rest_rotation).normalize()
 }
 
+struct HumanoidProfileTransformTarget<'a> {
+	key: &'a str,
+	transform: &'a TransformSample,
+	role: UnmotionHumanoidRole,
+	adapter_role: UnmotionHumanoidRole,
+}
+
 fn apply_humanoid_transform_to_profile_node(
 	profile: &HumanoidProfile,
 	nodes: &mut [UnaSceneNode],
 	rest_nodes: Option<&[UnaSceneNode]>,
 	frame_ctx: RetargetFrameContext<'_>,
-	key: &str,
-	transform: &TransformSample,
-	role: UnmotionHumanoidRole,
-	adapter_role: UnmotionHumanoidRole,
+	target: HumanoidProfileTransformTarget<'_>,
 ) {
-	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), key) else {
+	let Some(ni) = profile_node_index_with_lookup(profile, frame_ctx.profile_lookup(), target.key) else {
 		return;
 	};
 	apply_humanoid_transform_to_node_index(
@@ -1064,9 +1068,9 @@ fn apply_humanoid_transform_to_profile_node(
 		rest_nodes,
 		frame_ctx,
 		ni,
-		transform,
-		role,
-		adapter_role,
+		target.transform,
+		target.role,
+		target.adapter_role,
 		None,
 		true,
 		None,
@@ -1094,14 +1098,16 @@ fn apply_humanoid_transform_to_node_index(
 			sample_rotation = clamp_eye_rotation(sample_rotation, deg);
 		}
 		write_retargeted_local_transform(
-			ni,
 			node,
-			rest_nodes,
-			frame_ctx,
-			compiled_base,
-			sample_rotation,
-			transform,
-			apply_translation,
+			RetargetLocalWrite {
+				node_index: ni,
+				rest_nodes,
+				frame_ctx,
+				compiled_base,
+				sample_rotation,
+				transform,
+				apply_translation,
+			},
 		);
 	}
 }
@@ -1133,28 +1139,40 @@ fn apply_finger_transform_to_profile_node(
 	);
 	if let Some(node) = nodes.get_mut(node_index) {
 		write_retargeted_local_transform(
-			node_index,
 			node,
-			rest_nodes,
-			frame_ctx,
-			compiled_base,
-			sample_rotation,
-			transform,
-			true,
+			RetargetLocalWrite {
+				node_index,
+				rest_nodes,
+				frame_ctx,
+				compiled_base,
+				sample_rotation,
+				transform,
+				apply_translation: true,
+			},
 		);
 	}
 }
 
-fn write_retargeted_local_transform(
+struct RetargetLocalWrite<'a> {
 	node_index: usize,
-	node: &mut UnaSceneNode,
-	rest_nodes: Option<&[UnaSceneNode]>,
-	frame_ctx: RetargetFrameContext<'_>,
+	rest_nodes: Option<&'a [UnaSceneNode]>,
+	frame_ctx: RetargetFrameContext<'a>,
 	compiled_base: Option<NodeRestTransform>,
 	sample_rotation: Quat,
-	transform: &TransformSample,
+	transform: &'a TransformSample,
 	apply_translation: bool,
-) {
+}
+
+fn write_retargeted_local_transform(node: &mut UnaSceneNode, input: RetargetLocalWrite<'_>) {
+	let RetargetLocalWrite {
+		node_index,
+		rest_nodes,
+		frame_ctx,
+		compiled_base,
+		sample_rotation,
+		transform,
+		apply_translation,
+	} = input;
 	let base = compiled_base.unwrap_or_else(|| base_node_transform(node_index, node, rest_nodes));
 	let sample_translation = if apply_translation {
 		frame_ctx.transform_translation(transform)
@@ -1223,10 +1241,12 @@ fn apply_hand_motion_to_scene(
 					nodes,
 					rest_nodes,
 					frame_ctx,
-					key,
-					wrist,
-					UnmotionHumanoidRole::HandWrist,
-					adapter_role,
+					HumanoidProfileTransformTarget {
+						key,
+						transform: wrist,
+						role: UnmotionHumanoidRole::HandWrist,
+						adapter_role,
+					},
 				);
 			}
 		}
@@ -1739,10 +1759,12 @@ pub fn apply_un_motion_frame_to_document_with_context(
 						&mut scene.nodes,
 						rest_nodes,
 						frame_ctx,
-						"head",
-						head,
-						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
-						UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+						HumanoidProfileTransformTarget {
+							key: "head",
+							transform: head,
+							role: UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+							adapter_role: UnmotionHumanoidRole::BodyBone(HumanoidBone::Head),
+						},
 					);
 				}
 			}
