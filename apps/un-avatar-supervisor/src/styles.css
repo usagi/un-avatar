@@ -3962,6 +3962,31 @@ dd {
 	grid-template-columns: repeat(2, minmax(180px, 1fr));
 }
 
+.physics-compat-badges {
+	display: flex;
+	flex-wrap: wrap;
+	align-content: center;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 8px 10px;
+	border: 1px solid color-mix(in srgb, var(--accent-cool) 28%, var(--border));
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--accent-cool) 8%, var(--panel-subtle));
+}
+
+.physics-compat-badges span {
+	min-width: 0;
+	padding: 2px 7px;
+	border: 1px solid color-mix(in srgb, var(--accent-cool) 48%, var(--border));
+	border-radius: 999px;
+	color: color-mix(in srgb, var(--accent-cool) 76%, var(--text));
+	font-size: 11px;
+	font-weight: 800;
+	line-height: 1.25;
+	white-space: nowrap;
+}
+
 .profile-wide-field {
 	grid-column: 1 / -1;
 }
