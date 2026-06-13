@@ -37,7 +37,7 @@ export type VrmMetadataTranslator = (key: string, options?: { values?: Record<st
 
 export function looksLikeVrmPath(path: string): boolean {
 	const lower = path.trim().toLowerCase();
-	return lower.endsWith(".vrm") || lower.endsWith(".glb") || lower.endsWith(".gltf") || lower.endsWith(".unavatar");
+	return lower.endsWith(".vrm") || lower.endsWith(".glb") || lower.endsWith(".gltf");
 }
 
 export function fallbackVrmMetadata(path: string, reason: unknown, translate: VrmMetadataTranslator): VrmMetadataInfo {

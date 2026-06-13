@@ -226,6 +226,7 @@
 	let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
 	let diagnosticsExports = $state<DiagnosticsExportEntry[]>([]);
 	let avatarSettings = $state<AvatarSetting[]>([]);
+	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
 	let wardrobeOptionsKey = $state("");
 	let selectedRendererId = $state<number | null>(null);
@@ -791,6 +792,14 @@
 		launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, next);
 	}
 
+	function bumpProfileIconRevision(path: string | null): void {
+		if (!path) return;
+		profileIconRevision = {
+			...profileIconRevision,
+			[path]: (profileIconRevision[path] ?? 0) + 1,
+		};
+	}
+
 	/// Renderers / Avatar Settings 画面で選択された ID を Tauri 側へ即座に保存する。
 	/// 失敗は UI を阻害しないようサイレントに無視する。
 	async function persistLastSelectedSettingId(id: string | null): Promise<void> {
@@ -895,7 +904,10 @@
 	}
 
 	function iconSrc(path: string | null): string {
-		return profileIconSrc(path, hasTauriRuntime(), convertFileSrc);
+		const src = profileIconSrc(path, hasTauriRuntime(), convertFileSrc);
+		const revision = path ? (profileIconRevision[path] ?? 0) : 0;
+		if (!revision || src.startsWith("data:image/") || src === DEFAULT_PROFILE_ICON_SRC) return src;
+		return `${src}${src.includes("?") ? "&" : "?"}v=${revision}`;
 	}
 
 	async function applyProfileUpdates(updates: readonly ProfilePresetUpdate[]): Promise<void> {
@@ -1833,8 +1845,8 @@
 		path: string,
 		rendererToRestart: RendererInstance | null,
 		settingId: string | null = selectedSetting?.id ?? null
-	): Promise<void> {
-		if (!settingId) return;
+	): Promise<AvatarSetting | null> {
+		if (!settingId) return null;
 		const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
 			settingId,
 			field: "avatar_path",
@@ -1843,6 +1855,7 @@
 		message = $_("profiles.messages.updated_avatar_path");
 		replaceAvatarSetting(setting);
 		queueRendererRestart(rendererToRestart, "avatar_path");
+		return setting;
 	}
 
 	async function acceptVrmMetadataAndUse(): Promise<void> {
@@ -1851,11 +1864,11 @@
 		vrmMetadataModal = null;
 		busy = true;
 		try {
-			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
+			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			if (useThumbnailForProfileIconOnAccept && modal.metadata.thumbnail_data_url) {
 				await applySelectedAvatarThumbnail({
 					rendererToRestart: modal.rendererToRestart,
-					settingId: modal.settingId,
+					settingId: savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
 					avatarPath: modal.pendingPath,
 					manageBusy: false,
 				});
@@ -1875,10 +1888,10 @@
 		unavatarMetadataModal = null;
 		busy = true;
 		try {
-			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
+			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
 				const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
-					settingId: modal.settingId,
+					settingId: savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
 					imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
 					crop: {
 						zoom: Number(unavatarProfileIconCrop.zoom) || 1,
@@ -1887,6 +1900,7 @@
 					},
 				});
 				replaceAvatarSetting(setting);
+				bumpProfileIconRevision(setting.icon_path);
 				queueRendererRestart(modal.rendererToRestart, "icon_path");
 			}
 			message = $_("vrm_metadata.messages.updated_after_confirmation");
@@ -1926,6 +1940,7 @@
 				avatarPath,
 			});
 			replaceAvatarSetting(setting);
+			bumpProfileIconRevision(setting.icon_path);
 			queueRendererRestart(rendererToRestart, "icon_path");
 			message = $_("profiles.messages.updated_thumbnail_icon");
 		} catch (error) {
