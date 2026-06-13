@@ -1278,7 +1278,7 @@ pub enum UnaDynamicsWritebackMode {
 }
 
 impl UnaDynamicsWritebackMode {
-	pub fn is_default(self: &Self) -> bool {
+	pub fn is_default(&self) -> bool {
 		*self == Self::default()
 	}
 }
@@ -1387,32 +1387,22 @@ pub struct UnaDynamicsInteraction {
 	pub parameter: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaDynamicsContactKind {
 	Sender,
 	Receiver,
+	#[default]
 	Unknown,
 }
 
-impl Default for UnaDynamicsContactKind {
-	fn default() -> Self {
-		Self::Unknown
-	}
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaDynamicsColliderShape {
 	Sphere,
 	Capsule,
+	#[default]
 	Unknown,
-}
-
-impl Default for UnaDynamicsColliderShape {
-	fn default() -> Self {
-		Self::Unknown
-	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1540,7 +1530,7 @@ pub enum UnaDynamicsSourceKind {
 }
 
 impl UnaDynamicsSourceKind {
-	pub fn is_default(self: &Self) -> bool {
+	pub fn is_default(&self) -> bool {
 		*self == Self::default()
 	}
 }
@@ -1737,11 +1727,13 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn counts(self) -> UnaRuntimeDynamicsCounts {
-		let mut counts = UnaRuntimeDynamicsCounts::default();
-		counts.runtime_enabled_overrides = self
-			.runtime_state
-			.map(|state| state.dynamics_enabled_overrides.len())
-			.unwrap_or_default();
+		let mut counts = UnaRuntimeDynamicsCounts {
+			runtime_enabled_overrides: self
+				.runtime_state
+				.map(|state| state.dynamics_enabled_overrides.len())
+				.unwrap_or_default(),
+			..Default::default()
+		};
 		for group in self.groups() {
 			counts.groups += 1;
 			if group.enabled {
@@ -2238,7 +2230,7 @@ pub struct UnaDocument {
 }
 
 impl UnaRuntimeState {
-	pub fn is_default(self: &Self) -> bool {
+	pub fn is_default(&self) -> bool {
 		self == &Self::default()
 	}
 }
@@ -3708,7 +3700,7 @@ fn unavatar_capability_enabled(source: &Value, names: &[&str]) -> bool {
 		array
 			.into_iter()
 			.flatten()
-			.any(|value| value.as_str().is_some_and(|candidate| names.iter().any(|name| candidate == *name)))
+			.any(|value| value.as_str().is_some_and(|candidate| names.contains(&candidate)))
 	}
 	array_has_name(source.get("capabilities").and_then(Value::as_array), names)
 		|| array_has_name(
