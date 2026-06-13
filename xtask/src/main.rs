@@ -6,7 +6,7 @@ use std::{
 	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
 	process::{self, Command, Stdio},
-	time::{Duration, Instant},
+	time::{Duration, Instant, SystemTime},
 };
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
@@ -538,10 +538,66 @@ fn normalize_profile_key(value: &str) -> String {
 	value.trim().to_ascii_lowercase().replace([' ', '_'], "-")
 }
 
+fn newest_mtime(path: &Path, skip_dir_names: &[&str]) -> Option<SystemTime> {
+	let metadata = fs::metadata(path).ok()?;
+	if metadata.is_file() {
+		return metadata.modified().ok();
+	}
+	if !metadata.is_dir() {
+		return None;
+	}
+	let mut newest = metadata.modified().ok();
+	let entries = fs::read_dir(path).ok()?;
+	for entry in entries.flatten() {
+		let child = entry.path();
+		if child.is_dir() {
+			if child
+				.file_name()
+				.and_then(|name| name.to_str())
+				.is_some_and(|name| skip_dir_names.iter().any(|skip| *skip == name))
+			{
+				continue;
+			}
+		}
+		if let Some(time) = newest_mtime(&child, skip_dir_names) {
+			if newest.is_none_or(|current| time > current) {
+				newest = Some(time);
+			}
+		}
+	}
+	newest
+}
+
+fn supervisor_frontend_needs_build(frontend_dir: &Path) -> bool {
+	let dist = frontend_dir.join("dist");
+	let Some(dist_mtime) = newest_mtime(&dist, &[]) else {
+		return true;
+	};
+	let inputs = [
+		"src",
+		"public",
+		"index.html",
+		"package.json",
+		"package-lock.json",
+		"svelte.config.js",
+		"tsconfig.json",
+		"vite.config.ts",
+	];
+	inputs
+		.iter()
+		.filter_map(|input| newest_mtime(&frontend_dir.join(input), &["node_modules", "dist"]))
+		.any(|input_mtime| input_mtime > dist_mtime)
+}
+
 fn run_supervisor_frontend_build(repo: &Path) -> bool {
+	let frontend_dir = repo.join("apps").join("un-avatar-supervisor");
+	if !supervisor_frontend_needs_build(&frontend_dir) {
+		eprintln!("frontend: dist is fresh; skip npm run build");
+		return true;
+	}
 	Command::new(npm_exe())
 		.args(["run", "build"])
-		.current_dir(repo.join("apps").join("un-avatar-supervisor"))
+		.current_dir(frontend_dir)
 		.stdin(Stdio::inherit())
 		.stdout(Stdio::inherit())
 		.stderr(Stdio::inherit())
