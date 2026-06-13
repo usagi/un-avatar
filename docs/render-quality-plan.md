@@ -81,7 +81,7 @@
 ### Texture Compression Policy
 
 - `texture_compression = "source"` は忠実性優先。ソースをRGBAへ展開したあとの画質を維持し、lossy compressionは行わない。
-- `texture_compression = "balanced"` は既定。テクスチャの使われどころと実行時GPU featureから保守的に選ぶ。WindowsではBCnを第一候補にする。現在は、BC対応GPUで服/generic系の不透明色テクスチャをBC1 sRGBへ圧縮し、normal mapをBC5 linearへ圧縮する。emissiveなど `high_quality` 扱いの色テクスチャはBC7 sRGBへ圧縮できる。顔・瞳・data・非対象画像は既定でsource/nativeまたはRGBAへfallbackする。Data texture は `[render_quality.texture_compression_advanced] data = "high_quality"` などの明示指定時だけ BC7 linear (`Bc7RgbaUnorm`) を使える。
+- `texture_compression = "balanced"` は既定。テクスチャの使われどころと実行時GPU featureから保守的に選ぶ。WindowsではBCnを第一候補にする。現在は、BC対応GPUで服/generic系の不透明色テクスチャをBC1 sRGBへ圧縮し、normal mapをBC5 linearへ圧縮する。emissiveなど `high_quality` 扱いの色テクスチャはBC7 sRGBへ圧縮できる。顔・瞳・data・非対象画像は既定でsource/nativeまたはRGBAへfallbackする。Data texture は `[render_quality.texture_compression_advanced] data = "high_quality"` などの明示指定時だけ BC7 linear (`Bc7RgbaUnorm`) を使える。`clothing = "high_quality"` / `generic_color = "high_quality"` は明示指定時だけ BC7 sRGB を使い、既定 `auto` では従来の BC1 / source fallback を維持する。
 - `texture_compression = "memory"` は、容量とGPU memoryを優先して `balanced` より圧縮寄りに選ぶ。
 - `texture_compression = "compat"` は、BCnなどGPU固有圧縮を避け、広く扱えるupload形式へ寄せる。
 - UASTC / ETC1S はGPU upload形式そのものではなく、KTX2 / BasisU系のcache/intermediateとして扱う。現段階ではBC1 / BC5 / BC7の圧縮済みblock mip chainをcache artifactとして保存し、後続で同じartifact層へKTX2 / BasisU containerを追加する。UASTCは顔・瞳・emissiveなど高品質寄り、ETC1Sは小容量寄りの選択肢にする。
