@@ -1,5 +1,6 @@
 import { aaModeLabel, formatBytes, runtimeMetric, textureModeLabel } from "./formatting";
 import { outputLabel, type OutputLabelData } from "./profileLabels";
+import type { TextureCompressionAdvanced } from "./profileTypes";
 
 export type RuntimeTextureSummaryLabelData = {
 	image_count: number;
@@ -32,6 +33,9 @@ export type RuntimeQualityStatusLabelData = {
 export type ProfileQualityLabelData = {
 	aa: string;
 	texture_resolution_limit: string;
+	texture_compression: string;
+	processed_texture_cache: boolean;
+	texture_compression_advanced: TextureCompressionAdvanced;
 };
 
 export type RuntimeStartupStatusLabelData = {
@@ -127,7 +131,19 @@ export function runtimeAaLabel(status: RuntimeQualityStatusLabelData | null): st
 
 export function qualitySummaryLabel(setting: ProfileQualityLabelData): string {
 	const textureLimit = setting.texture_resolution_limit === "off" ? "Unlimited" : textureModeLabel(setting.texture_resolution_limit);
-	return `AA: ${aaModeLabel(setting.aa)} / Tex: ${textureLimit}`;
+	const compression = textureModeLabel(setting.texture_compression);
+	const advanced = textureCompressionAdvancedSummary(setting.texture_compression_advanced);
+	const cache = setting.processed_texture_cache ? "cache on" : "cache off";
+	return `AA: ${aaModeLabel(setting.aa)} / Tex: ${textureLimit} / ${compression}${advanced} / ${cache}`;
+}
+
+function textureCompressionAdvancedSummary(advanced: TextureCompressionAdvanced): string {
+	const colorBc7 = advanced.clothing === "high_quality" && advanced.generic_color === "high_quality";
+	const dataBc7 = advanced.data === "high_quality";
+	if (colorBc7 && dataBc7) return " + BC7 color/data";
+	if (colorBc7) return " + BC7 color";
+	if (dataBc7) return " + BC7 data";
+	return "";
 }
 
 export function texturePolicyLabel(status: RuntimeQualityStatusLabelData | null, pendingLabel: string): string {
