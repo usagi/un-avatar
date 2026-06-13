@@ -896,6 +896,8 @@ impl TexturePrepareSummary {
 	fn record(
 		&mut self,
 		image_index: usize,
+		image_name: Option<&str>,
+		mime_type: Option<&str>,
 		role: TextureRole,
 		resident: bool,
 		elapsed: Duration,
@@ -953,8 +955,10 @@ impl TexturePrepareSummary {
 		let read_mb = cache_event.read_bytes as f64 / (1024.0 * 1024.0);
 		if elapsed_ms >= 50.0 || read_mb >= 64.0 {
 			let stage_ms = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0;
+			let image_name = image_name.unwrap_or("");
+			let mime_type = mime_type.unwrap_or("");
 			eprintln!(
-				"un-avatar-renderer: gpu scene texture image={} resident={} role={role:?}: {elapsed_ms:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms read_mb={read_mb:.1}",
+				"un-avatar-renderer: gpu scene texture image={} name={image_name:?} mime={mime_type:?} resident={} role={role:?}: {elapsed_ms:.1}ms cube={:.1}ms source={:.1}ms rgba={:.1}ms cache_lookup={:.1}ms cache_read={:.1}ms processed={:.1}ms payload={:.1}ms upload={:.1}ms read_mb={read_mb:.1}",
 				image_index,
 				resident,
 				stage_ms(timings.cube),
@@ -8556,6 +8560,8 @@ impl SceneMeshes {
 					image_texture_slots.push(slot);
 					texture_prepare_summary.record(
 						image_index,
+						source_metadata.and_then(|source| source.name.as_deref()),
+						source_metadata.and_then(|source| source.mime_type.as_deref()),
 						role,
 						image_resident,
 						image_prepare_start.elapsed(),
@@ -8655,6 +8661,8 @@ impl SceneMeshes {
 						image_texture_slots.push(slot);
 						texture_prepare_summary.record(
 							image_index,
+							source_metadata.and_then(|source| source.name.as_deref()),
+							source_metadata.and_then(|source| source.mime_type.as_deref()),
 							role,
 							image_resident,
 							image_prepare_start.elapsed(),
@@ -8735,6 +8743,8 @@ impl SceneMeshes {
 						image_texture_slots.push(slot);
 						texture_prepare_summary.record(
 							image_index,
+							source_metadata.and_then(|source| source.name.as_deref()),
+							source_metadata.and_then(|source| source.mime_type.as_deref()),
 							role,
 							image_resident,
 							image_prepare_start.elapsed(),
@@ -8847,6 +8857,8 @@ impl SceneMeshes {
 					image_texture_slots.push(slot);
 					texture_prepare_summary.record(
 						image_index,
+						source_metadata.and_then(|source| source.name.as_deref()),
+						source_metadata.and_then(|source| source.mime_type.as_deref()),
 						role,
 						image_resident,
 						image_prepare_start.elapsed(),
@@ -8890,6 +8902,8 @@ impl SceneMeshes {
 				)));
 				texture_prepare_summary.record(
 					image_index,
+					source_metadata.and_then(|source| source.name.as_deref()),
+					source_metadata.and_then(|source| source.mime_type.as_deref()),
 					role,
 					image_resident,
 					image_prepare_start.elapsed(),
@@ -8930,6 +8944,8 @@ impl SceneMeshes {
 				)));
 				texture_prepare_summary.record(
 					image_index,
+					source_metadata.and_then(|source| source.name.as_deref()),
+					source_metadata.and_then(|source| source.mime_type.as_deref()),
 					role,
 					image_resident,
 					image_prepare_start.elapsed(),
@@ -9176,6 +9192,8 @@ impl SceneMeshes {
 			}
 			texture_prepare_summary.record(
 				image_index,
+				source_metadata.and_then(|source| source.name.as_deref()),
+				source_metadata.and_then(|source| source.mime_type.as_deref()),
 				role,
 				image_resident,
 				image_prepare_start.elapsed(),
