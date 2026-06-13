@@ -24,8 +24,8 @@
 <div class="dynamics-override-row">
 	<div class="dynamics-override-title">
 		<strong
-			>{override.name}{#if override.spring_bone_count > 0}
-				<small>{override.spring_bone_count}</small>
+			>{override.name}{#if override.dynamics_group_count > 0}
+				<small>{override.dynamics_group_count}</small>
 			{/if}</strong
 		>
 		{#if override.mode === "authored"}

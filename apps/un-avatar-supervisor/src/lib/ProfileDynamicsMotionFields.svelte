@@ -10,7 +10,7 @@
 		| "dynamics_enabled"
 		| "dynamics_enable_all_on_launch"
 		| "contact_parameter_emission"
-		| "spring_bone_category_overrides"
+		| "dynamics_category_overrides"
 		| "apply_vmc_root_translation"
 	>;
 	export let busy = false;
@@ -40,7 +40,7 @@
 		onChange={(checked) => onUpdateSettingValue("physics.contacts.parameter_emission", checked)}
 	/>
 	<ProfileDynamicsOverrides
-		overrides={setting.spring_bone_category_overrides}
+		overrides={setting.dynamics_category_overrides}
 		dynamicsEnabled={setting.dynamics_enabled}
 		{busy}
 		{onUpdateSettingValue}

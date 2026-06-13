@@ -2,7 +2,7 @@ export type DynamicsCategoryOverrideSetting = {
 	category: string;
 	name: string;
 	mode: "authored" | "override_verlet" | "override_xpbd";
-	spring_bone_count: number;
+	dynamics_group_count: number;
 	solver: string;
 	damping_configured: boolean;
 	damping_half_life_ms: number;
@@ -78,7 +78,7 @@ export function defaultDynamicsCategoryOverrides(): DynamicsCategoryOverrideSett
 			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 			.join(" "),
 		mode: "authored" as const,
-		spring_bone_count: 0,
+		dynamics_group_count: 0,
 		solver: "verlet",
 		damping_configured: false,
 		damping_half_life_ms: 120,

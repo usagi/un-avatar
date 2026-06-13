@@ -909,10 +909,10 @@ struct RendererSpringBonePhysicsParams {
 #[serde(rename_all = "snake_case")]
 struct RendererSpringBoneSetting {
 	dynamics_enabled: bool,
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -1150,10 +1150,10 @@ struct AvatarSetting {
 	/// VRC Contact Receiver の runtime parameter emission を有効化するか。
 	/// manifest `[physics.contacts] parameter_emission` に対応。既定 false。
 	contact_parameter_emission: bool,
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	/// VMC `/VMC/Ext/Root/Pos` の translation を scene root へ加算するか。
 	/// manifest `[motion] apply_vmc_root_translation` に対応。既定 false（Waidayo 等の calibration 都合で
 	/// 意図せず非ゼロな translation が送られアバターが前後にズレる問題を防ぐため）。フルボディトラッカー
@@ -1369,10 +1369,10 @@ struct PhysicsSettings {
 	dynamics_enabled: Option<bool>,
 	dynamics_enable_all_on_launch: bool,
 	contact_parameter_emission: bool,
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -1447,7 +1447,7 @@ struct SpringBoneCategoryOverrideSetting {
 	category: String,
 	name: String,
 	mode: String,
-	spring_bone_count: usize,
+	dynamics_group_count: usize,
 	solver: String,
 	damping_configured: bool,
 	damping_half_life_ms: f32,
@@ -6299,18 +6299,18 @@ fn renderer_bone_collider_config(setting: &RendererSpringBoneSetting) -> Rendere
 }
 
 fn renderer_spring_bone_physics_config(setting: &RendererSpringBoneSetting) -> Option<RendererSpringBonePhysicsConfig> {
-	if !setting.spring_bone_physics_configured {
+	if !setting.dynamics_physics_configured {
 		return None;
 	}
 	let overrides: Vec<_> = setting
-		.spring_bone_category_overrides
+		.dynamics_category_overrides
 		.iter()
 		.filter_map(renderer_spring_bone_category_override)
 		.collect();
 	Some(RendererSpringBonePhysicsConfig {
 		time_mode: "time_based".to_string(),
-		simulation_hz: setting.spring_bone_simulation_hz.clamp(30.0, 240.0),
-		substeps: setting.spring_bone_substeps.clamp(1, 8),
+		simulation_hz: setting.dynamics_simulation_hz.clamp(30.0, 240.0),
+		substeps: setting.dynamics_substeps.clamp(1, 8),
 		overrides,
 	})
 }
@@ -6848,10 +6848,10 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		dynamics_enabled: physics.dynamics_enabled.unwrap_or(true),
 		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		contact_parameter_emission: physics.contact_parameter_emission,
-		spring_bone_physics_configured: physics.spring_bone_physics_configured,
-		spring_bone_simulation_hz: physics.spring_bone_simulation_hz,
-		spring_bone_substeps: physics.spring_bone_substeps,
-		spring_bone_category_overrides: physics.spring_bone_category_overrides,
+		dynamics_physics_configured: physics.dynamics_physics_configured,
+		dynamics_simulation_hz: physics.dynamics_simulation_hz,
+		dynamics_substeps: physics.dynamics_substeps,
+		dynamics_category_overrides: physics.dynamics_category_overrides,
 		apply_vmc_root_translation: motion.apply_vmc_root_translation,
 		spout_enabled: output.spout_enabled,
 		spout_name: output.spout_name,
@@ -8007,7 +8007,7 @@ fn spring_bone_category_setting(
 		category: category.to_string(),
 		name,
 		mode: "authored".to_string(),
-		spring_bone_count: authored.count,
+		dynamics_group_count: authored.count,
 		solver: "verlet".to_string(),
 		damping_configured: false,
 		damping_half_life_ms: 120.0,
@@ -8249,14 +8249,14 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 		contact_parameter_emission: contacts
 			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
 			.unwrap_or(false),
-		spring_bone_physics_configured: spring_bone_physics.is_some(),
-		spring_bone_simulation_hz: spring_bone_physics
+		dynamics_physics_configured: spring_bone_physics.is_some(),
+		dynamics_simulation_hz: spring_bone_physics
 			.and_then(|physics| physics.simulation_hz)
 			.filter(|value| value.is_finite())
 			.unwrap_or(60.0)
 			.clamp(30.0, 240.0),
-		spring_bone_substeps: spring_bone_physics.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
-		spring_bone_category_overrides: spring_bone_category_override_settings(spring_bone_physics, avatar_path, manifest_path),
+		dynamics_substeps: spring_bone_physics.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
+		dynamics_category_overrides: spring_bone_category_override_settings(spring_bone_physics, avatar_path, manifest_path),
 		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
@@ -8834,7 +8834,7 @@ fn apply_spring_bone_category_override_value(
 	}
 	if key == "reset" {
 		let mode = setting
-			.spring_bone_category_overrides
+			.dynamics_category_overrides
 			.iter()
 			.find(|item| item.category == category)
 			.map(|item| item.mode.as_str())
@@ -8888,11 +8888,11 @@ fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) 
 
 fn spring_bone_authored_params_for_setting(setting: &AvatarSetting, category: &str) -> SpringBoneCategoryAuthoredParams {
 	setting
-		.spring_bone_category_overrides
+		.dynamics_category_overrides
 		.iter()
 		.find(|item| normalize_spring_bone_category_id(&item.category) == category)
 		.map(|item| SpringBoneCategoryAuthoredParams {
-			count: item.spring_bone_count,
+			count: item.dynamics_group_count,
 			stiffness_hz: item.authored_stiffness_hz,
 			xpbd_compliance: item.authored_xpbd_compliance,
 		})

@@ -103,10 +103,10 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	dynamics_enabled: boolean;
 	dynamics_enable_all_on_launch: boolean;
 	contact_parameter_emission: boolean;
-	spring_bone_physics_configured: boolean;
-	spring_bone_simulation_hz: number;
-	spring_bone_substeps: number;
-	spring_bone_category_overrides: DynamicsCategoryOverrideSetting[];
+	dynamics_physics_configured: boolean;
+	dynamics_simulation_hz: number;
+	dynamics_substeps: number;
+	dynamics_category_overrides: DynamicsCategoryOverrideSetting[];
 	apply_vmc_root_translation: boolean;
 	camera_target: [number, number, number] | null;
 	camera_longitude_deg: number | null;
@@ -247,7 +247,7 @@ export type MotionSetting = Pick<
 	| "dynamics_enabled"
 	| "dynamics_enable_all_on_launch"
 	| "contact_parameter_emission"
-	| "spring_bone_category_overrides"
+	| "dynamics_category_overrides"
 	| "apply_vmc_root_translation"
 	| "bone_colliders_enabled"
 	| "bone_collider_head"
