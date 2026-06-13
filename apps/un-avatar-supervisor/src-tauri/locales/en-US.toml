@@ -417,7 +417,7 @@ texture_role_normal = "Normal maps default to GPU Native compression when suppor
 texture_role_occlusion = "Occlusion maps default to GPU Native compression when supported."
 texture_role_emissive = "Emissive maps default to High Quality compression."
 texture_role_generic_color = "Other color textures default to Auto. Benchmark before forcing high-quality compression."
-texture_role_data = "Data masks default to Source. BC7-like choices can cut hot cache reads after warmup, but check visual differences before using them broadly."
+texture_role_data = "Data masks default to Source. High Quality uses BC7 linear and can cut hot cache reads after warmup; keep it opt-in until mask visual differences are checked."
 
 [profiles.hints.look]
 section = "Avatar Effects: adjust viewer-space presentation effects without rewriting authored material values. These settings can also apply to a running Renderer."

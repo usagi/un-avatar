@@ -429,7 +429,7 @@ texture_role_normal = "法線 map。対応環境では既定 GPU Native。"
 texture_role_occlusion = "Occlusion map。対応環境では既定 GPU Native。"
 texture_role_emissive = "発光 map。既定 High Quality。"
 texture_role_generic_color = "その他の色 texture。既定 Auto。High Quality 強制は benchmark 後に使います。"
-texture_role_data = "Data mask は既定 Source。BC7 系は warmup 後の cache read を減らせる場合がありますが、広く使う前に見た目差分を確認します。"
+texture_role_data = "Data mask は既定 Source。High Quality は BC7 linear で warmup 後の cache read を減らせますが、mask の見た目差分を確認するまでは opt-in。"
 
 [profiles.hints.look]
 section = "Avatar Effects: authored material value を書き換えず、viewer-space の見た目効果を調整します。実行中の Renderer にも反映されます。"
