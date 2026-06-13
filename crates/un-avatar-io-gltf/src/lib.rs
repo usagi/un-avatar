@@ -189,18 +189,14 @@ struct GltfSliceImportProfile {
 	image_decode_workers: usize,
 }
 
-fn import_gltf_slice_parallel_images(
-	slice: &[u8],
-	decode_image_indices: Option<&BTreeSet<usize>>,
-) -> Result<
-	(
-		gltf::Document,
-		Vec<gltf::buffer::Data>,
-		Vec<Option<gltf::image::Data>>,
-		GltfSliceImportProfile,
-	),
-	ImportError,
-> {
+type GltfSliceImport = (
+	gltf::Document,
+	Vec<gltf::buffer::Data>,
+	Vec<Option<gltf::image::Data>>,
+	GltfSliceImportProfile,
+);
+
+fn import_gltf_slice_parallel_images(slice: &[u8], decode_image_indices: Option<&BTreeSet<usize>>) -> Result<GltfSliceImport, ImportError> {
 	let parse_started = Instant::now();
 	let gltf = gltf::Gltf::from_slice(slice).map_err(|e| ImportError::Message(e.to_string()))?;
 	let parse_ms = parse_started.elapsed().as_millis();
@@ -491,7 +487,7 @@ fn collect_glb_image_source_metadata_inner(
 					let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
 					out.push((
 						image_index,
-						glb_image_source_metadata_from_json_image(
+						glb_image_source_metadata_from_json_image(GlbJsonImageSourceMetadataInput {
 							image_index,
 							image,
 							buffer_views,
@@ -501,7 +497,7 @@ fn collect_glb_image_source_metadata_inner(
 							source_file_path,
 							byte_offset_base,
 							profile,
-						),
+						}),
 					));
 				}
 				out
@@ -521,17 +517,30 @@ fn collect_glb_image_source_metadata_inner(
 	out
 }
 
-fn glb_image_source_metadata_from_json_image(
+struct GlbJsonImageSourceMetadataInput<'a> {
 	image_index: usize,
-	image: &Value,
-	buffer_views: Option<&Vec<Value>>,
-	bin: &[u8],
-	samplers: &[Option<UnaTextureSampler>],
+	image: &'a Value,
+	buffer_views: Option<&'a Vec<Value>>,
+	bin: &'a [u8],
+	samplers: &'a [Option<UnaTextureSampler>],
 	retain_encoded: bool,
-	source_file_path: Option<&Path>,
+	source_file_path: Option<&'a Path>,
 	byte_offset_base: u64,
-	profile: Option<&GlbImageSourceMetadataProfile>,
-) -> Option<UnaImageSourceMetadata> {
+	profile: Option<&'a GlbImageSourceMetadataProfile>,
+}
+
+fn glb_image_source_metadata_from_json_image(input: GlbJsonImageSourceMetadataInput<'_>) -> Option<UnaImageSourceMetadata> {
+	let GlbJsonImageSourceMetadataInput {
+		image_index,
+		image,
+		buffer_views,
+		bin,
+		samplers,
+		retain_encoded,
+		source_file_path,
+		byte_offset_base,
+		profile,
+	} = input;
 	let sampler = samplers.get(image_index).copied().flatten();
 	let name = image.get("name").and_then(Value::as_str).map(str::to_string);
 	let mime_type = image.get("mimeType").and_then(Value::as_str).map(str::to_string);
@@ -650,7 +659,17 @@ fn collect_glb_image_source_metadata_serial(
 		.enumerate()
 		.map(|(image_index, image)| {
 			let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
-			glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers, retain_encoded, None, 0, None)
+			glb_image_source_metadata_from_json_image(GlbJsonImageSourceMetadataInput {
+				image_index,
+				image,
+				buffer_views,
+				bin,
+				samplers: &samplers,
+				retain_encoded,
+				source_file_path: None,
+				byte_offset_base: 0,
+				profile: None,
+			})
 		})
 		.collect()
 }
@@ -11948,11 +11967,11 @@ mod tests {
 
 	fn glb_bytes_with_bin(json: &str, bin: &[u8]) -> Vec<u8> {
 		let mut json_bytes = json.as_bytes().to_vec();
-		while json_bytes.len() % 4 != 0 {
+		while !json_bytes.len().is_multiple_of(4) {
 			json_bytes.push(b' ');
 		}
 		let mut bin_bytes = bin.to_vec();
-		while bin_bytes.len() % 4 != 0 {
+		while !bin_bytes.len().is_multiple_of(4) {
 			bin_bytes.push(0);
 		}
 		let bin_len = if bin_bytes.is_empty() { 0 } else { 8 + bin_bytes.len() };
