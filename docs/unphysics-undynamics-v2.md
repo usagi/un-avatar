@@ -83,7 +83,7 @@ Source importer は authored fields を UNDynamics terms へ写像する責務�
 ## Current Mainline
 
 Wardrobe hot switch、runtime action、Menu / Parameter candidate、Contacts metadata / opt-in emission diagnostics は v2 初回リリースの physics QA に十分な基盤とする。
-以後の主作業は UNDynamics behavior implementation であり、Wardrobe / Menu の richer UI、renderer tray / global shortcut access、broader eviction policy、お着替え transition effect は physics behavior が期待動作に達した後へ送る。
+以後の主作業は UNDynamics behavior implementation であり、Wardrobe / Menu の richer UI、broader eviction policy、お着替え transition effect は physics behavior が期待動作に達した後へ送る。renderer tray / global shortcut は [`v2-near-term-plan.md`](v2-near-term-plan.md) の operation policy を正本とし、Renderer tray は標準 runtime 操作面、global shortcut は同じ操作を呼ぶ任意 accelerator として扱う。
 
 優先順:
 

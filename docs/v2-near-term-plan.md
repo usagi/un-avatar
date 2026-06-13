@@ -135,6 +135,18 @@ Output / preview policy:
 - Running renderers expose the same practical shortcut in the Output controls: `Spout2 Only` enables 1080p Spout2 and minimizes the local preview without stopping the renderer. Plain 720p / 1080p buttons only change Spout2 output and do not implicitly restore or minimize the preview.
 - True headless output, where renderer rendering no longer depends on a visible/native surface, is a later renderer architecture task. Do not fake it by silently changing Spout resolution or coupling it back to window size.
 
+Renderer tray / Supervisor operation policy:
+
+- Renderer-specific operation belongs to the Renderer process. A Renderer must be operable without a resident Supervisor process, because the profile, output, wardrobe, action, and physics state being controlled is Renderer-local.
+- The Renderer tray icon is the stable always-available runtime operation surface, not an emergency fallback. Global shortcuts are optional accelerators that invoke the same runtime actions; they are not the source of truth.
+- A Renderer tray menu should expose the practical operations users need while streaming: show / hide / focus preview, Window Preview / Spout2 + Preview / Spout2 Only output mode, Spout2 output resolution, always-on-top / input-passthrough where supported, UNPhysics all on/off and bounded group controls where practical, wardrobe / VRC menu runtime actions from the normalized runtime action and menu candidate lists, camera reset / presets, Open Supervisor, and Quit this Renderer.
+- Multi-renderer operation uses one tray icon per Renderer. Tooltip / menu header must include profile or avatar display name plus a process discriminator so users can tell which Renderer they are controlling.
+- `Open Supervisor` from a Renderer tray focuses an existing Supervisor instance when one exists, otherwise starts Supervisor. Supervisor startup must use a single-instance mechanism or equivalent local IPC to avoid duplicate management UIs.
+- Supervisor remains the management UI: profile authoring, first-run setup, multi-renderer launch/control, telemetry aggregation, diagnostics, and editing a profile while watching a Renderer. Mature daily operation may be direct Renderer launch plus Renderer tray control, with Supervisor opened on demand.
+- Supervisor profile settings should offer `Create Shortcut on Desktop` / `Update Desktop Shortcut`. On Windows this creates a deterministic `.lnk` for direct Renderer launch with the selected profile/manifest arguments, a useful display name, profile icon when available, and the correct working directory. Existing same-profile shortcuts should update rather than accumulate duplicates.
+- Implementation should map tray menu clicks into existing Renderer control commands / `RendererControlEvent` paths and refresh menu state from throttled runtime status snapshots, not per-frame polling. A native tray crate or thin Windows `Shell_NotifyIcon` wrapper is preferred over adding a UI framework dependency to the Renderer.
+- Supervisor may keep its own tray icon for Supervisor/global app tasks, but it must not be the only way to operate a running Renderer.
+
 ## UNPhysics / UNDynamics Runtime Normalization
 
 SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。
@@ -156,7 +168,7 @@ SpringBone / PhysBone は source format ごとの physics component ではなく
 - 現在対応済み: VRC PhysBone `rootTransform` / `ignoreTransforms` / `multiChildType=Ignore` / `endpointPosition` / `enabled` / `radius` / `pull` / `spring` / `stiffness` / `gravity` / `allowCollision=false` / stable source id / limit metadata / interaction metadata / interaction `parameter` の最小抽出と lower、leaf root `endpointPosition` の synthetic endpoint child 化、`sourceParams.ignoreTransforms` で全 child が ignored になる root の synthetic endpoint child 化、non-leaf endpoint warning、PhysBone interaction suffix runtime parameter definition 宣言、PhysBone radius / force / angle / stretch 系 AnimationCurve metadata の sourceParams 保存と CLI source count diagnostics、source collider metadata 保存、sphere / capsule / insideBounds collider の初期 solver / debug draw 接続、collider position / rotation / radius / height / insideBounds / shapeType の source-neutral 接続、Unity enum serialized numeric `shapeType` の Sphere / Capsule import、VRC Contact Sender / Receiver metadata export / import と source id 一意化、current runtime scene pose contact probe、VRC Constraints reference metadata 保存、angle limit の現 solver backend で扱える拘束への近似反映、branch root の複数 group 化、wardrobe `dynamicsEnable` による runtime group enable override、safe next-chain-node target への `max_stretch` translation writeback、UNMotion `signals` から宣言済み action / ModularAvatarParameters runtime parameter への Bool / Scalar 入力、CLI diagnostics、Supervisor profile `[physics.dynamics] enable_all_on_launch = true` による明示的な起動時 all dynamics runtime override。VRC PhysBone は source metadata / action target として保持し、authored default は source の `enabled` を尊重する。CLI diagnose / renderer runtime status / Supervisor diagnostics は groups が存在しても effective enabled group が 0 の状態を warning として出す。
 - 残り: direct grabbing / posing evaluator、VRC Constraints solver integration、full Animator graph style evaluation。grabbing / posing action hook 用の source_id / root_path / base parameter / suffix parameter 候補は CLI diagnose / renderer runtime status に公開済み。endpointPosition は leaf root と、`sourceParams.ignoreTransforms` で non-ignored child が無くなる root の synthetic endpoint child 化まで固定済み。per-chain radius curve は base radius 倍率を chain tail ごとの `hit_radius_samples` として solver collider constraint へ近似反映する初期実装まで完了。stretch は `rotation_translation` かつ safe next-chain-node target がある group だけ `max_stretch` upper bound を反映し、targetless group は metadata / diagnostics に留める。これを v2 初回リリースの主要未完了領域として扱う。
 - Wardrobe / action / animation が dynamics enabled state を切り替えられるよう、source data と runtime state の所有関係を明記する。
-- PhysBone behavior の詳細再現は現在の主作業に移す。Wardrobe / Menu の UI polish、tray / global shortcut、broader eviction policy は UNDynamics の期待動作確認後に戻る。
+- PhysBone behavior の詳細再現は現在の主作業に移す。Wardrobe / Menu の UI polish、broader eviction policy は UNDynamics の期待動作確認後に戻る。Renderer tray / global shortcut は上の operation policy を正本とし、Renderer tray は標準 runtime 操作面、global shortcut は同じ操作を呼ぶ任意 accelerator として扱う。
 
 ## Wardrobe Hot Switch Target
 
@@ -192,7 +204,7 @@ MVP control command:
 後回し:
 
 - `Ambiguous group` の自動推論は `wardrobe` set の `assetGroupOwnershipHints`（`path` / `groupId`）で明示指定を受け付ける。これにより `wardrobe.assetGroupOwnership` は曖昧候補を誤る前提を避けつつ補助可能になる。なお broader eviction policy は未着手。
-- richer Supervisor wardrobe menu hierarchy / search、renderer tray icon / global shortcut からの wardrobe / menu access、full external menu UI parity は v2 初回の physics blocker 解消後に回す。現時点の runtime action / menu candidate / renderer status は初期 QA に十分な基盤とする。
+- richer Supervisor wardrobe menu hierarchy / search、full external menu UI parity は v2 初回の physics blocker 解消後に回す。Renderer tray からの wardrobe / menu access は上の operation policy に従い、Supervisor 専用 UI ではなく Renderer runtime 操作面として実装する。現時点の runtime action / menu candidate / renderer status は初期 QA と tray 接続の基盤とする。
 - crossfade、dissolve、sparkle などのお着替え effect。
 - set ごとの physics reset / blend。
 - user-facing ring-menu UI。
