@@ -7,7 +7,7 @@
 
 	export let setting: Pick<
 		MotionSetting,
-		| "spring_bones"
+		| "dynamics_enabled"
 		| "dynamics_enable_all_on_launch"
 		| "contact_parameter_emission"
 		| "spring_bone_category_overrides"
@@ -22,7 +22,7 @@
 		label={$_("profiles.editor.spring_bone")}
 		phaseTag="UNPhysics"
 		hint={$_("profiles.hints.motion.spring_bone")}
-		checked={setting.spring_bones}
+		checked={setting.dynamics_enabled}
 		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
 	/>
 	<ProfileToggleField
@@ -41,7 +41,7 @@
 	/>
 	<ProfileDynamicsOverrides
 		overrides={setting.spring_bone_category_overrides}
-		dynamicsEnabled={setting.spring_bones}
+		dynamicsEnabled={setting.dynamics_enabled}
 		{busy}
 		{onUpdateSettingValue}
 	/>

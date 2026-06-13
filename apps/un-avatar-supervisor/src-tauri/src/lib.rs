@@ -908,7 +908,7 @@ struct RendererSpringBonePhysicsParams {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct RendererSpringBoneSetting {
-	spring_bones: bool,
+	dynamics_enabled: bool,
 	spring_bone_physics_configured: bool,
 	spring_bone_simulation_hz: f32,
 	spring_bone_substeps: u32,
@@ -1143,7 +1143,7 @@ struct AvatarSetting {
 	primary_motion_source: String,
 	/// UNPhysics / UNDynamics の runtime solver を有効化するか。
 	/// manifest `[physics.dynamics] enabled` に対応。
-	spring_bones: bool,
+	dynamics_enabled: bool,
 	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
 	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
 	dynamics_enable_all_on_launch: bool,
@@ -3987,7 +3987,8 @@ fn apply_avatar_setting_value(
 		field if field.starts_with("effects.post.") => {
 			apply_post_effect_setting_value(manifest, field, value)?;
 		}
-		"spring_bones"
+		"dynamics_enabled"
+		| "spring_bones"
 		| "physics.contacts.parameter_emission"
 		| "physics.dynamics.enable_all_on_launch"
 		| "physics.spring_bone.simulation_hz"
@@ -4458,7 +4459,7 @@ fn apply_physics_setting_value(
 	value: serde_json::Value,
 ) -> Result<(), String> {
 	match field {
-		"spring_bones" => set_nested_json_bool(manifest, &["physics", "dynamics", "enabled"], &value, field),
+		"dynamics_enabled" | "spring_bones" => set_nested_json_bool(manifest, &["physics", "dynamics", "enabled"], &value, field),
 		"physics.contacts.parameter_emission" => {
 			set_nested_json_bool(manifest, &["physics", "contacts", "parameter_emission"], &value, field)
 		}
@@ -5141,7 +5142,7 @@ fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: Sta
 		id,
 		state.inner(),
 		RendererControlCommand::SetDynamics {
-			enabled: setting.spring_bones,
+			enabled: setting.dynamics_enabled,
 			bone_colliders: renderer_bone_collider_config(&setting),
 			physics_config: renderer_spring_bone_physics_config(&setting),
 		},
@@ -6844,7 +6845,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		look_at_enabled: motion.look_at_enabled,
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
-		spring_bones: physics.dynamics_enabled.unwrap_or(true),
+		dynamics_enabled: physics.dynamics_enabled.unwrap_or(true),
 		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		contact_parameter_emission: physics.contact_parameter_emission,
 		spring_bone_physics_configured: physics.spring_bone_physics_configured,
@@ -10273,7 +10274,7 @@ id = "test"
 		.unwrap();
 
 		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
-		apply_avatar_setting_value(&mut manifest, &setting, "spring_bones", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "dynamics_enabled", serde_json::json!(true)).unwrap();
 		assert_eq!(
 			manifest
 				.get("physics")
@@ -10420,7 +10421,7 @@ enabled = true
 		.unwrap();
 		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
 		let _ = fs::remove_file(path);
-		assert!(parsed.spring_bones);
+		assert!(parsed.dynamics_enabled);
 	}
 
 	#[test]
@@ -10442,7 +10443,7 @@ id = "test"
 		.unwrap();
 		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
 		let _ = fs::remove_file(path);
-		assert!(parsed.spring_bones);
+		assert!(parsed.dynamics_enabled);
 	}
 
 	#[test]

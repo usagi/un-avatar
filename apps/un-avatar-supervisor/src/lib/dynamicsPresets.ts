@@ -16,7 +16,7 @@ export type DynamicsCategoryOverrideSetting = {
 	authored_xpbd_compliance: number;
 };
 
-export const DYNAMICS_ENABLED_FIELD = "spring_bones";
+export const DYNAMICS_ENABLED_FIELD = "dynamics_enabled";
 export const DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD = "physics.dynamics.enable_all_on_launch";
 export const DYNAMICS_OVERRIDE_FIELD_PREFIX = "physics.spring_bone.";
 export const DYNAMICS_BONE_COLLIDER_FIELD_PREFIX = "physics.bone_colliders.";
