@@ -1,6 +1,6 @@
 export const LOOK_POLICY_OPTIONS = [
-	["authored", "Authored"],
-	["override", "Override"],
+	["authored", "Material authored"],
+	["override", "Silhouette override"],
 	["off", "Off"],
 ] as const;
 
@@ -180,3 +180,7 @@ export const BLOOM_QUALITY_OPTIONS = [
 	["compact", "Compact"],
 	["high_quality", "High quality"],
 ] as const;
+
+export function optionLabel<const T extends readonly (readonly [string, string])[]>(options: T, value: string): string {
+	return options.find(([key]) => key === value)?.[1] ?? value;
+}

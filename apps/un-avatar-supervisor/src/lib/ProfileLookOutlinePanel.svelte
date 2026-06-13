@@ -2,6 +2,7 @@
 	import type { ProfileSettingValue } from "./profileTypes";
 	import { _ } from "svelte-i18n";
 	import { formatFixed } from "./formatting";
+	import { LOOK_POLICY_OPTIONS, optionLabel } from "./lookOptions";
 	import ProfileLookOutlineFields from "./ProfileLookOutlineFields.svelte";
 	import type { ColorModeChangeHandler } from "./profileColorActions";
 	import type { ProfileOutlineSetting } from "./profileLookTypes";
@@ -18,7 +19,9 @@
 	<summary>
 		<span>{$_("profiles.editor.look_outline")}</span>
 		<small>{$_("profiles.editor.look_outline_summary")}</small>
-		<span class="effect-panel-status">{setting.outline_policy} · {formatFixed((setting.outline_width ?? 0.003) * 1000)}mm</span>
+		<span class="effect-panel-status"
+			>{optionLabel(LOOK_POLICY_OPTIONS, setting.outline_policy)} · {formatFixed((setting.outline_width ?? 0.003) * 1000)}mm</span
+		>
 	</summary>
 	<ProfileLookOutlineFields {setting} {busy} {colorDisplayMode} {onColorModeChange} {onUpdateSettingValue} />
 </details>
