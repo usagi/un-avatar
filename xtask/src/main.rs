@@ -177,6 +177,7 @@ struct RendererLogSummary {
 	gltf_import_slice_ms: Option<String>,
 	scene_snapshot_ms: Option<String>,
 	read_meshes_ms: Option<String>,
+	read_meshes_stage: Option<String>,
 	prewarm_total_ms: Option<String>,
 	texture_total_ms: Option<String>,
 	mesh_total_ms: Option<String>,
@@ -237,11 +238,11 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tscene_snapshot_ms\tread_meshes_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
+		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.pre_scene_import_ms.as_deref().unwrap_or("-"),
@@ -249,6 +250,7 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 			summary.gltf_import_slice_ms.as_deref().unwrap_or("-"),
 			summary.scene_snapshot_ms.as_deref().unwrap_or("-"),
 			summary.read_meshes_ms.as_deref().unwrap_or("-"),
+			summary.read_meshes_stage.as_deref().unwrap_or("-"),
 			summary.prewarm_total_ms.as_deref().unwrap_or("-"),
 			summary.texture_total_ms.as_deref().unwrap_or("-"),
 			summary.mesh_total_ms.as_deref().unwrap_or("-"),
@@ -296,6 +298,8 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.scene_snapshot_ms = metric_token(line, "scene_snapshot_ms=");
 		} else if line.contains("glTF scene profile: read_meshes_ms=") {
 			summary.read_meshes_ms = metric_token(line, "read_meshes_ms=");
+		} else if let Some(stage) = line.strip_prefix("un-avatar-renderer: glTF scene profile: read_meshes.stage_ms ") {
+			summary.read_meshes_stage = Some(stage.to_string());
 		} else if line.contains("scene cache prewarm scene") {
 			summary.prewarm_total_ms = metric_token(line, "total=").map(strip_ms);
 		} else if line.contains("gpu scene texture prepare summary") {
@@ -3168,6 +3172,7 @@ glTF import profile: file_read_bytes=779284856 file_read_ms=182\n\
 glTF import profile: gltf_import_slice_ms=102\n\
 glTF import profile: pre_scene_import_ms=382\n\
 glTF scene profile: read_meshes_ms=129\n\
+un-avatar-renderer: glTF scene profile: read_meshes.stage_ms cache_clone=6 cache_take=0 positions=5 joints_weights=12 attributes=19 indices=9 morphs=96 defaults=0 cache_insert=42\n\
 glTF import profile: scene_snapshot_ms=249\n\
 un-avatar-renderer: gpu scene benchmark import path=model elapsed=1120.9ms\n\
 un-avatar-renderer: gpu scene texture image=6 name=\"Body_b\" mime=\"image/png\" resident=true role=GenericColor: 72.5ms cube=0.0ms source=0.0ms rgba=0.0ms cache_lookup=0.0ms cache_read=25.9ms processed=0.0ms payload=0.0ms upload=46.5ms read_mb=85.3\n\
@@ -3184,6 +3189,10 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 		assert_eq!(summary.gltf_import_slice_ms.as_deref(), Some("102"));
 		assert_eq!(summary.scene_snapshot_ms.as_deref(), Some("249"));
 		assert_eq!(summary.read_meshes_ms.as_deref(), Some("129"));
+		assert_eq!(
+			summary.read_meshes_stage.as_deref(),
+			Some("cache_clone=6 cache_take=0 positions=5 joints_weights=12 attributes=19 indices=9 morphs=96 defaults=0 cache_insert=42")
+		);
 		assert_eq!(summary.texture_total_ms.as_deref(), Some("1271.4"));
 		assert_eq!(summary.mesh_total_ms.as_deref(), Some("121.9"));
 		assert_eq!(summary.cache_read_ms.as_deref(), Some("70.4"));
