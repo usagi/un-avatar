@@ -2639,6 +2639,22 @@ fn build_lazy_scene_image_texture_upload(
 	build_scene_image_texture_upload(upload_image, source_metadata, lazy, gpu_texture_compression)
 }
 
+fn build_lazy_scene_cube_texture_upload(
+	scene: &UnaSceneSnapshot,
+	lazy: &SceneCubeTextureLazyUpload,
+) -> Option<(CubeUpload, CubeUploadCacheEvent)> {
+	let image = scene.images.get(lazy.image_index)?;
+	let source_metadata = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
+	let decoded_source;
+	let upload_image = if let Some(decoded) = source_metadata.and_then(decode_encoded_source_image) {
+		decoded_source = decoded;
+		&decoded_source
+	} else {
+		image
+	};
+	cube_upload_from_image(upload_image, source_metadata, lazy.processed_texture_cache)
+}
+
 fn decode_encoded_source_image(source: &UnaImageSourceMetadata) -> Option<UnaImageRgba> {
 	let file_bytes;
 	let bytes = if let Some(bytes) = source.encoded_bytes.as_deref() {
@@ -2683,8 +2699,18 @@ fn scene_image_source_dimensions(image: &UnaImageRgba, source: Option<&UnaImageS
 		.unwrap_or((image.width.max(1), image.height.max(1)))
 }
 
+struct SceneCubeTextureLazyUpload {
+	image_index: usize,
+	processed_texture_cache: bool,
+}
+
+enum SceneCubeTextureUpload {
+	Source(CubeUpload),
+	Lazy(SceneCubeTextureLazyUpload),
+}
+
 struct SceneCubeTextureSlot {
-	upload: CubeUpload,
+	upload: SceneCubeTextureUpload,
 	texture: Option<wgpu::Texture>,
 	view: Option<wgpu::TextureView>,
 }
@@ -2692,17 +2718,40 @@ struct SceneCubeTextureSlot {
 impl SceneCubeTextureSlot {
 	fn new(upload: CubeUpload) -> Self {
 		Self {
-			upload,
+			upload: SceneCubeTextureUpload::Source(upload),
 			texture: None,
 			view: None,
 		}
 	}
 
-	fn ensure_uploaded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<wgpu::TextureView> {
+	fn new_lazy(image_index: usize, processed_texture_cache: bool) -> Self {
+		Self {
+			upload: SceneCubeTextureUpload::Lazy(SceneCubeTextureLazyUpload {
+				image_index,
+				processed_texture_cache,
+			}),
+			texture: None,
+			view: None,
+		}
+	}
+
+	fn ensure_uploaded(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: Option<&UnaSceneSnapshot>,
+	) -> Option<wgpu::TextureView> {
 		if let Some(view) = &self.view {
 			return Some(view.clone());
 		}
-		let texture = create_cube_texture_from_upload(device, queue, &self.upload);
+		if let SceneCubeTextureUpload::Lazy(lazy) = &self.upload {
+			let (upload, _) = build_lazy_scene_cube_texture_upload(scene?, lazy)?;
+			self.upload = SceneCubeTextureUpload::Source(upload);
+		}
+		let SceneCubeTextureUpload::Source(upload) = &self.upload else {
+			return None;
+		};
+		let texture = create_cube_texture_from_upload(device, queue, upload);
 		let view = texture.create_view(&wgpu::TextureViewDescriptor {
 			label: Some("gltf_image_cube_view"),
 			dimension: Some(wgpu::TextureViewDimension::Cube),
@@ -4962,8 +5011,9 @@ fn cube_source_layout(image: &UnaImageRgba, source: Option<&UnaImageSourceMetada
 	if !texture_source_is_cube(source) {
 		return None;
 	}
-	let width = image.width.max(1);
-	let height = image.height.max(1);
+	let (width, height) = scene_image_source_dimensions(image, source);
+	let width = width.max(1);
+	let height = height.max(1);
 	let layout_hint = source
 		.and_then(|source| source.source_layout.as_deref())
 		.unwrap_or("")
@@ -4990,6 +5040,19 @@ fn cube_source_layout(image: &UnaImageRgba, source: Option<&UnaImageSourceMetada
 		return Some((CubeSourceLayout::SphereMap, width.min(height).max(1)));
 	}
 	None
+}
+
+fn estimated_cube_upload_mip_bytes(face_size: u32) -> u64 {
+	let mut total = 0u64;
+	let mut size = face_size.max(1);
+	loop {
+		total = total.saturating_add(size as u64 * size as u64 * 6 * 8);
+		if size <= 1 {
+			break;
+		}
+		size = (size / 2).max(1);
+	}
+	total
 }
 
 fn cube_upload_from_image(
@@ -8500,55 +8563,59 @@ impl SceneMeshes {
 				texture_summary.cubemap_count += 1;
 			}
 			let cube_prepare_start = Instant::now();
-			if let Some((cube_upload, cube_cache_event)) = cube_upload_from_image(im, source_metadata, processed_texture_cache) {
-				image_prepare_timings.cube += cube_prepare_start.elapsed();
-				texture_summary.cubemap_converted_count += 1;
-				if cube_cache_event.hit {
-					texture_summary.cubemap_cache_hits += 1;
-				}
-				if cube_cache_event.miss {
-					texture_summary.cubemap_cache_misses += 1;
-				}
-				if cube_cache_event.write {
-					texture_summary.cubemap_cache_writes += 1;
-				}
-				let cube_bytes = cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
-				let mut slot = SceneCubeTextureSlot::new(cube_upload);
+			if let Some((_layout, face_size)) = cube_source_layout(im, source_metadata) {
 				if cube_resident {
-					report(
-						"gpu-upload",
-						total_steps,
-						format!(
-							"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
-							image_index + 1,
-							scene.images.len(),
-							slot.upload.face_size,
-							slot.upload.mips.len(),
-							slot.upload.layout
-						),
-					);
-					texture_summary.cubemap_uploaded_bytes += cube_bytes;
-					let upload_start = Instant::now();
-					cube_image_views.push(slot.ensure_uploaded(device, queue));
-					image_prepare_timings.upload += upload_start.elapsed();
+					if let Some((cube_upload, cube_cache_event)) = build_lazy_scene_cube_texture_upload(
+						scene,
+						&SceneCubeTextureLazyUpload {
+							image_index,
+							processed_texture_cache,
+						},
+					) {
+						image_prepare_timings.cube += cube_prepare_start.elapsed();
+						texture_summary.cubemap_converted_count += 1;
+						if cube_cache_event.hit {
+							texture_summary.cubemap_cache_hits += 1;
+						}
+						if cube_cache_event.miss {
+							texture_summary.cubemap_cache_misses += 1;
+						}
+						if cube_cache_event.write {
+							texture_summary.cubemap_cache_writes += 1;
+						}
+						let cube_bytes = cube_upload.mips.iter().map(|mip| mip.data_rgba16f.len() as u64).sum::<u64>();
+						report(
+							"gpu-upload",
+							total_steps,
+							format!(
+								"Uploading cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
+								image_index + 1,
+								scene.images.len(),
+								cube_upload.face_size,
+								cube_upload.mips.len(),
+								cube_upload.layout
+							),
+						);
+						texture_summary.cubemap_uploaded_bytes += cube_bytes;
+						let upload_start = Instant::now();
+						let mut slot = SceneCubeTextureSlot::new(cube_upload);
+						cube_image_views.push(slot.ensure_uploaded(device, queue, Some(scene)));
+						image_prepare_timings.upload += upload_start.elapsed();
+						cube_texture_slots.push(Some(slot));
+					} else {
+						image_prepare_timings.cube += cube_prepare_start.elapsed();
+						texture_summary.cubemap_fallback_count += 1;
+						cube_image_views.push(None);
+						cube_texture_slots.push(None);
+					}
 				} else {
+					image_prepare_timings.cube += cube_prepare_start.elapsed();
+					let cube_bytes = estimated_cube_upload_mip_bytes(face_size);
 					texture_summary.deferred_cubemap_upload_count += 1;
 					texture_summary.deferred_cubemap_mip_bytes += cube_bytes;
-					report(
-						"gpu-upload",
-						total_steps,
-						format!(
-							"Deferring cubemap texture {}/{} face={} mips={} layout={} ({role:?})",
-							image_index + 1,
-							scene.images.len(),
-							slot.upload.face_size,
-							slot.upload.mips.len(),
-							slot.upload.layout
-						),
-					);
 					cube_image_views.push(None);
+					cube_texture_slots.push(Some(SceneCubeTextureSlot::new_lazy(image_index, processed_texture_cache)));
 				}
-				cube_texture_slots.push(Some(slot));
 			} else {
 				image_prepare_timings.cube += cube_prepare_start.elapsed();
 				if texture_source_is_cube(source_metadata) {
@@ -10980,7 +11047,7 @@ impl SceneMeshes {
 		let mut cube_loaded = 0;
 		for index in cube_load_indices {
 			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
-				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue);
+				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue, Some(scene));
 				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
 			}
 		}
@@ -12007,6 +12074,27 @@ mod tests {
 		assert_eq!(
 			cube_source_layout(&image, Some(&cube_source)),
 			Some((CubeSourceLayout::VerticalCross, 256))
+		);
+	}
+
+	#[test]
+	fn cubemap_source_layout_uses_metadata_dimensions_for_deferred_placeholder() {
+		let cube_source = UnaImageSourceMetadata {
+			texture_shape: Some("TextureCube".to_string()),
+			width: Some(1024),
+			height: Some(512),
+			..empty_source_metadata()
+		};
+		let image = UnaImageRgba {
+			width: 0,
+			height: 0,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: Vec::new(),
+		};
+
+		assert_eq!(
+			cube_source_layout(&image, Some(&cube_source)),
+			Some((CubeSourceLayout::Latlong, 256))
 		);
 	}
 
