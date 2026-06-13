@@ -60,9 +60,17 @@ export const TEXTURE_COMPRESSION_ROLES: Array<{
 	{ key: "eyes", labelKey: "profiles.editor.options.texture_role_eyes", hintKey: "profiles.hints.quality.texture_role_eyes" },
 	{ key: "clothing", labelKey: "profiles.editor.options.texture_role_clothing", hintKey: "profiles.hints.quality.texture_role_clothing" },
 	{ key: "normal", labelKey: "profiles.editor.options.texture_role_normal", hintKey: "profiles.hints.quality.texture_role_normal" },
-	{ key: "occlusion", labelKey: "profiles.editor.options.texture_role_occlusion", hintKey: "profiles.hints.quality.texture_role_occlusion" },
+	{
+		key: "occlusion",
+		labelKey: "profiles.editor.options.texture_role_occlusion",
+		hintKey: "profiles.hints.quality.texture_role_occlusion",
+	},
 	{ key: "emissive", labelKey: "profiles.editor.options.texture_role_emissive", hintKey: "profiles.hints.quality.texture_role_emissive" },
-	{ key: "generic_color", labelKey: "profiles.editor.options.texture_role_generic_color", hintKey: "profiles.hints.quality.texture_role_generic_color" },
+	{
+		key: "generic_color",
+		labelKey: "profiles.editor.options.texture_role_generic_color",
+		hintKey: "profiles.hints.quality.texture_role_generic_color",
+	},
 	{ key: "data", labelKey: "profiles.editor.options.texture_role_data", hintKey: "profiles.hints.quality.texture_role_data" },
 ];
 

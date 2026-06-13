@@ -29,9 +29,7 @@
 	</label>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1280, height: 720 }, "720p")}>720p</button>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1920, height: 1080 }, "1080p")}>1080p</button>
-	<button
-		disabled={spoutDisabled}
-		onclick={() => setSpoutOnly1080p()}
-		title={$_("renderers.controls.spout_only_title")}>{$_("renderers.controls.spout_only")}</button
+	<button disabled={spoutDisabled} onclick={() => setSpoutOnly1080p()} title={$_("renderers.controls.spout_only_title")}
+		>{$_("renderers.controls.spout_only")}</button
 	>
 </div>
