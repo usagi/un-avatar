@@ -135,8 +135,6 @@ export const OUTPUT_MODE_PRESETS: Record<OutputModePreset, readonly ProfilePrese
 	],
 	spout2_only: [
 		["output.spout2.enabled", true],
-		["window.width", 640],
-		["window.height", 360],
 		["window.minimized", true],
 	],
 };

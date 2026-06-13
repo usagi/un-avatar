@@ -131,8 +131,8 @@ Supervisor look policy:
 Output / preview policy:
 
 - Spout2 output resolution and local Window preview size are separate user concepts. Streamers often want OBS to receive 1920x1080 while the local preview stays small or minimized.
-- v2 Supervisor exposes output modes as Window Preview, Spout2 + Preview, and Spout2 Only. `Spout2 Only` initially means Spout2 enabled, output resolution set for OBS, and the local preview window launched minimized; this keeps the current winit/wgpu surface path intact.
-- Running renderers expose the same practical shortcut in the Output controls: `Spout2 Only` enables 1080p Spout2 and minimizes the local preview without stopping the renderer. Plain 720p / 1080p buttons only change Spout2 output and do not implicitly restore or minimize the preview.
+- v2 Supervisor exposes output modes as Window Preview, Spout2 + Preview, and Spout2 Only. `Spout2 Only` initially means Spout2 enabled and the local preview window launched minimized; it does not resize the preview window or change Spout2 resolution. Output resolution and preview size are explicit separate controls. This keeps the current winit/wgpu surface path intact.
+- Running renderers expose the same practical shortcut in the Output controls: `Spout2 Only` enables Spout2 and minimizes the local preview without stopping the renderer. Plain 720p / 1080p buttons only change Spout2 output and do not implicitly restore or minimize the preview.
 - True headless output, where renderer rendering no longer depends on a visible/native surface, is a later renderer architecture task. Do not fake it by silently changing Spout resolution or coupling it back to window size.
 
 Renderer tray / Supervisor operation policy:
