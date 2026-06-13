@@ -5032,32 +5032,89 @@ textarea {
 }
 
 .unavatar-crop-frame {
+	position: relative;
 	overflow: hidden;
+	touch-action: none;
+	cursor: grab;
 }
 
 .unavatar-crop-frame .vrm-metadata-thumbnail {
 	will-change: transform;
 }
 
-.unavatar-icon-crop-controls {
-	display: grid;
-	grid-template-columns: minmax(180px, auto) repeat(3, minmax(90px, 140px));
-	align-items: center;
-	gap: 8px;
-	margin-right: auto;
+.unavatar-crop-frame.disabled {
+	cursor: default;
 }
 
-.unavatar-icon-crop-controls label:not(.vrm-thumbnail-icon-toggle) {
-	display: grid;
-	gap: 3px;
+.unavatar-crop-frame.disabled .vrm-metadata-thumbnail {
+	opacity: 0.72;
+	filter: saturate(0.86);
+}
+
+.unavatar-crop-hint {
+	position: absolute;
+	right: 10px;
+	bottom: 9px;
+	max-width: calc(100% - 20px);
+	padding: 4px 7px;
+	border: 1px solid color-mix(in srgb, var(--accent-cool) 34%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--panel) 74%, transparent);
 	color: var(--muted);
-	font-size: 11px;
+	font-size: 10px;
 	font-weight: 700;
+	line-height: 1;
+	pointer-events: none;
 }
 
-.unavatar-icon-crop-controls input[type="range"] {
-	width: 100%;
-	min-width: 90px;
+.unavatar-icon-crop-panel {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	width: min(100%, 330px);
+	min-height: 34px;
+	margin-top: 10px;
+}
+
+.unavatar-icon-crop-panel > button {
+	flex: 0 0 auto;
+	min-width: 118px;
+	padding: 7px 10px;
+	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--panel-subtle) 52%, transparent);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 700;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.unavatar-icon-crop-panel > button.active {
+	border-color: color-mix(in srgb, var(--accent-cool) 70%, var(--border));
+	background: color-mix(in srgb, var(--accent-cool) 14%, var(--panel-subtle));
+	color: var(--text);
+}
+
+.unavatar-crop-zoom-actions {
+	display: inline-flex;
+	gap: 4px;
+}
+
+.unavatar-crop-zoom-actions button {
+	width: 34px;
+	height: 30px;
+	min-height: 30px;
+	padding: 0;
+	border-radius: 7px;
+	font-size: 12px;
+	font-weight: 800;
+}
+
+.unavatar-crop-zoom-actions button:disabled {
+	opacity: 0.45;
+	cursor: default;
 }
 
 @media (max-width: 760px) {
