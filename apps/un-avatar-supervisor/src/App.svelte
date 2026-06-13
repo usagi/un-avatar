@@ -716,7 +716,7 @@
 			return;
 		}
 		const section = document.querySelector<HTMLElement>(`[data-profile-section="${id}"]`);
-		section?.scrollIntoView({ block: "start", behavior: "smooth" });
+		section?.scrollIntoView({ block: "start", behavior: "auto" });
 		if (typeof window !== "undefined") {
 			profileSectionScrollUnlockTimer = window.setTimeout(() => {
 				profileSectionScrollTarget = null;

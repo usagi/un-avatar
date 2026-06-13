@@ -10343,6 +10343,28 @@ mod tests {
 			body_positions.windows(2).all(|pair| pair[0] < pair[1]),
 			"profile section body order should match the profile nav order: {body_markers:?}"
 		);
+
+		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
+			.expect("styles.css should be readable");
+		let css_markers = [
+			(".profile-identity-section", "order: 0"),
+			(".profile-avatar-section", "order: 1"),
+			(".render-quality-section", "order: 2"),
+			(".lighting-section", "order: 3"),
+			(".rendering-presentation-section", "order: 4"),
+			(".profile-motion-section", "order: 5"),
+			(".profile-physics-section", "order: 6"),
+			(".profile-camera-section", "order: 7"),
+			(".profile-window-section", "order: 8"),
+			(".profile-output-section", "order: 9"),
+		];
+		for (selector, order) in css_markers {
+			let marker = format!("{selector} {{\n\t{order};");
+			assert!(
+				styles_css.contains(&marker),
+				"profile section CSS selector {selector} should contain {order}"
+			);
+		}
 	}
 
 	#[test]

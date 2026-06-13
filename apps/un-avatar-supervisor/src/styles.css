@@ -634,7 +634,8 @@ small,
 }
 
 .stage-title-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(220px, 1fr) auto;
 	align-items: flex-start;
 	justify-content: space-between;
 	gap: 12px;
@@ -666,16 +667,18 @@ small,
 	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: 8px;
+	min-width: 0;
 	max-width: min(920px, 60vw);
 }
 
 .profile-stage-action-group {
 	display: grid;
-	grid-template-columns: minmax(116px, 160px) minmax(0, auto);
+	grid-template-columns: minmax(112px, 150px) minmax(0, 1fr);
 	flex: 0 1 auto;
 	align-items: start;
 	justify-content: flex-end;
 	gap: 8px;
+	max-width: 100%;
 	min-width: 0;
 	padding-left: 8px;
 	border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -729,6 +732,7 @@ small,
 	justify-content: center;
 	gap: 6px;
 	max-width: 190px;
+	min-width: 0;
 	min-height: 30px;
 	padding: 0 10px;
 	border-radius: 7px;
@@ -2340,7 +2344,7 @@ td small {
 	}
 
 	.profile-stage-action-group {
-		grid-template-columns: minmax(112px, 150px) minmax(0, auto);
+		grid-template-columns: minmax(108px, 140px) minmax(0, 1fr);
 	}
 
 	.runtime-summary-grid {
@@ -3482,22 +3486,26 @@ dd {
 	order: 4;
 }
 
-.profile-window-section {
+.profile-motion-section {
 	order: 5;
+}
+
+.profile-physics-section {
+	order: 6;
+}
+
+.profile-camera-section {
+	order: 7;
+}
+
+.profile-window-section {
+	order: 8;
 	grid-template-columns: repeat(12, minmax(0, 1fr));
 	align-items: start;
 }
 
-.profile-camera-section {
-	order: 6;
-}
-
-.profile-motion-section {
-	order: 7;
-}
-
 .profile-output-section {
-	order: 8;
+	order: 9;
 }
 
 .profile-identity-section {
@@ -4069,7 +4077,7 @@ dd {
 
 .dynamics-override-row {
 	display: grid;
-	grid-template-columns: minmax(120px, 0.8fr) repeat(3, minmax(150px, 1fr)) auto;
+	grid-template-columns: minmax(128px, 0.9fr) repeat(auto-fit, minmax(150px, 1fr));
 	align-items: end;
 	gap: 8px;
 	padding: 8px;
@@ -4083,6 +4091,16 @@ dd {
 	gap: 2px;
 	align-self: center;
 	min-width: 0;
+}
+
+.dynamics-override-row > label {
+	min-width: 0;
+}
+
+.dynamics-override-row > button {
+	align-self: end;
+	justify-self: end;
+	min-width: max-content;
 }
 
 .dynamics-override-title strong {
@@ -4117,6 +4135,7 @@ dd {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
+	min-width: 0;
 	padding-top: 2px;
 }
 
@@ -4606,6 +4625,8 @@ label {
 input,
 select,
 textarea {
+	max-width: 100%;
+	min-width: 0;
 	min-height: 32px;
 	border: 1px solid var(--border);
 	border-radius: 6px;
@@ -4949,11 +4970,12 @@ textarea {
 	}
 
 	.stage-title-row {
-		flex-wrap: wrap;
+		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.profile-stage-actions {
 		justify-content: flex-start;
+		width: 100%;
 	}
 
 	.profile-stage-action-group {
