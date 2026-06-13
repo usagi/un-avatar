@@ -1355,6 +1355,26 @@ struct UntoonShaderFeatures {
 	normal_second: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum UntoonSourceProfile {
+	#[default]
+	Plain,
+	MToon,
+	LilToon,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct UntoonFeaturePlan {
+	source_profile: UntoonSourceProfile,
+	shader_features: UntoonShaderFeatures,
+}
+
+impl UntoonFeaturePlan {
+	fn none() -> Self {
+		Self::default()
+	}
+}
+
 impl UntoonShaderFeatures {
 	fn include(&mut self, other: Self) {
 		self.profile_extensions |= other.profile_extensions;
@@ -2243,9 +2263,9 @@ fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShad
 	})
 }
 
-fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonShaderFeatures {
+fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonFeaturePlan {
 	if opts.force_simple_basecolor || !shading.is_toon_like() {
-		return UntoonShaderFeatures::default();
+		return UntoonFeaturePlan::none();
 	}
 	if let Some(liltoon_like) = material.liltoon_like_runtime() {
 		let has_main_layer_dissolve = liltoon_like.main_color.second_dissolve.mask_texture_index.is_some()
@@ -2268,51 +2288,63 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 		let rim = lil_enabled(liltoon_like.rim.enabled_factor);
 		let emission = lil_enabled(liltoon_like.emission.enabled_factor);
 		let emission_second = lil_enabled(liltoon_like.emission.second_enabled_factor);
-		UntoonShaderFeatures {
-			profile_extensions: true,
-			main_layers,
-			alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
-			dissolve: has_dissolve,
-			parallax: lil_enabled(liltoon_like.parallax.enabled_factor),
-			id_mask: liltoon_features::uses_id_mask(&liltoon_like.id_mask),
-			udim_discard: liltoon_features::uses_udim_discard(&liltoon_like.udim_discard),
-			audio_link: material_needs_audio_link_texture(material, shading),
-			shadow_layers: lil_enabled(liltoon_like.shadow.enabled_factor),
-			matcap,
-			matcap_second,
-			matcap_custom_normal: liltoon_like.matcap.custom_normal_factor > 0.5 || liltoon_like.matcap.second_custom_normal_factor > 0.5,
-			reflection,
-			reflection_cube,
-			anisotropy,
-			rim,
-			rim_shade: lil_enabled(liltoon_like.rim.shade_enabled_factor),
-			backlight: lil_enabled(liltoon_like.backlight.enabled_factor),
-			glitter: lil_enabled(liltoon_like.glitter.enabled_factor),
-			emission,
-			emission_second,
-			distance_fade: liltoon_like.rendering.distance_fade_color_factor[3] > 0.00001
-				|| liltoon_like.rendering.distance_fade_rim_color_factor[3] > 0.00001
-				|| liltoon_like.rendering.distance_fade_mode_factor > 0.5,
-			fur: material_has_fur(material, shading, opts),
-			gem: liltoon_like.is_gem_profile(),
-			refraction: liltoon_like.needs_screen_refraction(),
-			normal_second: lil_enabled(liltoon_like.normal.second_enabled_factor),
+		UntoonFeaturePlan {
+			source_profile: UntoonSourceProfile::LilToon,
+			shader_features: UntoonShaderFeatures {
+				profile_extensions: true,
+				main_layers,
+				alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
+				dissolve: has_dissolve,
+				parallax: lil_enabled(liltoon_like.parallax.enabled_factor),
+				id_mask: liltoon_features::uses_id_mask(&liltoon_like.id_mask),
+				udim_discard: liltoon_features::uses_udim_discard(&liltoon_like.udim_discard),
+				audio_link: material_needs_audio_link_texture(material, shading),
+				shadow_layers: lil_enabled(liltoon_like.shadow.enabled_factor),
+				matcap,
+				matcap_second,
+				matcap_custom_normal: liltoon_like.matcap.custom_normal_factor > 0.5
+					|| liltoon_like.matcap.second_custom_normal_factor > 0.5,
+				reflection,
+				reflection_cube,
+				anisotropy,
+				rim,
+				rim_shade: lil_enabled(liltoon_like.rim.shade_enabled_factor),
+				backlight: lil_enabled(liltoon_like.backlight.enabled_factor),
+				glitter: lil_enabled(liltoon_like.glitter.enabled_factor),
+				emission,
+				emission_second,
+				distance_fade: liltoon_like.rendering.distance_fade_color_factor[3] > 0.00001
+					|| liltoon_like.rendering.distance_fade_rim_color_factor[3] > 0.00001
+					|| liltoon_like.rendering.distance_fade_mode_factor > 0.5,
+				fur: material_has_fur(material, shading, opts),
+				gem: liltoon_like.is_gem_profile(),
+				refraction: liltoon_like.needs_screen_refraction(),
+				normal_second: lil_enabled(liltoon_like.normal.second_enabled_factor),
+			},
 		}
 	} else {
 		let mtoon = material.mtoon_like_runtime();
-		UntoonShaderFeatures {
-			profile_extensions: false,
-			shadow_layers: true,
-			matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
-			reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-			reflection_cube: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-			rim: mtoon.is_some_and(|mtoon| {
-				mtoon.rim_multiply_texture_index.is_some() || mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001)
-			}),
-			emission: material.emissive_texture_index.is_some() || material.emissive_factor.iter().any(|value| value.abs() > 0.00001),
-			..Default::default()
+		UntoonFeaturePlan {
+			source_profile: UntoonSourceProfile::MToon,
+			shader_features: UntoonShaderFeatures {
+				profile_extensions: false,
+				shadow_layers: true,
+				matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
+				reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
+				reflection_cube: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
+				rim: mtoon.is_some_and(|mtoon| {
+					mtoon.rim_multiply_texture_index.is_some()
+						|| mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001)
+				}),
+				emission: material.emissive_texture_index.is_some() || material.emissive_factor.iter().any(|value| value.abs() > 0.00001),
+				..Default::default()
+			},
 		}
 	}
+}
+
+fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonShaderFeatures {
+	material_untoon_feature_plan(material, shading, opts).shader_features
 }
 
 fn material_runtime_requirements(
@@ -12769,6 +12801,10 @@ mod tests {
 		assert!(requirements.audio_link_texture);
 		assert!(requirements.screen_refraction);
 		assert!(requirements.fur);
+		let liltoon_plan = material_untoon_feature_plan(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert_eq!(liltoon_plan.source_profile, UntoonSourceProfile::LilToon);
+		assert!(liltoon_plan.shader_features.audio_link);
+		assert!(liltoon_plan.shader_features.refraction);
 
 		let disabled_fur = material_runtime_requirements(
 			&mat,
@@ -12808,8 +12844,10 @@ mod tests {
 			..Default::default()
 		};
 
-		let features = material_untoon_shader_features(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+		let plan = material_untoon_feature_plan(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+		let features = plan.shader_features;
 
+		assert_eq!(plan.source_profile, UntoonSourceProfile::MToon);
 		assert!(!features.profile_extensions);
 		assert!(features.shadow_layers);
 		assert!(features.matcap);
