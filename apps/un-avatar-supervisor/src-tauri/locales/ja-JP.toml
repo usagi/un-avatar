@@ -410,9 +410,9 @@ section = "Avatar: Renderer で読み込む VRM/VRM1 アバターファイルを
 [profiles.hints.quality]
 section = "Render Quality: 起動時に決まる描画品質とテクスチャ処理を設定します。"
 recommendations_label = "描画品質のおすすめ"
-light = "FXAA / 2K / Auto compression / Bilinear"
+light = "FXAA / 2K / Memory compression / Bilinear"
 balanced = "SMAA / Auto texture limit / Balanced compression / Mitchell"
-high = "SMAA / No texture limit / Auto compression / Mitchell"
+high = "SMAA / No texture limit / Balanced compression + Clothing/Generic Color BC7。初回はキャッシュ準備推奨。"
 anti_aliasing = "Anti-aliasing: 輪郭のジャギーを抑えます。MSAA は高品質ですが負荷が高めです。"
 texture_limit = "テクスチャ上限: 大きすぎるテクスチャを制限して、メモリ使用量と起動負荷を抑えます。"
 mipmap_filter = "Mipmap filter: 既定は Mitchell-Netravali。Box2x2 は旧実装互換、Lanczos3 はシャープ寄りです。"
