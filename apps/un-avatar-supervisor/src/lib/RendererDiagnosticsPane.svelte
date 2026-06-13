@@ -122,6 +122,14 @@
 		return `${entry.owner_key} state=${entry.condition_state ?? "none"} ${entry.target_kind}:${entry.target_key} ready=${entry.ready} reason=${entry.reason} baseline=${JSON.stringify(entry.baseline_value)} current=${JSON.stringify(entry.current_value)}`;
 	}
 
+	function wardrobeResidencyLabel(upload: NonNullable<RendererRuntimeDiagnosticsData["wardrobe_asset_upload"]>): string {
+		const pendingCube = upload.pending_cube_texture_upload_count ?? 0;
+		const inactiveCube = upload.inactive_cube_textures_used_by_active_draw_count ?? 0;
+		const activeCubeDraws = upload.active_draws_using_inactive_cube_texture_count ?? 0;
+		const groups = upload.active_asset_groups?.length ? upload.active_asset_groups.join(",") : "-";
+		return `mode=${upload.mode} groups=${groups} allResident=${upload.all_resident} scopedUpload=${upload.scoped_upload_supported} resident mesh=${upload.resident_draw_mesh_primitive_count}/${upload.total_draw_mesh_primitive_count} image=${upload.resident_image_texture_count}/${upload.total_image_texture_count} material=${upload.resident_material_slot_count}/${upload.total_material_slot_count} pending image=${upload.pending_image_texture_upload_count} cube=${pendingCube} material=${upload.pending_material_slot_upload_count} activeGaps imageDraws=${upload.active_draws_using_inactive_image_texture_count} cubeDraws=${activeCubeDraws} materialDraws=${upload.active_draws_using_inactive_material_slot_count} inactiveActive image=${upload.inactive_image_textures_used_by_active_draw_count} cube=${inactiveCube} material=${upload.inactive_material_slots_used_by_active_draw_count} lastLoad mesh=${upload.last_mesh_buffer_scoped_load_count}/${upload.last_mesh_buffer_scoped_unload_count} image=${upload.last_image_texture_scoped_load_count}/${upload.last_image_texture_scoped_unload_count} cube=${upload.last_cubemap_scoped_load_count}/${upload.last_cubemap_scoped_unload_count} material=${upload.last_material_slot_scoped_upload_count}`;
+	}
+
 	function toggleDynamicsGroup(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): void {
 		if (!canSetDynamicsEnabled || !group.source_id) return;
 		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
@@ -154,6 +162,10 @@
 			<dd>{runtimeStatus.note}</dd>
 		{/if}
 		{#if runtimeStatus}
+			{#if runtimeStatus.wardrobe_asset_upload}
+				<dt>{$_("renderers.details.diag_wardrobe_residency")}</dt>
+				<dd class="stderr-block">{wardrobeResidencyLabel(runtimeStatus.wardrobe_asset_upload)}</dd>
+			{/if}
 			<dt>{$_("renderers.details.diag_dynamics_summary")}</dt>
 			<dd>
 				{$_("renderers.details.diag_dynamics_summary_value", {

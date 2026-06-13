@@ -337,6 +337,57 @@ export type RendererRuntimeActionStatus = {
 	}[];
 };
 
+export type RendererWardrobeAssetUploadPlan = {
+	mode: string;
+	active_asset_groups?: string[];
+	declared_asset_group_count: number;
+	owned_asset_group_count: number;
+	owned_mesh_primitive_count: number;
+	owned_material_count: number;
+	owned_image_count: number;
+	owned_dynamics_count: number;
+	resident_mesh_primitive_count: number;
+	resident_material_count: number;
+	resident_image_count: number;
+	resident_dynamics_count: number;
+	total_draw_mesh_primitive_count: number;
+	resident_draw_mesh_primitive_count: number;
+	inactive_draw_mesh_primitive_count: number;
+	total_image_texture_count: number;
+	resident_image_texture_count: number;
+	inactive_image_texture_count: number;
+	active_draws_using_inactive_image_texture_count: number;
+	inactive_image_textures_used_by_active_draw_count: number;
+	active_draws_using_inactive_cube_texture_count?: number;
+	inactive_cube_textures_used_by_active_draw_count?: number;
+	total_material_slot_count: number;
+	resident_material_slot_count: number;
+	inactive_material_slot_count: number;
+	active_draws_using_inactive_material_slot_count: number;
+	inactive_material_slots_used_by_active_draw_count: number;
+	pending_image_texture_upload_count: number;
+	pending_cube_texture_upload_count?: number;
+	pending_material_slot_upload_count: number;
+	last_residency_refresh_active_draw_change_count: number;
+	last_residency_refresh_image_load_count: number;
+	last_residency_refresh_image_unload_count: number;
+	last_residency_refresh_material_load_count: number;
+	last_residency_refresh_material_unload_count: number;
+	last_mesh_buffer_scoped_load_count: number;
+	last_mesh_buffer_scoped_unload_count: number;
+	last_image_texture_scoped_load_count: number;
+	last_image_texture_scoped_unload_count: number;
+	last_cubemap_scoped_load_count: number;
+	last_cubemap_scoped_unload_count: number;
+	last_material_slot_scoped_upload_count: number;
+	inactive_owned_asset_group_count: number;
+	scoped_draw_supported: boolean;
+	scoped_upload_supported: boolean;
+	all_resident: boolean;
+	active_residency_gaps_detected: boolean;
+	reason?: string;
+};
+
 export type RendererRuntimeStatus = {
 	id: number;
 	state: RendererState;
@@ -377,6 +428,7 @@ export type RendererRuntimeStatus = {
 	mipmap_filter: string | null;
 	processed_texture_cache: boolean | null;
 	texture_summary: TextureRuntimeSummary | null;
+	wardrobe_asset_upload?: RendererWardrobeAssetUploadPlan;
 	spout_available: boolean;
 	spout_enabled: boolean;
 	spout_name: string | null;
@@ -525,6 +577,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "runtime_parameter_definitions"
 	| "runtime_parameter_conflicts"
 	| "menu_wardrobe_candidates"
+	| "wardrobe_asset_upload"
 	| "dynamics_groups"
 	| "dynamics_interaction_hooks"
 	| "dynamics_colliders"
