@@ -184,6 +184,8 @@ struct RendererLogSummary {
 	gpu_ms: Option<String>,
 	pipeline_load_mb: Option<String>,
 	pipeline_store_mb: Option<String>,
+	top_texture_ms: f64,
+	top_texture: Option<String>,
 }
 
 fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -> bool {
@@ -229,11 +231,11 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb"
+		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.prewarm_total_ms.as_deref().unwrap_or("-"),
@@ -247,7 +249,8 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 			summary.cpu_no_surface_ms.as_deref().unwrap_or("-"),
 			summary.gpu_ms.as_deref().unwrap_or("-"),
 			summary.pipeline_load_mb.as_deref().unwrap_or("-"),
-			summary.pipeline_store_mb.as_deref().unwrap_or("-")
+			summary.pipeline_store_mb.as_deref().unwrap_or("-"),
+			summary.top_texture.as_deref().unwrap_or("-")
 		);
 	}
 	true
@@ -289,6 +292,8 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.pipeline_load_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
 		} else if line.contains("Vulkan pipeline cache store") {
 			summary.pipeline_store_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
+		} else if line.contains("gpu scene texture image=") {
+			record_top_texture_line(line, summary);
 		}
 	}
 }
@@ -296,7 +301,7 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 fn metric_token(line: &str, key: &str) -> Option<String> {
 	line.split_whitespace()
 		.find_map(|token| token.strip_prefix(key))
-		.map(|value| value.trim_end_matches([',', ';']).to_string())
+		.map(|value| value.trim_end_matches([',', ';', ':']).to_string())
 }
 
 fn strip_ms(value: String) -> String {
@@ -306,6 +311,39 @@ fn strip_ms(value: String) -> String {
 fn bytes_to_mb(value: String) -> Option<String> {
 	let bytes = value.parse::<f64>().ok()?;
 	Some(format!("{:.1}", bytes / (1024.0 * 1024.0)))
+}
+
+fn record_top_texture_line(line: &str, summary: &mut RendererLogSummary) {
+	let Some(ms) = texture_line_elapsed_ms(line) else {
+		return;
+	};
+	if ms <= summary.top_texture_ms {
+		return;
+	}
+	summary.top_texture_ms = ms;
+	let image = metric_token(line, "image=").unwrap_or_else(|| "?".to_string());
+	let role = metric_token(line, "role=").unwrap_or_else(|| "?".to_string());
+	let name = quoted_field(line, "name=").unwrap_or_else(|| "?".to_string());
+	let read_mb = metric_token(line, "read_mb=").unwrap_or_else(|| "-".to_string());
+	let cache_read_ms = metric_token(line, "cache_read=").map(strip_ms).unwrap_or_else(|| "-".to_string());
+	let upload_ms = metric_token(line, "upload=").map(strip_ms).unwrap_or_else(|| "-".to_string());
+	summary.top_texture = Some(format!(
+		"image={image} role={role} name={name} total_ms={ms:.1} cache_read_ms={cache_read_ms} upload_ms={upload_ms} read_mb={read_mb}"
+	));
+}
+
+fn texture_line_elapsed_ms(line: &str) -> Option<f64> {
+	let (_, after_role) = line.split_once(" role=")?;
+	let (_, after_colon) = after_role.split_once(": ")?;
+	after_colon.split_whitespace().next()?.strip_suffix("ms")?.parse().ok()
+}
+
+fn quoted_field(line: &str, key: &str) -> Option<String> {
+	let start = line.find(key)? + key.len();
+	let rest = line.get(start..)?;
+	let rest = rest.strip_prefix('"')?;
+	let end = rest.find('"')?;
+	Some(rest[..end].to_string())
 }
 
 fn path_from_arg(repo: &Path, value: String) -> PathBuf {
@@ -3103,6 +3141,7 @@ mod tests {
 		summarize_renderer_log_text(
 			"un-avatar-renderer: Vulkan pipeline cache load path=x bytes=6025281\n\
 un-avatar-renderer: gpu scene benchmark import path=model elapsed=1120.9ms\n\
+un-avatar-renderer: gpu scene texture image=6 name=\"Body_b\" mime=\"image/png\" resident=true role=GenericColor: 72.5ms cube=0.0ms source=0.0ms rgba=0.0ms cache_lookup=0.0ms cache_read=25.9ms processed=0.0ms payload=0.0ms upload=46.5ms read_mb=85.3\n\
 un-avatar-renderer: gpu scene texture prepare summary: total=1271.4ms images=231 cache_read=70.4ms upload=387.5ms processed_cache=39/0/0 compressed_cache=21/0/0\n\
 un-avatar-renderer: gpu scene mesh prepare summary: total=121.9ms prepared=625\n\
 un-avatar-renderer: frame bench frames=180 warmup=5 fps_avg=60.1 cpu_no_surface_avg=1.29ms gpu_avg=0.69ms\n\
@@ -3121,6 +3160,10 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 		assert_eq!(summary.gpu_ms.as_deref(), Some("0.69"));
 		assert_eq!(summary.pipeline_load_mb.as_deref(), Some("5.7"));
 		assert_eq!(summary.pipeline_store_mb.as_deref(), Some("5.7"));
+		assert_eq!(
+			summary.top_texture.as_deref(),
+			Some("image=6 role=GenericColor name=Body_b total_ms=72.5 cache_read_ms=25.9 upload_ms=46.5 read_mb=85.3")
+		);
 	}
 
 	#[test]
