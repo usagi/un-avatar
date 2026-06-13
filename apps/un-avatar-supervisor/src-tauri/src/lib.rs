@@ -7194,32 +7194,73 @@ fn set_process_app_user_model_id() -> Result<(), String> {
 
 #[cfg(windows)]
 fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings: &[AvatarSetting]) -> Result<(), String> {
-	let mut tasks = Vec::new();
-	tasks.push(windows_integration::JumpListTask {
-		title: "Open Supervisor".to_string(),
-		target: supervisor_exe.to_path_buf(),
-		arguments: String::new(),
-		working_dir: working_dir.to_path_buf(),
-		icon: Some(supervisor_exe.to_path_buf()),
-	});
-	for setting in settings {
-		let manifest_path = PathBuf::from(&setting.manifest_path);
-		let renderer_exe = renderer_executable_path();
-		let icon = shortcut_icon_path(setting, &renderer_exe).or_else(|| Some(supervisor_exe.to_path_buf()));
-		tasks.push(windows_integration::JumpListTask {
-			title: format!("Launch {}", setting.name),
-			target: supervisor_exe.to_path_buf(),
-			arguments: format!("{} {}", SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG, quote_windows_arg(&manifest_path)),
-			working_dir: working_dir.to_path_buf(),
-			icon,
-		});
-	}
+	let renderer_exe = renderer_executable_path();
+	let profiles = settings
+		.iter()
+		.map(|setting| LauncherTaskProfile {
+			name: setting.name.clone(),
+			manifest_path: PathBuf::from(&setting.manifest_path),
+			icon: shortcut_icon_path(setting, &renderer_exe),
+		})
+		.collect::<Vec<_>>();
+	let tasks = build_launcher_task_specs(supervisor_exe, working_dir, &profiles);
+	let tasks = tasks
+		.into_iter()
+		.map(|task| windows_integration::JumpListTask {
+			title: task.title,
+			target: task.target,
+			arguments: task.arguments,
+			working_dir: task.working_dir,
+			icon: task.icon,
+		})
+		.collect::<Vec<_>>();
 	windows_integration::update_jump_list(UN_AVATAR_LAUNCHER_APP_ID, &tasks)
 }
 
 #[cfg(not(windows))]
 fn update_windows_jump_list(_supervisor_exe: &Path, _working_dir: &Path, _settings: &[AvatarSetting]) -> Result<(), String> {
 	Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherTaskProfile {
+	name: String,
+	manifest_path: PathBuf,
+	icon: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherTaskSpec {
+	title: String,
+	target: PathBuf,
+	arguments: String,
+	working_dir: PathBuf,
+	icon: Option<PathBuf>,
+}
+
+fn build_launcher_task_specs(supervisor_exe: &Path, working_dir: &Path, profiles: &[LauncherTaskProfile]) -> Vec<LauncherTaskSpec> {
+	let mut tasks = Vec::with_capacity(profiles.len() + 1);
+	tasks.push(LauncherTaskSpec {
+		title: "Open Supervisor".to_string(),
+		target: supervisor_exe.to_path_buf(),
+		arguments: String::new(),
+		working_dir: working_dir.to_path_buf(),
+		icon: Some(supervisor_exe.to_path_buf()),
+	});
+	for profile in profiles {
+		tasks.push(LauncherTaskSpec {
+			title: format!("Launch {}", profile.name),
+			target: supervisor_exe.to_path_buf(),
+			arguments: format!(
+				"{} {}",
+				SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG,
+				quote_windows_arg(&profile.manifest_path)
+			),
+			working_dir: working_dir.to_path_buf(),
+			icon: profile.icon.clone().or_else(|| Some(supervisor_exe.to_path_buf())),
+		});
+	}
+	tasks
 }
 
 fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathBuf> {
@@ -9434,20 +9475,21 @@ mod tests {
 		fs,
 		io::{BufRead, BufReader, Cursor, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
-		path::Path,
+		path::{Path, PathBuf},
 		sync::{atomic::Ordering, Arc, Mutex},
 		thread,
 		time::{Duration, Instant},
 	};
 
 	use super::{
-		apply_avatar_setting_value, avatar_model_picker_parent, data_image_base64_parts, diagnostics_archive_path,
-		diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
-		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
-		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting,
-		ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		apply_avatar_setting_value, avatar_model_picker_parent, build_launcher_task_specs, data_image_base64_parts,
+		diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value,
+		path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
+		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path,
+		resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session,
+		spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id,
+		validate_spout_dimension, AvatarSetting, LauncherTaskProfile, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
+		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -9621,6 +9663,53 @@ mod tests {
 	fn profile_id_slug_is_stable_for_copied_settings() {
 		assert_eq!(unique_profile_id("Main Avatar Copy"), "main-avatar-copy");
 		assert_eq!(unique_profile_id("  Debug/View Copy!  "), "debug-view-copy");
+	}
+
+	#[test]
+	fn launcher_task_specs_include_every_profile_without_app_cap() {
+		let supervisor = Path::new(r"C:\Program Files\UN Avatar\un-avatar-supervisor.exe");
+		let working_dir = Path::new(r"C:\Program Files\UN Avatar");
+		let profiles = (0..16)
+			.map(|index| LauncherTaskProfile {
+				name: format!("Profile {index}"),
+				manifest_path: Path::new("target")
+					.join("tmp")
+					.join("profiles with spaces")
+					.join(format!("profile {index}.toml")),
+				icon: None,
+			})
+			.collect::<Vec<_>>();
+
+		let tasks = build_launcher_task_specs(supervisor, working_dir, &profiles);
+
+		assert_eq!(tasks.len(), profiles.len() + 1);
+		assert_eq!(tasks[0].title, "Open Supervisor");
+		assert_eq!(tasks[1].title, "Launch Profile 0");
+		assert_eq!(tasks[16].title, "Launch Profile 15");
+		assert_eq!(tasks[16].target, supervisor);
+		assert_eq!(tasks[16].working_dir, working_dir);
+		assert!(tasks[16].arguments.starts_with("--launch-renderer-manifest "));
+		assert!(tasks[16].arguments.contains(r#""target\tmp\profiles with spaces\profile 15.toml""#));
+	}
+
+	#[test]
+	fn launcher_task_specs_keep_profile_icons_when_available() {
+		let supervisor = Path::new(r"C:\UN Avatar\un-avatar-supervisor.exe");
+		let working_dir = Path::new(r"C:\UN Avatar");
+		let icon = Path::new(r"C:\Users\the\Pictures\profile.ico").to_path_buf();
+		let profiles = vec![LauncherTaskProfile {
+			name: "Usagi".to_string(),
+			manifest_path: PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"),
+			icon: Some(icon.clone()),
+		}];
+
+		let tasks = build_launcher_task_specs(supervisor, working_dir, &profiles);
+
+		assert_eq!(tasks[1].icon.as_ref(), Some(&icon));
+		assert_eq!(
+			tasks[1].arguments,
+			r#"--launch-renderer-manifest "C:\Users\the\Profiles\usagi.toml""#
+		);
 	}
 
 	#[test]
