@@ -20,6 +20,7 @@ use un_avatar_core::{
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
 use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
+use crate::liltoon_features;
 use crate::scene_transform::{safe_inverse_mesh_world, scene_world_matrices};
 use crate::skin_tone::{
 	build_skin_tone_matched_images, material_skin_tone_kind, skin_tone_matching_debug_for_scene_with_world,
@@ -1556,36 +1557,7 @@ fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
 }
 
 fn lil_enabled(value: f32) -> bool {
-	value > 0.5
-}
-
-fn liltoon_uses_main_color_adjustment(main: &un_avatar_core::UnaLilToonLikeMainColor) -> bool {
-	main.main_texture_hsvg_factor
-		.iter()
-		.zip([0.0, 1.0, 1.0, 1.0])
-		.any(|(value, default)| (*value - default).abs() > 0.00001)
-		|| lil_enabled(main.gradation_enabled_factor)
-}
-
-fn liltoon_id_mask_has_runtime_controls(id_mask: &un_avatar_core::UnaLilToonLikeIdMask) -> bool {
-	id_mask.flags_factor.iter().any(|value| *value > 0.0001)
-		|| id_mask.prior_flags_factor.iter().any(|value| *value > 0.0001)
-		|| id_mask.controls_dissolve_factor > 0.0001
-}
-
-fn liltoon_uses_id_mask(id_mask: &un_avatar_core::UnaLilToonLikeIdMask) -> bool {
-	id_mask.compile_factor > 0.5 || liltoon_id_mask_has_runtime_controls(id_mask)
-}
-
-fn liltoon_udim_discard_has_runtime_rows(udim: &un_avatar_core::UnaLilToonLikeUdimDiscard) -> bool {
-	udim.row0_factor.iter().any(|value| *value > 0.0001)
-		|| udim.row1_factor.iter().any(|value| *value > 0.0001)
-		|| udim.row2_factor.iter().any(|value| *value > 0.0001)
-		|| udim.row3_factor.iter().any(|value| *value > 0.0001)
-}
-
-fn liltoon_uses_udim_discard(udim: &un_avatar_core::UnaLilToonLikeUdimDiscard) -> bool {
-	udim.compile_factor > 0.5 || liltoon_udim_discard_has_runtime_rows(udim)
+	liltoon_features::enabled(value)
 }
 
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
@@ -1603,7 +1575,7 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 		push_texture_index(&mut indices, mtoon.uv_animation_mask_texture_index);
 	}
 	if let Some(liltoon) = material.liltoon_like_runtime() {
-		if liltoon_uses_main_color_adjustment(&liltoon.main_color) {
+		if liltoon_features::uses_main_color_adjustment(&liltoon.main_color) {
 			push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
 		}
 		if lil_enabled(liltoon.main_color.gradation_enabled_factor) {
@@ -2228,7 +2200,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 				&& has_main_layer_dissolve);
 		let main_layers = lil_enabled(liltoon_like.main_color.second_enabled_factor)
 			|| lil_enabled(liltoon_like.main_color.third_enabled_factor)
-			|| liltoon_uses_main_color_adjustment(&liltoon_like.main_color);
+			|| liltoon_features::uses_main_color_adjustment(&liltoon_like.main_color);
 		let matcap = lil_enabled(liltoon_like.matcap.enabled_factor);
 		let matcap_second = lil_enabled(liltoon_like.matcap.second_enabled_factor);
 		let reflection = lil_enabled(liltoon_like.reflection.enabled_factor);
@@ -2243,8 +2215,8 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
 			dissolve: has_dissolve,
 			parallax: lil_enabled(liltoon_like.parallax.enabled_factor),
-			id_mask: liltoon_uses_id_mask(&liltoon_like.id_mask),
-			udim_discard: liltoon_uses_udim_discard(&liltoon_like.udim_discard),
+			id_mask: liltoon_features::uses_id_mask(&liltoon_like.id_mask),
+			udim_discard: liltoon_features::uses_udim_discard(&liltoon_like.udim_discard),
 			audio_link: material_needs_audio_link_texture(material, shading),
 			shadow_layers: lil_enabled(liltoon_like.shadow.enabled_factor),
 			matcap,
@@ -7039,7 +7011,7 @@ fn mesh_draw_material_gpu_with_profiles(
 			[
 				u.id_mask
 					.compile_factor
-					.max(if liltoon_id_mask_has_runtime_controls(&u.id_mask) {
+					.max(if liltoon_features::id_mask_has_runtime_controls(&u.id_mask) {
 						1.0
 					} else {
 						0.0
@@ -7116,7 +7088,7 @@ fn mesh_draw_material_gpu_with_profiles(
 			[
 				u.udim_discard
 					.compile_factor
-					.max(if liltoon_udim_discard_has_runtime_rows(&u.udim_discard) {
+					.max(if liltoon_features::udim_discard_has_runtime_rows(&u.udim_discard) {
 						1.0
 					} else {
 						0.0

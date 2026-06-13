@@ -6,6 +6,7 @@ mod camera;
 mod debug_dump;
 mod debug_log;
 mod gpu;
+mod liltoon_features;
 mod manifest;
 mod mesh_pass;
 mod model_loader;

@@ -3,6 +3,7 @@
 use un_avatar_core::{UnaAlphaMode, UnaMaterialPbr, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot};
 
 use crate::debug_dump::eye_area_material_name;
+use crate::liltoon_features;
 use crate::mesh_pass::{AvatarOutlinePolicy, SceneMeshLoadOpts};
 use crate::texture_pipeline::TextureRole;
 
@@ -109,15 +110,7 @@ fn mark_texture_role(roles: &mut [TextureRole], index: Option<usize>, role: Text
 }
 
 fn lil_enabled(value: f32) -> bool {
-	value > 0.5
-}
-
-fn liltoon_uses_main_color_adjustment(main: &un_avatar_core::UnaLilToonLikeMainColor) -> bool {
-	main.main_texture_hsvg_factor
-		.iter()
-		.zip([0.0, 1.0, 1.0, 1.0])
-		.any(|(value, default)| (*value - default).abs() > 0.00001)
-		|| lil_enabled(main.gradation_enabled_factor)
+	liltoon_features::enabled(value)
 }
 
 fn texture_role_from_source_metadata(source: &un_avatar_core::UnaImageSourceMetadata) -> Option<TextureRole> {
@@ -159,7 +152,7 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
 		if let Some(liltoon_like) = mat.liltoon_like_runtime() {
-			if liltoon_uses_main_color_adjustment(&liltoon_like.main_color) {
+			if liltoon_features::uses_main_color_adjustment(&liltoon_like.main_color) {
 				mark_texture_role(
 					&mut roles,
 					liltoon_like.main_color.main_color_adjust_mask_texture_index,
