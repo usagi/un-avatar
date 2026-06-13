@@ -59,6 +59,7 @@ static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
 const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
+const UN_AVATAR_RENDERER_APP_ID: &str = "DrUsagi.UNAvatar.Renderer";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -4698,6 +4699,7 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 		&format!("--manifest {}", quote_windows_arg(&manifest_path)),
 		&working_dir,
 		icon_path.as_deref(),
+		Some(UN_AVATAR_RENDERER_APP_ID),
 	)?;
 	Ok(shortcut_path.display().to_string())
 }
@@ -4714,7 +4716,14 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
 	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
 	let launcher_path = start_menu_dir.join("UN Avatar.lnk");
-	create_windows_shortcut(&launcher_path, &supervisor_exe, "", &supervisor_working_dir, Some(&supervisor_exe))?;
+	create_windows_shortcut(
+		&launcher_path,
+		&supervisor_exe,
+		"",
+		&supervisor_working_dir,
+		Some(&supervisor_exe),
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
+	)?;
 
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let profile_path = start_menu_dir.join(format!("UN Avatar - {}.lnk", sanitize_shortcut_file_stem(&setting.name)));
@@ -4726,6 +4735,7 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 		&profile_args,
 		&supervisor_working_dir,
 		icon_path.as_deref().or(Some(&supervisor_exe)),
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
 	)?;
 	let visible_settings = list_avatar_settings()?;
 	update_windows_jump_list(&supervisor_exe, &supervisor_working_dir, &visible_settings)?;
@@ -7159,16 +7169,10 @@ fn create_windows_shortcut(
 	arguments: &str,
 	working_dir: &Path,
 	icon_path: Option<&Path>,
+	app_id: Option<&str>,
 ) -> Result<(), String> {
-	windows_integration::create_shortcut(
-		shortcut_path,
-		target_path,
-		arguments,
-		working_dir,
-		icon_path,
-		Some(UN_AVATAR_LAUNCHER_APP_ID),
-	)
-	.map_err(|e| format!("create shortcut {}: {e}", shortcut_path.display()))
+	windows_integration::create_shortcut(shortcut_path, target_path, arguments, working_dir, icon_path, app_id)
+		.map_err(|e| format!("create shortcut {}: {e}", shortcut_path.display()))
 }
 
 #[cfg(not(windows))]
@@ -7178,6 +7182,7 @@ fn create_windows_shortcut(
 	_arguments: &str,
 	_working_dir: &Path,
 	_icon_path: Option<&Path>,
+	_app_id: Option<&str>,
 ) -> Result<(), String> {
 	Err("shortcut creation is currently implemented for Windows only".to_string())
 }
