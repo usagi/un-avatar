@@ -1370,6 +1370,10 @@ impl FrameBenchState {
 		} else {
 			0.0
 		};
+		let dynamics_profile_enabled = self.dynamics_fixed_steps.max > 0.0
+			|| self.dynamics_world_ms.max > 0.0
+			|| self.dynamics_collider_ms.max > 0.0
+			|| self.dynamics_solve_ms.max > 0.0;
 		eprintln!(
 			"un-avatar-renderer: frame bench frames={} warmup={} fps_avg={:.1} wall_avg={:.2}ms wall_max={:.2}ms cpu_record_avg={:.2}ms cpu_record_max={:.2}ms cpu_no_surface_avg={:.2}ms cpu_no_surface_max={:.2}ms cpu_total_avg={:.2}ms cpu_total_max={:.2}ms gpu_avg={:.2}ms gpu_max={:.2}ms",
 			self.frames,
@@ -1386,24 +1390,32 @@ impl FrameBenchState {
 			self.gpu_ms.avg(frames),
 			self.gpu_ms.max,
 		);
+		let dynamics_profile_detail = if dynamics_profile_enabled {
+			format!(
+				" dyn_steps={:.2}/{:.2} dyn_world={:.2}/{:.2}ms dyn_colliders={:.2}/{:.2}ms dyn_solve={:.2}/{:.2}ms dyn_solve_collision={:.2}/{:.2}ms dyn_solve_propagate={:.2}/{:.2}ms",
+				self.dynamics_fixed_steps.avg(frames),
+				self.dynamics_fixed_steps.max,
+				self.dynamics_world_ms.avg(frames),
+				self.dynamics_world_ms.max,
+				self.dynamics_collider_ms.avg(frames),
+				self.dynamics_collider_ms.max,
+				self.dynamics_solve_ms.avg(frames),
+				self.dynamics_solve_ms.max,
+				self.dynamics_solve_collision_ms.avg(frames),
+				self.dynamics_solve_collision_ms.max,
+				self.dynamics_solve_propagate_ms.avg(frames),
+				self.dynamics_solve_propagate_ms.max,
+			)
+		} else {
+			String::new()
+		};
 		eprintln!(
-			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms dyn_steps={:.2}/{:.2} dyn_world={:.2}/{:.2}ms dyn_colliders={:.2}/{:.2}ms dyn_solve={:.2}/{:.2}ms dyn_solve_collision={:.2}/{:.2}ms dyn_solve_propagate={:.2}/{:.2}ms globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
+			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms{} globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
 			self.motion_apply_ms.avg(frames),
 			self.motion_apply_ms.max,
 			self.dynamics_step_ms.avg(frames),
 			self.dynamics_step_ms.max,
-			self.dynamics_fixed_steps.avg(frames),
-			self.dynamics_fixed_steps.max,
-			self.dynamics_world_ms.avg(frames),
-			self.dynamics_world_ms.max,
-			self.dynamics_collider_ms.avg(frames),
-			self.dynamics_collider_ms.max,
-			self.dynamics_solve_ms.avg(frames),
-			self.dynamics_solve_ms.max,
-			self.dynamics_solve_collision_ms.avg(frames),
-			self.dynamics_solve_collision_ms.max,
-			self.dynamics_solve_propagate_ms.avg(frames),
-			self.dynamics_solve_propagate_ms.max,
+			dynamics_profile_detail,
 			self.frame_globals_ms.avg(frames),
 			self.frame_globals_ms.max,
 			self.surface_acquire_ms.avg(frames),
