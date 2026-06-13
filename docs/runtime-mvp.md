@@ -83,7 +83,7 @@ Windows配布ではSpout2を標準機能として扱う。
 - renderer起動前にSupervisorが package root を `PATH` へ追加する
 - 開発時に手動で `spout-sdk` featureを使う場合は `SPOUT2_SDK_DIR` / `SPOUT2_LIB_DIR` / `PATH` を明示する
 
-現状の送出はCPU readback + `send_image_rgba` を実用候補のfallbackとする。低遅延化の次段階は、readback ring buffer化、またはSpout2 GPU texture送信への移行である。
+現状の送出はCPU readback + `send_image_rgba` を実用候補のfallbackとし、readback は 2-slot ring buffer と非同期 `map_async` でフレームループをブロックしない。低遅延化の次段階は、readback ring 長 / drop policy の実測調整、または Spout2 GPU texture 送信への移行である。
 
 Supervisor runtime status / diagnostics では、Spout2の送信試行数・成功数・失敗数・連続失敗数・readback/send/total時間・sender初期化状態・sender実解像度を観測できるようにする。送信連続失敗、sender未初期化、要求解像度と実sender解像度の不一致はruntime noteとして表に出す。OBS側で受信できない、またはPremultiplied Alpha設定が合わない場合でも、まずrenderer側が送信を継続できているかを切り分けられる状態をMVP完了条件に含める。
 
