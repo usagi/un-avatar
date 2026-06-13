@@ -2,6 +2,8 @@
 
 この文書は、lilToon-like AudioLink 初期対応後の短期作業順を固定する。
 
+Supervisor / Renderer tray / launcher の v2 UI・GUI 運用設計は [`v2-ui-gui-operation-plan.md`](v2-ui-gui-operation-plan.md) を正本にする。
+
 ## 現在位置
 
 - AudioLink は v2 初期範囲として十分に完了した扱いにする。

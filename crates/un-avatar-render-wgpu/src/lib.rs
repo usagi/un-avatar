@@ -1668,8 +1668,8 @@ impl AvatarApp {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
 					enabled: true,
 					name: None,
-					width: Some(self.opts.spout.width.unwrap_or(1920)),
-					height: Some(self.opts.spout.height.unwrap_or(1080)),
+					width: None,
+					height: None,
 				});
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
 					decorations: None,
@@ -1679,6 +1679,14 @@ impl AvatarApp {
 					minimized: Some(true),
 					width: None,
 					height: None,
+				});
+			}
+			RendererTrayAction::SetSpoutResolution { width, height } => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+					enabled: true,
+					name: None,
+					width: Some(width),
+					height: Some(height),
 				});
 			}
 			RendererTrayAction::SetAlwaysOnTop(always_on_top) => {

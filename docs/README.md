@@ -19,6 +19,7 @@ v1 公開時点で残す文書の索引。
 | [`development-guidelines.md`](development-guidelines.md) | ローカル検証、xtask、リリース前確認の基本 |
 | [`render-quality-plan.md`](render-quality-plan.md) | AA、texture cache / compression、renderer 品質方針 |
 | [`v2-near-term-plan.md`](v2-near-term-plan.md) | AudioLink 初期対応後の短期作業順、リファクタリング、Wardrobe hot switch 方針 |
+| [`v2-ui-gui-operation-plan.md`](v2-ui-gui-operation-plan.md) | v2 Supervisor / Renderer tray / launcher の UI・GUI 運用設計 |
 | [`unavatar-format-v0.1.md`](unavatar-format-v0.1.md) | `.unavatar` GLB extension preview spec |
 | [`unity-exporter-v0.1.md`](unity-exporter-v0.1.md) | Unity Editor Exporter の境界、配置、MVP |
 | [`unevaluation-v2.md`](unevaluation-v2.md) | v2 runtime evaluation、owner policy、Contacts parameter phase 設計 |

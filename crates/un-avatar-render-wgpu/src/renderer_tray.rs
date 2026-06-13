@@ -23,6 +23,7 @@ pub(crate) enum RendererTrayAction {
 	SetWindowPreview,
 	SetSpoutPreview,
 	SetSpoutOnly,
+	SetSpoutResolution { width: u32, height: u32 },
 	SetAlwaysOnTop(bool),
 	SetInputPassthrough(bool),
 	SetAllDynamics(bool),
@@ -186,6 +187,30 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		check_label("Spout2 Only", snapshot.spout_enabled && snapshot.minimized),
 		snapshot.spout_available,
 		RendererTrayAction::SetSpoutOnly,
+	);
+	append_separator(&output);
+	append_disabled(&output, spout_resolution_label(snapshot));
+	append_menu_item(
+		&output,
+		&mut actions,
+		"output:spout_720p",
+		check_label(
+			"Spout2 1280 x 720",
+			snapshot.spout_width == Some(1280) && snapshot.spout_height == Some(720),
+		),
+		snapshot.spout_available,
+		RendererTrayAction::SetSpoutResolution { width: 1280, height: 720 },
+	);
+	append_menu_item(
+		&output,
+		&mut actions,
+		"output:spout_1080p",
+		check_label(
+			"Spout2 1920 x 1080",
+			snapshot.spout_width == Some(1920) && snapshot.spout_height == Some(1080),
+		),
+		snapshot.spout_available,
+		RendererTrayAction::SetSpoutResolution { width: 1920, height: 1080 },
 	);
 	append_submenu(&menu, &output);
 
@@ -364,6 +389,13 @@ fn check_label(label: impl AsRef<str>, checked: bool) -> String {
 	}
 }
 
+fn spout_resolution_label(snapshot: &RendererRuntimeSnapshot) -> String {
+	match (snapshot.spout_width, snapshot.spout_height) {
+		(Some(width), Some(height)) => format!("Spout2 output: {width} x {height}"),
+		_ => "Spout2 output: follows preview size".to_string(),
+	}
+}
+
 fn menu_wardrobe_label(candidate: &gpu::RuntimeMenuWardrobeCandidateStatus) -> String {
 	if !candidate.menu_path.is_empty() {
 		candidate.menu_path.join(" / ")
@@ -397,13 +429,15 @@ fn tray_tooltip(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) 
 
 fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
-		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
 		snapshot.scene_state,
 		snapshot.spout_available,
 		snapshot.spout_enabled,
 		snapshot.minimized,
 		snapshot.always_on_top,
 		snapshot.input_passthrough,
+		snapshot.spout_width.map_or(0, |value| value),
+		snapshot.spout_height.map_or(0, |value| value),
 		snapshot.dynamics_group_count,
 		snapshot.dynamics_enabled_group_count,
 		snapshot.active_wardrobe_set.as_deref().unwrap_or(""),

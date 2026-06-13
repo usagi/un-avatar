@@ -121,6 +121,11 @@ open_folder = "Open Folder"
 active_label = "Active:"
 active_unset = "-"
 
+[profiles.action_groups]
+prepare = "Profile preparation"
+live_renderer = "Live Renderer"
+launch = "Launch"
+
 [profiles.live]
 running = "Live renderer"
 running_count = "Running x%{count}"

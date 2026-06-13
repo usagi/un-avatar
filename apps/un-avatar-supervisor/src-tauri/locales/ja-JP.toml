@@ -129,6 +129,11 @@ open_folder = "フォルダーを開く"
 active_label = "Active:"
 active_unset = "-"
 
+[profiles.action_groups]
+prepare = "プロファイル準備"
+live_renderer = "実行中 Renderer"
+launch = "起動"
+
 [profiles.live]
 running = "実行中"
 running_count = "実行中 x%{count}"

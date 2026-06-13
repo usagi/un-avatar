@@ -35,44 +35,50 @@
 			</span>
 		{/if}
 	</div>
-	<button
-		type="button"
-		disabled={busy}
-		data-hint={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
-		title={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
-		onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
-	>
-	<button
-		type="button"
-		disabled={busy}
-		data-hint={$_("profiles.actions.desktop_shortcut_hint")}
-		title={$_("profiles.actions.desktop_shortcut_hint")}
-		onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} />{$_("profiles.actions.desktop_shortcut")}</button
-	>
-	<button
-		type="button"
-		disabled={busy}
-		data-hint={$_("profiles.actions.taskbar_launcher_hint")}
-		title={$_("profiles.actions.taskbar_launcher_hint")}
-		onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} />{$_("profiles.actions.taskbar_launcher")}</button
-	>
-	{#if liveRenderer}
-		<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}
-			><Monitor size={14} />{$_("profiles.live.view_renderer")}</button
-		>
-		<button type="button" disabled={!liveRenderer.pid} onclick={() => onActivateRenderer(liveRenderer.id)}
-			><ExternalLink size={14} />{$_("renderers.toolbar.activate")}</button
-		>
-		<button type="button" disabled={busy || !liveRenderer.pid} onclick={() => onCaptureRendererScreenshot(liveRenderer.id)}
-			><Camera size={14} />{$_("renderers.toolbar.screenshot")}</button
-		>
-	{:else}
+	<div class="profile-stage-action-group" aria-label={$_("profiles.action_groups.prepare")}>
 		<button
 			type="button"
 			disabled={busy}
-			data-hint={$_("profiles.actions.quick_run_hint")}
-			title={$_("profiles.actions.quick_run_hint")}
-			onclick={() => onLaunchProfile(settingId)}><Play size={14} />{$_("profiles.actions.quick_run")}</button
+			data-hint={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
+			title={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
+			onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /><span>{$_("profiles.actions.warm_cache")}</span></button
 		>
+		<button
+			type="button"
+			disabled={busy}
+			data-hint={$_("profiles.actions.desktop_shortcut_hint")}
+			title={$_("profiles.actions.desktop_shortcut_hint")}
+			onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /><span>{$_("profiles.actions.desktop_shortcut")}</span></button
+		>
+		<button
+			type="button"
+			disabled={busy}
+			data-hint={$_("profiles.actions.taskbar_launcher_hint")}
+			title={$_("profiles.actions.taskbar_launcher_hint")}
+			onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /><span>{$_("profiles.actions.taskbar_launcher")}</span></button
+		>
+	</div>
+	{#if liveRenderer}
+		<div class="profile-stage-action-group" aria-label={$_("profiles.action_groups.live_renderer")}>
+			<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}
+				><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
+			>
+			<button type="button" disabled={!liveRenderer.pid} onclick={() => onActivateRenderer(liveRenderer.id)}
+				><ExternalLink size={14} /><span>{$_("renderers.toolbar.activate")}</span></button
+			>
+			<button type="button" disabled={busy || !liveRenderer.pid} onclick={() => onCaptureRendererScreenshot(liveRenderer.id)}
+				><Camera size={14} /><span>{$_("renderers.toolbar.screenshot")}</span></button
+			>
+		</div>
+	{:else}
+		<div class="profile-stage-action-group" aria-label={$_("profiles.action_groups.launch")}>
+			<button
+				type="button"
+				disabled={busy}
+				data-hint={$_("profiles.actions.quick_run_hint")}
+				title={$_("profiles.actions.quick_run_hint")}
+				onclick={() => onLaunchProfile(settingId)}><Play size={14} /><span>{$_("profiles.actions.quick_run")}</span></button
+			>
+		</div>
 	{/if}
 </div>

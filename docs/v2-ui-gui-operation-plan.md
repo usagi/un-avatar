@@ -1,0 +1,66 @@
+# v2 UI / GUI Operation Plan
+
+This document fixes the v2 user-operation shape before release polish.
+The source policy is [`v2-near-term-plan.md`](v2-near-term-plan.md), especially Output / preview and Renderer tray / Supervisor operation.
+
+## Product Surfaces
+
+### Supervisor
+
+Supervisor is the management and authoring UI.
+
+- First-run setup and profile creation.
+- Profile editing while watching a Renderer.
+- Multi-renderer launch, focus, restart, screenshot, diagnostics, and telemetry comparison.
+- Cache warmup, desktop shortcut creation, Start Menu / taskbar launcher shortcut creation, and future Jump List registration.
+- Migration from v1 user profiles into v2 schema.
+
+Supervisor must not be required for mature daily operation once a profile is prepared.
+
+### Renderer Tray
+
+The Renderer tray icon is the stable runtime operation surface for each Renderer process.
+
+- One tray icon per Renderer.
+- Header identifies avatar / profile and pid.
+- Output operations are local to that Renderer: Window Preview, Spout2 + Preview, Spout2 Only, and explicit Spout2 resolution presets.
+- Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
+- UNPhysics, wardrobe, VRC menu actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
+- Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
+
+Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
+
+### Launcher / Shortcuts
+
+Shortcut and launcher UX is a bridge from prepared profiles to daily operation.
+
+- Desktop shortcut launches a selected profile directly through the Renderer path.
+- Start Menu / taskbar launcher shortcut uses a stable launcher identity and AppUserModelID.
+- Launching the pinned app without a profile opens or focuses Supervisor.
+- Launching a profile task starts or focuses the corresponding Renderer according to that profile's multiple-renderer policy.
+- Jump List tasks should expose all visible profile launch tasks and Open Supervisor. Do not impose an app-side fixed count cap.
+
+## v2 UI Rules
+
+- Output resolution and preview window size are separate controls. No button may silently resize the preview when the user asked for an output mode.
+- `Spout2 Only` means Spout2 enabled and local preview minimized. It does not change Spout2 resolution.
+- UNPhysics / UNDynamics are the user-facing physics names. SpringBone / PhysBone are source-format or diagnostics terms.
+- Material authored values stay authored. Supervisor profile UI should not provide broad v1-style controls that push one Outline / Rim / MatCap / Specular / AO value into every material.
+- Screen / viewer effects may be profile controls: Silhouette Outline, Bloom, SSAO, contact shadow, color grading, background, capture / output policy.
+- Runtime UI should show only operations that can work now, or clearly mark unavailable backend support. Do not advertise headless output until the renderer architecture supports it.
+
+## Implementation Order
+
+1. Keep Renderer tray output behavior consistent with Supervisor runtime output controls.
+2. Fill missing tray operations only through existing normalized renderer control events.
+3. Polish Supervisor profile action rows so shortcut, launcher, cache warmup, and live renderer actions read as one coherent v2 workflow.
+4. Remove development-only compatibility UI labels after v1-to-v2 user migration remains covered.
+5. Add diagnostics that compare Supervisor runtime buttons and Renderer tray behavior for the same output and UNPhysics state.
+
+## Non-goals For v2 First Release
+
+- True headless rendering without a native preview surface.
+- Full external VRC menu UI parity inside Supervisor.
+- Full Animator graph editing.
+- VRC Constraints solver integration.
+- Per-material authoring UI for every UNToon parameter.
