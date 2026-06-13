@@ -288,3 +288,12 @@ PhysBone behavior implementation は runtime state cleanup、UNDynamics normaliz
 - Poiyomi 互換。
 - style-only cleanup のための lilToon-like rendering rewrite。
 - instant switching が安定する前の完璧な wardrobe transition effect。
+
+## Release Footing
+
+v2 初回リリース候補は、完璧な VRC clone ではなく、実用時に破綻しない起動速度、明確な診断、正規化された UI 語彙を満たす状態を足場にする。
+
+- Supervisor の profile UI は source-format 名を直接操作概念にしない。物理は `UNPhysics` / `UNDynamics` を正本名にし、`SpringBone` / `PhysBone` は importer / diagnostics / source metadata の説明に限定する。
+- `.unavatar` / VRC model の未対応範囲は、無言 fallback ではなく diagnostics と runtime status に出す。特に full Animator graph、dynamic reactive mesh gating、PhysBone suffix value emission、VRC Constraints solver integration は未完了として扱う。
+- 速度改善は `mizuki-split` class の benchmark、renderer log summary、または明確な不要 work の削除を根拠にする。見た目品質や VRAM 効率を落とす可能性がある変更は、既定化前に profile option / cache prewarm / visual check の扱いを決める。
+- Windows 配布は portable zip を正本にし、installer と Authenticode 署名は v2 未対応・対応未定のまま扱う。

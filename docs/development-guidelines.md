@@ -76,6 +76,23 @@ v2 の Windows 配布正本は portable zip とする。Installer（MSI / NSIS /
 
 Authenticode 署名も v2 では未対応・対応未定とする。自己署名証明書は Windows 一般ユーザー向けの信頼問題を解決せず、証明書導入を求める運用は逆に負担になるため採用しない。UN Avatar は OSS / MIT として、配布物の透明性は source、build 手順、release notes、hash / checksum の公開で担保する。
 
+## v2 リリース候補前の手動確認
+
+v2 は `.unavatar` / VRC 由来機能を含むため、VRM だけでなく軽量 VRC model と重い wardrobe model を確認対象に入れる。
+
+- `cargo xtask ci`
+- `cargo xtask release-package --version <version>` が portable zip を生成すること
+- `cargo xtask run --release` で Supervisor が起動し、profile 作成 / 編集 / Renderer 起動 / 停止ができること
+- Renderer 直接起動用 shortcut、taskbar launcher、Renderer tray からの停止 / Supervisor 起動が機能すること
+- profile UI のユーザー向け物理名は `UNPhysics` / `UNDynamics` とし、`SpringBone` / `PhysBone` は source diagnostics や互換文脈以外に出さないこと
+- `model1` 相当の VRM で UNMF/Z、Perfect Sync、手足、UNPhysics が動くこと
+- 軽量 VRC model で PhysBone 由来 UNDynamics と Perfect Sync / ShapeKey が動くこと
+- `mizuki-split` class の `.unavatar` で Base と代表 wardrobe set を起動し、loading / texture / mesh / shader / first-frame / fps の summary を保存すること
+- `cargo xtask run-renderer --release --profile mizuki-split --wardrobe-set <set> -- --bench-frames 180 --no-fps-title` と `cargo xtask summarize-renderer-log` で hot path の比較 TSV を残すこと
+- `キャッシュ準備` は通常起動と別操作として機能し、完了 summary が processed / compressed texture cache と pipeline cache の結果を示すこと
+- `.unavatar` の unsupported / approximate / diagnostics-only 機能は CLI diagnose、Renderer runtime status、Supervisor diagnostics のいずれかで観測できること
+- full Animator graph、dynamic reactive mesh gating、PhysBone suffix value emission、VRC Constraints solver integration は未完了領域として隠さないこと
+
 ## v1 リリース前の手動確認
 
 最低限、次を確認する。
