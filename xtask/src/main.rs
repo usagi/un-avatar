@@ -172,6 +172,11 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 struct RendererLogSummary {
 	path: PathBuf,
 	import_ms: Option<String>,
+	pre_scene_import_ms: Option<String>,
+	file_read_ms: Option<String>,
+	gltf_import_slice_ms: Option<String>,
+	scene_snapshot_ms: Option<String>,
+	read_meshes_ms: Option<String>,
 	prewarm_total_ms: Option<String>,
 	texture_total_ms: Option<String>,
 	mesh_total_ms: Option<String>,
@@ -232,13 +237,18 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
+		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tscene_snapshot_ms\tread_meshes_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
+			summary.pre_scene_import_ms.as_deref().unwrap_or("-"),
+			summary.file_read_ms.as_deref().unwrap_or("-"),
+			summary.gltf_import_slice_ms.as_deref().unwrap_or("-"),
+			summary.scene_snapshot_ms.as_deref().unwrap_or("-"),
+			summary.read_meshes_ms.as_deref().unwrap_or("-"),
 			summary.prewarm_total_ms.as_deref().unwrap_or("-"),
 			summary.texture_total_ms.as_deref().unwrap_or("-"),
 			summary.mesh_total_ms.as_deref().unwrap_or("-"),
@@ -276,6 +286,16 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			&& (line.contains("gpu scene benchmark import") || line.contains("scene cache prewarm import"))
 		{
 			summary.import_ms = metric_token(line, "elapsed=").map(strip_ms);
+		} else if line.contains("glTF import profile: pre_scene_import_ms=") {
+			summary.pre_scene_import_ms = metric_token(line, "pre_scene_import_ms=");
+		} else if line.contains("glTF import profile: file_read_bytes=") {
+			summary.file_read_ms = metric_token(line, "file_read_ms=");
+		} else if line.contains("glTF import profile: gltf_import_slice_ms=") {
+			summary.gltf_import_slice_ms = metric_token(line, "gltf_import_slice_ms=");
+		} else if line.contains("glTF import profile: scene_snapshot_ms=") {
+			summary.scene_snapshot_ms = metric_token(line, "scene_snapshot_ms=");
+		} else if line.contains("glTF scene profile: read_meshes_ms=") {
+			summary.read_meshes_ms = metric_token(line, "read_meshes_ms=");
 		} else if line.contains("scene cache prewarm scene") {
 			summary.prewarm_total_ms = metric_token(line, "total=").map(strip_ms);
 		} else if line.contains("gpu scene texture prepare summary") {
@@ -3144,6 +3164,11 @@ mod tests {
 		let mut summary = RendererLogSummary::default();
 		summarize_renderer_log_text(
 			"un-avatar-renderer: Vulkan pipeline cache load path=x bytes=6025281\n\
+glTF import profile: file_read_bytes=779284856 file_read_ms=182\n\
+glTF import profile: gltf_import_slice_ms=102\n\
+glTF import profile: pre_scene_import_ms=382\n\
+glTF scene profile: read_meshes_ms=129\n\
+glTF import profile: scene_snapshot_ms=249\n\
 un-avatar-renderer: gpu scene benchmark import path=model elapsed=1120.9ms\n\
 un-avatar-renderer: gpu scene texture image=6 name=\"Body_b\" mime=\"image/png\" resident=true role=GenericColor: 72.5ms cube=0.0ms source=0.0ms rgba=0.0ms cache_lookup=0.0ms cache_read=25.9ms processed=0.0ms payload=0.0ms upload=46.5ms read_mb=85.3\n\
 un-avatar-renderer: gpu scene texture prepare summary: total=1271.4ms images=231 cache_read=70.4ms upload=387.5ms processed_cache=39/0/0 compressed_cache=21/0/0\n\
@@ -3154,6 +3179,11 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 			&mut summary,
 		);
 		assert_eq!(summary.import_ms.as_deref(), Some("1120.9"));
+		assert_eq!(summary.pre_scene_import_ms.as_deref(), Some("382"));
+		assert_eq!(summary.file_read_ms.as_deref(), Some("182"));
+		assert_eq!(summary.gltf_import_slice_ms.as_deref(), Some("102"));
+		assert_eq!(summary.scene_snapshot_ms.as_deref(), Some("249"));
+		assert_eq!(summary.read_meshes_ms.as_deref(), Some("129"));
 		assert_eq!(summary.texture_total_ms.as_deref(), Some("1271.4"));
 		assert_eq!(summary.mesh_total_ms.as_deref(), Some("121.9"));
 		assert_eq!(summary.cache_read_ms.as_deref(), Some("70.4"));
