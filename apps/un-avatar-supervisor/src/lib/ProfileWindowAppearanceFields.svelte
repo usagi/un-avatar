@@ -22,12 +22,14 @@
 	<ProfileToggleField
 		label={$_("profiles.editor.borderless")}
 		checked={!decorations}
+		disabled={busy}
 		onChange={(checked) => onUpdateSettingValue("window.decorations", !checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.transparent")}
 		hint={$_("profiles.editor.transparent_hint")}
 		checked={transparent}
+		disabled={busy}
 		onChange={(checked) => onUpdateSettingValue("window.transparent", checked)}
 	/>
 	<ColorField

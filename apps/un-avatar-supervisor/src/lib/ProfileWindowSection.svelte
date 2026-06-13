@@ -41,14 +41,16 @@
 		inputPassthrough={setting.input_passthrough}
 		alwaysOnTop={setting.always_on_top}
 		minimized={setting.minimized}
+		{busy}
 		{onUpdateSettingValue}
 	/>
-	<ProfileWindowDebugFields showAxes={setting.show_axes} showBoneColliders={setting.show_bone_colliders} {onUpdateSettingValue} />
+	<ProfileWindowDebugFields showAxes={setting.show_axes} showBoneColliders={setting.show_bone_colliders} {busy} {onUpdateSettingValue} />
 	<ProfileWindowGeometryFields
 		width={setting.window_width}
 		height={setting.window_height}
 		x={setting.window_x}
 		y={setting.window_y}
+		{busy}
 		{onUpdateSettingValue}
 	/>
 </section>

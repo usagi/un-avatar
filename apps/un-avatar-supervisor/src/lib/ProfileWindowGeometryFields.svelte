@@ -9,6 +9,7 @@
 	export let height = 720;
 	export let x: number | null = null;
 	export let y: number | null = null;
+	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
 </script>
 
@@ -21,6 +22,7 @@
 			min={field.min}
 			max={field.max}
 			step={field.step}
+			disabled={busy}
 			onChange={(value) => onUpdateSettingValue(field.field, value)}
 		/>
 	{/each}
@@ -33,6 +35,7 @@
 			max={WINDOW_POSITION_MAX}
 			step={1}
 			placeholder="(default)"
+			disabled={busy}
 			onChange={(value) => onUpdateSettingValue(field.field, value)}
 		/>
 	{/each}

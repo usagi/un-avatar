@@ -7,6 +7,7 @@
 	export let inputPassthrough = false;
 	export let alwaysOnTop = false;
 	export let minimized = false;
+	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
 </script>
 
@@ -15,18 +16,20 @@
 	<ProfileToggleField
 		label={$_("profiles.editor.click_through")}
 		checked={inputPassthrough}
-		disabled={!transparent}
+		disabled={busy || !transparent}
 		onChange={(checked) => onUpdateSettingValue("window.input_passthrough", checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.always_on_top")}
 		checked={alwaysOnTop}
+		disabled={busy}
 		onChange={(checked) => onUpdateSettingValue("window.always_on_top", checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.start_minimized")}
 		hint={$_("profiles.hints.window.start_minimized")}
 		checked={minimized}
+		disabled={busy}
 		onChange={(checked) => onUpdateSettingValue("window.minimized", checked)}
 	/>
 </div>
