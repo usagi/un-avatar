@@ -191,6 +191,12 @@ struct RendererLogSummary {
 	fps_avg: Option<String>,
 	cpu_no_surface_ms: Option<String>,
 	gpu_ms: Option<String>,
+	frame_dynamics_ms: Option<String>,
+	frame_draw_state_ms: Option<String>,
+	frame_scene_world_ms: Option<String>,
+	frame_skin_palette_ms: Option<String>,
+	frame_skin_write_ms: Option<String>,
+	frame_submit_ms: Option<String>,
 	pipeline_load_mb: Option<String>,
 	pipeline_store_mb: Option<String>,
 	top_texture_ms: f64,
@@ -241,11 +247,11 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tgltf_parse_ms\tgltf_buffers_ms\tgltf_image_decode_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
+		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tgltf_parse_ms\tgltf_buffers_ms\tgltf_image_decode_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tframe_dynamics_ms\tframe_draw_state_ms\tframe_scene_world_ms\tframe_skin_palette_ms\tframe_skin_write_ms\tframe_submit_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.pre_scene_import_ms.as_deref().unwrap_or("-"),
@@ -267,6 +273,12 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 			summary.fps_avg.as_deref().unwrap_or("-"),
 			summary.cpu_no_surface_ms.as_deref().unwrap_or("-"),
 			summary.gpu_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_ms.as_deref().unwrap_or("-"),
+			summary.frame_draw_state_ms.as_deref().unwrap_or("-"),
+			summary.frame_scene_world_ms.as_deref().unwrap_or("-"),
+			summary.frame_skin_palette_ms.as_deref().unwrap_or("-"),
+			summary.frame_skin_write_ms.as_deref().unwrap_or("-"),
+			summary.frame_submit_ms.as_deref().unwrap_or("-"),
 			summary.pipeline_load_mb.as_deref().unwrap_or("-"),
 			summary.pipeline_store_mb.as_deref().unwrap_or("-"),
 			summary.top_texture.as_deref().unwrap_or("-"),
@@ -324,6 +336,13 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.fps_avg = metric_token(line, "fps_avg=");
 			summary.cpu_no_surface_ms = metric_token(line, "cpu_no_surface_avg=").map(strip_ms);
 			summary.gpu_ms = metric_token(line, "gpu_avg=").map(strip_ms);
+		} else if line.contains("frame bench detail ") {
+			summary.frame_dynamics_ms = frame_detail_avg(line, "dynamics=");
+			summary.frame_draw_state_ms = frame_detail_avg(line, "draw_state=");
+			summary.frame_scene_world_ms = frame_detail_avg(line, "scene_world=");
+			summary.frame_skin_palette_ms = frame_detail_avg(line, "skin_palette=");
+			summary.frame_skin_write_ms = frame_detail_avg(line, "skin_write=");
+			summary.frame_submit_ms = frame_detail_avg(line, "submit=");
 		} else if line.contains("Vulkan pipeline cache load") {
 			summary.pipeline_load_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
 		} else if line.contains("Vulkan pipeline cache store") {
@@ -334,6 +353,12 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.texture_roles = Some(roles.to_string());
 		}
 	}
+}
+
+fn frame_detail_avg(line: &str, key: &str) -> Option<String> {
+	let token = metric_token(line, key)?;
+	let (avg, _) = token.split_once('/')?;
+	Some(avg.strip_suffix("ms").unwrap_or(avg).to_string())
 }
 
 fn metric_token(line: &str, key: &str) -> Option<String> {
@@ -3191,6 +3216,7 @@ un-avatar-renderer: gpu scene texture prepare summary: total=1271.4ms images=231
 un-avatar-renderer: gpu scene texture prepare roles: GenericColor=27/161 read=985.9MB/291.2ms upload=101.6ms cache_hits=15 compressed_hits=12 Data=20/39 read=1239.8MB/350.4ms upload=84.5ms cache_hits=20 compressed_hits=0\n\
 un-avatar-renderer: gpu scene mesh prepare summary: total=121.9ms prepared=625\n\
 un-avatar-renderer: frame bench frames=180 warmup=5 fps_avg=60.1 cpu_no_surface_avg=1.29ms gpu_avg=0.69ms\n\
+un-avatar-renderer: frame bench detail motion=0.07/0.22ms dynamics=0.80/1.29ms globals=0.03/0.09ms surface=14.30/15.26ms draw_state=0.33/0.75ms scene_world=0.15/0.45ms skin_palette=0.17/0.42ms skin_write=0.16/0.40ms submit=0.78/1.44ms\n\
 un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 			&mut summary,
 		);
@@ -3216,6 +3242,12 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 		assert_eq!(summary.fps_avg.as_deref(), Some("60.1"));
 		assert_eq!(summary.cpu_no_surface_ms.as_deref(), Some("1.29"));
 		assert_eq!(summary.gpu_ms.as_deref(), Some("0.69"));
+		assert_eq!(summary.frame_dynamics_ms.as_deref(), Some("0.80"));
+		assert_eq!(summary.frame_draw_state_ms.as_deref(), Some("0.33"));
+		assert_eq!(summary.frame_scene_world_ms.as_deref(), Some("0.15"));
+		assert_eq!(summary.frame_skin_palette_ms.as_deref(), Some("0.17"));
+		assert_eq!(summary.frame_skin_write_ms.as_deref(), Some("0.16"));
+		assert_eq!(summary.frame_submit_ms.as_deref(), Some("0.78"));
 		assert_eq!(summary.pipeline_load_mb.as_deref(), Some("5.7"));
 		assert_eq!(summary.pipeline_store_mb.as_deref(), Some("5.7"));
 		assert_eq!(
