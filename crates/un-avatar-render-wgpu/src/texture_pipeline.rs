@@ -1162,11 +1162,14 @@ pub(crate) fn compression_preference_for_role(
 		TextureCompressionMode::Source => TextureCompressionPreference::Source,
 		TextureCompressionMode::Compat => TextureCompressionPreference::Source,
 		TextureCompressionMode::Balanced => match role {
-			TextureRole::Face | TextureRole::Eyes => TextureCompressionPreference::Source,
+			TextureRole::Face => advanced.face,
+			TextureRole::Eyes => advanced.eyes,
 			TextureRole::Data => advanced.data,
-			TextureRole::Normal | TextureRole::Occlusion => TextureCompressionPreference::GpuNative,
-			TextureRole::Emissive => TextureCompressionPreference::HighQuality,
-			TextureRole::Clothing | TextureRole::GenericColor => TextureCompressionPreference::Auto,
+			TextureRole::Normal => advanced.normal,
+			TextureRole::Occlusion => advanced.occlusion,
+			TextureRole::Emissive => advanced.emissive,
+			TextureRole::Clothing => advanced.clothing,
+			TextureRole::GenericColor => advanced.generic_color,
 		},
 		TextureCompressionMode::Memory => match role {
 			TextureRole::Face | TextureRole::Eyes => TextureCompressionPreference::HighQuality,
@@ -2111,6 +2114,46 @@ mod tests {
 			TextureCompressionMode::Balanced,
 			&TextureCompressionAdvancedOptions::default(),
 			TextureRole::Emissive,
+			true,
+			BlockCompressionEncoder::Cpu,
+			1,
+			None,
+			false,
+			None,
+			false,
+		);
+
+		assert_eq!(payload.kind.cache_tag(), TextureUploadKind::Bc7Srgb.cache_tag());
+		assert_eq!(payload.mips[0].data.len(), 16);
+		assert!(!cache_event.hit && !cache_event.miss && !cache_event.write);
+	}
+
+	#[test]
+	fn balanced_advanced_color_roles_can_prefer_bc7() {
+		let mut advanced = TextureCompressionAdvancedOptions::default();
+		advanced.clothing = TextureCompressionPreference::HighQuality;
+		advanced.generic_color = TextureCompressionPreference::HighQuality;
+
+		assert!(should_try_bc7_color(
+			TextureCompressionMode::Balanced,
+			&advanced,
+			TextureRole::Clothing,
+			true,
+		));
+		assert!(should_try_bc7_color(
+			TextureCompressionMode::Balanced,
+			&advanced,
+			TextureRole::GenericColor,
+			true,
+		));
+
+		let rgba = [255, 64, 32, 192].repeat(4 * 4);
+		let processed = build_processed_texture(&rgba, 4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2);
+		let (payload, cache_event) = texture_upload_payload(
+			processed,
+			TextureCompressionMode::Balanced,
+			&advanced,
+			TextureRole::GenericColor,
 			true,
 			BlockCompressionEncoder::Cpu,
 			1,
