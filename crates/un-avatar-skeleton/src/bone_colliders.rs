@@ -465,10 +465,12 @@ fn push_out_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 		return point;
 	}
 	let delta = point - center;
-	let dist = delta.length();
-	if dist >= radius || !dist.is_finite() {
+	let dist_sq = delta.length_squared();
+	let radius_sq = radius * radius;
+	if dist_sq >= radius_sq || !dist_sq.is_finite() {
 		return point;
 	}
+	let dist = dist_sq.sqrt();
 	if dist <= 1e-6 {
 		center + Vec3::Y * radius
 	} else {
@@ -482,10 +484,12 @@ fn push_into_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 	}
 	let radius = radius.max(0.0);
 	let delta = point - center;
-	let dist = delta.length();
-	if dist <= radius || !dist.is_finite() {
+	let dist_sq = delta.length_squared();
+	let radius_sq = radius * radius;
+	if dist_sq <= radius_sq || !dist_sq.is_finite() {
 		return point;
 	}
+	let dist = dist_sq.sqrt();
 	if dist <= 1e-6 || radius <= OFF_EPSILON {
 		center
 	} else {
