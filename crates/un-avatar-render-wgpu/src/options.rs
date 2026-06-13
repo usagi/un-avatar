@@ -578,8 +578,8 @@ pub struct AvatarWindowOptions {
 	pub runtime_control_address: Option<SocketAddr>,
 	/// Supervisor と renderer の runtime IPC に使う Zenoh base key。
 	pub runtime_bus_key: Option<String>,
-	/// VRM SpringBone を毎フレームシミュレーションする（既定 ON。揺れもの表現は VRM アバターの基本機能のため）。
-	/// 静止画として表示したいときだけ manifest `[spring_bones] enable = false` で OFF にする。
+	/// UNPhysics / UNDynamics を毎フレームシミュレーションする（既定 ON。揺れもの表現はアバターの基本機能のため）。
+	/// 静止画として表示したいときだけ manifest `[physics.dynamics] enabled = false` で OFF にする。
 	pub enable_spring_bones: bool,
 	/// 起動直後にすべての runtime dynamics group を明示 ON にする。VRC PhysBone 既定 OFF モデル向けの opt-in。
 	pub dynamics_enable_all_on_launch: bool,

@@ -4977,10 +4977,11 @@ pub fn run_cli() -> Result<(), RunError> {
 		)]
 		runtime_bus_key: Option<String>,
 		#[arg(
-			long,
-			help = "VRM SpringBone シミュレーションを無効化（既定 ON。静止画用途で揺れを完全に止めたいときに指定）"
+			long = "no-dynamics",
+			alias = "no-spring-bones",
+			help = "UNPhysics / UNDynamics シミュレーションを無効化（既定 ON。静止画用途で揺れを完全に止めたいときに指定）"
 		)]
-		no_spring_bones: bool,
+		no_dynamics: bool,
 		#[arg(
 			long,
 			value_name = "PATH",
@@ -5152,7 +5153,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			b: cli.cb,
 			a: cli.ca,
 		},
-		enable_spring_bones: !cli.no_spring_bones,
+		enable_spring_bones: !cli.no_dynamics,
 		dynamics_enable_all_on_launch: false,
 		bone_colliders: Default::default(),
 		spring_bone_physics: DynamicsPhysicsConfig::default(),
@@ -5410,7 +5411,7 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.audio_link != default.audio_link {
 		opts.audio_link = cli.audio_link;
 	}
-	// CLI で `--no-spring-bones` が指定されたときだけ強制 OFF。指定なしは
+	// CLI で `--no-dynamics` が指定されたときだけ強制 OFF。指定なしは
 	// manifest 値（または既定値 true）をそのまま使う。
 	if !cli.enable_spring_bones {
 		opts.enable_spring_bones = false;
