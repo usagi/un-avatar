@@ -1209,7 +1209,10 @@ pub struct UnaRuntimeMaterialSlotTarget {
 	pub primitive_index: Option<usize>,
 }
 
-/// VRM Secondary Animation / SpringBone の 1 チェーン（bootstrap）。
+/// Source-normalized UNDynamics group stored in the document.
+///
+/// The historical Rust type name is retained for serde/API compatibility while
+/// new code should use [`UnaDynamicsSourceGroup`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnaSpringBoneGroup {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
@@ -1252,6 +1255,8 @@ pub struct UnaSpringBoneGroup {
 	/// glTF ノードインデックスのチェーン（親→子）。
 	pub bone_node_indices: Vec<usize>,
 }
+
+pub type UnaDynamicsSourceGroup = UnaSpringBoneGroup;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsParameters {
@@ -1559,15 +1564,17 @@ pub struct UnaSpringBoneSettings {
 	pub constraint_refs: Vec<UnaDynamicsConstraintRef>,
 }
 
+pub type UnaDynamicsSettings = UnaSpringBoneSettings;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UnaRuntimeDynamics<'a> {
-	spring_bones: Option<&'a UnaSpringBoneSettings>,
+	dynamics: Option<&'a UnaDynamicsSettings>,
 	runtime_state: Option<&'a UnaRuntimeState>,
 }
 
 #[derive(Debug, Default)]
 pub struct UnaRuntimeDynamicsMut<'a> {
-	spring_bones: Option<&'a mut UnaSpringBoneSettings>,
+	dynamics: Option<&'a mut UnaDynamicsSettings>,
 	runtime_state: Option<&'a mut UnaRuntimeState>,
 }
 
@@ -1598,11 +1605,11 @@ pub struct UnaRuntimeDynamicsCounts {
 }
 
 impl<'a> UnaRuntimeDynamics<'a> {
-	pub fn groups(self) -> &'a [UnaSpringBoneGroup] {
-		self.spring_bones.map(|settings| settings.groups.as_slice()).unwrap_or(&[])
+	pub fn groups(self) -> &'a [UnaDynamicsSourceGroup] {
+		self.dynamics.map(|settings| settings.groups.as_slice()).unwrap_or(&[])
 	}
 
-	pub fn group(self, index: usize) -> Option<&'a UnaSpringBoneGroup> {
+	pub fn group(self, index: usize) -> Option<&'a UnaDynamicsSourceGroup> {
 		self.groups().get(index)
 	}
 
@@ -1629,14 +1636,14 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.groups().iter().filter(|group| self.group_enabled(group)).count()
 	}
 
-	pub fn group_enabled(self, group: &UnaSpringBoneGroup) -> bool {
+	pub fn group_enabled(self, group: &UnaDynamicsSourceGroup) -> bool {
 		if let Some(enabled) = self.group_enabled_override(group) {
 			return enabled;
 		}
 		group.enabled
 	}
 
-	pub fn group_enabled_override(self, group: &UnaSpringBoneGroup) -> Option<bool> {
+	pub fn group_enabled_override(self, group: &UnaDynamicsSourceGroup) -> Option<bool> {
 		if group.source_id.is_empty() {
 			return None;
 		}
@@ -1693,11 +1700,11 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
-		self.spring_bones.into_iter().flat_map(|settings| settings.colliders.iter())
+		self.dynamics.into_iter().flat_map(|settings| settings.colliders.iter())
 	}
 
 	pub fn contacts(self) -> impl Iterator<Item = &'a UnaDynamicsContact> {
-		self.spring_bones.into_iter().flat_map(|settings| settings.contacts.iter())
+		self.dynamics.into_iter().flat_map(|settings| settings.contacts.iter())
 	}
 
 	pub fn contact_parameter_declarations(self) -> Vec<UnaEvaluationContactParameterDeclaration> {
@@ -1719,7 +1726,7 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn constraint_refs(self) -> impl Iterator<Item = &'a UnaDynamicsConstraintRef> {
-		self.spring_bones.into_iter().flat_map(|settings| settings.constraint_refs.iter())
+		self.dynamics.into_iter().flat_map(|settings| settings.constraint_refs.iter())
 	}
 
 	pub fn source_collider_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
@@ -2105,13 +2112,13 @@ fn vec3_len(v: [f32; 3]) -> f32 {
 impl<'a> UnaRuntimeDynamicsMut<'a> {
 	pub fn as_readonly(&self) -> UnaRuntimeDynamics<'_> {
 		UnaRuntimeDynamics {
-			spring_bones: self.spring_bones.as_deref(),
+			dynamics: self.dynamics.as_deref(),
 			runtime_state: self.runtime_state.as_deref(),
 		}
 	}
 
-	pub fn groups_mut(&mut self) -> &mut [UnaSpringBoneGroup] {
-		self.spring_bones
+	pub fn groups_mut(&mut self) -> &mut [UnaDynamicsSourceGroup] {
+		self.dynamics
 			.as_deref_mut()
 			.map(|settings| settings.groups.as_mut_slice())
 			.unwrap_or(&mut [])
@@ -2157,7 +2164,7 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 impl UnaSpringBoneSettings {
 	pub fn runtime_dynamics(&self) -> UnaRuntimeDynamics<'_> {
 		UnaRuntimeDynamics {
-			spring_bones: Some(self),
+			dynamics: Some(self),
 			runtime_state: None,
 		}
 	}
@@ -2224,7 +2231,8 @@ pub struct UnaDocument {
 	/// Hot switch / action evaluation after source import. This is not persisted source data.
 	#[serde(default, skip_serializing_if = "UnaRuntimeState::is_default")]
 	pub runtime_state: UnaRuntimeState,
-	/// VRM SpringBone / secondaryAnimation から取り込んだ揺れもの用チェーン（ランタイムで更新）。
+	/// Source-normalized UNDynamics data. Serialized as the historical
+	/// `spring_bones` field for existing `.unavatar` compatibility.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub spring_bones: Option<UnaSpringBoneSettings>,
 }
@@ -3154,7 +3162,7 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
 		UnaRuntimeDynamics {
-			spring_bones: self.document.spring_bones.as_ref(),
+			dynamics: self.document.spring_bones.as_ref(),
 			runtime_state: Some(&self.document.runtime_state),
 		}
 	}
@@ -3171,7 +3179,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		Some(UnaRuntimeSceneDynamicsMut {
 			scene: scene.as_mut()?,
 			dynamics: UnaRuntimeDynamicsMut {
-				spring_bones: spring_bones.as_mut(),
+				dynamics: spring_bones.as_mut(),
 				runtime_state: Some(runtime_state),
 			},
 		})
