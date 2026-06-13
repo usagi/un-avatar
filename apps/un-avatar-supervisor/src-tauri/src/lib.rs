@@ -3948,8 +3948,8 @@ fn apply_avatar_setting_value(
 	field: &str,
 	value: serde_json::Value,
 ) -> Result<(), String> {
-	match field {
-		"avatar_path" => {
+	match avatar_setting_field_domain(field).ok_or_else(|| format!("unsupported setting field: {field}"))? {
+		AvatarSettingFieldDomain::AvatarPath => {
 			let path = json_string(&value, field)?;
 			set_optional_root_string(
 				manifest,
@@ -3957,65 +3957,97 @@ fn apply_avatar_setting_value(
 				avatar_path_for_manifest_value(&path, Path::new(&setting.manifest_path)),
 			)?;
 		}
-		"wardrobe_set" => {
+		AvatarSettingFieldDomain::WardrobeSet => {
 			set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string())?;
 		}
-		"icon_path" => {
+		AvatarSettingFieldDomain::IconPath => {
 			let path = json_string(&value, field)?;
 			set_optional_nested_string(manifest, &["window", "icon_path"], path)?;
 		}
-		field if field.starts_with("profile.") => {
+		AvatarSettingFieldDomain::Profile => {
 			apply_profile_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("motion.") => {
+		AvatarSettingFieldDomain::Motion => {
 			apply_motion_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("audio_link.") => {
+		AvatarSettingFieldDomain::AudioLink => {
 			apply_audio_link_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("render_quality.") => {
+		AvatarSettingFieldDomain::RenderQuality => {
 			apply_render_quality_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.avatar.contact_shadow.") => {
+		AvatarSettingFieldDomain::ContactShadow => {
 			apply_contact_shadow_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.avatar.") => {
+		AvatarSettingFieldDomain::AvatarEffect => {
 			apply_avatar_effect_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("environment.") => {
+		AvatarSettingFieldDomain::Environment => {
 			apply_environment_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.post.") => {
+		AvatarSettingFieldDomain::PostEffect => {
 			apply_post_effect_setting_value(manifest, field, value)?;
 		}
-		"dynamics_enabled"
-		| "spring_bones"
-		| "physics.contacts.parameter_emission"
-		| "physics.dynamics.enable_all_on_launch"
-		| "physics.dynamics.solver.simulation_hz"
-		| "physics.dynamics.solver.substeps"
-		| "physics.spring_bone.simulation_hz"
-		| "physics.spring_bone.substeps" => {
+		AvatarSettingFieldDomain::Physics => {
 			apply_physics_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("physics.") => {
-			apply_physics_setting_value(manifest, setting, field, value)?;
-		}
-		field if field.starts_with("window.") => {
+		AvatarSettingFieldDomain::Window => {
 			apply_window_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("debug.") => {
+		AvatarSettingFieldDomain::Debug => {
 			apply_debug_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("camera.") => {
+		AvatarSettingFieldDomain::Camera => {
 			apply_camera_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("output.") => {
+		AvatarSettingFieldDomain::Output => {
 			apply_output_setting_value(manifest, field, value)?;
 		}
-		_ => return Err(format!("unsupported setting field: {field}")),
 	}
 	Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AvatarSettingFieldDomain {
+	AvatarPath,
+	WardrobeSet,
+	IconPath,
+	Profile,
+	Motion,
+	AudioLink,
+	RenderQuality,
+	ContactShadow,
+	AvatarEffect,
+	Environment,
+	PostEffect,
+	Physics,
+	Window,
+	Debug,
+	Camera,
+	Output,
+}
+
+fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> {
+	match field {
+		"avatar_path" => Some(AvatarSettingFieldDomain::AvatarPath),
+		"wardrobe_set" => Some(AvatarSettingFieldDomain::WardrobeSet),
+		"icon_path" => Some(AvatarSettingFieldDomain::IconPath),
+		"dynamics_enabled" | "spring_bones" => Some(AvatarSettingFieldDomain::Physics),
+		_ if field.starts_with("profile.") => Some(AvatarSettingFieldDomain::Profile),
+		_ if field.starts_with("motion.") => Some(AvatarSettingFieldDomain::Motion),
+		_ if field.starts_with("audio_link.") => Some(AvatarSettingFieldDomain::AudioLink),
+		_ if field.starts_with("render_quality.") => Some(AvatarSettingFieldDomain::RenderQuality),
+		_ if field.starts_with("effects.avatar.contact_shadow.") => Some(AvatarSettingFieldDomain::ContactShadow),
+		_ if field.starts_with("effects.avatar.") => Some(AvatarSettingFieldDomain::AvatarEffect),
+		_ if field.starts_with("environment.") => Some(AvatarSettingFieldDomain::Environment),
+		_ if field.starts_with("effects.post.") => Some(AvatarSettingFieldDomain::PostEffect),
+		_ if field.starts_with("physics.") => Some(AvatarSettingFieldDomain::Physics),
+		_ if field.starts_with("window.") => Some(AvatarSettingFieldDomain::Window),
+		_ if field.starts_with("debug.") => Some(AvatarSettingFieldDomain::Debug),
+		_ if field.starts_with("camera.") => Some(AvatarSettingFieldDomain::Camera),
+		_ if field.starts_with("output.") => Some(AvatarSettingFieldDomain::Output),
+		_ => None,
+	}
 }
 
 fn apply_environment_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
@@ -9557,14 +9589,14 @@ mod tests {
 	};
 
 	use super::{
-		apply_avatar_setting_value, avatar_model_picker_parent, build_launcher_task_specs, data_image_base64_parts,
-		diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, migrate_avatar_manifest_to_v2,
-		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
-		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path,
-		resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session,
-		spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id,
-		validate_spout_dimension, AvatarSetting, LauncherTaskProfile, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
-		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
+		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp,
+		migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count,
+		read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, renderer_launch_control_commands,
+		repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
+		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name,
+		unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileStorage,
+		RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -10220,6 +10252,24 @@ display_name = "New Avatar"
 "#;
 		let manifest = parse_manifest_value(text, Path::new("new-avatar.toml")).unwrap();
 		assert_eq!(manifest.get("title").and_then(toml::Value::as_str), Some("New Avatar"));
+	}
+
+	#[test]
+	fn avatar_setting_field_domain_routes_specific_prefixes_before_general_ones() {
+		assert_eq!(
+			avatar_setting_field_domain("effects.avatar.contact_shadow.enabled"),
+			Some(AvatarSettingFieldDomain::ContactShadow)
+		);
+		assert_eq!(
+			avatar_setting_field_domain("effects.avatar.outline.width"),
+			Some(AvatarSettingFieldDomain::AvatarEffect)
+		);
+		assert_eq!(
+			avatar_setting_field_domain("physics.dynamics.solver.simulation_hz"),
+			Some(AvatarSettingFieldDomain::Physics)
+		);
+		assert_eq!(avatar_setting_field_domain("spring_bones"), Some(AvatarSettingFieldDomain::Physics));
+		assert_eq!(avatar_setting_field_domain("unknown.setting"), None);
 	}
 
 	#[test]
