@@ -10068,6 +10068,25 @@ impl PrimitiveReadProfile {
 	}
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PrimitiveVertexPayloadCacheConfig {
+	disabled: bool,
+	min_uses: usize,
+}
+
+impl PrimitiveVertexPayloadCacheConfig {
+	fn from_env() -> Self {
+		Self {
+			disabled: std::env::var_os("UN_AVATAR_DISABLE_IMPORT_VERTEX_PAYLOAD_CACHE").is_some(),
+			min_uses: std::env::var("UN_AVATAR_IMPORT_VERTEX_PAYLOAD_CACHE_MIN_USES")
+				.ok()
+				.and_then(|value| value.parse::<usize>().ok())
+				.unwrap_or(2)
+				.max(2),
+		}
+	}
+}
+
 fn accessor_index(accessor: Option<gltf::Accessor<'_>>) -> Option<usize> {
 	accessor.map(|accessor| accessor.index())
 }
@@ -10129,9 +10148,11 @@ fn read_primitive(
 	buffers: &[gltf::buffer::Data],
 	mesh_weights: Option<&[f32]>,
 	mesh_target_names: &[String],
+	payload_key: PrimitiveVertexPayloadKey,
 	vertex_payload_id: Option<u64>,
 	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
 	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
+	cache_config: PrimitiveVertexPayloadCacheConfig,
 	_report: &mut ImportReport,
 ) -> Result<Option<(UnaMeshBuffers, bool, bool, PrimitiveReadProfile)>, ImportError> {
 	if prim.mode() != gltf::mesh::Mode::Triangles {
@@ -10142,14 +10163,8 @@ fn read_primitive(
 		return Ok(None);
 	}
 
-	let payload_key = primitive_vertex_payload_key(&prim, mesh_weights, mesh_target_names);
-	let cache_disabled = std::env::var_os("UN_AVATAR_DISABLE_IMPORT_VERTEX_PAYLOAD_CACHE").is_some();
-	let cache_min_uses = std::env::var("UN_AVATAR_IMPORT_VERTEX_PAYLOAD_CACHE_MIN_USES")
-		.ok()
-		.and_then(|value| value.parse::<usize>().ok())
-		.unwrap_or(2)
-		.max(2);
-	let cache_reusable = !cache_disabled && vertex_payload_key_counts.get(&payload_key).copied().unwrap_or(0) >= cache_min_uses;
+	let cache_reusable =
+		!cache_config.disabled && vertex_payload_key_counts.get(&payload_key).copied().unwrap_or(0) >= cache_config.min_uses;
 	let reader = prim.reader(|b| buffers.get(b.index()).map(|d| d.as_ref()));
 	if cache_reusable {
 		let cache_clone_started = Instant::now();
@@ -10471,9 +10486,10 @@ fn scene_snapshot_from_gltf_inner(
 		}
 	}
 	let mut vertex_payload_key_ids = BTreeMap::<PrimitiveVertexPayloadKey, u64>::new();
+	let vertex_payload_cache_config = PrimitiveVertexPayloadCacheConfig::from_env();
 	let mut next_vertex_payload_id = 1u64;
 	for (key, count) in &vertex_payload_key_counts {
-		if *count > 1 {
+		if !vertex_payload_cache_config.disabled && *count >= vertex_payload_cache_config.min_uses {
 			vertex_payload_key_ids.insert(key.clone(), next_vertex_payload_id);
 			next_vertex_payload_id = next_vertex_payload_id.saturating_add(1);
 		}
@@ -10493,17 +10509,18 @@ fn scene_snapshot_from_gltf_inner(
 		for prim in mesh.primitives() {
 			let primitive_started = Instant::now();
 			let primitive_index = prim.index();
-			let vertex_payload_id = vertex_payload_key_ids
-				.get(&primitive_vertex_payload_key(&prim, mw, &target_names))
-				.copied();
+			let payload_key = primitive_vertex_payload_key(&prim, mw, &target_names);
+			let vertex_payload_id = vertex_payload_key_ids.get(&payload_key).copied();
 			if let Some((buf, cache_hit, cacheable, primitive_profile)) = read_primitive(
 				prim,
 				buffers,
 				mw,
 				&target_names,
+				payload_key,
 				vertex_payload_id,
 				&mut vertex_payload_cache,
 				&vertex_payload_key_counts,
+				vertex_payload_cache_config,
 				report,
 			)? {
 				mesh_read_profile.add(primitive_profile);
