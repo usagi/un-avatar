@@ -35,80 +35,84 @@
 			</span>
 		{/if}
 	</div>
-	<div
-		class="profile-stage-action-group"
-		aria-label={$_("profiles.action_groups.prepare")}
-		data-hint={$_("profiles.action_groups.prepare_hint")}
-	>
-		<div class="profile-stage-action-copy">
-			<strong>{$_("profiles.action_groups.prepare")}</strong>
-			<span>{$_("profiles.action_groups.prepare_hint")}</span>
-		</div>
-		<div class="profile-stage-action-buttons">
+	{#if liveRenderer}
+		<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.live_renderer")}>
+			<button type="button" class="profile-stage-primary-action" onclick={() => onViewRenderer(liveRenderer.id)}
+				><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
+			>
 			<button
 				type="button"
 				disabled={busy}
-				data-hint={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
-				title={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
-				onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /><span>{$_("profiles.actions.warm_cache")}</span></button
+				data-hint={$_("profiles.actions.warm_cache_live_hint")}
+				title={$_("profiles.actions.warm_cache_live_hint")}
+				aria-label={$_("profiles.actions.warm_cache")}
+				onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /></button
 			>
 			<button
 				type="button"
 				disabled={busy}
 				data-hint={$_("profiles.actions.desktop_shortcut_hint")}
 				title={$_("profiles.actions.desktop_shortcut_hint")}
-				onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /><span>{$_("profiles.actions.desktop_shortcut")}</span></button
+				aria-label={$_("profiles.actions.desktop_shortcut")}
+				onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /></button
 			>
 			<button
 				type="button"
 				disabled={busy}
 				data-hint={$_("profiles.actions.taskbar_launcher_hint")}
 				title={$_("profiles.actions.taskbar_launcher_hint")}
-				onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /><span>{$_("profiles.actions.taskbar_launcher")}</span></button
+				aria-label={$_("profiles.actions.taskbar_launcher")}
+				onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /></button
+			>
+			<button
+				type="button"
+				disabled={!liveRenderer.pid}
+				title={$_("renderers.toolbar.activate")}
+				aria-label={$_("renderers.toolbar.activate")}
+				onclick={() => onActivateRenderer(liveRenderer.id)}><ExternalLink size={14} /></button
+			>
+			<button
+				type="button"
+				disabled={busy || !liveRenderer.pid}
+				title={$_("renderers.toolbar.screenshot")}
+				aria-label={$_("renderers.toolbar.screenshot")}
+				onclick={() => onCaptureRendererScreenshot(liveRenderer.id)}><Camera size={14} /></button
 			>
 		</div>
-	</div>
-	{#if liveRenderer}
-		<div
-			class="profile-stage-action-group"
-			aria-label={$_("profiles.action_groups.live_renderer")}
-			data-hint={$_("profiles.action_groups.live_renderer_hint")}
-		>
-			<div class="profile-stage-action-copy">
-				<strong>{$_("profiles.action_groups.live_renderer")}</strong>
-				<span>{$_("profiles.action_groups.live_renderer_hint")}</span>
-			</div>
-			<div class="profile-stage-action-buttons">
-				<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}
-					><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
-				>
-				<button type="button" disabled={!liveRenderer.pid} onclick={() => onActivateRenderer(liveRenderer.id)}
-					><ExternalLink size={14} /><span>{$_("renderers.toolbar.activate")}</span></button
-				>
-				<button type="button" disabled={busy || !liveRenderer.pid} onclick={() => onCaptureRendererScreenshot(liveRenderer.id)}
-					><Camera size={14} /><span>{$_("renderers.toolbar.screenshot")}</span></button
-				>
-			</div>
-		</div>
 	{:else}
-		<div
-			class="profile-stage-action-group"
-			aria-label={$_("profiles.action_groups.launch")}
-			data-hint={$_("profiles.action_groups.launch_hint")}
-		>
-			<div class="profile-stage-action-copy">
-				<strong>{$_("profiles.action_groups.launch")}</strong>
-				<span>{$_("profiles.action_groups.launch_hint")}</span>
-			</div>
-			<div class="profile-stage-action-buttons">
-				<button
-					type="button"
-					disabled={busy}
-					data-hint={$_("profiles.actions.quick_run_hint")}
-					title={$_("profiles.actions.quick_run_hint")}
-					onclick={() => onLaunchProfile(settingId)}><Play size={14} /><span>{$_("profiles.actions.quick_run")}</span></button
-				>
-			</div>
+		<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.launch")}>
+			<button
+				type="button"
+				class="profile-stage-primary-action"
+				disabled={busy}
+				data-hint={$_("profiles.actions.quick_run_hint")}
+				title={$_("profiles.actions.quick_run_hint")}
+				onclick={() => onLaunchProfile(settingId)}><Play size={14} /><span>{$_("profiles.actions.quick_run")}</span></button
+			>
+			<button
+				type="button"
+				disabled={busy}
+				data-hint={$_("profiles.actions.warm_cache_hint")}
+				title={$_("profiles.actions.warm_cache_hint")}
+				aria-label={$_("profiles.actions.warm_cache")}
+				onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /></button
+			>
+			<button
+				type="button"
+				disabled={busy}
+				data-hint={$_("profiles.actions.desktop_shortcut_hint")}
+				title={$_("profiles.actions.desktop_shortcut_hint")}
+				aria-label={$_("profiles.actions.desktop_shortcut")}
+				onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /></button
+			>
+			<button
+				type="button"
+				disabled={busy}
+				data-hint={$_("profiles.actions.taskbar_launcher_hint")}
+				title={$_("profiles.actions.taskbar_launcher_hint")}
+				aria-label={$_("profiles.actions.taskbar_launcher")}
+				onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /></button
+			>
 		</div>
 	{/if}
 </div>

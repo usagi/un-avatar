@@ -521,7 +521,7 @@ small,
 
 .profile-stage {
 	grid-template-columns: auto minmax(0, 1fr);
-	min-height: 156px;
+	min-height: 134px;
 	align-items: start;
 }
 
@@ -667,10 +667,11 @@ small,
 	display: flex;
 	flex: 0 0 auto;
 	flex-wrap: wrap;
+	align-items: center;
 	justify-content: flex-end;
 	gap: 8px;
 	min-width: 0;
-	max-width: min(920px, 60vw);
+	max-width: min(620px, 48vw);
 }
 
 .profile-stage-action-group {
@@ -722,6 +723,7 @@ small,
 .profile-stage-action-buttons {
 	display: inline-flex;
 	flex-wrap: wrap;
+	align-items: center;
 	justify-content: flex-end;
 	gap: 6px;
 	min-width: 0;
@@ -748,18 +750,37 @@ small,
 	white-space: nowrap;
 }
 
+.profile-stage-action-buttons > button:not(.profile-stage-primary-action) {
+	width: 32px;
+	max-width: 32px;
+	flex: 0 0 32px;
+	padding: 0;
+}
+
+.profile-stage-action-buttons > .profile-stage-primary-action {
+	max-width: 172px;
+	flex: 0 1 auto;
+	padding: 0 10px;
+}
+
 .profile-pending-action-slot {
 	display: inline-flex;
 	align-items: center;
 	justify-content: flex-end;
-	min-width: clamp(0px, 20vw, 260px);
+	width: 0;
+	min-width: 0;
 	min-height: 30px;
-	margin-right: 8px;
+	margin-right: 0;
+	overflow: hidden;
 	opacity: 0;
 	pointer-events: none;
 }
 
 .profile-pending-action-slot-visible {
+	width: auto;
+	min-width: clamp(0px, 20vw, 260px);
+	margin-right: 8px;
+	overflow: visible;
 	opacity: 1;
 	pointer-events: auto;
 }
