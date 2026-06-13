@@ -19,8 +19,8 @@ pub use humanoid_retarget::{
 };
 pub use spring_bones::{
 	DynamicsCategoryDefinition, DynamicsCategoryOverride, DynamicsPhysicsConfig, DynamicsPhysicsParams, DynamicsSimulator, DynamicsSolver,
-	DynamicsTimeMode, SpringBoneCategoryDefinition, SpringBoneCategoryOverride, SpringBonePhysicsConfig, SpringBonePhysicsParams,
-	SpringBoneSimulator, SpringBoneSolver, SpringBoneTimeMode,
+	DynamicsStepProfile, DynamicsTimeMode, SpringBoneCategoryDefinition, SpringBoneCategoryOverride, SpringBonePhysicsConfig,
+	SpringBonePhysicsParams, SpringBoneSimulator, SpringBoneSolver, SpringBoneTimeMode,
 };
 pub use un_avatar_types::HumanoidProfile;
 

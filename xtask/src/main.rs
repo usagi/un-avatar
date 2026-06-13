@@ -192,6 +192,12 @@ struct RendererLogSummary {
 	cpu_no_surface_ms: Option<String>,
 	gpu_ms: Option<String>,
 	frame_dynamics_ms: Option<String>,
+	frame_dynamics_steps: Option<String>,
+	frame_dynamics_world_ms: Option<String>,
+	frame_dynamics_collider_ms: Option<String>,
+	frame_dynamics_solve_ms: Option<String>,
+	frame_dynamics_solve_collision_ms: Option<String>,
+	frame_dynamics_solve_propagate_ms: Option<String>,
 	frame_draw_state_ms: Option<String>,
 	frame_scene_world_ms: Option<String>,
 	frame_skin_palette_ms: Option<String>,
@@ -247,11 +253,11 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tgltf_parse_ms\tgltf_buffers_ms\tgltf_image_decode_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tframe_dynamics_ms\tframe_draw_state_ms\tframe_scene_world_ms\tframe_skin_palette_ms\tframe_skin_write_ms\tframe_submit_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
+		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tgltf_parse_ms\tgltf_buffers_ms\tgltf_image_decode_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tframe_dynamics_ms\tframe_dynamics_steps\tframe_dynamics_world_ms\tframe_dynamics_collider_ms\tframe_dynamics_solve_ms\tframe_dynamics_solve_collision_ms\tframe_dynamics_solve_propagate_ms\tframe_draw_state_ms\tframe_scene_world_ms\tframe_skin_palette_ms\tframe_skin_write_ms\tframe_submit_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.pre_scene_import_ms.as_deref().unwrap_or("-"),
@@ -274,6 +280,12 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 			summary.cpu_no_surface_ms.as_deref().unwrap_or("-"),
 			summary.gpu_ms.as_deref().unwrap_or("-"),
 			summary.frame_dynamics_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_steps.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_world_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_collider_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_solve_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_solve_collision_ms.as_deref().unwrap_or("-"),
+			summary.frame_dynamics_solve_propagate_ms.as_deref().unwrap_or("-"),
 			summary.frame_draw_state_ms.as_deref().unwrap_or("-"),
 			summary.frame_scene_world_ms.as_deref().unwrap_or("-"),
 			summary.frame_skin_palette_ms.as_deref().unwrap_or("-"),
@@ -338,6 +350,12 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.gpu_ms = metric_token(line, "gpu_avg=").map(strip_ms);
 		} else if line.contains("frame bench detail ") {
 			summary.frame_dynamics_ms = frame_detail_avg(line, "dynamics=");
+			summary.frame_dynamics_steps = frame_detail_avg(line, "dyn_steps=");
+			summary.frame_dynamics_world_ms = frame_detail_avg(line, "dyn_world=");
+			summary.frame_dynamics_collider_ms = frame_detail_avg(line, "dyn_colliders=");
+			summary.frame_dynamics_solve_ms = frame_detail_avg(line, "dyn_solve=");
+			summary.frame_dynamics_solve_collision_ms = frame_detail_avg(line, "dyn_solve_collision=");
+			summary.frame_dynamics_solve_propagate_ms = frame_detail_avg(line, "dyn_solve_propagate=");
 			summary.frame_draw_state_ms = frame_detail_avg(line, "draw_state=");
 			summary.frame_scene_world_ms = frame_detail_avg(line, "scene_world=");
 			summary.frame_skin_palette_ms = frame_detail_avg(line, "skin_palette=");

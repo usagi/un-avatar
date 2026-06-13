@@ -1228,6 +1228,12 @@ struct FrameBenchState {
 	cpu_total_ms: FrameBenchMetric,
 	motion_apply_ms: FrameBenchMetric,
 	dynamics_step_ms: FrameBenchMetric,
+	dynamics_fixed_steps: FrameBenchMetric,
+	dynamics_world_ms: FrameBenchMetric,
+	dynamics_collider_ms: FrameBenchMetric,
+	dynamics_solve_ms: FrameBenchMetric,
+	dynamics_solve_collision_ms: FrameBenchMetric,
+	dynamics_solve_propagate_ms: FrameBenchMetric,
 	frame_globals_ms: FrameBenchMetric,
 	surface_acquire_ms: FrameBenchMetric,
 	target_prepare_ms: FrameBenchMetric,
@@ -1285,6 +1291,12 @@ impl FrameBenchState {
 			cpu_total_ms: FrameBenchMetric::default(),
 			motion_apply_ms: FrameBenchMetric::default(),
 			dynamics_step_ms: FrameBenchMetric::default(),
+			dynamics_fixed_steps: FrameBenchMetric::default(),
+			dynamics_world_ms: FrameBenchMetric::default(),
+			dynamics_collider_ms: FrameBenchMetric::default(),
+			dynamics_solve_ms: FrameBenchMetric::default(),
+			dynamics_solve_collision_ms: FrameBenchMetric::default(),
+			dynamics_solve_propagate_ms: FrameBenchMetric::default(),
 			frame_globals_ms: FrameBenchMetric::default(),
 			surface_acquire_ms: FrameBenchMetric::default(),
 			target_prepare_ms: FrameBenchMetric::default(),
@@ -1321,6 +1333,12 @@ impl FrameBenchState {
 		self.cpu_total_ms.push(timings.cpu_total_ms);
 		self.motion_apply_ms.push(timings.motion_apply_ms);
 		self.dynamics_step_ms.push(timings.dynamics_step_ms);
+		self.dynamics_fixed_steps.push(timings.dynamics_profile.fixed_steps as f32);
+		self.dynamics_world_ms.push(timings.dynamics_profile.world_ms);
+		self.dynamics_collider_ms.push(timings.dynamics_profile.collider_ms);
+		self.dynamics_solve_ms.push(timings.dynamics_profile.solve_ms);
+		self.dynamics_solve_collision_ms.push(timings.dynamics_profile.solve_collision_ms);
+		self.dynamics_solve_propagate_ms.push(timings.dynamics_profile.solve_propagate_ms);
 		self.frame_globals_ms.push(timings.frame_globals_ms);
 		self.surface_acquire_ms.push(timings.surface_acquire_ms);
 		self.target_prepare_ms.push(timings.target_prepare_ms);
@@ -1369,11 +1387,23 @@ impl FrameBenchState {
 			self.gpu_ms.max,
 		);
 		eprintln!(
-			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
+			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms dyn_steps={:.2}/{:.2} dyn_world={:.2}/{:.2}ms dyn_colliders={:.2}/{:.2}ms dyn_solve={:.2}/{:.2}ms dyn_solve_collision={:.2}/{:.2}ms dyn_solve_propagate={:.2}/{:.2}ms globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
 			self.motion_apply_ms.avg(frames),
 			self.motion_apply_ms.max,
 			self.dynamics_step_ms.avg(frames),
 			self.dynamics_step_ms.max,
+			self.dynamics_fixed_steps.avg(frames),
+			self.dynamics_fixed_steps.max,
+			self.dynamics_world_ms.avg(frames),
+			self.dynamics_world_ms.max,
+			self.dynamics_collider_ms.avg(frames),
+			self.dynamics_collider_ms.max,
+			self.dynamics_solve_ms.avg(frames),
+			self.dynamics_solve_ms.max,
+			self.dynamics_solve_collision_ms.avg(frames),
+			self.dynamics_solve_collision_ms.max,
+			self.dynamics_solve_propagate_ms.avg(frames),
+			self.dynamics_solve_propagate_ms.max,
 			self.frame_globals_ms.avg(frames),
 			self.frame_globals_ms.max,
 			self.surface_acquire_ms.avg(frames),

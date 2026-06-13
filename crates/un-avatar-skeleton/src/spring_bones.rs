@@ -28,7 +28,7 @@
 //! - dt 可変だと Verlet 速度 `curr - prev` が前フレームの dt 分の変位を表すため発散していた
 //!   → `accumulator` で固定 dt サブステップ化 (`FIXED_DT = 1/60s`)。
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,18 @@ pub enum SpringBoneTimeMode {
 }
 
 pub type DynamicsTimeMode = SpringBoneTimeMode;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DynamicsStepProfile {
+	pub fixed_steps: u32,
+	pub active_groups: u32,
+	pub active_joints: u32,
+	pub world_ms: f32,
+	pub collider_ms: f32,
+	pub solve_ms: f32,
+	pub solve_collision_ms: f32,
+	pub solve_propagate_ms: f32,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -675,6 +687,27 @@ impl SpringBoneSimulator {
 	}
 
 	pub fn step_runtime_dynamics(&mut self, scene: &mut UnaSceneSnapshot, dynamics: UnaRuntimeDynamics<'_>, dt: f32) {
+		self.step_runtime_dynamics_inner(scene, dynamics, dt, None);
+	}
+
+	pub fn step_runtime_dynamics_profiled(
+		&mut self,
+		scene: &mut UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		dt: f32,
+	) -> DynamicsStepProfile {
+		let mut profile = DynamicsStepProfile::default();
+		self.step_runtime_dynamics_inner(scene, dynamics, dt, Some(&mut profile));
+		profile
+	}
+
+	fn step_runtime_dynamics_inner(
+		&mut self,
+		scene: &mut UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		dt: f32,
+		mut profile: Option<&mut DynamicsStepProfile>,
+	) {
 		if !dynamics.has_groups() {
 			return;
 		}
@@ -687,8 +720,17 @@ impl SpringBoneSimulator {
 		self.accumulator = (self.accumulator + dt).min(MAX_ACCUM);
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
+			let t_world = profile.is_some().then(Instant::now);
 			write_world_from_snapshot(scene, &mut self.world_scratch);
+			if let (Some(profile), Some(t_world)) = (profile.as_deref_mut(), t_world) {
+				profile.world_ms += t_world.elapsed().as_secs_f32() * 1000.0;
+			}
+			let t_collider = profile.is_some().then(Instant::now);
 			resolve_world_colliders(&self.world_scratch, &self.bone_colliders, &mut self.world_colliders);
+			if let (Some(profile), Some(t_collider)) = (profile.as_deref_mut(), t_collider) {
+				profile.collider_ms += t_collider.elapsed().as_secs_f32() * 1000.0;
+			}
+			let t_solve = profile.is_some().then(Instant::now);
 			for &runtime_index in &self.active_runtime_indices {
 				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
@@ -700,8 +742,22 @@ impl SpringBoneSimulator {
 					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
 						rt.reset_xpbd_lambdas();
 					}
-					step_group(scene, g, rt, &mut self.world_scratch, &self.world_colliders, sub_dt);
+					step_group(
+						scene,
+						g,
+						rt,
+						&mut self.world_scratch,
+						&self.world_colliders,
+						sub_dt,
+						profile.as_deref_mut(),
+					);
 				}
+			}
+			if let (Some(profile), Some(t_solve)) = (profile.as_deref_mut(), t_solve) {
+				profile.solve_ms += t_solve.elapsed().as_secs_f32() * 1000.0;
+				profile.fixed_steps = profile.fixed_steps.saturating_add(1);
+				profile.active_groups = self.active_runtime_indices.len() as u32;
+				profile.active_joints = self.active_joint_count() as u32;
 			}
 			self.accumulator -= fixed_dt;
 			steps += 1;
@@ -765,6 +821,7 @@ fn step_group(
 	world_scratch: &mut [Mat4],
 	bone_colliders: &[WorldBoneColliderPrimitive],
 	dt: f32,
+	mut profile: Option<&mut DynamicsStepProfile>,
 ) {
 	let drag = match rt.params.solver {
 		SpringBoneSolver::Verlet | SpringBoneSolver::Xpbd => {
@@ -832,6 +889,7 @@ fn step_group(
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				let t_collision = profile.is_some().then(Instant::now);
 				next_tail = constrain_tail_colliders(
 					next_tail,
 					child_pos,
@@ -840,6 +898,9 @@ fn step_group(
 					bone_colliders,
 					joint.hit_radius,
 				);
+				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
+					profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
+				}
 				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
@@ -850,6 +911,7 @@ fn step_group(
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			let t_collision = profile.is_some().then(Instant::now);
 			next_tail = constrain_tail_colliders(
 				next_tail,
 				child_pos,
@@ -858,6 +920,9 @@ fn step_group(
 				bone_colliders,
 				joint.hit_radius,
 			);
+			if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
+				profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
+			}
 			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
@@ -890,7 +955,11 @@ fn step_group(
 		}
 
 		// 子以下の world 行列を更新（次の joint の親回転計算で使う）。
+		let t_propagate = profile.is_some().then(Instant::now);
 		propagate_world_subtree(&scene.nodes, world_scratch, joint.child_node, parent_world);
+		if let (Some(profile), Some(t_propagate)) = (profile.as_deref_mut(), t_propagate) {
+			profile.solve_propagate_ms += t_propagate.elapsed().as_secs_f32() * 1000.0;
+		}
 
 		joint.prev_tail = joint.curr_tail;
 		joint.curr_tail = next_tail;

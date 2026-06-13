@@ -21,7 +21,7 @@ use un_avatar_core::{
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
-	BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator,
+	BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator, DynamicsStepProfile,
 };
 use winit::window::Window;
 
@@ -2239,6 +2239,7 @@ pub struct FrameTimings {
 	pub cpu_total_ms: f32,
 	pub motion_apply_ms: f32,
 	pub dynamics_step_ms: f32,
+	pub dynamics_profile: DynamicsStepProfile,
 	pub frame_globals_ms: f32,
 	pub surface_acquire_ms: f32,
 	pub target_prepare_ms: f32,
@@ -3546,6 +3547,7 @@ pub(crate) struct GpuState {
 	audio_link_options: AudioLinkOptions,
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	dynamics_sim: Option<DynamicsSimulator>,
+	dynamics_profile_enabled: bool,
 	runtime_dynamics_enabled: bool,
 	runtime_bone_collider_config: BoneColliderConfig,
 	runtime_dynamics_physics: DynamicsPhysicsConfig,
@@ -3796,6 +3798,7 @@ impl GpuState {
 		let avatar_outline = mesh_diagnostics.avatar_outline;
 		let scene_meshes = None;
 		let dynamics_sim = None;
+		let dynamics_profile_enabled = std::env::var_os("UN_AVATAR_DYNAMICS_PROFILE").is_some();
 		let contact_shadow_pipeline = None;
 		let bone_collider_count = 0;
 		let bone_collider_source = BoneColliderSource::Off;
@@ -3888,6 +3891,7 @@ impl GpuState {
 			audio_link_options: AudioLinkOptions::default(),
 			audio_link_runtime: None,
 			dynamics_sim,
+			dynamics_profile_enabled,
 			runtime_dynamics_enabled: true,
 			runtime_bone_collider_config: BoneColliderConfig::default(),
 			runtime_dynamics_physics: DynamicsPhysicsConfig::default(),
@@ -6407,10 +6411,15 @@ impl GpuState {
 		self.apply_pending_motion_frames();
 		let motion_apply_ms = t_motion0.elapsed().as_secs_f32() * 1000.0;
 		let t_dynamics0 = Instant::now();
+		let mut dynamics_profile = DynamicsStepProfile::default();
 		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
 			if let Ok(mut doc) = doc_arc.write() {
 				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
-					sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
+					if self.dynamics_profile_enabled {
+						dynamics_profile = sim.step_runtime_dynamics_profiled(runtime.scene, runtime.dynamics.as_readonly(), dt);
+					} else {
+						sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
+					}
 				}
 			}
 		}
@@ -6966,6 +6975,7 @@ impl GpuState {
 			cpu_total_ms: t_cpu0.elapsed().as_secs_f32() * 1000.0,
 			motion_apply_ms,
 			dynamics_step_ms,
+			dynamics_profile,
 			frame_globals_ms,
 			surface_acquire_ms,
 			target_prepare_ms,
