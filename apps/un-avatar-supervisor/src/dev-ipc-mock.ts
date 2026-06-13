@@ -349,7 +349,13 @@ export function installDevIpcMock(): void {
 					contact_count: 2,
 					modular_avatar_component_count: 18,
 					redistribution_allowed: null,
-					sample_screenshot_data_url: null,
+					preview_images: [
+						{
+							view: "front",
+							data_url:
+								"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+						},
+					],
 				};
 			case "read_unavatar_wardrobe_options":
 				return {

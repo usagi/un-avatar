@@ -48,7 +48,6 @@
 	} from "./lib/rendererTypes";
 	import { fallbackVrmMetadata, looksLikeVrmPath, type VrmMetadataDialogState, type VrmMetadataInfo } from "./lib/vrmMetadata";
 	import {
-		fallbackUnavatarMetadata,
 		looksLikeUnavatarPath,
 		type UnavatarMetadataDialogState,
 		type UnavatarMetadataInfo,
@@ -874,17 +873,11 @@
 
 	async function readUnavatarMetadataForPath(path: string): Promise<UnavatarMetadataInfo | null> {
 		if (!selectedSetting) return null;
-		try {
-			return await invoke<UnavatarMetadataInfo | null>("read_unavatar_metadata", {
-				path,
-				manifestPath: selectedSetting.manifest_path,
-			});
-		} catch (error) {
-			if (looksLikeUnavatarPath(path)) {
-				return fallbackUnavatarMetadata(path);
-			}
-			throw error;
-		}
+		return await invoke<UnavatarMetadataInfo | null>("read_unavatar_metadata", {
+			path,
+			manifestPath: selectedSetting.manifest_path,
+			wardrobeSet: selectedSetting.wardrobe_set,
+		});
 	}
 
 	function rendererRuntimeStatus(renderer: RendererInstance): RendererRuntimeStatus | null {
@@ -1785,7 +1778,11 @@
 			return;
 		}
 		if (looksLikeUnavatarPath(path)) {
-			const metadata = (await readUnavatarMetadataForPath(path)) ?? fallbackUnavatarMetadata(path);
+			const metadata = await readUnavatarMetadataForPath(path);
+			if (!metadata) {
+				message = "Selected avatar has no UNAvatar metadata";
+				return;
+			}
 			unavatarMetadataModal = {
 				metadata,
 				pendingPath: path,
@@ -1923,7 +1920,11 @@
 		busy = true;
 		try {
 			if (looksLikeUnavatarPath(selectedSetting.avatar_path)) {
-				const metadata = (await readUnavatarMetadataForPath(selectedSetting.avatar_path)) ?? fallbackUnavatarMetadata(selectedSetting.avatar_path);
+				const metadata = await readUnavatarMetadataForPath(selectedSetting.avatar_path);
+				if (!metadata) {
+					message = "Selected avatar has no UNAvatar metadata";
+					return;
+				}
 				unavatarMetadataModal = {
 					metadata,
 					pendingPath: null,

@@ -9,6 +9,9 @@
 
 	$: metadata = modal.metadata;
 	$: title = metadata.name?.trim() || metadata.file_name;
+	let selectedPreviewIndex = 0;
+	$: if (selectedPreviewIndex >= metadata.preview_images.length) selectedPreviewIndex = 0;
+	$: selectedPreview = metadata.preview_images[selectedPreviewIndex] ?? null;
 	$: stats = [
 		[$_("unavatar_rights.stats.wardrobe"), metadata.wardrobe_set_count],
 		[$_("unavatar_rights.stats.dynamics"), metadata.dynamics_count],
@@ -20,12 +23,26 @@
 <div class="vrm-metadata-backdrop" role="presentation">
 	<div class="vrm-metadata-dialog unavatar-rights-dialog" role="dialog" aria-modal="true" aria-label={$_("unavatar_rights.title")}>
 		<div class="vrm-metadata-portrait" aria-hidden="true">
-			{#if metadata.sample_screenshot_data_url}
+			{#if selectedPreview}
 				<div class="vrm-metadata-preview-frame">
-					<img class="vrm-metadata-thumbnail" src={metadata.sample_screenshot_data_url} alt="" />
+					<img class="vrm-metadata-thumbnail" src={selectedPreview.data_url} alt="" />
 				</div>
 			{:else}
 				<div class="vrm-metadata-sigil">UN</div>
+			{/if}
+			{#if metadata.preview_images.length > 1}
+				<div class="unavatar-preview-strip" aria-label={$_("unavatar_rights.preview_images")}>
+					{#each metadata.preview_images as preview, index}
+						<button
+							type="button"
+							class:active={index === selectedPreviewIndex}
+							title={preview.view ?? `preview ${index + 1}`}
+							onclick={() => (selectedPreviewIndex = index)}
+						>
+							<img src={preview.data_url} alt="" />
+						</button>
+					{/each}
+				</div>
 			{/if}
 			<span>.unavatar {metadata.spec_version ?? ""}</span>
 		</div>
