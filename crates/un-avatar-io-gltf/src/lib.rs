@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::ops::Range;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
@@ -129,6 +130,22 @@ fn retain_encoded_bytes_for_deferred_images(image_sources: &mut [Option<UnaImage
 		}
 	}
 	retained
+}
+
+fn path_backed_deferred_image_source_count(image_sources: &[Option<UnaImageSourceMetadata>], images: &[UnaImageRgba]) -> usize {
+	image_sources
+		.iter()
+		.enumerate()
+		.filter(|(index, source)| {
+			images.get(*index).is_some_and(is_deferred_image_placeholder)
+				&& source.as_ref().is_some_and(|source| {
+					source.source_file_path.is_some()
+						&& source.byte_offset.is_some()
+						&& source.byte_length > 0
+						&& source.encoded_bytes.is_none()
+				})
+		})
+		.count()
 }
 
 fn collect_scene_images_from_imported_data(
@@ -326,8 +343,10 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						sampler,
 						width,
 						height,
+						byte_offset: Some(start as u64),
 						byte_length: bytes.len() as u64,
 						source_hash: fnv1a64(bytes),
+						source_file_path: None,
 						encoded_bytes: None,
 					})
 				}
@@ -364,8 +383,10 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					sampler,
 					width: None,
 					height: None,
+					byte_offset: None,
 					byte_length: 0,
 					source_hash: fnv1a64(uri.as_bytes()),
+					source_file_path: None,
 					encoded_bytes: None,
 				}),
 			}
@@ -377,6 +398,8 @@ fn collect_glb_image_source_metadata(
 	root: &Value,
 	bin: &[u8],
 	retain_encoded_indices: Option<&BTreeSet<usize>>,
+	source_file_path: Option<&Path>,
+	byte_offset_base: u64,
 ) -> Vec<Option<UnaImageSourceMetadata>> {
 	let Some(images) = root.get("images").and_then(Value::as_array) else {
 		return Vec::new();
@@ -406,7 +429,16 @@ fn collect_glb_image_source_metadata(
 					let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
 					out.push((
 						image_index,
-						glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, samplers, retain_encoded),
+						glb_image_source_metadata_from_json_image(
+							image_index,
+							image,
+							buffer_views,
+							bin,
+							samplers,
+							retain_encoded,
+							source_file_path,
+							byte_offset_base,
+						),
 					));
 				}
 				out
@@ -433,6 +465,8 @@ fn glb_image_source_metadata_from_json_image(
 	bin: &[u8],
 	samplers: &[Option<UnaTextureSampler>],
 	retain_encoded: bool,
+	source_file_path: Option<&Path>,
+	byte_offset_base: u64,
 ) -> Option<UnaImageSourceMetadata> {
 	let sampler = samplers.get(image_index).copied().flatten();
 	let name = image.get("name").and_then(Value::as_str).map(str::to_string);
@@ -472,8 +506,10 @@ fn glb_image_source_metadata_from_json_image(
 			sampler,
 			width: None,
 			height: None,
+			byte_offset: None,
 			byte_length: 0,
 			source_hash: fnv1a64(uri.as_bytes()),
+			source_file_path: None,
 			encoded_bytes: None,
 		});
 	}
@@ -483,6 +519,7 @@ fn glb_image_source_metadata_from_json_image(
 	let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
 	let bytes = bin.get(offset..offset.checked_add(length)?)?;
 	let (width, height) = encoded_image_dimensions(bytes, mime_type.as_deref());
+	let encoded_bytes = (retain_encoded && source_file_path.is_none()).then(|| bytes.to_vec());
 	Some(UnaImageSourceMetadata {
 		name,
 		mime_type,
@@ -516,9 +553,11 @@ fn glb_image_source_metadata_from_json_image(
 		sampler,
 		width,
 		height,
+		byte_offset: Some(byte_offset_base.saturating_add(offset as u64)),
 		byte_length: bytes.len() as u64,
 		source_hash: fnv1a64(bytes),
-		encoded_bytes: retain_encoded.then(|| bytes.to_vec()),
+		source_file_path: source_file_path.map(Path::to_path_buf),
+		encoded_bytes,
 	})
 }
 
@@ -538,7 +577,7 @@ fn collect_glb_image_source_metadata_serial(
 		.enumerate()
 		.map(|(image_index, image)| {
 			let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
-			glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers, retain_encoded)
+			glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers, retain_encoded, None, 0)
 		})
 		.collect()
 }
@@ -732,8 +771,10 @@ fn append_unavatar_texture_assets(
 			sampler: asset.get("sampler").map(sampler_from_root_json),
 			width: Some(decoded_width),
 			height: Some(decoded_height),
+			byte_offset: None,
 			byte_length: bytes.len() as u64,
 			source_hash: fnv1a64(bytes),
+			source_file_path: None,
 			encoded_bytes: Some(bytes.to_vec()),
 		}));
 		map.insert(id.to_string(), image_index);
@@ -10401,6 +10442,12 @@ fn scene_snapshot_from_gltf_inner(
 			"glTF import profile: retained_deferred_encoded_image_count={retained_encoded_sources}"
 		));
 	}
+	let path_backed_deferred_sources = path_backed_deferred_image_source_count(&image_sources, &images);
+	if path_backed_deferred_sources > 0 {
+		report.push_info(format!(
+			"glTF import profile: file_backed_deferred_encoded_image_count={path_backed_deferred_sources}"
+		));
+	}
 	let step_started = Instant::now();
 	refine_liltoon_alpha_from_images(&mut materials, &images);
 	record_scene_snapshot_profile_step(report, profile, "refine_liltoon_alpha_from_images", step_started);
@@ -10623,7 +10670,13 @@ impl AvatarImporter for GltfImporter {
 							deferred_image_indices_for_decode_selection(Some(&root), decode_image_indices.as_ref());
 						precomputed_decode_image_indices = decode_image_indices;
 						let source_started = Instant::now();
-						original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin, retain_encoded_indices.as_ref()));
+						original_image_sources = Some(collect_glb_image_source_metadata(
+							&root,
+							&bin,
+							retain_encoded_indices.as_ref(),
+							Some(&path),
+							bin_range.start as u64,
+						));
 						import_profile_messages.push(format!(
 							"glTF import profile: image_source_metadata_ms={}",
 							source_started.elapsed().as_millis()
@@ -10726,7 +10779,13 @@ impl AvatarImporter for GltfImporter {
 					let retain_encoded_indices = deferred_image_indices_for_decode_selection(Some(&root), decode_image_indices.as_ref());
 					precomputed_decode_image_indices = decode_image_indices;
 					let source_started = Instant::now();
-					original_image_sources = Some(collect_glb_image_source_metadata(&root, &bin, retain_encoded_indices.as_ref()));
+					original_image_sources = Some(collect_glb_image_source_metadata(
+						&root,
+						&bin,
+						retain_encoded_indices.as_ref(),
+						None,
+						0,
+					));
 					import_profile_messages.push(format!(
 						"glTF import profile: image_source_metadata_ms={}",
 						source_started.elapsed().as_millis()
@@ -11880,7 +11939,7 @@ mod tests {
 			})
 		);
 		assert_eq!(samplers[1], Some(UnaTextureSampler::default()));
-		let metadata = collect_glb_image_source_metadata(&root, &[], None);
+		let metadata = collect_glb_image_source_metadata(&root, &[], None, None, 0);
 		let source = metadata[0].as_ref().unwrap();
 		assert_eq!(source.color_space.as_deref(), Some("linear"));
 		assert_eq!(source.texture_type.as_deref(), Some("NormalMap"));
@@ -11927,7 +11986,7 @@ mod tests {
 			}"#,
 		)
 		.unwrap();
-		let metadata = collect_glb_image_source_metadata(&root, &[0, 0, 0, 0, 1, 2, 3, 4], None);
+		let metadata = collect_glb_image_source_metadata(&root, &[0, 0, 0, 0, 1, 2, 3, 4], None, None, 0);
 		assert_eq!(metadata.len(), 1);
 		let source = metadata[0].as_ref().unwrap();
 		assert_eq!(source.name.as_deref(), Some("main"));
@@ -11953,10 +12012,28 @@ mod tests {
 		)
 		.unwrap();
 		let retain = BTreeSet::from([1usize]);
-		let metadata = collect_glb_image_source_metadata(&root, &[1, 2, 3, 4, 5, 6], Some(&retain));
+		let metadata = collect_glb_image_source_metadata(&root, &[1, 2, 3, 4, 5, 6], Some(&retain), None, 0);
 
 		assert!(metadata[0].as_ref().unwrap().encoded_bytes.is_none());
 		assert_eq!(metadata[1].as_ref().unwrap().encoded_bytes.as_deref(), Some(&[4, 5, 6][..]));
+	}
+
+	#[test]
+	fn glb_image_source_metadata_uses_file_range_for_path_backed_lazy_decode() {
+		let root: Value = serde_json::from_str(
+			r#"{
+				"images": [{"name": "a", "bufferView": 0, "mimeType": "image/png"}],
+				"bufferViews": [{"buffer": 0, "byteOffset": 2, "byteLength": 3}]
+			}"#,
+		)
+		.unwrap();
+		let retain = BTreeSet::from([0usize]);
+		let metadata = collect_glb_image_source_metadata(&root, &[0, 0, 4, 5, 6], Some(&retain), Some(Path::new("avatar.glb")), 100);
+		let source = metadata[0].as_ref().unwrap();
+		assert_eq!(source.byte_offset, Some(102));
+		assert_eq!(source.byte_length, 3);
+		assert_eq!(source.source_file_path.as_deref(), Some(Path::new("avatar.glb")));
+		assert!(source.encoded_bytes.is_none());
 	}
 
 	#[test]
@@ -11980,7 +12057,7 @@ mod tests {
 		let bin = (0u8..16).collect::<Vec<_>>();
 
 		assert_eq!(
-			collect_glb_image_source_metadata(&root, &bin, None),
+			collect_glb_image_source_metadata(&root, &bin, None, None, 0),
 			collect_glb_image_source_metadata_serial(&root, &bin, None)
 		);
 	}

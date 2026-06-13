@@ -4,7 +4,7 @@ use std::{
 	borrow::Cow,
 	collections::{BTreeMap, BTreeSet},
 	fs,
-	io::{BufReader, BufWriter, Read, Write},
+	io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
 	path::{Path, PathBuf},
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -2573,7 +2573,22 @@ fn build_lazy_scene_image_texture_upload(
 }
 
 fn decode_encoded_source_image(source: &UnaImageSourceMetadata) -> Option<UnaImageRgba> {
-	let bytes = source.encoded_bytes.as_deref()?;
+	let file_bytes;
+	let bytes = if let Some(bytes) = source.encoded_bytes.as_deref() {
+		bytes
+	} else {
+		let path = source.source_file_path.as_ref()?;
+		let offset = source.byte_offset?;
+		let len = usize::try_from(source.byte_length).ok()?;
+		let mut file = fs::File::open(path).ok()?;
+		file.seek(SeekFrom::Start(offset)).ok()?;
+		file_bytes = {
+			let mut bytes = vec![0u8; len];
+			file.read_exact(&mut bytes).ok()?;
+			bytes
+		};
+		file_bytes.as_slice()
+	};
 	let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
 	let (width, height) = decoded.dimensions();
 	Some(UnaImageRgba {
@@ -2582,6 +2597,10 @@ fn decode_encoded_source_image(source: &UnaImageSourceMetadata) -> Option<UnaIma
 		pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
 		pixels: decoded.into_raw(),
 	})
+}
+
+fn source_has_lazy_encoded_bytes(source: &UnaImageSourceMetadata) -> bool {
+	source.encoded_bytes.is_some() || (source.source_file_path.is_some() && source.byte_offset.is_some() && source.byte_length > 0)
 }
 
 fn is_deferred_scene_image_placeholder(image: &UnaImageRgba) -> bool {
@@ -8553,7 +8572,7 @@ impl SceneMeshes {
 				&& is_deferred_scene_image_placeholder(im)
 				&& !texture_source_is_cube(source_metadata)
 			{
-				if let Some(source) = source_metadata.filter(|source| source.encoded_bytes.is_some()) {
+				if let Some(source) = source_metadata.filter(|source| source_has_lazy_encoded_bytes(source)) {
 					let compression_preference = compression_preference_for_role(texture_compression, texture_compression_advanced, role);
 					if compression_preference == TextureCompressionPreference::Source {
 						let source_key =
@@ -11021,8 +11040,10 @@ mod tests {
 			sampler: None,
 			width: None,
 			height: None,
+			byte_offset: None,
 			byte_length: 0,
 			source_hash: 0,
+			source_file_path: None,
 			encoded_bytes: None,
 		}
 	}

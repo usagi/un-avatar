@@ -7,6 +7,7 @@
 use std::{
 	borrow::Cow,
 	collections::{BTreeMap, BTreeSet},
+	path::PathBuf,
 };
 
 use serde::{Deserialize, Serialize};
@@ -3994,6 +3995,11 @@ pub struct UnaImageSourceMetadata {
 	pub height: Option<u32>,
 	pub byte_length: u64,
 	pub source_hash: u64,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub byte_offset: Option<u64>,
+	/// Runtime-only path to the container file that owns `byte_offset` / `byte_length`.
+	#[serde(default, skip_serializing, skip_deserializing)]
+	pub source_file_path: Option<PathBuf>,
 	/// Encoded source payload retained for runtime lazy decode. This is intentionally
 	/// not serialized; package formats remain the durable source of truth.
 	#[serde(default, skip_serializing, skip_deserializing)]

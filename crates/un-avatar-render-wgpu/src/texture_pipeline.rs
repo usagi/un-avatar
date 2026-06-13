@@ -1950,8 +1950,10 @@ mod tests {
 			sampler: None,
 			width: None,
 			height: None,
+			byte_offset: None,
 			byte_length: 3,
 			source_hash: 0x1234,
+			source_file_path: None,
 			encoded_bytes: None,
 		};
 		let key_a = texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &source);
