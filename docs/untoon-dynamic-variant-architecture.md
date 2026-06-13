@@ -139,7 +139,9 @@ Variant planner は model load 時に実行する。
 
 `audio_link_texture_needed` は AudioLink 入力 source が有効な場合だけ実際の worker / texture upload を起動する実行時判定である。`runtime_requires_audio_link_texture` は material set が AudioLink texture を要求しているかを表す variant planning 用の事実であり、入力 source の ON/OFF とは分けて扱う。
 
-現実装では `material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出し、draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
+現実装では `material_untoon_feature_plan()` が `UntoonSourceProfile` と `UntoonShaderFeatures` を分けて返し、`material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出する。draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
+
+`UntoonSourceProfile` は `Plain` / `MToon` / `LilToon` の provenance / import policy を表し、shader 内 runtime branch の条件ではない。MToon input と lilToon input は UNToon semantic / feature plan へ正規化され、必要 feature だけが shader variant planning に渡る。
 
 Renderer の通常経路は `liltoon_like_runtime()` / `mtoon_like_runtime()` を使う。`*_source_profile()` は import provenance と source-to-semantic 変換、または互換テスト用の低レベル helper に閉じる。これにより、MToon / lilToon / 将来の native UNToon input の差は runtime shader path ではなく model/material compile boundary で吸収する。
 
@@ -255,7 +257,7 @@ UntoonVariantKey {
 
 1. UNToon semantic / source profile / variant planning の用語を docs に固定する。
 2. VRC import base の `.unavatar` skinning を既存 GPU skinning pipeline に接続・検証する。
-3. 既存 GPU skinning resource を variant planning の予約対象として扱えるようにする。
+3. `UntoonFeaturePlan` を pipeline / bind layout / resource reservation の入力へ昇格し、source profile を shader branch 条件として使わないことを code boundary で固定する。
 4. 既存 lilToon-like renderer の `FullOnePass` / `Portable16` 実装名を内部歴史名として閉じ込める。
 5. MToon input を UNToon semantic へ変換し、MToon-only モデルが小さい dynamic variant を選ぶようにする。
 6. shader module metadata と deterministic source generation を導入する。

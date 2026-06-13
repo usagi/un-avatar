@@ -43,7 +43,7 @@
   - resolved wardrobe state
   - pose、morph、material、expression、action state、dynamics state
   - GPU resources / cache
-- active asset groups は runtime state、asset group ownership は scene source data に属する。両者の合成は core の document-level scoped asset selection query に集約し、scene が無い場合も active groups を missing として扱う。renderer / diagnose / wardrobe apply report / future physics は同じ解釈を使う。Unity Exporter は renderer ごとの mesh primitive / material / image index 診断を出し、宣言済み wardrobe asset group と renderer / PhysBone source path が一致する範囲で `wardrobe.assetGroupOwnership` を自動生成する。
+- active asset groups は runtime state、asset group ownership は scene source data に属する。両者の合成は core の `UnaRuntimeModel::scoped_asset_selection()` に集約し、scene が無い場合も active groups を missing として扱う。`UnaDocument::scoped_asset_selection()` は互換入口として runtime model query へ委譲する。renderer / diagnose / wardrobe apply report / future physics は同じ解釈を使う。Unity Exporter は renderer ごとの mesh primitive / material / image index 診断を出し、宣言済み wardrobe asset group と renderer / PhysBone source path が一致する範囲で `wardrobe.assetGroupOwnership` を自動生成する。
 - wardrobe visibility と morph change を renderer control、VRC menu action、shortcut、将来の animation evaluation から再利用できる形にする。
 - render thread の work は bounded / nonblocking に保つ。AudioLink で固定した方針を skinning、animation、physics にも適用する。
 - 生成 fallback resources、bind groups、optional material textures 周辺の brittle な indexing assumption は、実害が見える箇所から減らす。
