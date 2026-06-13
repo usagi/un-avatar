@@ -37,7 +37,7 @@ use un_avatar_core::{
 	UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings,
 };
 
-use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
+use crate::bone_colliders::{push_out_of_world_colliders, resolve_world_colliders, BoneColliderPrimitive, WorldBoneColliderPrimitive};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -331,6 +331,7 @@ pub struct SpringBoneSimulator {
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
 	bone_colliders: Vec<BoneColliderPrimitive>,
+	world_colliders: Vec<WorldBoneColliderPrimitive>,
 	physics: SpringBonePhysicsConfig,
 }
 
@@ -354,6 +355,7 @@ impl Default for SpringBoneSimulator {
 			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
+			world_colliders: Vec::new(),
 			physics: SpringBonePhysicsConfig::default().normalized(),
 		}
 	}
@@ -659,6 +661,7 @@ impl SpringBoneSimulator {
 				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
+				world_colliders: Vec::new(),
 				physics,
 			})
 		}
@@ -685,6 +688,7 @@ impl SpringBoneSimulator {
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
 			write_world_from_snapshot(scene, &mut self.world_scratch);
+			resolve_world_colliders(&self.world_scratch, &self.bone_colliders, &mut self.world_colliders);
 			for &runtime_index in &self.active_runtime_indices {
 				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
@@ -696,7 +700,7 @@ impl SpringBoneSimulator {
 					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
 						rt.reset_xpbd_lambdas();
 					}
-					step_group(scene, g, rt, &mut self.world_scratch, &self.bone_colliders, sub_dt);
+					step_group(scene, g, rt, &mut self.world_scratch, &self.world_colliders, sub_dt);
 				}
 			}
 			self.accumulator -= fixed_dt;
@@ -710,6 +714,18 @@ impl SpringBoneSimulator {
 
 	pub fn bone_colliders(&self) -> &[BoneColliderPrimitive] {
 		&self.bone_colliders
+	}
+
+	pub fn active_group_count(&self) -> usize {
+		self.active_runtime_indices.len()
+	}
+
+	pub fn active_joint_count(&self) -> usize {
+		self.active_runtime_indices
+			.iter()
+			.filter_map(|&index| self.runtimes.get(index).and_then(Option::as_ref))
+			.map(|runtime| runtime.joints.len())
+			.sum()
 	}
 
 	pub fn translation_writeback_candidate_count(&self) -> usize {
@@ -747,7 +763,7 @@ fn step_group(
 	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
 	world_scratch: &mut [Mat4],
-	bone_colliders: &[BoneColliderPrimitive],
+	bone_colliders: &[WorldBoneColliderPrimitive],
 	dt: f32,
 ) {
 	let drag = match rt.params.solver {
@@ -821,7 +837,6 @@ fn step_group(
 					child_pos,
 					target_axis_world,
 					constrained_length,
-					world_scratch,
 					bone_colliders,
 					joint.hit_radius,
 				);
@@ -840,7 +855,6 @@ fn step_group(
 				child_pos,
 				target_axis_world,
 				constrained_length,
-				world_scratch,
 				bone_colliders,
 				joint.hit_radius,
 			);
@@ -972,14 +986,13 @@ fn constrain_tail_colliders(
 	child_pos: Vec3,
 	fallback_axis: Vec3,
 	length: f32,
-	world: &[Mat4],
-	bone_colliders: &[BoneColliderPrimitive],
+	bone_colliders: &[WorldBoneColliderPrimitive],
 	hit_radius: f32,
 ) -> Vec3 {
 	if bone_colliders.is_empty() {
 		return next_tail;
 	}
-	let pushed = push_out_of_colliders(next_tail, world, bone_colliders, hit_radius.max(0.0));
+	let pushed = push_out_of_world_colliders(next_tail, bone_colliders, hit_radius.max(0.0));
 	let pushed_dir = (pushed - child_pos).normalize_or_zero();
 	if pushed_dir.length_squared() >= 1e-12 {
 		child_pos + pushed_dir * length

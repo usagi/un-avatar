@@ -95,6 +95,21 @@ pub enum BoneColliderPrimitive {
 	},
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum WorldBoneColliderPrimitive {
+	Sphere {
+		center: Vec3,
+		radius: f32,
+		inside_bounds: bool,
+	},
+	Capsule {
+		a: Vec3,
+		b: Vec3,
+		radius: f32,
+		inside_bounds: bool,
+	},
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoneColliderStats {
 	pub count: u32,
@@ -243,24 +258,40 @@ pub(crate) fn scene_world(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
 	world
 }
 
+#[cfg(test)]
 pub(crate) fn push_out_of_colliders(point: Vec3, world: &[Mat4], colliders: &[BoneColliderPrimitive], extra_radius: f32) -> Vec3 {
-	let mut p = point;
-	let extra = extra_radius.max(0.0);
+	let mut resolved = Vec::with_capacity(colliders.len());
+	resolve_world_colliders(world, colliders, &mut resolved);
+	push_out_of_world_colliders(point, &resolved, extra_radius)
+}
+
+pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderPrimitive], out: &mut Vec<WorldBoneColliderPrimitive>) {
+	out.clear();
+	out.reserve(colliders.len());
 	for collider in colliders {
 		match *collider {
 			BoneColliderPrimitive::Sphere { node, radius } => {
-				let Some(center) = node_position(world, node) else { continue };
-				p = push_out_sphere(p, center, radius + extra);
+				if let Some(center) = node_position(world, node) {
+					out.push(WorldBoneColliderPrimitive::Sphere {
+						center,
+						radius,
+						inside_bounds: false,
+					});
+				}
 			}
 			BoneColliderPrimitive::Capsule {
 				start_node,
 				end_node,
 				radius,
 			} => {
-				let (Some(a), Some(b)) = (node_position(world, start_node), node_position(world, end_node)) else {
-					continue;
-				};
-				p = push_out_sphere(p, closest_on_segment(p, a, b), radius + extra);
+				if let (Some(a), Some(b)) = (node_position(world, start_node), node_position(world, end_node)) {
+					out.push(WorldBoneColliderPrimitive::Capsule {
+						a,
+						b,
+						radius,
+						inside_bounds: false,
+					});
+				}
 			}
 			BoneColliderPrimitive::LocalSphere {
 				node,
@@ -268,14 +299,13 @@ pub(crate) fn push_out_of_colliders(point: Vec3, world: &[Mat4], colliders: &[Bo
 				radius,
 				inside_bounds,
 			} => {
-				let Some((center, radius)) = local_sphere_world(world, node, center, radius) else {
-					continue;
-				};
-				p = if inside_bounds {
-					push_into_sphere(p, center, radius - extra)
-				} else {
-					push_out_sphere(p, center, radius + extra)
-				};
+				if let Some((center, radius)) = local_sphere_world(world, node, center, radius) {
+					out.push(WorldBoneColliderPrimitive::Sphere {
+						center,
+						radius,
+						inside_bounds,
+					});
+				}
 			}
 			BoneColliderPrimitive::LocalCapsule {
 				node,
@@ -285,13 +315,46 @@ pub(crate) fn push_out_of_colliders(point: Vec3, world: &[Mat4], colliders: &[Bo
 				radius,
 				inside_bounds,
 			} => {
-				let Some((a, b, radius)) = local_capsule_world(world, node, center, axis, half_length, radius) else {
-					continue;
-				};
+				if let Some((a, b, radius)) = local_capsule_world(world, node, center, axis, half_length, radius) {
+					out.push(WorldBoneColliderPrimitive::Capsule {
+						a,
+						b,
+						radius,
+						inside_bounds,
+					});
+				}
+			}
+		}
+	}
+}
+
+pub(crate) fn push_out_of_world_colliders(point: Vec3, colliders: &[WorldBoneColliderPrimitive], extra_radius: f32) -> Vec3 {
+	let mut p = point;
+	let extra = extra_radius.max(0.0);
+	for collider in colliders {
+		match *collider {
+			WorldBoneColliderPrimitive::Sphere {
+				center,
+				radius,
+				inside_bounds,
+			} => {
 				p = if inside_bounds {
-					push_into_sphere(p, closest_on_segment(p, a, b), radius - extra)
+					push_into_sphere(p, center, radius - extra)
 				} else {
-					push_out_sphere(p, closest_on_segment(p, a, b), radius + extra)
+					push_out_sphere(p, center, radius + extra)
+				};
+			}
+			WorldBoneColliderPrimitive::Capsule {
+				a,
+				b,
+				radius,
+				inside_bounds,
+			} => {
+				let center = closest_on_segment(p, a, b);
+				p = if inside_bounds {
+					push_into_sphere(p, center, radius - extra)
+				} else {
+					push_out_sphere(p, center, radius + extra)
 				};
 			}
 		}

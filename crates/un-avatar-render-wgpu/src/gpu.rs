@@ -2141,6 +2141,16 @@ fn build_runtime_physics_for_document(
 	} else {
 		None
 	};
+	if let Some(sim) = dynamics_sim.as_ref() {
+		eprintln!(
+			"un-avatar-renderer: dynamics simulator stats active_groups={} active_joints={} colliders={} translation_writeback_candidates={} translation_writeback_targets={}",
+			sim.active_group_count(),
+			sim.active_joint_count(),
+			sim.bone_collider_count(),
+			sim.translation_writeback_candidate_count(),
+			sim.translation_writeback_target_count()
+		);
+	}
 	let debug_bone_colliders = if dynamics_sim.is_some() { Vec::new() } else { bone_colliders };
 	RuntimePhysicsBuild {
 		dynamics_sim,
