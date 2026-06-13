@@ -22,6 +22,7 @@
 	export let onCaptureRendererScreenshot: (rendererId: number) => void | Promise<void>;
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
+	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
 	export let onScrollSection: (section: ProfileSectionId) => void;
 
 	$: summaryItems = profileStageSummaryItems(setting, $_);
@@ -43,6 +44,7 @@
 				{onCaptureRendererScreenshot}
 				{onLaunchProfile}
 				{onPrewarmSceneCache}
+				{onCreateDesktopShortcut}
 			/>
 		</div>
 		<ProfileSummaryGrid items={summaryItems} {activeSection} {onScrollSection} />

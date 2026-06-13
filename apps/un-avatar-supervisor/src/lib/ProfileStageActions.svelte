@@ -14,6 +14,7 @@
 	export let onCaptureRendererScreenshot: (rendererId: number) => void | Promise<void>;
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
+	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
 </script>
 
 <div class="profile-stage-actions">
@@ -40,6 +41,14 @@
 		title={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
 		onclick={() => onPrewarmSceneCache(settingId)}
 		><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
+	>
+	<button
+		type="button"
+		disabled={busy}
+		data-hint={$_("profiles.actions.desktop_shortcut_hint")}
+		title={$_("profiles.actions.desktop_shortcut_hint")}
+		onclick={() => onCreateDesktopShortcut(settingId)}
+		><Monitor size={14} />{$_("profiles.actions.desktop_shortcut")}</button
 	>
 	{#if liveRenderer}
 		<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}

@@ -1970,6 +1970,7 @@ pub fn run() {
 			launch_renderer,
 			new_avatar_setting,
 			prewarm_renderer_scene_cache,
+			create_renderer_desktop_shortcut,
 			pick_file_path,
 			read_vrm_metadata,
 			save_avatar_thumbnail_icon,
@@ -4665,6 +4666,29 @@ fn launch_renderer_in_state(
 }
 
 #[tauri::command]
+fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let renderer_exe = renderer_executable_path();
+	if !renderer_exe.is_file() {
+		return Err(format!("renderer executable not found: {}", renderer_exe.display()));
+	}
+	let desktop_dir = dirs::desktop_dir().ok_or_else(|| "desktop directory was not found".to_string())?;
+	fs::create_dir_all(&desktop_dir).map_err(|e| format!("create desktop dir {}: {e}", desktop_dir.display()))?;
+	let shortcut_path = desktop_dir.join(format!("{}.lnk", sanitize_shortcut_file_stem(&setting.name)));
+	let working_dir = renderer_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	let icon_path = shortcut_icon_path(&setting, &renderer_exe);
+	create_windows_shortcut(
+		&shortcut_path,
+		&renderer_exe,
+		&format!("--manifest {}", quote_windows_arg(&manifest_path)),
+		&working_dir,
+		icon_path.as_deref(),
+	)?;
+	Ok(shortcut_path.display().to_string())
+}
+
+#[tauri::command]
 fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<String, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
@@ -6989,6 +7013,90 @@ fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf>
 			let fallback = repo_root().join("assets").join("brand").join("un-avatar-artwork-renderer.png");
 			fallback.is_file().then_some(fallback)
 		})
+}
+
+fn shortcut_icon_path<'a>(setting: &'a AvatarSetting, renderer_exe: &'a Path) -> Option<PathBuf> {
+	resolve_renderer_window_icon_path(setting)
+		.filter(|path| {
+			path.extension()
+				.and_then(|ext| ext.to_str())
+				.is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
+		})
+		.or_else(|| renderer_exe.is_file().then_some(renderer_exe.to_path_buf()))
+}
+
+fn sanitize_shortcut_file_stem(name: &str) -> String {
+	let mut out = String::new();
+	for ch in name.trim().chars() {
+		let replacement = match ch {
+			'<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+			ch if ch.is_control() => '_',
+			ch => ch,
+		};
+		out.push(replacement);
+	}
+	let out = out.trim().trim_matches('.').to_string();
+	if out.is_empty() {
+		"UN Avatar Renderer".to_string()
+	} else {
+		out
+	}
+}
+
+fn quote_windows_arg(path: &Path) -> String {
+	let raw = path.display().to_string();
+	format!("\"{}\"", raw.replace('"', "\\\""))
+}
+
+#[cfg(windows)]
+fn create_windows_shortcut(
+	shortcut_path: &Path,
+	target_path: &Path,
+	arguments: &str,
+	working_dir: &Path,
+	icon_path: Option<&Path>,
+) -> Result<(), String> {
+	let script = r#"
+$shortcutPath = $args[0]
+$targetPath = $args[1]
+$arguments = $args[2]
+$workingDirectory = $args[3]
+$iconPath = $args[4]
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = $targetPath
+$shortcut.Arguments = $arguments
+$shortcut.WorkingDirectory = $workingDirectory
+if ($iconPath -and (Test-Path -LiteralPath $iconPath)) {
+  $shortcut.IconLocation = $iconPath
+}
+$shortcut.Save()
+"#;
+	let status = Command::new("powershell")
+		.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+		.arg(shortcut_path)
+		.arg(target_path)
+		.arg(arguments)
+		.arg(working_dir)
+		.arg(icon_path.unwrap_or(target_path))
+		.status()
+		.map_err(|e| format!("create shortcut: launch powershell: {e}"))?;
+	if status.success() {
+		Ok(())
+	} else {
+		Err(format!("create shortcut failed with status {status}"))
+	}
+}
+
+#[cfg(not(windows))]
+fn create_windows_shortcut(
+	_shortcut_path: &Path,
+	_target_path: &Path,
+	_arguments: &str,
+	_working_dir: &Path,
+	_icon_path: Option<&Path>,
+) -> Result<(), String> {
+	Err("desktop shortcut creation is currently implemented for Windows only".to_string())
 }
 
 fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathBuf> {

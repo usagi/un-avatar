@@ -1432,6 +1432,22 @@
 		}
 	}
 
+	async function createDesktopShortcut(settingId: string): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = $_("profiles.messages.desktop_shortcut_requires_tauri");
+			return;
+		}
+		busy = true;
+		try {
+			const path = await invoke<string>("create_renderer_desktop_shortcut", { settingId });
+			message = $_("profiles.messages.desktop_shortcut_created", { values: { path } });
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function maybeAutoLaunchSelectedOnStartup(): Promise<void> {
 		if (startupAutoLaunchAttempted) return;
 		startupAutoLaunchAttempted = true;
@@ -2918,6 +2934,7 @@
 						}}
 						onLaunchProfile={(settingId) => launchSetting(settingId, false)}
 						onPrewarmSceneCache={(settingId) => prewarmSceneCache(settingId)}
+						onCreateDesktopShortcut={(settingId) => createDesktopShortcut(settingId)}
 						onScrollSection={(section) => scrollProfileSection(section)}
 					/>
 				{/if}
