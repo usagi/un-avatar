@@ -7807,10 +7807,14 @@ fn json_texture_compression_preference(value: &serde_json::Value, field: &str) -
 
 fn json_texture_compression_mode(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let mode = json_string(value, field)?;
-	match mode.as_str() {
-		"auto" | "advanced" => Ok("balanced".to_string()),
-		"source" | "balanced" | "memory" | "compat" => Ok(mode),
-		_ => Err(format!("{field} must be one of source, balanced, memory, compat")),
+	normalize_texture_compression_mode(&mode).ok_or_else(|| format!("{field} must be one of source, balanced, memory, compat"))
+}
+
+fn normalize_texture_compression_mode(value: &str) -> Option<String> {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"auto" | "advanced" => Some("balanced".to_string()),
+		"source" | "balanced" | "memory" | "compat" => Some(value.trim().to_ascii_lowercase().replace('-', "_")),
+		_ => None,
 	}
 }
 
@@ -8271,7 +8275,11 @@ fn render_quality_settings(render_quality: ManifestRenderQuality, legacy_aa: Opt
 	RenderQualitySettings {
 		aa: render_quality.aa.or(legacy_aa).unwrap_or_else(|| "off".to_string()),
 		texture_resolution_limit: render_quality.texture_resolution_limit.unwrap_or_else(|| "off".to_string()),
-		texture_compression: render_quality.texture_compression.unwrap_or_else(|| "balanced".to_string()),
+		texture_compression: render_quality
+			.texture_compression
+			.as_deref()
+			.and_then(normalize_texture_compression_mode)
+			.unwrap_or_else(|| "balanced".to_string()),
 		mipmap_filter: render_quality.mipmap_filter.unwrap_or_else(|| "mitchell".to_string()),
 		render_backend: render_quality.render_backend.unwrap_or_else(|| "vulkan".to_string()),
 		block_compression_encoder: render_quality.block_compression_encoder.unwrap_or_else(|| "gpu".to_string()),
@@ -10647,6 +10655,34 @@ id = "test"
 		assert_eq!(options.sets[0].id, "field_drape");
 		assert_eq!(options.sets[0].name, "Field Drape");
 		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn read_avatar_setting_normalizes_legacy_texture_compression_modes() {
+		for legacy_mode in ["auto", "advanced"] {
+			let path = std::env::temp_dir().join(format!(
+				"un-avatar-texture-compression-mode-test-{}-{}-{legacy_mode}.toml",
+				std::process::id(),
+				Instant::now().elapsed().as_nanos()
+			));
+			fs::write(
+				&path,
+				format!(
+					r#"title = "Test"
+
+[profile]
+id = "test"
+
+[render_quality]
+texture_compression = "{legacy_mode}"
+"#
+				),
+			)
+			.unwrap();
+			let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+			let _ = fs::remove_file(path);
+			assert_eq!(parsed.texture_compression, "balanced");
+		}
 	}
 
 	#[test]
