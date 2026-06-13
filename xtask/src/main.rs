@@ -168,6 +168,138 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 		})
 }
 
+#[derive(Default)]
+struct RendererLogSummary {
+	path: PathBuf,
+	import_ms: Option<String>,
+	prewarm_total_ms: Option<String>,
+	texture_total_ms: Option<String>,
+	mesh_total_ms: Option<String>,
+	cache_read_ms: Option<String>,
+	upload_ms: Option<String>,
+	processed_cache: Option<String>,
+	compressed_cache: Option<String>,
+	fps_avg: Option<String>,
+	cpu_no_surface_ms: Option<String>,
+	gpu_ms: Option<String>,
+	pipeline_load_mb: Option<String>,
+	pipeline_store_mb: Option<String>,
+}
+
+fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths = Vec::new();
+	for arg in args {
+		if matches!(arg.as_str(), "--help" | "-h") {
+			print_summarize_renderer_log_usage();
+			return true;
+		}
+		let path = path_from_arg(repo, arg);
+		if path.is_dir() {
+			let Ok(entries) = fs::read_dir(&path) else {
+				eprintln!("summarize-renderer-log: cannot read dir {}", path.display());
+				return false;
+			};
+			for entry in entries.flatten() {
+				let path = entry.path();
+				if path
+					.extension()
+					.and_then(|ext| ext.to_str())
+					.is_some_and(|ext| ext.eq_ignore_ascii_case("log"))
+				{
+					paths.push(path);
+				}
+			}
+		} else {
+			paths.push(path);
+		}
+	}
+	if paths.is_empty() {
+		print_summarize_renderer_log_usage();
+		return false;
+	}
+	paths.sort();
+	let summaries = paths
+		.iter()
+		.filter_map(|path| match summarize_renderer_log(path) {
+			Ok(summary) => Some(summary),
+			Err(e) => {
+				eprintln!("summarize-renderer-log: {}: {e}", path.display());
+				None
+			}
+		})
+		.collect::<Vec<_>>();
+	println!(
+		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb"
+	);
+	for summary in summaries {
+		println!(
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			summary.path.display(),
+			summary.import_ms.as_deref().unwrap_or("-"),
+			summary.prewarm_total_ms.as_deref().unwrap_or("-"),
+			summary.texture_total_ms.as_deref().unwrap_or("-"),
+			summary.mesh_total_ms.as_deref().unwrap_or("-"),
+			summary.cache_read_ms.as_deref().unwrap_or("-"),
+			summary.upload_ms.as_deref().unwrap_or("-"),
+			summary.processed_cache.as_deref().unwrap_or("-"),
+			summary.compressed_cache.as_deref().unwrap_or("-"),
+			summary.fps_avg.as_deref().unwrap_or("-"),
+			summary.cpu_no_surface_ms.as_deref().unwrap_or("-"),
+			summary.gpu_ms.as_deref().unwrap_or("-"),
+			summary.pipeline_load_mb.as_deref().unwrap_or("-"),
+			summary.pipeline_store_mb.as_deref().unwrap_or("-")
+		);
+	}
+	true
+}
+
+fn summarize_renderer_log(path: &Path) -> Result<RendererLogSummary, String> {
+	let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+	let mut summary = RendererLogSummary {
+		path: path.to_path_buf(),
+		..Default::default()
+	};
+	for line in text.lines() {
+		if line.contains("model import profile") && line.contains("step=import_gltf_path") {
+			summary.import_ms = metric_token(line, "elapsed=").map(strip_ms);
+		} else if line.contains("scene cache prewarm scene") {
+			summary.prewarm_total_ms = metric_token(line, "total=").map(strip_ms);
+		} else if line.contains("gpu scene texture prepare summary") {
+			summary.texture_total_ms = metric_token(line, "total=").map(strip_ms);
+			summary.cache_read_ms = metric_token(line, "cache_read=").map(strip_ms);
+			summary.upload_ms = metric_token(line, "upload=").map(strip_ms);
+			summary.processed_cache = metric_token(line, "processed_cache=");
+			summary.compressed_cache = metric_token(line, "compressed_cache=");
+		} else if line.contains("gpu scene mesh prepare summary") {
+			summary.mesh_total_ms = metric_token(line, "total=").map(strip_ms);
+		} else if line.contains("frame bench frames=") {
+			summary.fps_avg = metric_token(line, "fps_avg=");
+			summary.cpu_no_surface_ms = metric_token(line, "cpu_no_surface_avg=").map(strip_ms);
+			summary.gpu_ms = metric_token(line, "gpu_avg=").map(strip_ms);
+		} else if line.contains("Vulkan pipeline cache load") {
+			summary.pipeline_load_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
+		} else if line.contains("Vulkan pipeline cache store") {
+			summary.pipeline_store_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
+		}
+	}
+	Ok(summary)
+}
+
+fn metric_token(line: &str, key: &str) -> Option<String> {
+	line.split_whitespace()
+		.find_map(|token| token.strip_prefix(key))
+		.map(|value| value.trim_end_matches([',', ';']).to_string())
+}
+
+fn strip_ms(value: String) -> String {
+	value.strip_suffix("ms").unwrap_or(&value).to_string()
+}
+
+fn bytes_to_mb(value: String) -> Option<String> {
+	let bytes = value.parse::<f64>().ok()?;
+	Some(format!("{:.1}", bytes / (1024.0 * 1024.0)))
+}
+
 fn path_from_arg(repo: &Path, value: String) -> PathBuf {
 	let path = PathBuf::from(value);
 	if path.is_absolute() {
@@ -1898,6 +2030,16 @@ fn print_run_renderer_usage() {
 	);
 }
 
+fn print_summarize_renderer_log_usage() {
+	eprintln!(
+		"cargo xtask summarize-renderer-log <log-file-or-dir>...\n\
+	\n\
+	renderer stderr log から import / texture prepare / mesh prepare / frame bench / pipeline cache の主要値をTSVで要約する。\n\
+	ディレクトリを渡した場合は直下の .log を対象にする。\n\
+	例: cargo xtask summarize-renderer-log target/tmp/mizuki-field-drape-source-hash-default-hot-180.log"
+	);
+}
+
 #[derive(Clone)]
 struct RetargetAuditModel {
 	label: &'static str,
@@ -2881,6 +3023,7 @@ commands:\n\
   smoke        一時 .una で CLI validate / formats list / sample plugin / convert を確認\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
   run-renderer  profile名またはmanifest pathからrenderer windowを起動\n\
+  summarize-renderer-log renderer stderr log の主要startup/bench値をTSV要約\n\
   retarget-audit VRM0/VRM1/.unavatar のCPU Humanoid retarget軸比較\n\
   unmotion-thumb-dump [key] [seconds] UNMotion/Zenoh の thumb joint quaternion を短時間dump\n\
 	acceptance-preflight MVP acceptance の実機確認前に必要な高速preflightを実行\n\
@@ -2911,6 +3054,7 @@ fn main() {
 		"smoke" => run_smoke(repo),
 		"render-smoke" => run_render_smoke(repo),
 		"run-renderer" => run_renderer(repo, args),
+		"summarize-renderer-log" | "summarize-renderer-logs" => run_summarize_renderer_log(repo, args),
 		"retarget-audit" => run_retarget_audit(repo),
 		"unmotion-thumb-dump" => run_unmotion_thumb_dump(&args.collect::<Vec<_>>()),
 		"acceptance-preflight" => run_acceptance_preflight(repo),
