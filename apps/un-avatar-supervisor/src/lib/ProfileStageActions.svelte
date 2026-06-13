@@ -52,7 +52,12 @@
 			><Camera size={14} />{$_("renderers.toolbar.screenshot")}</button
 		>
 	{:else}
-		<button type="button" disabled={busy} onclick={() => onLaunchProfile(settingId)}
+		<button
+			type="button"
+			disabled={busy}
+			data-hint={$_("profiles.actions.quick_run_hint")}
+			title={$_("profiles.actions.quick_run_hint")}
+			onclick={() => onLaunchProfile(settingId)}
 			><Play size={14} />{$_("profiles.actions.quick_run")}</button
 		>
 	{/if}
