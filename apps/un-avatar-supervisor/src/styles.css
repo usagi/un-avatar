@@ -505,6 +505,7 @@ small,
 	grid-template-columns: auto minmax(0, 1fr) auto;
 	gap: 14px;
 	align-items: center;
+	flex: 0 0 auto;
 	min-height: 134px;
 	padding: 10px 12px;
 	border: 1px solid color-mix(in srgb, var(--accent-cool) 36%, var(--border));
@@ -520,7 +521,7 @@ small,
 
 .profile-stage {
 	grid-template-columns: auto minmax(0, 1fr);
-	min-height: 134px;
+	min-height: 156px;
 	align-items: start;
 }
 
@@ -631,6 +632,7 @@ small,
 .profile-stage-main {
 	align-content: start;
 	gap: 8px;
+	min-height: 0;
 }
 
 .stage-title-row {
@@ -962,10 +964,12 @@ small,
 .profile-summary-grid {
 	display: grid;
 	grid-template-columns: repeat(8, minmax(82px, 1fr));
+	align-items: stretch;
 }
 
 .profile-summary-grid button {
 	min-height: 46px;
+	overflow: hidden;
 	text-align: left;
 	cursor: pointer;
 }
