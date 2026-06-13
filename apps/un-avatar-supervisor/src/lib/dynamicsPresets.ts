@@ -26,15 +26,15 @@ export function dynamicsOverrideFieldPrefix(category: string): string {
 }
 
 export const DYNAMICS_MODE_OPTIONS = [
-	["authored", "profiles.editor.spring_bone_mode_authored_verlet"],
-	["override_verlet", "profiles.editor.spring_bone_mode_override_verlet"],
-	["override_xpbd", "profiles.editor.spring_bone_mode_override_xpbd"],
+	["authored", "profiles.editor.dynamics_mode_authored_verlet"],
+	["override_verlet", "profiles.editor.dynamics_mode_override_verlet"],
+	["override_xpbd", "profiles.editor.dynamics_mode_override_xpbd"],
 ] as const;
 
 export const DYNAMICS_DAMPING_FIELD = {
 	key: "damping_half_life_ms",
-	labelKey: "profiles.editor.spring_bone_damping",
-	hintKey: "profiles.editor.spring_bone_damping_hint",
+	labelKey: "profiles.editor.dynamics_damping",
+	hintKey: "profiles.editor.dynamics_damping_hint",
 	min: 1,
 	max: 10000,
 	step: 1,
@@ -43,16 +43,16 @@ export const DYNAMICS_DAMPING_FIELD = {
 export const DYNAMICS_XPBD_FIELDS = [
 	{
 		key: "xpbd_compliance",
-		labelKey: "profiles.editor.spring_bone_xpbd_compliance",
-		hintKey: "profiles.editor.spring_bone_xpbd_compliance_hint",
+		labelKey: "profiles.editor.dynamics_xpbd_compliance",
+		hintKey: "profiles.editor.dynamics_xpbd_compliance_hint",
 		min: 0,
 		max: 10,
 		step: 0.001,
 	},
 	{
 		key: "constraint_iterations",
-		labelKey: "profiles.editor.spring_bone_iterations",
-		hintKey: "profiles.editor.spring_bone_iterations_hint",
+		labelKey: "profiles.editor.dynamics_iterations",
+		hintKey: "profiles.editor.dynamics_iterations_hint",
 		min: 1,
 		max: 32,
 		step: 1,
@@ -62,8 +62,8 @@ export const DYNAMICS_XPBD_FIELDS = [
 export const DYNAMICS_VERLET_FIELDS = [
 	{
 		key: "stiffness_hz",
-		labelKey: "profiles.editor.spring_bone_verlet_stiffness",
-		hintKey: "profiles.editor.spring_bone_verlet_stiffness_hint",
+		labelKey: "profiles.editor.dynamics_verlet_stiffness",
+		hintKey: "profiles.editor.dynamics_verlet_stiffness_hint",
 		min: 0,
 		max: 60,
 		step: 0.1,
@@ -108,7 +108,7 @@ export function dynamicsRecommendedPresets(category: string): string[] {
 }
 
 export function dynamicsPresetLabel(category: string, preset: string, translate: (key: string) => string): string {
-	const key = `profiles.editor.spring_bone_preset_${category}_${preset}`;
+	const key = `profiles.editor.dynamics_preset_${category}_${preset}`;
 	const translated = translate(key);
 	return translated === key ? preset : translated;
 }

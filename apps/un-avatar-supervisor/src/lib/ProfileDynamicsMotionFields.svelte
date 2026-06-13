@@ -19,9 +19,9 @@
 
 <div class="section-grid profile-channel-fields">
 	<ProfileToggleField
-		label={$_("profiles.editor.spring_bone")}
+		label={$_("profiles.editor.dynamics")}
 		phaseTag="UNPhysics"
-		hint={$_("profiles.hints.motion.spring_bone")}
+		hint={$_("profiles.hints.motion.dynamics")}
 		checked={setting.dynamics_enabled}
 		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
 	/>

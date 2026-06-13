@@ -13,7 +13,7 @@
 
 {#if presets.length > 0}
 	<div class="dynamics-preset-actions">
-		<span>{$_("profiles.editor.spring_bone_recommended_presets")}</span>
+		<span>{$_("profiles.editor.dynamics_recommended_presets")}</span>
 		{#each presets as preset}
 			<button type="button" class="secondary" {disabled} onclick={() => onUpdateSettingValue(`${fieldPrefix}.preset`, preset)}>
 				{dynamicsPresetLabel(override.category, preset, $_)}

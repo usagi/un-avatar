@@ -29,14 +29,14 @@
 			{/if}</strong
 		>
 		{#if override.mode === "authored"}
-			<span>{$_("profiles.editor.spring_bone_category_inherit")}</span>
+			<span>{$_("profiles.editor.dynamics_category_inherit")}</span>
 		{:else}
-			<span>{$_("profiles.editor.spring_bone_category_override")}</span>
+			<span>{$_("profiles.editor.dynamics_category_override")}</span>
 		{/if}
 	</div>
 	<ProfileSelectField
-		label={$_("profiles.editor.spring_bone_mode")}
-		hint={$_("profiles.editor.spring_bone_mode_hint")}
+		label={$_("profiles.editor.dynamics_mode")}
+		hint={$_("profiles.editor.dynamics_mode_hint")}
 		value={override.mode}
 		{disabled}
 		options={DYNAMICS_MODE_OPTIONS}
@@ -45,7 +45,7 @@
 	{#if override.mode !== "authored"}
 		<ProfileDynamicsOverrideFields {override} {disabled} {onUpdateSettingValue} />
 		<button type="button" class="secondary" {disabled} onclick={() => onUpdateSettingValue(`${fieldPrefix}.reset`, true)}>
-			{$_("profiles.editor.spring_bone_category_reset")}
+			{$_("profiles.editor.dynamics_category_reset")}
 		</button>
 	{/if}
 	{#if override.mode === "override_xpbd" && recommendedPresets.length > 0}
