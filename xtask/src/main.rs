@@ -591,17 +591,6 @@ fn run_acceptance_prepare(repo: &Path) -> bool {
 		return false;
 	}
 
-	let clickthrough_manifest = acceptance_renderer_manifest(
-		"Acceptance Click-through Window",
-		"target/tmp/model1.vrm",
-		"smaa",
-		"off",
-		"source",
-		true,
-		true,
-		false,
-	);
-
 	let files = [
 		(
 			manifests.join("model1-front.toml"),
@@ -655,16 +644,27 @@ fn run_acceptance_prepare(repo: &Path) -> bool {
 				false,
 			),
 		),
-		(manifests.join("click-through.toml"), clickthrough_manifest.clone()),
-		(manifests.join("clickthrough-window.toml"), clickthrough_manifest),
 		(
-			manifests.join("texture-auto.toml"),
+			manifests.join("click-through.toml"),
 			acceptance_renderer_manifest(
-				"Acceptance Texture Auto",
+				"Acceptance Click-through Window",
+				"target/tmp/model1.vrm",
+				"smaa",
+				"off",
+				"source",
+				true,
+				true,
+				false,
+			),
+		),
+		(
+			manifests.join("texture-balanced.toml"),
+			acceptance_renderer_manifest(
+				"Acceptance Texture Balanced",
 				"target/tmp/model1.vrm",
 				"fxaa",
 				"2k",
-				"auto",
+				"balanced",
 				false,
 				false,
 				false,
@@ -901,8 +901,8 @@ Useful manifests:\n\n\
 - `manifests/model2-front.toml`: +Z-front model2 and eye-area MToon pass.\n\
 - `manifests/vrm1-front.toml`: +Z-front VRM1 pass.\n\
 - `manifests/transparent-window.toml`: real transparent window pass.\n\
-- `manifests/click-through.toml`: launch-time Click-through pass; `clickthrough-window.toml` is also generated as a compatibility alias.\n\
-- `manifests/texture-auto.toml`: texture summary/fallback diagnostics pass.\n\
+- `manifests/click-through.toml`: launch-time Click-through pass.\n\
+- `manifests/texture-balanced.toml`: texture summary/fallback diagnostics pass.\n\
 - `manifests/spout-1080p.toml`: OBS Spout2 1080p pass. Use a packaged/release Spout2 build, or a dev build with `--features spout-sdk` plus the Spout2 SDK/DLL environment.\n\n\
 Record evidence in `notes-template.md` and keep screenshots/diagnostics bundles next to it.\n"
 	.to_string()
