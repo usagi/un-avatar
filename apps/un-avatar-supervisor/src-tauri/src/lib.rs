@@ -4676,31 +4676,65 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		.output()
 		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
 	let elapsed = started.elapsed().as_secs_f64();
+	let stderr = String::from_utf8_lossy(&output.stderr);
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	if output.status.success() {
-		let message = format!("Scene cache prewarm finished for {} in {:.1}s", setting.name, elapsed);
+		let detail = prewarm_renderer_scene_cache_detail(&stderr)
+			.map(|detail| format!(" ({detail})"))
+			.unwrap_or_default();
+		let message = format!("Renderer cache prewarm finished for {} in {:.1}s{detail}", setting.name, elapsed);
 		push_notification(
 			&mut state,
 			NotificationLevel::Info,
-			"Scene cache ready".to_string(),
+			"Renderer cache ready".to_string(),
 			message.clone(),
 		);
 		return Ok(message);
 	}
-	let stderr = String::from_utf8_lossy(&output.stderr);
 	let last_line = stderr
 		.lines()
 		.rev()
 		.find(|line| !line.trim().is_empty())
 		.unwrap_or("no stderr output");
-	let message = format!("Scene cache prewarm failed for {} after {:.1}s: {last_line}", setting.name, elapsed);
+	let message = format!(
+		"Renderer cache prewarm failed for {} after {:.1}s: {last_line}",
+		setting.name, elapsed
+	);
 	push_notification(
 		&mut state,
 		NotificationLevel::Warning,
-		"Scene cache prewarm failed".to_string(),
+		"Renderer cache prewarm failed".to_string(),
 		message.clone(),
 	);
 	Err(message)
+}
+
+fn prewarm_renderer_scene_cache_detail(stderr: &str) -> Option<String> {
+	let texture_line = stderr
+		.lines()
+		.rev()
+		.find(|line| line.contains("gpu scene texture prepare summary:"));
+	let mut parts = Vec::new();
+	if let Some(line) = texture_line {
+		if let Some(processed) = metric_token(line, "processed_cache=") {
+			parts.push(format!("processed {processed}"));
+		}
+		if let Some(compressed) = metric_token(line, "compressed_cache=") {
+			parts.push(format!("compressed {compressed}"));
+		}
+	}
+	if stderr.lines().any(|line| line.contains("pipeline cache store")) {
+		parts.push("pipeline cache stored".to_string());
+	}
+	(!parts.is_empty()).then(|| parts.join(", "))
+}
+
+fn metric_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+	let start = line.find(key)? + key.len();
+	let tail = &line[start..];
+	let end = tail.find(char::is_whitespace).unwrap_or(tail.len());
+	let token = &tail[..end];
+	(!token.is_empty()).then_some(token)
 }
 
 fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSetting, manifest_path_text: &str) -> Option<RendererInstance> {
@@ -10171,6 +10205,19 @@ id = "test"
 		)
 		.unwrap_err();
 		assert!(invalid_encoder.contains("gpu, cpu"));
+	}
+
+	#[test]
+	fn prewarm_renderer_scene_cache_detail_reports_texture_and_pipeline_cache() {
+		let stderr = r#"
+un-avatar-renderer: gpu scene texture prepare summary: total=364.3ms images=231 resident=59 deferred=172 processed_cache=0/0/0 processed_cache_read_mb=0.0 compressed_cache=59/0/0
+un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\UN Avatar\pipeline-cache\v1\cache.upc bytes=6025281
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
+			Some("processed 0/0/0, compressed 59/0/0, pipeline cache stored")
+		);
 	}
 
 	#[test]
