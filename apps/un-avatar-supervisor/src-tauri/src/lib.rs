@@ -13,6 +13,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use image::ImageEncoder as _;
 use serde::{Deserialize, Serialize};
 use tauri::{
 	image::Image,
@@ -4862,7 +4863,7 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 	fs::create_dir_all(&desktop_dir).map_err(|e| format!("create desktop dir {}: {e}", desktop_dir.display()))?;
 	let shortcut_path = desktop_dir.join(format!("{}.lnk", sanitize_shortcut_file_stem(&setting.name)));
 	let working_dir = renderer_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
-	let icon_path = shortcut_icon_path(&setting, &renderer_exe);
+	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
 	create_windows_shortcut(
 		&shortcut_path,
 		&renderer_exe,
@@ -4898,7 +4899,7 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let profile_path = start_menu_dir.join(format!("UN Avatar - {}.lnk", sanitize_shortcut_file_stem(&setting.name)));
 	let profile_args = format!("{} {}", SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG, quote_windows_arg(&manifest_path));
-	let icon_path = shortcut_icon_path(&setting, &renderer_exe);
+	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
 	create_windows_shortcut(
 		&profile_path,
 		&supervisor_exe,
@@ -7315,6 +7316,47 @@ fn shortcut_icon_path<'a>(setting: &'a AvatarSetting, renderer_exe: &'a Path) ->
 				.is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
 		})
 		.or_else(|| renderer_exe.is_file().then_some(renderer_exe.to_path_buf()))
+}
+
+fn shortcut_icon_path_for_creation(setting: &AvatarSetting, renderer_exe: &Path) -> Option<PathBuf> {
+	if let Some(icon_path) = resolve_renderer_window_icon_path(setting) {
+		if icon_path
+			.extension()
+			.and_then(|ext| ext.to_str())
+			.is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
+		{
+			return Some(icon_path);
+		}
+		if let Some(generated) = generate_shortcut_ico(setting, &icon_path) {
+			return Some(generated);
+		}
+	}
+	renderer_exe.is_file().then_some(renderer_exe.to_path_buf())
+}
+
+fn generate_shortcut_ico(setting: &AvatarSetting, source_path: &Path) -> Option<PathBuf> {
+	let bytes = fs::read(source_path).ok()?;
+	let output = encode_shortcut_ico(&bytes).ok()?;
+	let cache_dir = user_profiles_dir().join("assets").join("shortcut-icons");
+	fs::create_dir_all(&cache_dir).ok()?;
+	let path = cache_dir.join(format!("{}-shortcut.ico", unique_profile_id(&setting.id)));
+	fs::write(&path, output).ok()?;
+	Some(path)
+}
+
+fn encode_shortcut_ico(bytes: &[u8]) -> Result<Vec<u8>, String> {
+	let image = image::load_from_memory(bytes).map_err(|e| format!("decode shortcut icon: {e}"))?;
+	let image = image.resize(256, 256, image::imageops::FilterType::Lanczos3).to_rgba8();
+	let mut output = Vec::new();
+	image::codecs::ico::IcoEncoder::new(&mut output)
+		.write_image(
+			image.as_raw(),
+			image.width(),
+			image.height(),
+			image::ExtendedColorType::Rgba8,
+		)
+		.map_err(|e| format!("encode shortcut icon ICO: {e}"))?;
+	Ok(output)
 }
 
 fn sanitize_shortcut_file_stem(name: &str) -> String {
@@ -10360,6 +10402,18 @@ mod tests {
 		let decoded = image::load_from_memory(&webp).unwrap();
 		assert!(decoded.width() <= PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
 		assert!(decoded.height() <= PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
+	}
+
+	#[test]
+	fn shortcut_icon_encoder_outputs_ico() {
+		let source = image::RgbaImage::from_pixel(128, 128, image::Rgba([96, 180, 255, 255]));
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let ico = crate::encode_shortcut_ico(&png).unwrap();
+		assert_eq!(&ico[0..4], &[0, 0, 1, 0]);
+		assert!(ico.len() > png.len() / 2);
 	}
 
 	#[test]
