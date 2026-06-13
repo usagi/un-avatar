@@ -58,6 +58,7 @@ static SPRING_BONE_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<SpringBoneAuthoredParam
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
+const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -1920,6 +1921,9 @@ struct AvatarManifestSummary {
 }
 
 pub fn run() {
+	if let Err(error) = set_process_app_user_model_id() {
+		eprintln!("un-avatar-supervisor: set AppUserModelID failed: {error}");
+	}
 	match run_startup_proxy_command() {
 		Ok(true) => return,
 		Ok(false) => {}
@@ -4720,6 +4724,8 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 		&supervisor_working_dir,
 		icon_path.as_deref().or(Some(&supervisor_exe)),
 	)?;
+	let visible_settings = list_avatar_settings()?;
+	update_windows_jump_list(&supervisor_exe, &supervisor_working_dir, &visible_settings)?;
 	Ok(start_menu_dir.display().to_string())
 }
 
@@ -7151,36 +7157,15 @@ fn create_windows_shortcut(
 	working_dir: &Path,
 	icon_path: Option<&Path>,
 ) -> Result<(), String> {
-	let script = r#"
-$shortcutPath = $args[0]
-$targetPath = $args[1]
-$arguments = $args[2]
-$workingDirectory = $args[3]
-$iconPath = $args[4]
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $targetPath
-$shortcut.Arguments = $arguments
-$shortcut.WorkingDirectory = $workingDirectory
-if ($iconPath -and (Test-Path -LiteralPath $iconPath)) {
-  $shortcut.IconLocation = $iconPath
-}
-$shortcut.Save()
-"#;
-	let status = Command::new("powershell")
-		.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
-		.arg(shortcut_path)
-		.arg(target_path)
-		.arg(arguments)
-		.arg(working_dir)
-		.arg(icon_path.unwrap_or(target_path))
-		.status()
-		.map_err(|e| format!("create shortcut: launch powershell: {e}"))?;
-	if status.success() {
-		Ok(())
-	} else {
-		Err(format!("create shortcut failed with status {status}"))
-	}
+	windows_integration::create_shortcut(
+		shortcut_path,
+		target_path,
+		arguments,
+		working_dir,
+		icon_path,
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
+	)
+	.map_err(|e| format!("create shortcut {}: {e}", shortcut_path.display()))
 }
 
 #[cfg(not(windows))]
@@ -7192,6 +7177,46 @@ fn create_windows_shortcut(
 	_icon_path: Option<&Path>,
 ) -> Result<(), String> {
 	Err("shortcut creation is currently implemented for Windows only".to_string())
+}
+
+#[cfg(windows)]
+fn set_process_app_user_model_id() -> Result<(), String> {
+	windows_integration::set_process_app_user_model_id(UN_AVATAR_LAUNCHER_APP_ID)
+}
+
+#[cfg(not(windows))]
+fn set_process_app_user_model_id() -> Result<(), String> {
+	Ok(())
+}
+
+#[cfg(windows)]
+fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings: &[AvatarSetting]) -> Result<(), String> {
+	let mut tasks = Vec::new();
+	tasks.push(windows_integration::JumpListTask {
+		title: "Open Supervisor".to_string(),
+		target: supervisor_exe.to_path_buf(),
+		arguments: String::new(),
+		working_dir: working_dir.to_path_buf(),
+		icon: Some(supervisor_exe.to_path_buf()),
+	});
+	for setting in settings {
+		let manifest_path = PathBuf::from(&setting.manifest_path);
+		let renderer_exe = renderer_executable_path();
+		let icon = shortcut_icon_path(setting, &renderer_exe).or_else(|| Some(supervisor_exe.to_path_buf()));
+		tasks.push(windows_integration::JumpListTask {
+			title: format!("Launch {}", setting.name),
+			target: supervisor_exe.to_path_buf(),
+			arguments: format!("{} {}", SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG, quote_windows_arg(&manifest_path)),
+			working_dir: working_dir.to_path_buf(),
+			icon,
+		});
+	}
+	windows_integration::update_jump_list(UN_AVATAR_LAUNCHER_APP_ID, &tasks)
+}
+
+#[cfg(not(windows))]
+fn update_windows_jump_list(_supervisor_exe: &Path, _working_dir: &Path, _settings: &[AvatarSetting]) -> Result<(), String> {
+	Ok(())
 }
 
 fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathBuf> {
@@ -9245,6 +9270,158 @@ fn exe_name(name: &str) -> String {
 		format!("{name}.exe")
 	} else {
 		name.to_string()
+	}
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+// Windows Shell COM bindings require unsafe calls; keep that exception at this OS boundary.
+mod windows_integration {
+	use std::path::{Path, PathBuf};
+
+	use windows::{
+		core::{Interface, PCWSTR},
+		Win32::{
+			Foundation::RPC_E_CHANGED_MODE,
+			Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Title},
+			System::Com::StructuredStorage::PROPVARIANT,
+			System::Com::{CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
+			UI::Shell::{
+				Common::{IObjectArray, IObjectCollection},
+				DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW,
+				PropertiesSystem::IPropertyStore,
+				SetCurrentProcessExplicitAppUserModelID, ShellLink,
+			},
+		},
+	};
+
+	pub(crate) struct JumpListTask {
+		pub(crate) title: String,
+		pub(crate) target: PathBuf,
+		pub(crate) arguments: String,
+		pub(crate) working_dir: PathBuf,
+		pub(crate) icon: Option<PathBuf>,
+	}
+
+	pub(crate) fn set_process_app_user_model_id(app_id: &str) -> Result<(), String> {
+		let app_id = WideString::new(app_id);
+		unsafe { SetCurrentProcessExplicitAppUserModelID(app_id.as_pcwstr()) }.map_err(format_windows_error)
+	}
+
+	pub(crate) fn create_shortcut(
+		shortcut_path: &Path,
+		target_path: &Path,
+		arguments: &str,
+		working_dir: &Path,
+		icon_path: Option<&Path>,
+		app_id: Option<&str>,
+	) -> Result<(), String> {
+		ensure_com_initialized()?;
+		unsafe {
+			let link = create_shell_link(target_path, arguments, working_dir, icon_path, app_id, None)?;
+			let persist: IPersistFile = link.cast().map_err(format_windows_error)?;
+			let shortcut = WideString::from_path(shortcut_path);
+			persist.Save(shortcut.as_pcwstr(), true).map_err(format_windows_error)?;
+		}
+		Ok(())
+	}
+
+	pub(crate) fn update_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
+		ensure_com_initialized()?;
+		unsafe {
+			let list: ICustomDestinationList =
+				CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+			let app_id_wide = WideString::new(app_id);
+			list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
+			let mut min_slots = 0;
+			let _removed: IObjectArray = list.BeginList(&mut min_slots).map_err(format_windows_error)?;
+			let collection: IObjectCollection =
+				CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+			for task in tasks {
+				let link = create_shell_link(
+					&task.target,
+					&task.arguments,
+					&task.working_dir,
+					task.icon.as_deref(),
+					Some(app_id),
+					Some(&task.title),
+				)?;
+				collection.AddObject(&link).map_err(format_windows_error)?;
+			}
+			let array: IObjectArray = collection.cast().map_err(format_windows_error)?;
+			list.AddUserTasks(&array).map_err(format_windows_error)?;
+			list.CommitList().map_err(format_windows_error)?;
+		}
+		Ok(())
+	}
+
+	unsafe fn create_shell_link(
+		target_path: &Path,
+		arguments: &str,
+		working_dir: &Path,
+		icon_path: Option<&Path>,
+		app_id: Option<&str>,
+		title: Option<&str>,
+	) -> Result<IShellLinkW, String> {
+		let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let target = WideString::from_path(target_path);
+		link.SetPath(target.as_pcwstr()).map_err(format_windows_error)?;
+		if !arguments.is_empty() {
+			let arguments = WideString::new(arguments);
+			link.SetArguments(arguments.as_pcwstr()).map_err(format_windows_error)?;
+		}
+		let working_dir = WideString::from_path(working_dir);
+		link.SetWorkingDirectory(working_dir.as_pcwstr()).map_err(format_windows_error)?;
+		if let Some(icon_path) = icon_path {
+			let icon = WideString::from_path(icon_path);
+			link.SetIconLocation(icon.as_pcwstr(), 0).map_err(format_windows_error)?;
+		}
+		let properties: IPropertyStore = link.cast().map_err(format_windows_error)?;
+		if let Some(app_id) = app_id {
+			let app_id_prop = PROPVARIANT::from(app_id);
+			properties
+				.SetValue(&PKEY_AppUserModel_ID, &app_id_prop)
+				.map_err(format_windows_error)?;
+		}
+		if let Some(title) = title {
+			let title_prop = PROPVARIANT::from(title);
+			properties.SetValue(&PKEY_Title, &title_prop).map_err(format_windows_error)?;
+		}
+		properties.Commit().map_err(format_windows_error)?;
+		Ok(link)
+	}
+
+	fn ensure_com_initialized() -> Result<(), String> {
+		let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+		if hr.is_ok() || hr == RPC_E_CHANGED_MODE {
+			Ok(())
+		} else {
+			Err(format_windows_error(hr.into()))
+		}
+	}
+
+	fn format_windows_error(error: windows::core::Error) -> String {
+		error.message().to_string()
+	}
+
+	struct WideString {
+		inner: Vec<u16>,
+	}
+
+	impl WideString {
+		fn new(value: &str) -> Self {
+			let mut inner: Vec<u16> = value.encode_utf16().collect();
+			inner.push(0);
+			Self { inner }
+		}
+
+		fn from_path(path: &Path) -> Self {
+			Self::new(&path.display().to_string())
+		}
+
+		fn as_pcwstr(&self) -> PCWSTR {
+			PCWSTR(self.inner.as_ptr())
+		}
 	}
 }
 

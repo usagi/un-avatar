@@ -7219,6 +7219,7 @@ dependencies = [
  "un-avatar-core",
  "un-avatar-io-vrm",
  "un-i18n",
+ "windows 0.61.3",
  "zenoh",
 ]
 

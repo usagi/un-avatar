@@ -50,5 +50,16 @@ un-i18n = { git = "https://github.com/usagi/un-common.git", branch = "main", pac
 rust-i18n = "4"
 tracing = "0.1"
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+ "Win32_Foundation",
+ "Win32_Storage_EnhancedStorage",
+ "Win32_System_Com",
+ "Win32_System_Com_StructuredStorage",
+ "Win32_UI_Shell",
+ "Win32_UI_Shell_Common",
+ "Win32_UI_Shell_PropertiesSystem",
+] }
+
 [lints]
 workspace = true
