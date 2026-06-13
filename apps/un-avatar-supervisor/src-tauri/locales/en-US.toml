@@ -113,7 +113,7 @@ warm_cache_live_hint = "Prepare next-launch cache in a separate process without 
 desktop_shortcut = "Desktop Shortcut"
 desktop_shortcut_hint = "Create or update a desktop shortcut that launches this profile directly in Renderer."
 taskbar_launcher = "Taskbar Launcher"
-taskbar_launcher_hint = "Create or update Start Menu shortcuts for pinning UN Avatar to the taskbar and launching this profile from the same launcher identity."
+taskbar_launcher_hint = "Create or update the Start Menu launcher, taskbar identity, and Jump List profile tasks for UN Avatar."
 duplicate = "Duplicate"
 delete = "Delete"
 delete_hold_hint = "Hold to delete"
@@ -517,7 +517,7 @@ thumbnail_requires_tauri = "Browser preview: thumbnail cache saving requires Tau
 desktop_shortcut_requires_tauri = "Browser preview: desktop shortcut creation requires Tauri"
 desktop_shortcut_created = "Created desktop shortcut: %{path}"
 taskbar_launcher_requires_tauri = "Browser preview: taskbar launcher setup requires Tauri"
-taskbar_launcher_created = "Updated Start Menu launcher shortcuts. Pin UN Avatar from this folder: %{path}"
+taskbar_launcher_created = "Updated the UN Avatar launcher and Jump List profile tasks. Pin UN Avatar from this folder, then right-click the taskbar icon to launch a profile: %{path}"
 
 [profiles.sections]
 identity = "Profile Settings"

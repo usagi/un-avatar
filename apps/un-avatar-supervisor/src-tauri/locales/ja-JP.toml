@@ -121,7 +121,7 @@ warm_cache_live_hint = "実行中の Renderer は止めず、別プロセスで�
 desktop_shortcut = "デスクトップショートカット"
 desktop_shortcut_hint = "このプロファイルを Renderer で直接起動するデスクトップショートカットを作成または更新します。"
 taskbar_launcher = "タスクバーLauncher"
-taskbar_launcher_hint = "UN Avatar をタスクバーにピン留めし、このプロファイルも同じ launcher identity から起動するためのスタートメニューショートカットを作成または更新します。"
+taskbar_launcher_hint = "UN Avatar のスタートメニュー launcher、タスクバー identity、Jump List のプロファイル起動タスクを作成または更新します。"
 duplicate = "複製"
 delete = "削除"
 delete_hold_hint = "長押しで削除"
@@ -529,7 +529,7 @@ thumbnail_requires_tauri = "ブラウザプレビューではサムネイルの�
 desktop_shortcut_requires_tauri = "ブラウザプレビューではデスクトップショートカット作成に対応していません"
 desktop_shortcut_created = "デスクトップショートカットを作成しました: %{path}"
 taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバー launcher 設定に対応していません"
-taskbar_launcher_created = "スタートメニューの launcher ショートカットを更新しました。ここから UN Avatar をピン留めできます: %{path}"
+taskbar_launcher_created = "UN Avatar launcher と Jump List のプロファイル起動タスクを更新しました。このフォルダーから UN Avatar をピン留めし、タスクバーアイコンの右クリックでプロファイルを起動できます: %{path}"
 
 [profiles.sections]
 identity = "プロファイル設定"
