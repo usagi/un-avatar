@@ -490,7 +490,7 @@ export function installDevIpcMock(): void {
 			case "set_last_selected_setting_id":
 			case "set_renderer_show_bone_colliders":
 			case "set_renderer_motion_receivers":
-			case "set_renderer_spring_bones":
+			case "set_renderer_dynamics":
 			case "set_renderer_all_dynamics_launch_setting":
 			case "set_renderer_dynamics_enabled":
 			case "set_renderer_all_dynamics_enabled":

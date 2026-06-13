@@ -1963,7 +1963,7 @@
 			fieldSetStartsWith(fields, DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
 			fieldSetStartsWith(fields, DYNAMICS_BONE_COLLIDER_FIELD_PREFIX)
 		) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_spring_bones", () => ({ setting }));
+			const applied = await applyRendererCommand(renderersToApply, "set_renderer_dynamics", () => ({ setting }));
 			await setAppliedMessage(applied, "Updated motion physics", (count) => `Updated motion physics on ${count} renderers`);
 			return;
 		}

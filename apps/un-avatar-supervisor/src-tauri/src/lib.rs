@@ -2005,7 +2005,7 @@ pub fn run() {
 			set_renderer_camera_lock,
 			set_renderer_apply_vmc_root_translation,
 			set_renderer_motion_receivers,
-			set_renderer_spring_bones,
+			set_renderer_dynamics,
 			set_renderer_all_dynamics_launch_setting,
 			set_renderer_dynamics_enabled,
 			set_renderer_all_dynamics_enabled,
@@ -5140,7 +5140,7 @@ fn set_renderer_motion_receivers(
 }
 
 #[tauri::command]
-fn set_renderer_spring_bones(id: u32, setting: RendererSpringBoneSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(
 		id,
 		state.inner(),
