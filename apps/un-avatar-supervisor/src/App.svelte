@@ -161,8 +161,13 @@
 			scopeKey: null,
 		},
 		{
-			id: "window",
-			labelKey: "profiles.editor.window",
+			id: "motion",
+			labelKey: "profiles.editor.motion",
+			scopeKey: null,
+		},
+		{
+			id: "physics",
+			labelKey: "profiles.editor.physics",
 			scopeKey: null,
 		},
 		{
@@ -171,13 +176,8 @@
 			scopeKey: null,
 		},
 		{
-			id: "motion",
-			labelKey: "profiles.editor.motion",
-			scopeKey: null,
-		},
-		{
-			id: "physics",
-			labelKey: "profiles.editor.physics",
+			id: "window",
+			labelKey: "profiles.editor.window",
 			scopeKey: null,
 		},
 		{
@@ -3043,26 +3043,6 @@
 									onActivate={() => (activeProfileSection = "look")}
 								/>
 
-								<ProfileWindowSection
-									setting={selectedSetting}
-									{busy}
-									{colorDisplayMode}
-									onColorModeChange={setColorDisplayMode}
-									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
-									onBackgroundColorChange={updateBackgroundColorValue}
-									onActivate={() => (activeProfileSection = "window")}
-								/>
-
-								<ProfileCameraSection
-									setting={selectedSetting}
-									{busy}
-									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
-									onApplyTargetPreset={(preset) => applyCameraTargetPreset(preset)}
-									onApplyOrbitPreset={(preset) => applyCameraOrbitPreset(preset)}
-									onApplyLensPreset={(preset) => applyCameraLensPreset(preset)}
-									onActivate={() => (activeProfileSection = "camera")}
-								/>
-
 								<ProfileMotionSection
 									setting={selectedSetting}
 									{busy}
@@ -3075,6 +3055,26 @@
 									{busy}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onActivate={() => (activeProfileSection = "physics")}
+								/>
+
+								<ProfileCameraSection
+									setting={selectedSetting}
+									{busy}
+									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onApplyTargetPreset={(preset) => applyCameraTargetPreset(preset)}
+									onApplyOrbitPreset={(preset) => applyCameraOrbitPreset(preset)}
+									onApplyLensPreset={(preset) => applyCameraLensPreset(preset)}
+									onActivate={() => (activeProfileSection = "camera")}
+								/>
+
+								<ProfileWindowSection
+									setting={selectedSetting}
+									{busy}
+									{colorDisplayMode}
+									onColorModeChange={setColorDisplayMode}
+									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onBackgroundColorChange={updateBackgroundColorValue}
+									onActivate={() => (activeProfileSection = "window")}
 								/>
 
 								<ProfileOutputSection
