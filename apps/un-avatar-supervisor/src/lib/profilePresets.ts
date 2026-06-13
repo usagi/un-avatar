@@ -10,6 +10,17 @@ import type {
 
 export type ProfilePresetUpdate = [field: string, value: ProfileSettingValue];
 
+const DEFAULT_TEXTURE_COMPRESSION_ADVANCED_UPDATES: readonly ProfilePresetUpdate[] = [
+	["render_quality.texture_compression_advanced.face", "source"],
+	["render_quality.texture_compression_advanced.eyes", "source"],
+	["render_quality.texture_compression_advanced.clothing", "auto"],
+	["render_quality.texture_compression_advanced.normal", "gpu_native"],
+	["render_quality.texture_compression_advanced.occlusion", "gpu_native"],
+	["render_quality.texture_compression_advanced.emissive", "high_quality"],
+	["render_quality.texture_compression_advanced.generic_color", "auto"],
+	["render_quality.texture_compression_advanced.data", "source"],
+];
+
 export const RENDER_QUALITY_RECOMMENDATIONS: Record<RenderQualityRecommendation, readonly ProfilePresetUpdate[]> = {
 	light: [
 		["render_quality.aa", "fxaa"],
@@ -17,6 +28,7 @@ export const RENDER_QUALITY_RECOMMENDATIONS: Record<RenderQualityRecommendation,
 		["render_quality.texture_compression", "memory"],
 		["render_quality.mipmap_filter", "bilinear"],
 		["render_quality.processed_texture_cache", true],
+		...DEFAULT_TEXTURE_COMPRESSION_ADVANCED_UPDATES,
 	],
 	balanced: [
 		["render_quality.aa", "smaa"],
@@ -24,6 +36,7 @@ export const RENDER_QUALITY_RECOMMENDATIONS: Record<RenderQualityRecommendation,
 		["render_quality.texture_compression", "balanced"],
 		["render_quality.mipmap_filter", "mitchell"],
 		["render_quality.processed_texture_cache", true],
+		...DEFAULT_TEXTURE_COMPRESSION_ADVANCED_UPDATES,
 	],
 	quality: [
 		["render_quality.aa", "smaa"],
@@ -31,6 +44,9 @@ export const RENDER_QUALITY_RECOMMENDATIONS: Record<RenderQualityRecommendation,
 		["render_quality.texture_compression", "balanced"],
 		["render_quality.mipmap_filter", "mitchell"],
 		["render_quality.processed_texture_cache", true],
+		...DEFAULT_TEXTURE_COMPRESSION_ADVANCED_UPDATES,
+		["render_quality.texture_compression_advanced.clothing", "high_quality"],
+		["render_quality.texture_compression_advanced.generic_color", "high_quality"],
 	],
 };
 
