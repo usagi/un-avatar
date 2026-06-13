@@ -339,6 +339,8 @@ impl GroupRuntime {
 pub struct SpringBoneSimulator {
 	runtimes: Vec<Option<GroupRuntime>>,
 	active_runtime_indices: Vec<usize>,
+	active_verlet_runtime_indices: Vec<usize>,
+	active_xpbd_runtime_indices: Vec<usize>,
 	world_scratch: Vec<Mat4>,
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
@@ -364,6 +366,8 @@ impl Default for SpringBoneSimulator {
 		Self {
 			runtimes: Vec::new(),
 			active_runtime_indices: Vec::new(),
+			active_verlet_runtime_indices: Vec::new(),
+			active_xpbd_runtime_indices: Vec::new(),
 			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
@@ -563,6 +567,8 @@ impl SpringBoneSimulator {
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
+		let mut active_verlet_runtime_indices = Vec::new();
+		let mut active_xpbd_runtime_indices = Vec::new();
 		for g in groups.iter().copied() {
 			if !g.effective_enabled {
 				runtimes.push(None);
@@ -660,7 +666,12 @@ impl SpringBoneSimulator {
 			} else {
 				let category_id = classify_group(scene, g, &physics.categories);
 				let params = resolve_group_params(&category_id, g, &override_params_by_category);
-				active_runtime_indices.push(runtimes.len());
+				let runtime_index = runtimes.len();
+				active_runtime_indices.push(runtime_index);
+				match params.solver {
+					SpringBoneSolver::Verlet => active_verlet_runtime_indices.push(runtime_index),
+					SpringBoneSolver::Xpbd => active_xpbd_runtime_indices.push(runtime_index),
+				}
 				runtimes.push(Some(GroupRuntime { joints, params }));
 			}
 		}
@@ -670,6 +681,8 @@ impl SpringBoneSimulator {
 			Some(Self {
 				runtimes,
 				active_runtime_indices,
+				active_verlet_runtime_indices,
+				active_xpbd_runtime_indices,
 				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
@@ -731,7 +744,7 @@ impl SpringBoneSimulator {
 				profile.collider_ms += t_collider.elapsed().as_secs_f32() * 1000.0;
 			}
 			let t_solve = profile.is_some().then(Instant::now);
-			for &runtime_index in &self.active_runtime_indices {
+			for &runtime_index in &self.active_verlet_runtime_indices {
 				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
@@ -739,10 +752,27 @@ impl SpringBoneSimulator {
 					continue;
 				}
 				for _ in 0..substeps {
-					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
-						rt.reset_xpbd_lambdas();
-					}
-					step_group(
+					step_group_solver::<false>(
+						scene,
+						g,
+						rt,
+						&mut self.world_scratch,
+						&self.world_colliders,
+						sub_dt,
+						profile.as_deref_mut(),
+					);
+				}
+			}
+			for &runtime_index in &self.active_xpbd_runtime_indices {
+				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
+					continue;
+				};
+				if !g.effective_enabled {
+					continue;
+				}
+				for _ in 0..substeps {
+					rt.reset_xpbd_lambdas();
+					step_group_solver::<true>(
 						scene,
 						g,
 						rt,
@@ -814,7 +844,7 @@ fn merge_category_override_params(overrides: &[SpringBoneCategoryOverride]) -> B
 	by_category
 }
 
-fn step_group(
+fn step_group_solver<const XPBD: bool>(
 	scene: &mut UnaSceneSnapshot,
 	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
@@ -841,7 +871,6 @@ fn step_group(
 	.normalize_or_zero()
 		* group.parameters.gravity_power
 		* rt.params.gravity_scale;
-	let is_xpbd = matches!(rt.params.solver, SpringBoneSolver::Xpbd);
 	let limit_max_angle_rad = group.limit.and_then(undynamics_cone_limit_angle_rad);
 
 	for joint in &mut rt.joints {
@@ -872,17 +901,13 @@ fn step_group(
 			// `verlet` は authored 値から 60fps 相当へ変換した減衰を使う軽量 VRM 互換経路。
 			// 古い `compat_univrm` / `compat_euler` 設定文字列は `verlet` alias として受け付ける。
 			let inertia = (joint.curr_tail - joint.prev_tail) * (1.0 - drag);
-			let stiff_pull = if is_xpbd {
-				Vec3::ZERO
-			} else {
-				target_axis_world * (stiffness * dt)
-			};
+			let stiff_pull = if XPBD { Vec3::ZERO } else { target_axis_world * (stiffness * dt) };
 			let external = gravity * dt;
 			joint.curr_tail + inertia + stiff_pull + external
 		};
 		let max_tail_length = tail_max_length(joint.length, group.limit, joint.translation_writeback_target.is_some());
 
-		if is_xpbd {
+		if XPBD {
 			let target_tail = child_pos + target_axis_world * joint.length;
 			for _ in 0..rt.params.constraint_iterations {
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);

@@ -54,6 +54,8 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - Output resolution and preview window size are separate controls. No button may silently resize the preview when the user asked for an output mode.
 - `Spout2 Only` means Spout2 enabled and local preview minimized. It does not change Spout2 resolution.
 - UNPhysics / UNDynamics are the user-facing physics names. SpringBone / PhysBone are source-format or diagnostics terms.
+- UNPhysics solver labels should trust the user while staying readable: `Standard (Verlet/PBD)` for the default Verlet integration plus PBD-style constraint projection path, and `Extended (XPBD)` for compliance / iteration based tuning. Do not describe source-authored model values as an authored solver choice.
+- Physics group adjustments are template-backed overrides over model-load resolved groups. v2 may ship the built-in Hair / Ears / Tail / Cloth / Accessory / Other templates, but the target UI model is an arbitrary override list with editable partial-match keywords and parameters. Template add actions such as standard base, animal ears/tail, cloth, and body/skin can seed that list without making model-specific hacks.
 - Material authored values stay authored. Supervisor profile UI should not provide broad v1-style controls that push one Outline / Rim / MatCap / Specular / AO value into every material.
 - Screen / viewer effects may be profile controls: Silhouette Outline, Bloom, SSAO, contact shadow, color grading, background, capture / output policy.
 - Runtime UI should show only operations that can work now, or clearly mark unavailable backend support. Do not advertise headless output until the renderer architecture supports it.
@@ -73,3 +75,4 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - Full Animator graph editing.
 - VRC Constraints solver integration.
 - Per-material authoring UI for every UNToon parameter.
+- FEM / SPH physics solvers and UNPhysics worker-thread pose-buffer architecture.
