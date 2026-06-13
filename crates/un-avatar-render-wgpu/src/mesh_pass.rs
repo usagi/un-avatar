@@ -1215,7 +1215,7 @@ struct SceneAssetResidencySets {
 
 impl SceneAssetResidencySets {
 	fn for_scene(scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> Self {
-		if scene.asset_group_ownership.is_empty() {
+		if scene.asset_group_ownership.is_empty() || active_asset_groups.is_empty() {
 			return Self {
 				all_resident: true,
 				..Default::default()
@@ -11121,7 +11121,45 @@ mod tests {
 		assert!(residency.image_resident(5));
 		assert!(!residency.image_resident(6));
 		let no_active_groups = SceneAssetResidencySets::for_scene(&scene, &[]);
-		assert!(!no_active_groups.mesh_primitive_resident(2, 0));
+		assert!(no_active_groups.mesh_primitive_resident(2, 0));
+	}
+
+	#[test]
+	fn asset_residency_treats_empty_base_group_as_selected_group() {
+		let scene = UnaSceneSnapshot {
+			asset_group_ownership: vec![
+				un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: String::new(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 0,
+						primitive_index: 0,
+					}],
+					materials: vec![0],
+					images: vec![0],
+					..Default::default()
+				},
+				un_avatar_core::UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					mesh_primitives: vec![un_avatar_core::UnaMeshPrimitiveKey {
+						mesh_index: 1,
+						primitive_index: 0,
+					}],
+					materials: vec![1],
+					images: vec![1],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+		let base_group = vec![String::new()];
+		let residency = SceneAssetResidencySets::for_scene(&scene, &base_group);
+
+		assert!(residency.mesh_primitive_resident(0, 0));
+		assert!(!residency.mesh_primitive_resident(1, 0));
+		assert!(residency.material_resident(0));
+		assert!(!residency.material_resident(1));
+		assert!(residency.image_resident(0));
+		assert!(!residency.image_resident(1));
 	}
 
 	#[test]
