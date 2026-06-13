@@ -2681,6 +2681,7 @@ fn duplicate_avatar_setting(setting_id: String, app: tauri::AppHandle) -> Result
 	let source = resolve_avatar_setting(&setting_id)?;
 	let source_path = PathBuf::from(&source.manifest_path);
 	let mut manifest = read_manifest_value(&source_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	let copy_name = unique_profile_name(&format!("{} Copy", source.name))?;
 	let created_at = current_timestamp_compact();
 	if let Some(table) = manifest.as_table_mut() {
@@ -2715,10 +2716,6 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 	let created_at = current_timestamp_compact();
 	let mut manifest = toml::map::Map::new();
 	manifest.insert("title".to_string(), toml::Value::String(name.clone()));
-	manifest.insert("transparent".to_string(), toml::Value::Boolean(false));
-	manifest.insert("input_passthrough".to_string(), toml::Value::Boolean(false));
-	manifest.insert("decorations".to_string(), toml::Value::Boolean(true));
-	manifest.insert("aa".to_string(), toml::Value::String("off".to_string()));
 	manifest.insert(
 		"background_color".to_string(),
 		toml::Value::Array(
@@ -3363,7 +3360,7 @@ fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, a
 
 	let mut manifest = read_manifest_value(&manifest_path)?;
 	let icon_path_text = icon_path.display().to_string();
-	set_optional_root_string(&mut manifest, "icon_path", icon_path_text.clone())?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
 	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
 	write_manifest_value(&manifest_path, &manifest)?;
@@ -3801,6 +3798,7 @@ fn update_avatar_setting_path(setting_id: String, field: String, path: String, a
 	let setting = resolve_avatar_setting_direct(&setting_id)?;
 	let manifest_path = editable_avatar_setting_path(&setting)?;
 	let mut manifest = read_manifest_value(&manifest_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	match field.as_str() {
 		"avatar_path" => {
@@ -3810,7 +3808,6 @@ fn update_avatar_setting_path(setting_id: String, field: String, path: String, a
 			);
 		}
 		"icon_path" => {
-			table.insert("icon_path".to_string(), toml::Value::String(path.clone()));
 			let window = table
 				.entry("window")
 				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
@@ -3882,6 +3879,7 @@ fn update_avatar_setting_manifest(
 	let setting = resolve_avatar_setting(setting_id)?;
 	let manifest_path = editable_avatar_setting_path(&setting)?;
 	let mut manifest = read_manifest_value(&manifest_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	apply(&setting, &mut manifest)?;
 	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
 	write_manifest_value(&manifest_path, &manifest)?;
@@ -3963,7 +3961,6 @@ fn apply_avatar_setting_value(
 		}
 		"icon_path" => {
 			let path = json_string(&value, field)?;
-			set_optional_root_string(manifest, "icon_path", path.clone())?;
 			set_optional_nested_string(manifest, &["window", "icon_path"], path)?;
 		}
 		field if field.starts_with("profile.") => {
@@ -4506,7 +4503,6 @@ fn apply_render_quality_setting_value(manifest: &mut toml::Value, field: &str, v
 	match field {
 		"render_quality.aa" => {
 			let aa = json_aa_mode(&value, field)?;
-			set_root_string(manifest, "aa", aa.clone())?;
 			set_nested_string(manifest, &["render_quality", "aa"], aa)
 		}
 		"render_quality.texture_resolution_limit" => set_nested_string(
@@ -8627,6 +8623,50 @@ fn write_manifest_value(path: &Path, manifest: &toml::Value) -> Result<(), Strin
 	fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+fn manifest_has_nested_key(manifest: &toml::Value, path: &[&str]) -> bool {
+	let Some((leaf, parents)) = path.split_last() else {
+		return false;
+	};
+	let mut table = match manifest.as_table() {
+		Some(table) => table,
+		None => return false,
+	};
+	for parent in parents {
+		let Some(next) = table.get(*parent) else {
+			return false;
+		};
+		table = match next.as_table() {
+			Some(table) => table,
+			None => return false,
+		};
+	}
+	table.contains_key(*leaf)
+}
+
+fn migrate_root_key_to_nested_if_missing(manifest: &mut toml::Value, root_key: &str, nested_path: &[&str]) -> Result<(), String> {
+	let value = manifest.as_table().and_then(|table| table.get(root_key)).cloned();
+	if let Some(value) = value {
+		if !manifest_has_nested_key(manifest, nested_path) {
+			set_nested_value(manifest, nested_path, value)?;
+		}
+		remove_root_key(manifest, root_key)?;
+	}
+	Ok(())
+}
+
+fn migrate_avatar_manifest_to_v2(manifest: &mut toml::Value) -> Result<(), String> {
+	migrate_root_key_to_nested_if_missing(manifest, "aa", &["render_quality", "aa"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "icon_path", &["window", "icon_path"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "transparent", &["window", "transparent"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "input_passthrough", &["window", "input_passthrough"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "decorations", &["window", "decorations"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "vmc_address", &["motion", "vmc_udp", "address"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "vmc_port", &["motion", "vmc_udp", "port"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "spout", &["output", "spout2"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "spring_bones", &["physics", "dynamics", "enabled"])?;
+	Ok(())
+}
+
 fn remove_root_key(manifest: &mut toml::Value, key: &str) -> Result<(), String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	table.remove(key);
@@ -9490,8 +9530,8 @@ mod tests {
 
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, build_launcher_task_specs, data_image_base64_parts,
-		diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value,
-		path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
+		diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, migrate_avatar_manifest_to_v2,
+		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
 		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path,
 		resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session,
 		spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id,
@@ -10232,6 +10272,7 @@ id = "test"
 		)
 		.unwrap();
 
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
 		apply_avatar_setting_value(&mut manifest, &setting, "spring_bones", serde_json::json!(true)).unwrap();
 		assert_eq!(
 			manifest
@@ -10243,7 +10284,86 @@ id = "test"
 				.and_then(toml::Value::as_bool),
 			Some(true)
 		);
-		assert_eq!(manifest.get("spring_bones").and_then(toml::Value::as_bool), Some(false));
+		assert!(manifest.get("spring_bones").is_none());
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_moves_legacy_root_keys_without_overwriting_v2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy"
+aa = "fxaa"
+icon_path = "legacy.ico"
+transparent = true
+input_passthrough = true
+decorations = false
+vmc_address = "127.0.0.1:39539"
+vmc_port = 39540
+spring_bones = false
+
+[spout]
+enabled = true
+name = "LegacySpout"
+width = 1280
+height = 720
+
+[render_quality]
+aa = "smaa"
+
+[window]
+transparent = false
+
+[motion.vmc_udp]
+address = "127.0.0.1:39541"
+"#,
+			Path::new("legacy.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		let table = manifest.as_table().unwrap();
+		for key in [
+			"aa",
+			"icon_path",
+			"transparent",
+			"input_passthrough",
+			"decorations",
+			"vmc_address",
+			"vmc_port",
+			"spring_bones",
+			"spout",
+		] {
+			assert!(table.get(key).is_none(), "legacy root key should be removed: {key}");
+		}
+		let render_quality = table.get("render_quality").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(render_quality.get("aa").and_then(toml::Value::as_str), Some("smaa"));
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("icon_path").and_then(toml::Value::as_str), Some("legacy.ico"));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("decorations").and_then(toml::Value::as_bool), Some(false));
+		let vmc_udp = table
+			.get("motion")
+			.and_then(toml::Value::as_table)
+			.and_then(|motion| motion.get("vmc_udp"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(vmc_udp.get("address").and_then(toml::Value::as_str), Some("127.0.0.1:39541"));
+		assert_eq!(vmc_udp.get("port").and_then(toml::Value::as_integer), Some(39540));
+		let dynamics = table
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(dynamics.get("enabled").and_then(toml::Value::as_bool), Some(false));
+		let spout = table
+			.get("output")
+			.and_then(toml::Value::as_table)
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout.get("name").and_then(toml::Value::as_str), Some("LegacySpout"));
 	}
 
 	#[test]
@@ -10549,6 +10669,7 @@ processed_texture_cache = true
 		)
 		.unwrap();
 
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
 		apply_avatar_setting_value(&mut manifest, &setting, "render_quality.aa", serde_json::json!("msaa")).unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
@@ -10605,7 +10726,7 @@ processed_texture_cache = true
 			.get("render_quality")
 			.and_then(toml::Value::as_table)
 			.expect("render_quality table");
-		assert_eq!(manifest.get("aa").and_then(toml::Value::as_str), Some("msaa"));
+		assert!(manifest.get("aa").is_none());
 		assert_eq!(render_quality.get("aa").and_then(toml::Value::as_str), Some("msaa"));
 		assert_eq!(
 			render_quality.get("texture_resolution_limit").and_then(toml::Value::as_str),
