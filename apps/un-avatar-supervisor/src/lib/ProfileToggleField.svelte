@@ -10,7 +10,7 @@
 <label class="toggle-field" data-hint={hint}
 	><input type="checkbox" {checked} {disabled} onchange={(event) => onChange((event.currentTarget as HTMLInputElement).checked)} /><span
 		>{label}{#if phaseTag}
-			<span class="phase-tag">{phaseTag}</span>
+			<span class="phase-tag" aria-hidden="true">{phaseTag}</span>
 		{/if}</span
 	></label
 >

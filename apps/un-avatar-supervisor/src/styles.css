@@ -3637,7 +3637,8 @@ dd {
 
 .rendering-presentation-section .effect-panel > label,
 .rendering-presentation-section .effect-panel > .toggle-field,
-.rendering-presentation-section .effect-panel > .unified-color-field {
+.rendering-presentation-section .effect-panel > .unified-color-field,
+.rendering-presentation-section .effect-panel > .look-preset-row {
 	display: inline-grid;
 	width: calc((100% - 42px) / 3);
 	min-width: min(100%, 240px);
@@ -3654,8 +3655,43 @@ dd {
 	display: inline-flex;
 }
 
+.rendering-presentation-section .effect-panel > .effect-subgroup {
+	margin: 8px;
+}
+
+.rendering-presentation-section .effect-subgroup > label,
+.rendering-presentation-section .effect-subgroup > .toggle-field {
+	display: inline-grid;
+	width: calc((100% - 30px) / 2);
+	min-width: min(100%, 320px);
+	margin: 6px;
+	vertical-align: top;
+}
+
+.rendering-presentation-section .effect-subgroup > .toggle-field {
+	display: inline-flex;
+}
+
+.look-preset-row {
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 6px;
+	padding: 8px 10px;
+	border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--panel-subtle) 38%, transparent);
+}
+
+.look-preset-row button {
+	min-width: 0;
+	min-height: 28px;
+	padding: 0 7px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .rendering-presentation-section .range-number-field {
-	grid-template-columns: minmax(180px, 1fr) 76px;
+	grid-template-columns: minmax(180px, 1fr) 112px;
 }
 
 .rendering-presentation-section .effect-panel > label > select,

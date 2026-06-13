@@ -43,13 +43,14 @@
 	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 	export let onOpenProfile: () => void;
 	export let onRevealProfilesDir: () => void | Promise<void>;
+	export let onSelectRendererPaneTab: (tab: RendererPaneTab) => void;
 </script>
 
 <aside class="panel details-panel">
 	<h2>{renderer ? $_("renderers.details.title") : $_("renderers.ready.title")}</h2>
 	{#if renderer}
 		<RendererRuntimeSummaryGrid {renderer} {runtimeStatus} />
-		<RendererPaneTabs bind:rendererPaneTab expressionPresetCount={runtimeStatus?.expression_presets?.length ?? 0} />
+		<RendererPaneTabs {rendererPaneTab} expressionPresetCount={runtimeStatus?.expression_presets?.length ?? 0} onSelectTab={onSelectRendererPaneTab} />
 		<RendererPaneContent
 			{renderer}
 			{runtimeStatus}

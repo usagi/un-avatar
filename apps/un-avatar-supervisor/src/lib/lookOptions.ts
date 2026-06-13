@@ -1,16 +1,3 @@
-export const LOOK_POLICY_OPTIONS = [
-	["authored", "Material authored"],
-	["override", "Silhouette override"],
-	["off", "Off"],
-] as const;
-
-export const OUTLINE_TYPE_OPTIONS = [
-	["mtoon", "Screen silhouette"],
-	["ink", "Ink"],
-	["brush", "Brush (reserved)"],
-	["double", "Double (reserved)"],
-] as const;
-
 export const OUTLINE_COLOR_FALLBACK: [number, number, number] = [0.02, 0.01, 0.03];
 
 export const OUTLINE_RANGE_FIELDS = [
@@ -24,6 +11,7 @@ export const OUTLINE_RANGE_FIELDS = [
 		rangeMin: 0,
 		rangeMax: 50,
 		step: 0.5,
+		decimals: 1,
 	},
 	{
 		key: "outline_roundness",
@@ -35,6 +23,7 @@ export const OUTLINE_RANGE_FIELDS = [
 		rangeMin: 0,
 		rangeMax: 1,
 		step: 0.01,
+		decimals: 2,
 	},
 ] as const;
 
@@ -48,6 +37,7 @@ export const OUTLINE_NUMBER_FIELDS = [
 		min: 0,
 		max: 1,
 		step: 0.05,
+		decimals: 2,
 	},
 ] as const;
 
@@ -60,6 +50,7 @@ export const CONTACT_SHADOW_RANGE_FIELDS = [
 		rangeMin: 0,
 		rangeMax: 1,
 		step: 0.01,
+		decimals: 2,
 	},
 	{
 		key: "contact_shadow_radius",
@@ -69,6 +60,7 @@ export const CONTACT_SHADOW_RANGE_FIELDS = [
 		rangeMin: 0.05,
 		rangeMax: 3,
 		step: 0.05,
+		decimals: 2,
 	},
 	{
 		key: "contact_shadow_softness",
@@ -78,6 +70,7 @@ export const CONTACT_SHADOW_RANGE_FIELDS = [
 		rangeMin: 0.1,
 		rangeMax: 8,
 		step: 0.1,
+		decimals: 1,
 	},
 	{
 		key: "contact_shadow_height",
@@ -87,6 +80,7 @@ export const CONTACT_SHADOW_RANGE_FIELDS = [
 		rangeMin: -1,
 		rangeMax: 1,
 		step: 0.01,
+		decimals: 2,
 	},
 ] as const;
 
@@ -142,6 +136,7 @@ export const COLOR_BASIC_RANGE_FIELDS = [
 		numberMin: -4,
 		numberMax: 4,
 		step: 0.05,
+		decimals: 2,
 	},
 	{
 		key: "color_contrast",
@@ -153,6 +148,7 @@ export const COLOR_BASIC_RANGE_FIELDS = [
 		numberMin: 0,
 		numberMax: 4,
 		step: 0.05,
+		decimals: 2,
 	},
 	{
 		key: "color_saturation",
@@ -164,6 +160,7 @@ export const COLOR_BASIC_RANGE_FIELDS = [
 		numberMin: 0,
 		numberMax: 4,
 		step: 0.05,
+		decimals: 2,
 	},
 ] as const;
 
@@ -180,7 +177,3 @@ export const BLOOM_QUALITY_OPTIONS = [
 	["compact", "Compact"],
 	["high_quality", "High quality"],
 ] as const;
-
-export function optionLabel<const T extends readonly (readonly [string, string])[]>(options: T, value: string): string {
-	return options.find(([key]) => key === value)?.[1] ?? value;
-}

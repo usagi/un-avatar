@@ -4,6 +4,7 @@
 
 	export let rendererPaneTab: RendererPaneTab;
 	export let expressionPresetCount = 0;
+	export let onSelectTab: (tab: RendererPaneTab) => void;
 </script>
 
 <div class="renderer-pane-tabs" role="tablist">
@@ -11,14 +12,14 @@
 		role="tab"
 		aria-selected={rendererPaneTab === "overview"}
 		class:active={rendererPaneTab === "overview"}
-		onclick={() => (rendererPaneTab = "overview")}
+		onclick={() => onSelectTab("overview")}
 		><strong>{$_("renderers.details.overview")}</strong><small>{$_("renderers.details.overview_subtitle")}</small></button
 	>
 	<button
 		role="tab"
 		aria-selected={rendererPaneTab === "controls"}
 		class:active={rendererPaneTab === "controls"}
-		onclick={() => (rendererPaneTab = "controls")}
+		onclick={() => onSelectTab("controls")}
 		><strong>{$_("renderers.details.controls")}</strong><small>{$_("renderers.details.controls_subtitle")}</small></button
 	>
 	<button
@@ -26,7 +27,7 @@
 		aria-selected={rendererPaneTab === "expressions"}
 		class:active={rendererPaneTab === "expressions"}
 		disabled={expressionPresetCount === 0}
-		onclick={() => (rendererPaneTab = "expressions")}
+		onclick={() => onSelectTab("expressions")}
 		title={expressionPresetCount > 0
 			? $_("renderers.details.expressions_tip_available")
 			: $_("renderers.details.expressions_tip_unavailable")}
@@ -37,7 +38,7 @@
 		role="tab"
 		aria-selected={rendererPaneTab === "diagnostics"}
 		class:active={rendererPaneTab === "diagnostics"}
-		onclick={() => (rendererPaneTab = "diagnostics")}
+		onclick={() => onSelectTab("diagnostics")}
 		><strong>{$_("renderers.details.diagnostics")}</strong><small>{$_("renderers.details.diagnostics_subtitle")}</small></button
 	>
 </div>

@@ -1,12 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import {
-		runtimeConnectionLabel,
-		runtimeOutputLabel,
-		runtimeResolution,
-		spoutHealthLabel,
-		type RuntimeSummaryStatusData,
-	} from "./runtimeLabels";
+	import { runtimeOutputLabel, runtimeResolution, spoutHealthLabel, type RuntimeSummaryStatusData } from "./runtimeLabels";
 	import type { RendererOutputView } from "./rendererTypes";
 
 	export let renderer: RendererOutputView;
@@ -14,15 +8,6 @@
 </script>
 
 <div class="runtime-summary-grid" aria-label="Runtime summary">
-	<span>
-		<small>{$_("renderers.summary.status")}</small>
-		<strong
-			>{runtimeConnectionLabel(runtimeStatus, {
-				pending: $_("renderers.summary.pending"),
-				connected: $_("renderers.summary.connected"),
-			})}</strong
-		>
-	</span>
 	<span>
 		<small>{$_("renderers.summary.surface")}</small>
 		<strong>{runtimeResolution(runtimeStatus)}</strong>

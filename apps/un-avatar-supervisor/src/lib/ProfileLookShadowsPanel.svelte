@@ -20,6 +20,12 @@
 				: $_("profiles.editor.look_status_off")}</span
 		>
 	</summary>
-	<ProfileLookContactShadowFields {setting} {busy} {onUpdateSettingValue} />
-	<ProfileLookSsaoFields {setting} {busy} {onUpdateSettingValue} />
+	<div class="subgroup effect-subgroup shadow-subgroup">
+		<div class="subgroup-heading">{$_("profiles.editor.look_contact_shadow")}</div>
+		<ProfileLookContactShadowFields {setting} {busy} {onUpdateSettingValue} />
+	</div>
+	<div class="subgroup effect-subgroup shadow-subgroup">
+		<div class="subgroup-heading">{$_("profiles.editor.look_ssao")}</div>
+		<ProfileLookSsaoFields {setting} {busy} {onUpdateSettingValue} />
+	</div>
 </details>

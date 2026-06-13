@@ -107,7 +107,7 @@ export function rendererMotionReceiversPayload(setting: RuntimeMotionSetting) {
 
 export function rendererAvatarOutlinePayload(setting: RuntimeAvatarEffectsSetting) {
 	return {
-		policy: setting.outline_policy,
+		policy: setting.outline_policy === "override" ? "override" : "off",
 		outlineType: setting.outline_type,
 		width: setting.outline_width,
 		color: setting.outline_color,

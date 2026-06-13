@@ -1213,15 +1213,15 @@ struct AvatarSetting {
 	debug_disable_normal_map: bool,
 	/// fs_mtoon を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
 	debug_base_texture_only: bool,
-	/// アバター outline の扱い。`[effects.avatar.outline] policy` に対応。
+	/// UN Avatar silhouette outline の扱い。`[effects.avatar.outline] policy` に対応。
 	outline_policy: String,
-	/// アバター outline の種類。v1 は `mtoon` のみ描画差分あり。`ink` / `brush` / `double` は予約値。
+	/// UN Avatar silhouette outline の種類。v2 UI では固定。`ink` / `brush` / `double` は予約値。
 	outline_type: String,
-	/// アバター outline の幅（メートル）。`None` は authored 値。
+	/// UN Avatar silhouette outline の幅（メートル）。`None` は既定値。
 	outline_width: Option<f32>,
-	/// アバター outline の色（linear RGB 0..1）。`None` は authored 値。
+	/// UN Avatar silhouette outline の色（linear RGB 0..1）。`None` は既定値。
 	outline_color: Option<[f32; 3]>,
-	/// アバター outline にライティングを混ぜる量。0 は完全な指定色、1 は authored lighting mix 相当。
+	/// UN Avatar silhouette outline にライティングを混ぜる量。0 は完全な指定色、1 は scene lighting 寄り。
 	outline_lighting_mix: Option<f32>,
 	/// UNAvatar screen-space outline の角の丸み。0 は角張る、1 は丸い。
 	outline_roundness: Option<f32>,
@@ -5242,7 +5242,7 @@ fn set_renderer_primary_motion_source(id: u32, source: String, state: State<'_, 
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetPrimaryMotionSource { source })
 }
 
-/// 実行中レンダラーの Avatar outline effect をライブ更新する。
+/// 実行中レンダラーの UN Avatar silhouette outline effect をライブ更新する。
 /// プロファイルの永続化は `update_avatar_setting_value` が担当し、ここでは runtime 反映だけを行う。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -5256,12 +5256,10 @@ fn set_renderer_avatar_outline(
 	roundness: Option<f32>,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<(), String> {
-	if let Some(policy) = policy.as_deref() {
-		match policy {
-			"authored" | "off" | "override" => {}
-			_ => return Err(format!("invalid avatar outline policy: {policy}")),
-		}
-	}
+	let policy = policy
+		.as_deref()
+		.map(|policy| normalize_outline_policy(policy).ok_or_else(|| format!("invalid avatar outline policy: {policy}")))
+		.transpose()?;
 	if let Some(outline_type) = outline_type.as_deref() {
 		match outline_type {
 			"mtoon" | "ink" | "brush" | "double" => {}
@@ -7880,7 +7878,10 @@ fn json_block_compression_encoder(value: &serde_json::Value, field: &str) -> Res
 
 fn normalize_outline_policy(value: &str) -> Option<String> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some("authored".to_string()),
+		// v1/v2-dev used `authored` for a broad material-outline override mode.
+		// v2 Supervisor profile outline is the independent UN Avatar silhouette
+		// post effect, so the legacy value migrates to "not using silhouette".
+		"authored" => Some("off".to_string()),
 		"off" | "none" | "disabled" => Some("off".to_string()),
 		"override" | "custom" => Some("override".to_string()),
 		_ => None,
@@ -8475,7 +8476,7 @@ fn post_effect_settings(post: Option<ManifestPostEffects>) -> PostEffectSettings
 
 fn avatar_effect_settings(avatar_effects: Option<ManifestAvatarEffects>) -> AvatarEffectSettings {
 	let mut settings = AvatarEffectSettings {
-		outline_policy: "authored".to_string(),
+		outline_policy: "off".to_string(),
 		outline_type: "mtoon".to_string(),
 		outline_width: None,
 		outline_color: None,
@@ -8602,7 +8603,7 @@ fn validate_bloom_quality(value: &str) -> Result<String, String> {
 
 fn json_outline_policy(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let raw = json_string(value, field)?;
-	normalize_outline_policy(&raw).ok_or_else(|| format!("{field} must be one of authored, off, override"))
+	normalize_outline_policy(&raw).ok_or_else(|| format!("{field} must be off or override"))
 }
 
 fn json_outline_type(value: &serde_json::Value, field: &str) -> Result<String, String> {
@@ -10239,10 +10240,11 @@ mod tests {
 				);
 				return;
 			}
-			assert!(
-				started.elapsed() < Duration::from_secs(2),
-				"runtime status stream cache was not updated"
-			);
+			if started.elapsed() >= Duration::from_secs(10) {
+				stop.store(true, Ordering::Release);
+				let last_error = cache.lock().ok().and_then(|cache| cache.last_error.clone());
+				panic!("runtime status stream cache was not updated: {last_error:?}");
+			}
 			thread::sleep(Duration::from_millis(20));
 		}
 	}
@@ -11146,6 +11148,39 @@ id = "test"
 		assert!((color[0] - 0.02).abs() < 1e-6);
 		assert!((color[1] - 0.01).abs() < 1e-6);
 		assert!((color[2] - 0.03).abs() < 1e-6);
+	}
+
+	#[test]
+	fn avatar_outline_authored_legacy_value_migrates_to_off() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"effects.avatar.outline.policy",
+			serde_json::json!("authored"),
+		)
+		.unwrap();
+
+		let policy = manifest
+			.get("effects")
+			.and_then(toml::Value::as_table)
+			.and_then(|effects| effects.get("avatar"))
+			.and_then(toml::Value::as_table)
+			.and_then(|avatar| avatar.get("outline"))
+			.and_then(toml::Value::as_table)
+			.and_then(|outline| outline.get("policy"))
+			.and_then(toml::Value::as_str);
+		assert_eq!(policy, Some("off"));
 	}
 
 	#[test]

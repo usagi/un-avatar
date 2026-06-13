@@ -20,6 +20,7 @@
 		numberMin={field.numberMin}
 		numberMax={field.numberMax}
 		step={field.step}
+		decimals={field.decimals}
 		disabled={busy}
 		onChange={(value) => onUpdateSettingValue(field.field, value)}
 	/>

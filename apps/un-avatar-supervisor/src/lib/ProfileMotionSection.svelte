@@ -1,10 +1,9 @@
 <script lang="ts">
 	import type { MotionSetting, ProfileSettingValue } from "./profileTypes";
 	import { _ } from "svelte-i18n";
-	import ProfileBoneColliderSettings from "./ProfileBoneColliderSettings.svelte";
-	import ProfileDynamicsMotionFields from "./ProfileDynamicsMotionFields.svelte";
 	import ProfileLookAtMotionFields from "./ProfileLookAtMotionFields.svelte";
 	import ProfileMotionChannels from "./ProfileMotionChannels.svelte";
+	import ProfileToggleField from "./ProfileToggleField.svelte";
 
 	export let setting: MotionSetting;
 	export let busy = false;
@@ -26,6 +25,12 @@
 
 	<ProfileLookAtMotionFields {setting} {busy} {onUpdateSettingValue} />
 
-	<ProfileDynamicsMotionFields {setting} {busy} {onUpdateSettingValue} />
-	<ProfileBoneColliderSettings {setting} {busy} {onUpdateSettingValue} />
+	<div class="section-grid profile-channel-fields">
+		<ProfileToggleField
+			label={$_("profiles.editor.apply_root_translation")}
+			hint={$_("profiles.hints.motion.root_translation")}
+			checked={setting.apply_vmc_root_translation}
+			onChange={(checked) => onUpdateSettingValue("motion.apply_vmc_root_translation", checked)}
+		/>
+	</div>
 </section>

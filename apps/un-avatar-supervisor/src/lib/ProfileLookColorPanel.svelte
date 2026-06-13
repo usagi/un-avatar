@@ -16,7 +16,7 @@
 	<summary>
 		<span>{$_("profiles.editor.look_color_grading")}</span>
 		<small>{$_("profiles.editor.look_color_grading_summary")}</small>
-		<span class="effect-panel-status">{setting.color_look} · exp {formatFixed(setting.color_exposure)}</span>
+		<span class="effect-panel-status">{setting.color_look} · {formatFixed(setting.color_look_intensity, 2)} · exp {formatFixed(setting.color_exposure, 2)}</span>
 	</summary>
 	<ProfileLookColorBasicFields {setting} {busy} {onUpdateSettingValue} />
 	<ProfileLookColorPresetFields {setting} {busy} {onUpdateSettingValue} />

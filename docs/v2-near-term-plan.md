@@ -128,6 +128,7 @@ Supervisor look policy:
 
 - v2 Supervisor では material authored outline と区別するため、画面空間の全体囲みは `Silhouette Outline` / `シルエットアウトライン` と呼ぶ。`Outline` 単独表記は material ごとの authored outline と紛らわしいため避ける。
 - Authored outline / Rim / MatCap / Specular / AO は UNToon material へ正規化された source-authored parameter として扱う。v1 のように Supervisor profile から全 material へ同じ width / color / rim / matcap / specular / AO 値を押し付ける設定は v2 の標準 UI / Supervisor runtime command / renderer manifest application から廃止する。既存 manifest に残る `[effects.avatar.rim]` / `[effects.avatar.matcap]` / `[effects.avatar.specular]` / `[effects.avatar.ambient_occlusion]` は読み込みを壊さず無視する。
+- `effects.avatar.outline.policy = "authored"` は v1 / v2-dev の旧 profile 値としてのみ扱い、v2 Supervisor profile では `"off"` へマイグレートする。シルエットアウトラインに `authored` 状態は存在しない。material-authored geometry outline は UNToon material feature として別経路で保持する。
 - Profile で直接扱う look controls は、Silhouette Outline、Bloom、SSAO、Contact shadow、color grading、背景などの screen / output / viewer-space effect を中心にする。material の authored value を壊す override は diagnostic / migration 互換に限定し、通常設定へ昇格しない。
 
 Output / preview policy:

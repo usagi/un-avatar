@@ -29,6 +29,7 @@
 		rangeMin={field.rangeMin}
 		rangeMax={field.rangeMax}
 		step={field.step}
+		decimals={field.decimals}
 		disabled={busy || !setting.contact_shadow_enabled}
 		onChange={(value) => onUpdateSettingValue(field.field, value)}
 	/>

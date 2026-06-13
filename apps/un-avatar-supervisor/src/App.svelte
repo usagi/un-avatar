@@ -10,6 +10,7 @@
 	import ProfileLightingSection from "./lib/ProfileLightingSection.svelte";
 	import ProfileLookSection from "./lib/ProfileLookSection.svelte";
 	import ProfileMotionSection from "./lib/ProfileMotionSection.svelte";
+	import ProfilePhysicsSection from "./lib/ProfilePhysicsSection.svelte";
 	import ProfileOutputSection from "./lib/ProfileOutputSection.svelte";
 	import ProfileQualitySection from "./lib/ProfileQualitySection.svelte";
 	import ProfileSectionNav from "./lib/ProfileSectionNav.svelte";
@@ -172,6 +173,11 @@
 		{
 			id: "motion",
 			labelKey: "profiles.editor.motion",
+			scopeKey: null,
+		},
+		{
+			id: "physics",
+			labelKey: "profiles.editor.physics",
 			scopeKey: null,
 		},
 		{
@@ -531,7 +537,7 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
-			outline_policy: "authored",
+			outline_policy: "off",
 			outline_type: "mtoon",
 			outline_width: null,
 			outline_color: null,
@@ -649,7 +655,7 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
-			outline_policy: "authored",
+			outline_policy: "off",
 			outline_type: "mtoon",
 			outline_width: null,
 			outline_color: null,
@@ -2832,6 +2838,7 @@
 						{colorDisplayMode}
 						{expressionOverrides}
 						bind:expressionFilter
+						onSelectRendererPaneTab={(tab) => (rendererPaneTab = tab)}
 						onSetSpoutOutput={(enabled, size, label) => {
 							if (!selectedRenderer) return;
 							return setRendererSpoutOutput(selectedRenderer, enabled, size, label);
@@ -3061,6 +3068,13 @@
 									{busy}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onActivate={() => (activeProfileSection = "motion")}
+								/>
+
+								<ProfilePhysicsSection
+									setting={selectedSetting}
+									{busy}
+									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onActivate={() => (activeProfileSection = "physics")}
 								/>
 
 								<ProfileOutputSection

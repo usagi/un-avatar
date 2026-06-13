@@ -23,7 +23,7 @@
 		label={$_(field.labelKey)}
 		hint={$_(field.hintKey)}
 		value={setting[field.key]}
-		decimals={"decimals" in field ? field.decimals : 0}
+		decimals={"decimals" in field ? field.decimals : 2}
 		rangeMin={field.rangeMin}
 		rangeMax={field.rangeMax}
 		step={field.step}

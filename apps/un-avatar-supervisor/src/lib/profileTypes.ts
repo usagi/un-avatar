@@ -21,7 +21,17 @@ export type TextureCompressionAdvanced = {
 	data: TextureCompressionPreference;
 };
 
-export type ProfileSectionId = "identity" | "avatar" | "quality" | "lighting" | "look" | "window" | "camera" | "motion" | "output";
+export type ProfileSectionId =
+	| "identity"
+	| "avatar"
+	| "quality"
+	| "lighting"
+	| "look"
+	| "window"
+	| "camera"
+	| "motion"
+	| "physics"
+	| "output";
 
 export type RenderQualityRecommendation = "light" | "balanced" | "quality";
 export type LookRecommendation = "natural" | "clear" | "pop" | "soft";

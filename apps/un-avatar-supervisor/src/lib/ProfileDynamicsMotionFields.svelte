@@ -11,7 +11,6 @@
 		| "dynamics_enable_all_on_launch"
 		| "contact_parameter_emission"
 		| "dynamics_category_overrides"
-		| "apply_vmc_root_translation"
 	>;
 	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
@@ -20,21 +19,18 @@
 <div class="section-grid profile-channel-fields">
 	<ProfileToggleField
 		label={$_("profiles.editor.dynamics")}
-		phaseTag="UNPhysics"
 		hint={$_("profiles.hints.motion.dynamics")}
 		checked={setting.dynamics_enabled}
 		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.dynamics_enable_all_on_launch")}
-		phaseTag="UNAvatar"
 		hint={$_("profiles.hints.motion.dynamics_enable_all_on_launch")}
 		checked={setting.dynamics_enable_all_on_launch}
 		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD, checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.contact_parameter_emission")}
-		phaseTag="Contacts"
 		hint={$_("profiles.hints.motion.contact_parameter_emission")}
 		checked={setting.contact_parameter_emission}
 		onChange={(checked) => onUpdateSettingValue("physics.contacts.parameter_emission", checked)}
@@ -44,12 +40,5 @@
 		dynamicsEnabled={setting.dynamics_enabled}
 		{busy}
 		{onUpdateSettingValue}
-	/>
-	<ProfileToggleField
-		label={$_("profiles.editor.apply_vmc_root_translation")}
-		phaseTag="VMC"
-		hint={$_("profiles.hints.motion.vmc_root_translation")}
-		checked={setting.apply_vmc_root_translation}
-		onChange={(checked) => onUpdateSettingValue("motion.apply_vmc_root_translation", checked)}
 	/>
 </div>
