@@ -175,6 +175,9 @@ struct RendererLogSummary {
 	pre_scene_import_ms: Option<String>,
 	file_read_ms: Option<String>,
 	gltf_import_slice_ms: Option<String>,
+	gltf_parse_ms: Option<String>,
+	gltf_buffers_ms: Option<String>,
+	gltf_image_decode_ms: Option<String>,
 	scene_snapshot_ms: Option<String>,
 	read_meshes_ms: Option<String>,
 	read_meshes_stage: Option<String>,
@@ -238,16 +241,19 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
+		"file\timport_ms\tpre_scene_import_ms\tfile_read_ms\tgltf_import_slice_ms\tgltf_parse_ms\tgltf_buffers_ms\tgltf_image_decode_ms\tscene_snapshot_ms\tread_meshes_ms\tread_meshes_stage\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.pre_scene_import_ms.as_deref().unwrap_or("-"),
 			summary.file_read_ms.as_deref().unwrap_or("-"),
 			summary.gltf_import_slice_ms.as_deref().unwrap_or("-"),
+			summary.gltf_parse_ms.as_deref().unwrap_or("-"),
+			summary.gltf_buffers_ms.as_deref().unwrap_or("-"),
+			summary.gltf_image_decode_ms.as_deref().unwrap_or("-"),
 			summary.scene_snapshot_ms.as_deref().unwrap_or("-"),
 			summary.read_meshes_ms.as_deref().unwrap_or("-"),
 			summary.read_meshes_stage.as_deref().unwrap_or("-"),
@@ -294,6 +300,10 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.file_read_ms = metric_token(line, "file_read_ms=");
 		} else if line.contains("glTF import profile: gltf_import_slice_ms=") {
 			summary.gltf_import_slice_ms = metric_token(line, "gltf_import_slice_ms=");
+		} else if line.contains("glTF import profile: gltf_import_slice.parse_ms=") {
+			summary.gltf_parse_ms = metric_token(line, "gltf_import_slice.parse_ms=");
+			summary.gltf_buffers_ms = metric_token(line, "buffers_ms=");
+			summary.gltf_image_decode_ms = metric_token(line, "image_decode_ms=");
 		} else if line.contains("glTF import profile: scene_snapshot_ms=") {
 			summary.scene_snapshot_ms = metric_token(line, "scene_snapshot_ms=");
 		} else if line.contains("glTF scene profile: read_meshes_ms=") {
@@ -3170,6 +3180,7 @@ mod tests {
 			"un-avatar-renderer: Vulkan pipeline cache load path=x bytes=6025281\n\
 glTF import profile: file_read_bytes=779284856 file_read_ms=182\n\
 glTF import profile: gltf_import_slice_ms=102\n\
+glTF import profile: gltf_import_slice.parse_ms=30 buffers_ms=72 image_decode_ms=0 images=39/231 workers=8\n\
 glTF import profile: pre_scene_import_ms=382\n\
 glTF scene profile: read_meshes_ms=129\n\
 un-avatar-renderer: glTF scene profile: read_meshes.stage_ms cache_clone=6 cache_take=0 positions=5 joints_weights=12 attributes=19 indices=9 morphs=96 defaults=0 cache_insert=42\n\
@@ -3187,6 +3198,9 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 		assert_eq!(summary.pre_scene_import_ms.as_deref(), Some("382"));
 		assert_eq!(summary.file_read_ms.as_deref(), Some("182"));
 		assert_eq!(summary.gltf_import_slice_ms.as_deref(), Some("102"));
+		assert_eq!(summary.gltf_parse_ms.as_deref(), Some("30"));
+		assert_eq!(summary.gltf_buffers_ms.as_deref(), Some("72"));
+		assert_eq!(summary.gltf_image_decode_ms.as_deref(), Some("0"));
 		assert_eq!(summary.scene_snapshot_ms.as_deref(), Some("249"));
 		assert_eq!(summary.read_meshes_ms.as_deref(), Some("129"));
 		assert_eq!(
