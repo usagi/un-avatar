@@ -130,9 +130,12 @@ active_label = "Active:"
 active_unset = "-"
 
 [profiles.action_groups]
-prepare = "プロファイル準備"
+prepare = "日常運用の準備"
+prepare_hint = "キャッシュ準備、ショートカット、launcher を整えて次回から直接起動しやすくします。"
 live_renderer = "実行中 Renderer"
-launch = "起動"
+live_renderer_hint = "このプロファイルで動いている Renderer を確認、前面化、撮影できます。"
+launch = "今すぐ確認"
+launch_hint = "Supervisor から起動し、このプロファイルの見た目と動作を確認します。"
 
 [profiles.live]
 running = "実行中"

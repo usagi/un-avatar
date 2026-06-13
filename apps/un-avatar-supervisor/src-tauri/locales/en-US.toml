@@ -122,9 +122,12 @@ active_label = "Active:"
 active_unset = "-"
 
 [profiles.action_groups]
-prepare = "Profile preparation"
+prepare = "Prepare Daily Use"
+prepare_hint = "Warm cache, shortcuts, and launcher setup make this profile easy to start directly next time."
 live_renderer = "Live Renderer"
-launch = "Launch"
+live_renderer_hint = "Inspect, activate, or capture the Renderer currently using this profile."
+launch = "Check Now"
+launch_hint = "Launch from Supervisor to verify this profile's look and behavior."
 
 [profiles.live]
 running = "Live renderer"

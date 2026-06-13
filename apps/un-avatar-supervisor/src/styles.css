@@ -661,21 +661,21 @@ small,
 }
 
 .profile-stage-actions {
-	display: inline-flex;
+	display: flex;
 	flex: 0 0 auto;
 	flex-wrap: wrap;
 	justify-content: flex-end;
 	gap: 8px;
-	max-width: min(820px, 56vw);
+	max-width: min(920px, 60vw);
 }
 
 .profile-stage-action-group {
-	display: inline-flex;
+	display: grid;
+	grid-template-columns: minmax(116px, 160px) minmax(0, auto);
 	flex: 0 1 auto;
-	flex-wrap: wrap;
-	align-items: center;
+	align-items: start;
 	justify-content: flex-end;
-	gap: 6px;
+	gap: 8px;
 	min-width: 0;
 	padding-left: 8px;
 	border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -684,6 +684,42 @@ small,
 .profile-pending-action-slot + .profile-stage-action-group {
 	padding-left: 0;
 	border-left: 0;
+}
+
+.profile-stage-action-copy {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+	padding-top: 1px;
+	text-align: right;
+}
+
+.profile-stage-action-copy strong {
+	overflow: hidden;
+	color: var(--text);
+	font-size: 12px;
+	font-weight: 750;
+	line-height: 1.15;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.profile-stage-action-copy span {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	overflow: hidden;
+	color: var(--muted);
+	font-size: 10.5px;
+	line-height: 1.25;
+}
+
+.profile-stage-action-buttons {
+	display: inline-flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	min-width: 0;
 }
 
 .profile-stage-actions button,
@@ -2301,6 +2337,10 @@ td small {
 
 	.profile-stage-actions {
 		max-width: 100%;
+	}
+
+	.profile-stage-action-group {
+		grid-template-columns: minmax(112px, 150px) minmax(0, auto);
 	}
 
 	.runtime-summary-grid {
@@ -4887,6 +4927,30 @@ textarea {
 
 	.profile-stage {
 		min-height: 224px;
+	}
+
+	.stage-title-row {
+		flex-wrap: wrap;
+	}
+
+	.profile-stage-actions {
+		justify-content: flex-start;
+	}
+
+	.profile-stage-action-group {
+		grid-template-columns: minmax(0, 1fr);
+		justify-content: stretch;
+		width: 100%;
+		padding-left: 0;
+		border-left: 0;
+	}
+
+	.profile-stage-action-copy {
+		text-align: left;
+	}
+
+	.profile-stage-action-buttons {
+		justify-content: flex-start;
 	}
 
 	.runtime-summary-grid {

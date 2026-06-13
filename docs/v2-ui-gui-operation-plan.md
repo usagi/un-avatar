@@ -40,6 +40,15 @@ Shortcut and launcher UX is a bridge from prepared profiles to daily operation.
 - Launching a profile task starts or focuses the corresponding Renderer according to that profile's multiple-renderer policy.
 - Jump List tasks should expose all visible profile launch tasks and Open Supervisor. Do not impose an app-side fixed count cap.
 
+### Supervisor Profile Workflow
+
+The profile stage presents shortcut, launcher, cache warmup, launch, and live renderer actions as one v2 workflow.
+
+- `Prepare Daily Use` groups cache warmup, desktop shortcut creation, and taskbar launcher setup. It answers "how do I make this profile pleasant to use next time?"
+- `Check Now` launches the selected profile from Supervisor so the user can verify appearance, physics, output, and motion before turning it into daily operation.
+- `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
+- These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
+
 ## v2 UI Rules
 
 - Output resolution and preview window size are separate controls. No button may silently resize the preview when the user asked for an output mode.
@@ -53,7 +62,7 @@ Shortcut and launcher UX is a bridge from prepared profiles to daily operation.
 
 1. Keep Renderer tray output behavior consistent with Supervisor runtime output controls.
 2. Fill missing tray operations only through existing normalized renderer control events.
-3. Polish Supervisor profile action rows so shortcut, launcher, cache warmup, and live renderer actions read as one coherent v2 workflow.
+3. Keep the Supervisor profile workflow visually coherent as shortcut, launcher, cache warmup, and live renderer actions evolve.
 4. Remove development-only compatibility UI labels after v1-to-v2 user migration remains covered.
 5. Add diagnostics that compare Supervisor runtime buttons and Renderer tray behavior for the same output and UNPhysics state.
 
