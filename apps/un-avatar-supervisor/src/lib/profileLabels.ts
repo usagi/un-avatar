@@ -12,6 +12,9 @@ export type MotionLabelData = {
 export type OutputLabelData = {
 	spout_enabled: boolean;
 	spout_name: string | null;
+	spout_width?: number | null;
+	spout_height?: number | null;
+	minimized?: boolean | null;
 };
 
 export type WindowLabelData = {
@@ -57,7 +60,11 @@ export function motionLabel(setting: MotionLabelData): string {
 }
 
 export function outputLabel(setting: OutputLabelData): string {
-	return setting.spout_enabled ? (setting.spout_name ? `Spout2 / ${setting.spout_name}` : "Spout2") : "Window";
+	if (!setting.spout_enabled) return "Window Preview";
+	const mode = setting.minimized ? "Spout2 Only" : "Spout2 + Preview";
+	const size = setting.spout_width && setting.spout_height ? ` / ${setting.spout_width} x ${setting.spout_height}` : "";
+	const name = setting.spout_name ? ` / ${setting.spout_name}` : "";
+	return `${mode}${size}${name}`;
 }
 
 export function windowLabel(setting: WindowLabelData): string {
