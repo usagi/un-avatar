@@ -137,6 +137,7 @@ pub struct ImportContext {
 	pub temp_dir: PathBuf,
 	pub initial_wardrobe_set: Option<String>,
 	pub defer_initial_image_decode: bool,
+	pub profile: bool,
 }
 
 impl ImportContext {
@@ -146,6 +147,7 @@ impl ImportContext {
 			temp_dir: PathBuf::from("."),
 			initial_wardrobe_set: None,
 			defer_initial_image_decode: false,
+			profile: false,
 		}
 	}
 }

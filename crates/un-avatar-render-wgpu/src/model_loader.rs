@@ -184,6 +184,7 @@ fn load_document_inner(
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: normalize_wardrobe_set_id(wardrobe_set).map(str::to_string),
 		defer_initial_image_decode,
+		profile,
 	};
 	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 	let result = if ext.eq_ignore_ascii_case("vrm") {

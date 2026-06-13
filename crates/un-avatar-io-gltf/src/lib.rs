@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
@@ -401,6 +402,66 @@ fn collect_glb_image_source_metadata(
 	source_file_path: Option<&Path>,
 	byte_offset_base: u64,
 ) -> Vec<Option<UnaImageSourceMetadata>> {
+	collect_glb_image_source_metadata_inner(root, bin, retain_encoded_indices, source_file_path, byte_offset_base, None)
+}
+
+#[derive(Default)]
+struct GlbImageSourceMetadataProfile {
+	dimensions_ns: AtomicU64,
+	hash_ns: AtomicU64,
+	hash_bytes: AtomicU64,
+}
+
+impl GlbImageSourceMetadataProfile {
+	fn record_dimensions(&self, elapsed: Duration) {
+		self.dimensions_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+	}
+
+	fn record_hash(&self, elapsed: Duration, bytes: usize) {
+		self.hash_ns.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+		self.hash_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+	}
+
+	fn dimensions_ms(&self) -> f64 {
+		self.dimensions_ns.load(Ordering::Relaxed) as f64 / 1_000_000.0
+	}
+
+	fn hash_ms(&self) -> f64 {
+		self.hash_ns.load(Ordering::Relaxed) as f64 / 1_000_000.0
+	}
+
+	fn hash_mb(&self) -> f64 {
+		self.hash_bytes.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0)
+	}
+}
+
+fn collect_glb_image_source_metadata_profiled(
+	root: &Value,
+	bin: &[u8],
+	retain_encoded_indices: Option<&BTreeSet<usize>>,
+	source_file_path: Option<&Path>,
+	byte_offset_base: u64,
+) -> (Vec<Option<UnaImageSourceMetadata>>, GlbImageSourceMetadataProfile) {
+	let profile = GlbImageSourceMetadataProfile::default();
+	let metadata = collect_glb_image_source_metadata_inner(
+		root,
+		bin,
+		retain_encoded_indices,
+		source_file_path,
+		byte_offset_base,
+		Some(&profile),
+	);
+	(metadata, profile)
+}
+
+fn collect_glb_image_source_metadata_inner(
+	root: &Value,
+	bin: &[u8],
+	retain_encoded_indices: Option<&BTreeSet<usize>>,
+	source_file_path: Option<&Path>,
+	byte_offset_base: u64,
+	profile: Option<&GlbImageSourceMetadataProfile>,
+) -> Vec<Option<UnaImageSourceMetadata>> {
 	let Some(images) = root.get("images").and_then(Value::as_array) else {
 		return Vec::new();
 	};
@@ -438,6 +499,7 @@ fn collect_glb_image_source_metadata(
 							retain_encoded,
 							source_file_path,
 							byte_offset_base,
+							profile,
 						),
 					));
 				}
@@ -467,6 +529,7 @@ fn glb_image_source_metadata_from_json_image(
 	retain_encoded: bool,
 	source_file_path: Option<&Path>,
 	byte_offset_base: u64,
+	profile: Option<&GlbImageSourceMetadataProfile>,
 ) -> Option<UnaImageSourceMetadata> {
 	let sampler = samplers.get(image_index).copied().flatten();
 	let name = image.get("name").and_then(Value::as_str).map(str::to_string);
@@ -518,8 +581,17 @@ fn glb_image_source_metadata_from_json_image(
 	let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
 	let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
 	let bytes = bin.get(offset..offset.checked_add(length)?)?;
+	let dimensions_started = Instant::now();
 	let (width, height) = encoded_image_dimensions(bytes, mime_type.as_deref());
+	if let Some(profile) = profile {
+		profile.record_dimensions(dimensions_started.elapsed());
+	}
 	let encoded_bytes = (retain_encoded && source_file_path.is_none()).then(|| bytes.to_vec());
+	let hash_started = Instant::now();
+	let source_hash = fnv1a64(bytes);
+	if let Some(profile) = profile {
+		profile.record_hash(hash_started.elapsed(), bytes.len());
+	}
 	Some(UnaImageSourceMetadata {
 		name,
 		mime_type,
@@ -555,7 +627,7 @@ fn glb_image_source_metadata_from_json_image(
 		height,
 		byte_offset: Some(byte_offset_base.saturating_add(offset as u64)),
 		byte_length: bytes.len() as u64,
-		source_hash: fnv1a64(bytes),
+		source_hash,
 		source_file_path: source_file_path.map(Path::to_path_buf),
 		encoded_bytes,
 	})
@@ -577,7 +649,7 @@ fn collect_glb_image_source_metadata_serial(
 		.enumerate()
 		.map(|(image_index, image)| {
 			let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
-			glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers, retain_encoded, None, 0)
+			glb_image_source_metadata_from_json_image(image_index, image, buffer_views, bin, &samplers, retain_encoded, None, 0, None)
 		})
 		.collect()
 }
@@ -10687,13 +10759,30 @@ impl AvatarImporter for GltfImporter {
 							deferred_image_indices_for_decode_selection(Some(&root), decode_image_indices.as_ref());
 						precomputed_decode_image_indices = decode_image_indices;
 						let source_started = Instant::now();
-						original_image_sources = Some(collect_glb_image_source_metadata(
-							&root,
-							&bin,
-							retain_encoded_indices.as_ref(),
-							Some(&path),
-							bin_range.start as u64,
-						));
+						if ctx.profile {
+							let (image_sources, source_profile) = collect_glb_image_source_metadata_profiled(
+								&root,
+								&bin,
+								retain_encoded_indices.as_ref(),
+								Some(&path),
+								bin_range.start as u64,
+							);
+							original_image_sources = Some(image_sources);
+							import_profile_messages.push(format!(
+								"glTF import profile: image_source_metadata.detail dimensions_ms={:.1} hash_ms={:.1} hash_mb={:.1}",
+								source_profile.dimensions_ms(),
+								source_profile.hash_ms(),
+								source_profile.hash_mb()
+							));
+						} else {
+							original_image_sources = Some(collect_glb_image_source_metadata(
+								&root,
+								&bin,
+								retain_encoded_indices.as_ref(),
+								Some(&path),
+								bin_range.start as u64,
+							));
+						}
 						import_profile_messages.push(format!(
 							"glTF import profile: image_source_metadata_ms={}",
 							source_started.elapsed().as_millis()
@@ -10796,13 +10885,25 @@ impl AvatarImporter for GltfImporter {
 					let retain_encoded_indices = deferred_image_indices_for_decode_selection(Some(&root), decode_image_indices.as_ref());
 					precomputed_decode_image_indices = decode_image_indices;
 					let source_started = Instant::now();
-					original_image_sources = Some(collect_glb_image_source_metadata(
-						&root,
-						&bin,
-						retain_encoded_indices.as_ref(),
-						None,
-						0,
-					));
+					if ctx.profile {
+						let (image_sources, source_profile) =
+							collect_glb_image_source_metadata_profiled(&root, &bin, retain_encoded_indices.as_ref(), None, 0);
+						original_image_sources = Some(image_sources);
+						import_profile_messages.push(format!(
+							"glTF import profile: image_source_metadata.detail dimensions_ms={:.1} hash_ms={:.1} hash_mb={:.1}",
+							source_profile.dimensions_ms(),
+							source_profile.hash_ms(),
+							source_profile.hash_mb()
+						));
+					} else {
+						original_image_sources = Some(collect_glb_image_source_metadata(
+							&root,
+							&bin,
+							retain_encoded_indices.as_ref(),
+							None,
+							0,
+						));
+					}
 					import_profile_messages.push(format!(
 						"glTF import profile: image_source_metadata_ms={}",
 						source_started.elapsed().as_millis()
