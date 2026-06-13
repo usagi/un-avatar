@@ -44,7 +44,7 @@ export type DiagnosticsBundleStats = {
 	issueRenderers: number;
 	notifications: number;
 	profiles: number;
-	tray: number;
+	launcher: number;
 	spoutActive: number;
 	spoutFailures: number;
 	spoutConsecutiveFailures: number;
@@ -225,7 +225,7 @@ export function diagnosticsBundleStats(bundle: Record<string, unknown>): Diagnos
 	const nativeNotifications = objectField(bundle, "native_notifications");
 	const profiles = objectField(bundle, "profiles");
 	const profileSettings = arrayField(profiles, "settings");
-	const trayLaunchSettings = arrayField(profiles, "tray_launch_settings");
+	const launcherSettings = profileLauncherSettings(profiles);
 	let connected = 0;
 	let issueRenderers = 0;
 	let spoutActive = 0;
@@ -266,7 +266,7 @@ export function diagnosticsBundleStats(bundle: Record<string, unknown>): Diagnos
 		issueRenderers,
 		notifications: notifications.length,
 		profiles: profileSettings.length,
-		tray: trayLaunchSettings.length,
+		launcher: launcherSettings.length,
 		spoutActive,
 		spoutFailures,
 		spoutConsecutiveFailures,
@@ -361,7 +361,7 @@ export function diagnosticsBundleSummary(bundle: Record<string, unknown>): Diagn
 	const nativeNotifications = objectField(bundle, "native_notifications");
 	const profiles = objectField(bundle, "profiles");
 	const profileSettings = arrayField(profiles, "settings");
-	const trayLaunchSettings = arrayField(profiles, "tray_launch_settings");
+	const launcherSettings = profileLauncherSettings(profiles);
 	let connectedRenderers = 0;
 	let issueRenderers = 0;
 	let spoutActive = 0;
@@ -414,7 +414,7 @@ export function diagnosticsBundleSummary(bundle: Record<string, unknown>): Diagn
 		},
 		{
 			label: "Profiles",
-			value: `${profileSettings.length} settings / ${trayLaunchSettings.length} tray`,
+			value: `${profileSettings.length} settings / ${launcherSettings.length} launcher`,
 		},
 		{
 			label: "Git",
@@ -538,9 +538,9 @@ export function diagnosticsComparisonDetails(
 		},
 		{
 			label: "Profiles",
-			before: `${leftStats.profiles} settings / ${leftStats.tray} tray`,
-			after: `${rightStats.profiles} settings / ${rightStats.tray} tray`,
-			level: leftStats.profiles === rightStats.profiles && leftStats.tray === rightStats.tray ? "info" : "warning",
+			before: `${leftStats.profiles} settings / ${leftStats.launcher} launcher`,
+			after: `${rightStats.profiles} settings / ${rightStats.launcher} launcher`,
+			level: leftStats.profiles === rightStats.profiles && leftStats.launcher === rightStats.launcher ? "info" : "warning",
 		},
 		{
 			label: "Spout",
@@ -651,6 +651,11 @@ export function arrayField(value: unknown, key: string): Record<string, unknown>
 	return Array.isArray(field)
 		? field.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
 		: [];
+}
+
+function profileLauncherSettings(profiles: Record<string, unknown>): Record<string, unknown>[] {
+	const launcherSettings = arrayField(profiles, "launcher_settings");
+	return launcherSettings.length > 0 ? launcherSettings : arrayField(profiles, "tray_launch_settings");
 }
 
 export function stringField(value: Record<string, unknown>, key: string): string | null {

@@ -825,6 +825,8 @@ struct SupervisorProfileDiagnostics {
 	seed_dir: String,
 	user_dir: String,
 	settings: Vec<AvatarSetting>,
+	launcher_settings: Vec<AvatarSetting>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	tray_launch_settings: Vec<AvatarSetting>,
 	error: Option<String>,
 }
@@ -2555,6 +2557,7 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 		Ok(settings) => SupervisorProfileDiagnostics {
 			seed_dir: profiles_dir().display().to_string(),
 			user_dir: user_profiles_dir().display().to_string(),
+			launcher_settings: settings.clone(),
 			tray_launch_settings: settings.clone(),
 			settings,
 			error: None,
@@ -2563,6 +2566,7 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 			seed_dir: profiles_dir().display().to_string(),
 			user_dir: user_profiles_dir().display().to_string(),
 			settings: Vec::new(),
+			launcher_settings: Vec::new(),
 			tray_launch_settings: Vec::new(),
 			error: Some(error),
 		},
