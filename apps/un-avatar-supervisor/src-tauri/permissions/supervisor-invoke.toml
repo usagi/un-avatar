@@ -41,7 +41,6 @@ commands.allow = [
 	"set_renderer_camera_lock",
 	"set_renderer_apply_vmc_root_translation",
 	"set_renderer_motion_receivers",
-	"set_renderer_spring_bones",
 	"set_renderer_all_dynamics_launch_setting",
 	"set_renderer_dynamics_enabled",
 	"set_renderer_all_dynamics_enabled",
