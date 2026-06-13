@@ -2194,8 +2194,8 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			|| liltoon_like.main_color.main_color_adjust_mask_texture_index.is_some();
 		let matcap = liltoon_like.matcap.enabled_factor > 0.5 || liltoon_like.matcap.texture_index.is_some();
 		let matcap_second = liltoon_like.matcap.second_enabled_factor > 0.5 || liltoon_like.matcap.second_texture_index.is_some();
-		let reflection = liltoon_like.reflection.enabled_factor > 0.5 || liltoon_like.reflection.color_texture_index.is_some();
-		let reflection_cube = liltoon_like.uses_reflection_source_cube() && liltoon_like.reflection.cube_texture_index.is_some();
+		let reflection = lil_enabled(liltoon_like.reflection.enabled_factor);
+		let reflection_cube = liltoon_uses_reflection_cube_texture(liltoon_like);
 		let anisotropy = liltoon_like.reflection.anisotropy_enabled_factor > 0.5
 			|| liltoon_like.reflection.anisotropy_tangent_texture_index.is_some()
 			|| liltoon_like.reflection.anisotropy_scale_mask_texture_index.is_some()
@@ -2283,10 +2283,16 @@ fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
 }
 
 fn liltoon_reflection_texture_index(liltoon_like: &un_avatar_core::UnaLilToonLikeMaterial) -> Option<usize> {
-	liltoon_like
-		.uses_reflection_source_cube()
+	liltoon_uses_reflection_cube_texture(liltoon_like)
 		.then_some(liltoon_like.reflection.cube_texture_index)
 		.flatten()
+}
+
+fn liltoon_uses_reflection_cube_texture(liltoon_like: &un_avatar_core::UnaLilToonLikeMaterial) -> bool {
+	liltoon_like.reflection.cube_texture_index.is_some()
+		&& liltoon_like.uses_reflection_source_cube()
+		&& (liltoon_like.is_gem_profile()
+			|| (lil_enabled(liltoon_like.reflection.enabled_factor) && lil_enabled(liltoon_like.reflection.apply_reflection_factor)))
 }
 
 fn transparent_backpass_enabled(
@@ -11182,6 +11188,8 @@ mod tests {
 		liltoon.matcap.texture_index = Some(11);
 		liltoon.emission.texture_index = Some(12);
 		liltoon.fur.mask_texture_index = Some(13);
+		liltoon.reflection.cube_texture_index = Some(14);
+		liltoon.reflection.cube_override_factor = 1.0;
 		let mut mat = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			base_color_texture_index: Some(3),
@@ -11196,8 +11204,10 @@ mod tests {
 		liltoon.matcap.enabled_factor = 1.0;
 		liltoon.emission.enabled_factor = 1.0;
 		liltoon.fur.enabled_factor = 1.0;
+		liltoon.reflection.enabled_factor = 1.0;
 
 		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13]);
+		assert_eq!(material_cube_texture_indices(&mat), vec![14]);
 	}
 
 	#[test]
@@ -12676,6 +12686,9 @@ mod tests {
 		assert_eq!(liltoon_reflection_texture_index(&normal), None);
 
 		normal.reflection.cube_override_factor = 1.0;
+		assert_eq!(liltoon_reflection_texture_index(&normal), None);
+
+		normal.reflection.enabled_factor = 1.0;
 		assert_eq!(liltoon_reflection_texture_index(&normal), Some(42));
 	}
 
