@@ -14,6 +14,7 @@ v2 の実装対象は、その中の bone dynamics layer である UNDynamics �
 Solver / renderer / wardrobe runtime の public boundary では、可能な限り `UNDynamics` の語彙を使う。
 `SpringBoneSimulator` など既存名は互換 shim として段階的に残してよいが、新しい behavior を SpringBone 固有 API に直接足さない。
 SpringBone を v2 physics model の基準にはしない。v1 solver は実装資産であり、UNDynamics runtime model の設計基準ではない。
+Profile / manifest schema では `[physics.dynamics]` を UNPhysics / UNDynamics の正本境界にし、solver backend 調整は `[physics.dynamics.solver]` に置く。旧 `[physics.spring_bone]` は v1 / 開発中 profile の読み込み互換であり、新規保存先にはしない。
 
 ## Design Boundary
 

@@ -257,6 +257,8 @@ pub(crate) struct PhysicsManifest {
 	pub bone_colliders: Option<BoneCollidersManifest>,
 	pub contacts: Option<ContactsPhysicsManifest>,
 	pub dynamics: Option<DynamicsPhysicsManifest>,
+	/// v1/v2 development-era compatibility. v2 canonical profile schema uses
+	/// `[physics.dynamics.solver]`.
 	pub spring_bone: Option<SpringBonePhysicsConfig>,
 }
 
@@ -265,6 +267,7 @@ pub(crate) struct PhysicsManifest {
 pub(crate) struct DynamicsPhysicsManifest {
 	pub enabled: Option<bool>,
 	pub enable_all_on_launch: Option<bool>,
+	pub solver: Option<SpringBonePhysicsConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -921,11 +924,11 @@ impl PhysicsManifest {
 		if let Some(contacts) = self.contacts {
 			contacts.apply_to(opts);
 		}
-		if let Some(dynamics) = self.dynamics {
-			dynamics.apply_to(opts);
-		}
 		if let Some(spring_bone) = self.spring_bone {
 			opts.spring_bone_physics = spring_bone.normalized();
+		}
+		if let Some(dynamics) = self.dynamics {
+			dynamics.apply_to(opts);
 		}
 	}
 }
@@ -937,6 +940,9 @@ impl DynamicsPhysicsManifest {
 		}
 		if let Some(enabled) = self.enable_all_on_launch {
 			opts.dynamics_enable_all_on_launch = enabled;
+		}
+		if let Some(solver) = self.solver {
+			opts.spring_bone_physics = solver.normalized();
 		}
 	}
 }
@@ -1275,16 +1281,16 @@ parameter_emission = true
 [physics.dynamics]
 enable_all_on_launch = true
 
-[physics.spring_bone]
+[physics.dynamics.solver]
 simulation_hz = 240
 substeps = 2
 
-[[physics.spring_bone.categories]]
+[[physics.dynamics.solver.categories]]
 id = "ears"
 name = "Ears"
 matches = ["ears", "耳", "ミミ"]
 
-[[physics.spring_bone.overrides]]
+[[physics.dynamics.solver.overrides]]
 category = "ears"
 solver = "xpbd"
 damping_half_life_ms = 90
@@ -1383,6 +1389,32 @@ constraint_iterations = 6
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.xpbd_compliance, Some(0.02));
 		assert_eq!(opts.spring_bone_physics.overrides[0].params.constraint_iterations, Some(6));
+	}
+
+	#[test]
+	fn toml_manifest_reads_legacy_spring_bone_solver_schema() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[physics.spring_bone]
+simulation_hz = 120
+substeps = 3
+
+[[physics.spring_bone.overrides]]
+category = "hair"
+solver = "xpbd"
+xpbd_compliance = 0.03
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert_eq!(opts.spring_bone_physics.simulation_hz, 120.0);
+		assert_eq!(opts.spring_bone_physics.substeps, 3);
+		assert_eq!(opts.spring_bone_physics.overrides[0].category, "hair");
+		assert_eq!(
+			opts.spring_bone_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+		);
 	}
 
 	#[test]

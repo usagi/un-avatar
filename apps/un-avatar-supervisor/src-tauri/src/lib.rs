@@ -1666,7 +1666,7 @@ struct ManifestPhysics {
 	bone_colliders: Option<ManifestBoneColliders>,
 	contacts: Option<ManifestContactsPhysics>,
 	dynamics: Option<ManifestDynamicsPhysics>,
-	spring_bone: Option<ManifestSpringBonePhysics>,
+	spring_bone: Option<ManifestDynamicsSolverPhysics>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1681,19 +1681,20 @@ struct ManifestContactsPhysics {
 struct ManifestDynamicsPhysics {
 	enabled: Option<bool>,
 	enable_all_on_launch: Option<bool>,
+	solver: Option<ManifestDynamicsSolverPhysics>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct ManifestSpringBonePhysics {
+struct ManifestDynamicsSolverPhysics {
 	simulation_hz: Option<f32>,
 	substeps: Option<u32>,
-	overrides: Option<Vec<ManifestSpringBoneCategoryOverride>>,
+	overrides: Option<Vec<ManifestDynamicsSolverCategoryOverride>>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct ManifestSpringBoneCategoryOverride {
+struct ManifestDynamicsSolverCategoryOverride {
 	category: String,
 	solver: Option<String>,
 	damping_half_life_ms: Option<f32>,
@@ -3991,6 +3992,8 @@ fn apply_avatar_setting_value(
 		| "spring_bones"
 		| "physics.contacts.parameter_emission"
 		| "physics.dynamics.enable_all_on_launch"
+		| "physics.dynamics.solver.simulation_hz"
+		| "physics.dynamics.solver.substeps"
 		| "physics.spring_bone.simulation_hz"
 		| "physics.spring_bone.substeps" => {
 			apply_physics_setting_value(manifest, setting, field, value)?;
@@ -4466,18 +4469,23 @@ fn apply_physics_setting_value(
 		"physics.dynamics.enable_all_on_launch" => {
 			set_nested_json_bool(manifest, &["physics", "dynamics", "enable_all_on_launch"], &value, field)
 		}
-		"physics.spring_bone.simulation_hz" => set_nested_ranged_float(
+		"physics.dynamics.solver.simulation_hz" | "physics.spring_bone.simulation_hz" => set_nested_ranged_float(
 			manifest,
-			&["physics", "spring_bone", "simulation_hz"],
+			&["physics", "dynamics", "solver", "simulation_hz"],
 			&value,
 			field,
 			30.0..=240.0,
 			"[30, 240]",
 		),
-		"physics.spring_bone.substeps" => {
-			set_nested_ranged_u32(manifest, &["physics", "spring_bone", "substeps"], &value, field, 1..=8, "[1, 8]")
-		}
-		field if field.starts_with("physics.spring_bone.overrides.") => {
+		"physics.dynamics.solver.substeps" | "physics.spring_bone.substeps" => set_nested_ranged_u32(
+			manifest,
+			&["physics", "dynamics", "solver", "substeps"],
+			&value,
+			field,
+			1..=8,
+			"[1, 8]",
+		),
+		field if field.starts_with("physics.dynamics.solver.overrides.") || field.starts_with("physics.spring_bone.overrides.") => {
 			apply_spring_bone_category_override_value(manifest, setting, field, value)
 		}
 		"physics.bone_colliders.enabled" => {
@@ -7920,7 +7928,7 @@ fn builtin_spring_bone_categories() -> &'static [(&'static str, &'static str)] {
 }
 
 fn spring_bone_category_override_settings(
-	physics: Option<&ManifestSpringBonePhysics>,
+	physics: Option<&ManifestDynamicsSolverPhysics>,
 	avatar_path: Option<&PathBuf>,
 	manifest_path: &Path,
 ) -> Vec<SpringBoneCategoryOverrideSetting> {
@@ -8245,7 +8253,9 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 	let bone_colliders = physics.and_then(|physics| physics.bone_colliders.as_ref());
 	let contacts = physics.and_then(|physics| physics.contacts.as_ref());
 	let dynamics = physics.and_then(|physics| physics.dynamics.as_ref());
-	let spring_bone_physics = physics.and_then(|physics| physics.spring_bone.as_ref());
+	let dynamics_solver = dynamics
+		.and_then(|dynamics| dynamics.solver.as_ref())
+		.or_else(|| physics.and_then(|physics| physics.spring_bone.as_ref()));
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
 		dynamics_enabled: dynamics.and_then(|dynamics| dynamics.enabled),
@@ -8253,14 +8263,14 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 		contact_parameter_emission: contacts
 			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
 			.unwrap_or(false),
-		dynamics_physics_configured: spring_bone_physics.is_some(),
-		dynamics_simulation_hz: spring_bone_physics
+		dynamics_physics_configured: dynamics_solver.is_some(),
+		dynamics_simulation_hz: dynamics_solver
 			.and_then(|physics| physics.simulation_hz)
 			.filter(|value| value.is_finite())
 			.unwrap_or(60.0)
 			.clamp(30.0, 240.0),
-		dynamics_substeps: spring_bone_physics.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
-		dynamics_category_overrides: spring_bone_category_override_settings(spring_bone_physics, avatar_path, manifest_path),
+		dynamics_substeps: dynamics_solver.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
+		dynamics_category_overrides: spring_bone_category_override_settings(dynamics_solver, avatar_path, manifest_path),
 		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
@@ -8828,7 +8838,8 @@ fn apply_spring_bone_category_override_value(
 	value: serde_json::Value,
 ) -> Result<(), String> {
 	let rest = field
-		.strip_prefix("physics.spring_bone.overrides.")
+		.strip_prefix("physics.dynamics.solver.overrides.")
+		.or_else(|| field.strip_prefix("physics.spring_bone.overrides."))
 		.ok_or_else(|| format!("invalid Dynamics override field: {field}"))?;
 	let (category, key) = rest
 		.split_once('.')
@@ -8877,9 +8888,8 @@ fn apply_spring_bone_category_override_value(
 }
 
 fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) -> Option<String> {
-	manifest
-		.get("physics")?
-		.get("spring_bone")?
+	dynamics_solver_table(manifest)
+		.or_else(|| manifest.get("physics")?.get("spring_bone"))?
 		.get("overrides")?
 		.as_array()?
 		.iter()
@@ -9052,12 +9062,12 @@ fn replace_spring_bone_category_override<const N: usize>(
 	values: [(String, toml::Value); N],
 ) -> Result<(), String> {
 	remove_spring_bone_category_override(manifest, category)?;
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let overrides = spring_bone
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let overrides = solver
 		.entry("overrides".to_string())
 		.or_insert_with(|| toml::Value::Array(Vec::new()))
 		.as_array_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides must be an array".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides must be an array".to_string())?;
 	let mut table = toml::map::Map::new();
 	table.insert("category".to_string(), toml::Value::String(category.to_string()));
 	for (key, value) in values {
@@ -9073,12 +9083,12 @@ fn set_spring_bone_category_override_value(
 	key: &str,
 	value: toml::Value,
 ) -> Result<(), String> {
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let overrides = spring_bone
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let overrides = solver
 		.entry("overrides".to_string())
 		.or_insert_with(|| toml::Value::Array(Vec::new()))
 		.as_array_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides must be an array".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides must be an array".to_string())?;
 	let index = overrides
 		.iter()
 		.position(|item| {
@@ -9095,14 +9105,14 @@ fn set_spring_bone_category_override_value(
 		});
 	let table = overrides[index]
 		.as_table_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides item must be a table".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides item must be a table".to_string())?;
 	table.insert(key.to_string(), value);
 	Ok(())
 }
 
 fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &str) -> Result<(), String> {
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let Some(overrides) = spring_bone.get_mut("overrides").and_then(toml::Value::as_array_mut) else {
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let Some(overrides) = solver.get_mut("overrides").and_then(toml::Value::as_array_mut) else {
 		return Ok(());
 	};
 	overrides.retain(|item| {
@@ -9115,18 +9125,27 @@ fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &s
 	Ok(())
 }
 
-fn spring_bone_table_mut(manifest: &mut toml::Value) -> Result<&mut toml::map::Map<String, toml::Value>, String> {
+fn dynamics_solver_table(manifest: &toml::Value) -> Option<&toml::Value> {
+	manifest.get("physics")?.get("dynamics")?.get("solver")
+}
+
+fn dynamics_solver_table_mut(manifest: &mut toml::Value) -> Result<&mut toml::map::Map<String, toml::Value>, String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let physics = table
 		.entry("physics".to_string())
 		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
 		.as_table_mut()
 		.ok_or_else(|| "physics must be a table".to_string())?;
-	physics
-		.entry("spring_bone".to_string())
+	let dynamics = physics
+		.entry("dynamics".to_string())
 		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
 		.as_table_mut()
-		.ok_or_else(|| "physics.spring_bone must be a table".to_string())
+		.ok_or_else(|| "physics.dynamics must be a table".to_string())?;
+	dynamics
+		.entry("solver".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "physics.dynamics.solver must be a table".to_string())
 }
 
 /// `[camera] target = [x, y, z]` の特定軸だけを更新する。
@@ -10873,31 +10892,33 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.mode",
+			"physics.dynamics.solver.overrides.ears.mode",
 			serde_json::json!("override_xpbd"),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.xpbd_compliance",
+			"physics.dynamics.solver.overrides.ears.xpbd_compliance",
 			serde_json::json!(0.015),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.constraint_iterations",
+			"physics.dynamics.solver.overrides.ears.constraint_iterations",
 			serde_json::json!(8),
 		)
 		.unwrap();
 
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
+		assert!(manifest.get("physics").and_then(|v| v.get("spring_bone")).is_none());
 		assert_eq!(overrides.len(), 1);
 		let item = overrides[0].as_table().expect("override item");
 		assert_eq!(item.get("category").and_then(toml::Value::as_str), Some("ears"));
@@ -10908,13 +10929,14 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.preset",
+			"physics.dynamics.solver.overrides.ears.preset",
 			serde_json::json!("snappy"),
 		)
 		.unwrap();
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
@@ -10926,13 +10948,14 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.mode",
+			"physics.dynamics.solver.overrides.ears.mode",
 			serde_json::json!("authored"),
 		)
 		.unwrap();
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
