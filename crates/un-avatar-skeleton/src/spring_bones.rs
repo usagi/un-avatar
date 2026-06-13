@@ -842,6 +842,7 @@ fn step_group(
 		* group.parameters.gravity_power
 		* rt.params.gravity_scale;
 	let is_xpbd = matches!(rt.params.solver, SpringBoneSolver::Xpbd);
+	let limit_max_angle_rad = group.limit.and_then(undynamics_cone_limit_angle_rad);
 
 	for joint in &mut rt.joints {
 		if joint.parent_node >= world_scratch.len() || joint.child_node >= scene.nodes.len() {
@@ -887,7 +888,7 @@ fn step_group(
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);
 				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
-				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 				let t_collision = profile.is_some().then(Instant::now);
 				next_tail = constrain_tail_colliders(
@@ -903,13 +904,13 @@ fn step_group(
 				}
 				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
-				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 			}
 		} else {
 			joint.rest_lambda = 0.0;
 			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
-			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
 			let t_collision = profile.is_some().then(Instant::now);
 			next_tail = constrain_tail_colliders(
@@ -925,7 +926,7 @@ fn step_group(
 			}
 			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
 			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
-			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, group.limit);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 		}
 
 		// 回転補正: rest pose の axis (target_axis_world) を実際の axis (next_tail - child_pos) に向ける。
@@ -1010,8 +1011,8 @@ fn constrain_tail_length_range(next_tail: Vec3, child_pos: Vec3, fallback_axis: 
 	child_pos + dir * distance
 }
 
-fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32, limit: Option<&UnaDynamicsLimit>) -> Vec3 {
-	let Some(max_angle_rad) = limit.and_then(undynamics_cone_limit_angle_rad) else {
+fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32, max_angle_rad: Option<f32>) -> Vec3 {
+	let Some(max_angle_rad) = max_angle_rad else {
 		return next_tail;
 	};
 	let rest_axis = fallback_axis.normalize_or_zero();
