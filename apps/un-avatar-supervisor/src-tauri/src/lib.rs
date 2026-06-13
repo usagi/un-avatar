@@ -1,7 +1,7 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	env, fs,
-	io::{BufRead, BufReader},
+	io::{BufRead, BufReader, Read, Seek, SeekFrom},
 	net::SocketAddr,
 	path::{Path, PathBuf},
 	process::{Child, ChildStderr, Command, Stdio},
@@ -48,6 +48,7 @@ fn app_title_with_version() -> String {
 const MAX_RENDERER_LOG_LINES: usize = 120;
 const MAX_STOPPED_RENDERER_HISTORY: usize = 20;
 const MAX_DIAGNOSTICS_PREVIEW_BYTES: u64 = 1024 * 1024;
+const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -495,6 +496,12 @@ struct UnavatarMetadataInfo {
 struct UnavatarPreviewImage {
 	view: Option<String>,
 	data_url: String,
+}
+
+#[derive(Clone, Debug)]
+enum GltfMetadataSource {
+	Glb { path: PathBuf, bin_offset: u64 },
+	Json { path: PathBuf, bytes: Vec<u8> },
 }
 
 #[derive(Clone, Serialize)]
@@ -3118,8 +3125,7 @@ fn read_unavatar_metadata(
 	if !resolved.is_file() {
 		return Err(format!("avatar file not found: {}", resolved.display()));
 	}
-	let bytes = fs::read(&resolved).map_err(|e| format!("read {}: {e}", resolved.display()))?;
-	let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let (root, source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
 	let Some(unavatar) = root.get("extensions").and_then(|extensions| extensions.get("UN_avatar")) else {
 		return Ok(None);
 	};
@@ -3170,20 +3176,19 @@ fn read_unavatar_metadata(
 			.unwrap_or_default(),
 		modular_avatar_component_count,
 		redistribution_allowed: provenance.get("redistributionAllowed").and_then(serde_json::Value::as_bool),
-		preview_images: unavatar_preview_images(unavatar, &root, &bytes, &resolved, wardrobe_set.as_deref()),
+		preview_images: unavatar_preview_images(unavatar, &root, &source, wardrobe_set.as_deref()),
 	}))
 }
 
 fn unavatar_preview_images(
 	unavatar: &serde_json::Value,
 	root: &serde_json::Value,
-	source_bytes: &[u8],
-	path: &Path,
+	source: &GltfMetadataSource,
 	wardrobe_set: Option<&str>,
 ) -> Vec<UnavatarPreviewImage> {
-	let mut out = unavatar_wardrobe_preview_images(unavatar, root, source_bytes, wardrobe_set);
+	let mut out = unavatar_wardrobe_preview_images(unavatar, root, source, wardrobe_set);
 	if out.is_empty() {
-		if let Some(data_url) = unavatar_sample_screenshot_data_url(unavatar, root, source_bytes, path) {
+		if let Some(data_url) = unavatar_sample_screenshot_data_url(unavatar, root, source) {
 			out.push(UnavatarPreviewImage { view: None, data_url });
 		}
 	}
@@ -3193,7 +3198,7 @@ fn unavatar_preview_images(
 fn unavatar_wardrobe_preview_images(
 	unavatar: &serde_json::Value,
 	root: &serde_json::Value,
-	source_bytes: &[u8],
+	source: &GltfMetadataSource,
 	wardrobe_set: Option<&str>,
 ) -> Vec<UnavatarPreviewImage> {
 	let Some(wardrobe) = unavatar.get("wardrobe") else {
@@ -3229,7 +3234,7 @@ fn unavatar_wardrobe_preview_images(
 		.take(6)
 		.filter_map(|preview| {
 			let buffer_view = preview.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
-			let bytes = gltf_buffer_view_bytes(root, source_bytes, buffer_view)?;
+			let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
 			let mime = preview
 				.get("mimeType")
 				.and_then(serde_json::Value::as_str)
@@ -3251,12 +3256,11 @@ fn unavatar_set_preview_images(set: &serde_json::Value) -> Option<&Vec<serde_jso
 fn unavatar_sample_screenshot_data_url(
 	unavatar: &serde_json::Value,
 	root: &serde_json::Value,
-	source_bytes: &[u8],
-	path: &Path,
+	source: &GltfMetadataSource,
 ) -> Option<String> {
 	let index = unavatar_preview_image_index(unavatar)? as usize;
 	let image = root.get("images")?.as_array()?.get(index)?;
-	let bytes = gltf_image_bytes(image, root, source_bytes, path)?;
+	let bytes = gltf_image_bytes_from_metadata_source(image, root, source)?;
 	let mime = image_mime_type(image, "")?;
 	Some(format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)))
 }
@@ -3294,17 +3298,116 @@ fn unavatar_preview_image_index(unavatar: &serde_json::Value) -> Option<u64> {
 	None
 }
 
-fn gltf_buffer_view_bytes(root: &serde_json::Value, source_bytes: &[u8], buffer_view_index: usize) -> Option<Vec<u8>> {
+fn read_gltf_metadata_root_and_source(path: &Path) -> Result<(serde_json::Value, GltfMetadataSource), String> {
+	let mut file = fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+	let mut header = [0u8; 12];
+	let read = file.read(&mut header).map_err(|e| format!("read {} header: {e}", path.display()))?;
+	if read == header.len() && &header[0..4] == b"glTF" && u32::from_le_bytes(header[4..8].try_into().expect("slice")) == 2 {
+		let mut json: Option<Vec<u8>> = None;
+		let mut bin_offset: Option<u64> = None;
+		loop {
+			let mut chunk_header = [0u8; 8];
+			match file.read_exact(&mut chunk_header) {
+				Ok(()) => {}
+				Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+				Err(e) => return Err(format!("read {} GLB chunk header: {e}", path.display())),
+			}
+			let length = u32::from_le_bytes(chunk_header[0..4].try_into().expect("slice")) as u64;
+			let chunk_type = u32::from_le_bytes(chunk_header[4..8].try_into().expect("slice"));
+			let payload_offset = file
+				.stream_position()
+				.map_err(|e| format!("tell {} GLB chunk: {e}", path.display()))?;
+			match chunk_type {
+				0x4E4F534A => {
+					let mut bytes = vec![0u8; length as usize];
+					file.read_exact(&mut bytes)
+						.map_err(|e| format!("read {} GLB JSON chunk: {e}", path.display()))?;
+					json = Some(bytes);
+				}
+				0x004E4942 => {
+					bin_offset = Some(payload_offset);
+					file.seek(SeekFrom::Current(length as i64))
+						.map_err(|e| format!("skip {} GLB BIN chunk: {e}", path.display()))?;
+				}
+				_ => {
+					file.seek(SeekFrom::Current(length as i64))
+						.map_err(|e| format!("skip {} GLB chunk: {e}", path.display()))?;
+				}
+			}
+			if json.is_some() && bin_offset.is_some() {
+				break;
+			}
+		}
+		let json = json.ok_or_else(|| format!("GLB JSON chunk is missing in {}", path.display()))?;
+		let root = serde_json::from_slice::<serde_json::Value>(&json).map_err(|e| format!("GLB JSON: {e}"))?;
+		return Ok((
+			root,
+			GltfMetadataSource::Glb {
+				path: path.to_path_buf(),
+				bin_offset: bin_offset.unwrap_or(0),
+			},
+		));
+	}
+
+	file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {}: {e}", path.display()))?;
+	let mut bytes = Vec::new();
+	file.read_to_end(&mut bytes).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let root = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| format!("glTF JSON: {e}"))?;
+	Ok((
+		root,
+		GltfMetadataSource::Json {
+			path: path.to_path_buf(),
+			bytes,
+		},
+	))
+}
+
+fn gltf_image_bytes_from_metadata_source(
+	image: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<Vec<u8>> {
+	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
+		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
+			return BASE64_STANDARD.decode(encoded).ok();
+		}
+		return fs::read(gltf_metadata_source_path(source).parent()?.join(uri)).ok();
+	}
+	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
+	gltf_buffer_view_bytes_from_source(root, source, buffer_view_index)
+}
+
+fn gltf_metadata_source_path(source: &GltfMetadataSource) -> &Path {
+	match source {
+		GltfMetadataSource::Glb { path, .. } | GltfMetadataSource::Json { path, .. } => path,
+	}
+}
+
+fn gltf_buffer_view_bytes_from_source(root: &serde_json::Value, source: &GltfMetadataSource, buffer_view_index: usize) -> Option<Vec<u8>> {
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
 	if buffer_view.get("buffer").and_then(serde_json::Value::as_u64).unwrap_or(0) != 0 {
 		return None;
 	}
-	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
-	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())? as usize;
-	let glb = gltf::Glb::from_slice(source_bytes).ok()?;
-	let bin = glb.bin?;
-	let end = offset.checked_add(length)?;
-	Some(bin.get(offset..end)?.to_vec())
+	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0);
+	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())?;
+	if length > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
+		return None;
+	}
+	match source {
+		GltfMetadataSource::Glb { path, bin_offset } => {
+			let start = bin_offset.checked_add(offset)?;
+			let mut file = fs::File::open(path).ok()?;
+			file.seek(SeekFrom::Start(start)).ok()?;
+			let mut bytes = vec![0u8; length as usize];
+			file.read_exact(&mut bytes).ok()?;
+			Some(bytes)
+		}
+		GltfMetadataSource::Json { bytes, .. } => {
+			let start = offset as usize;
+			let end = start.checked_add(length as usize)?;
+			bytes.get(start..end).map(|slice| slice.to_vec())
+		}
+	}
 }
 
 #[tauri::command]
@@ -10512,6 +10615,67 @@ mod tests {
 		assert_eq!(metadata.contact_count, 1);
 		assert_eq!(metadata.modular_avatar_component_count, 7);
 		assert_eq!(metadata.redistribution_allowed, Some(false));
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_only_json_and_preview_buffer_view_ranges() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-partial-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let json = r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 1073741824 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Partial UNAvatar" },
+      "wardrobe": {
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "id": "front", "view": "front", "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#;
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let declared_bin_len = 1024_u32 * 1024 * 1024;
+		let total_len = 12_u32 + 8 + json_bytes.len() as u32 + 8 + declared_bin_len;
+		let mut file = fs::File::create(&path).unwrap();
+		file.write_all(&0x46546C67u32.to_le_bytes()).unwrap();
+		file.write_all(&2u32.to_le_bytes()).unwrap();
+		file.write_all(&total_len.to_le_bytes()).unwrap();
+		file.write_all(&(json_bytes.len() as u32).to_le_bytes()).unwrap();
+		file.write_all(&0x4E4F534Au32.to_le_bytes()).unwrap();
+		file.write_all(&json_bytes).unwrap();
+		file.write_all(&declared_bin_len.to_le_bytes()).unwrap();
+		file.write_all(&0x004E4942u32.to_le_bytes()).unwrap();
+		file.write_all(&preview_png).unwrap();
+		drop(file);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Partial UNAvatar"));
+		assert_eq!(metadata.wardrobe_set_count, 1);
 		assert_eq!(metadata.preview_images.len(), 1);
 		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));

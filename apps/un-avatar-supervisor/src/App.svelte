@@ -194,10 +194,12 @@
 	];
 
 	type VrmMetadataModalState = VrmMetadataDialogState & {
+		settingId: string;
 		rendererToRestart: RendererInstance | null;
 	};
 
 	type UnavatarMetadataModalState = UnavatarMetadataDialogState & {
+		settingId: string;
 		rendererToRestart: RendererInstance | null;
 	};
 
@@ -856,12 +858,12 @@
 		}
 	}
 
-	async function readVrmMetadataForPath(path: string): Promise<VrmMetadataInfo | null> {
-		if (!selectedSetting) return null;
+	async function readVrmMetadataForPath(path: string, setting: AvatarSetting | null = selectedSetting): Promise<VrmMetadataInfo | null> {
+		if (!setting) return null;
 		try {
 			return await invoke<VrmMetadataInfo | null>("read_vrm_metadata", {
 				path,
-				manifestPath: selectedSetting.manifest_path,
+				manifestPath: setting.manifest_path,
 			});
 		} catch (error) {
 			if (looksLikeVrmPath(path)) {
@@ -871,12 +873,12 @@
 		}
 	}
 
-	async function readUnavatarMetadataForPath(path: string): Promise<UnavatarMetadataInfo | null> {
-		if (!selectedSetting) return null;
+	async function readUnavatarMetadataForPath(path: string, setting: AvatarSetting | null = selectedSetting): Promise<UnavatarMetadataInfo | null> {
+		if (!setting) return null;
 		return await invoke<UnavatarMetadataInfo | null>("read_unavatar_metadata", {
 			path,
-			manifestPath: selectedSetting.manifest_path,
-			wardrobeSet: selectedSetting.wardrobe_set,
+			manifestPath: setting.manifest_path,
+			wardrobeSet: setting.wardrobe_set,
 		});
 	}
 
@@ -1739,7 +1741,8 @@
 	}
 
 	async function browseSettingPath(field: "avatar_path" | "icon_path", kind: "avatar" | "icon"): Promise<void> {
-		if (!selectedSetting) return;
+		const targetSetting = selectedSetting;
+		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
 			message = "Browser preview: file picker requires Tauri";
 			return;
@@ -1753,11 +1756,11 @@
 				return;
 			}
 			if (field === "avatar_path") {
-				await requestAvatarPathUpdate(path, rendererToRestart);
+				await requestAvatarPathUpdate(path, rendererToRestart, targetSetting);
 				return;
 			}
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_path", {
-				settingId: selectedSetting.id,
+				settingId: targetSetting.id,
 				field,
 				path,
 			});
@@ -1771,14 +1774,18 @@
 		}
 	}
 
-	async function requestAvatarPathUpdate(path: string, rendererToRestart: RendererInstance | null): Promise<void> {
-		if (!selectedSetting) return;
+	async function requestAvatarPathUpdate(
+		path: string,
+		rendererToRestart: RendererInstance | null,
+		targetSetting: AvatarSetting | null = selectedSetting
+	): Promise<void> {
+		if (!targetSetting) return;
 		if (!path.trim()) {
-			await saveAvatarPath(path, rendererToRestart);
+			await saveAvatarPath(path, rendererToRestart, targetSetting.id);
 			return;
 		}
 		if (looksLikeUnavatarPath(path)) {
-			const metadata = await readUnavatarMetadataForPath(path);
+			const metadata = await readUnavatarMetadataForPath(path, targetSetting);
 			if (!metadata) {
 				message = "Selected avatar has no UNAvatar metadata";
 				return;
@@ -1786,29 +1793,35 @@
 			unavatarMetadataModal = {
 				metadata,
 				pendingPath: path,
+				settingId: targetSetting.id,
 				rendererToRestart,
 			};
 			message = $_("unavatar_rights.title");
 			return;
 		}
-		const metadata = await readVrmMetadataForPath(path);
+		const metadata = await readVrmMetadataForPath(path, targetSetting);
 		if (metadata) {
 			vrmMetadataModal = {
 				metadata,
 				pendingPath: path,
+				settingId: targetSetting.id,
 				rendererToRestart,
 			};
 			useThumbnailForProfileIconOnAccept = Boolean(metadata.thumbnail_data_url);
 			message = $_("vrm_metadata.messages.review_before_use");
 			return;
 		}
-		await saveAvatarPath(path, rendererToRestart);
+		await saveAvatarPath(path, rendererToRestart, targetSetting.id);
 	}
 
-	async function saveAvatarPath(path: string, rendererToRestart: RendererInstance | null): Promise<void> {
-		if (!selectedSetting) return;
+	async function saveAvatarPath(
+		path: string,
+		rendererToRestart: RendererInstance | null,
+		settingId: string | null = selectedSetting?.id ?? null
+	): Promise<void> {
+		if (!settingId) return;
 		const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
-			settingId: selectedSetting.id,
+			settingId,
 			field: "avatar_path",
 			value: path,
 		});
@@ -1823,11 +1836,11 @@
 		vrmMetadataModal = null;
 		busy = true;
 		try {
-			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart);
+			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			if (useThumbnailForProfileIconOnAccept && modal.metadata.thumbnail_data_url) {
 				await applySelectedAvatarThumbnail({
 					rendererToRestart: modal.rendererToRestart,
-					settingId: selectedSetting?.manifest_path ?? selectedSetting?.id ?? null,
+					settingId: modal.settingId,
 					avatarPath: modal.pendingPath,
 					manageBusy: false,
 				});
@@ -1847,7 +1860,7 @@
 		unavatarMetadataModal = null;
 		busy = true;
 		try {
-			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart);
+			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			message = $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
 			message = String(error);
@@ -1920,7 +1933,7 @@
 		busy = true;
 		try {
 			if (looksLikeUnavatarPath(selectedSetting.avatar_path)) {
-				const metadata = await readUnavatarMetadataForPath(selectedSetting.avatar_path);
+				const metadata = await readUnavatarMetadataForPath(selectedSetting.avatar_path, selectedSetting);
 				if (!metadata) {
 					message = "Selected avatar has no UNAvatar metadata";
 					return;
@@ -1928,11 +1941,12 @@
 				unavatarMetadataModal = {
 					metadata,
 					pendingPath: null,
+					settingId: selectedSetting.id,
 					rendererToRestart: null,
 				};
 				return;
 			}
-			const metadata = await readVrmMetadataForPath(selectedSetting.avatar_path);
+			const metadata = await readVrmMetadataForPath(selectedSetting.avatar_path, selectedSetting);
 			if (!metadata) {
 				message = $_("vrm_metadata.messages.no_metadata");
 				return;
@@ -1940,6 +1954,7 @@
 			vrmMetadataModal = {
 				metadata,
 				pendingPath: null,
+				settingId: selectedSetting.id,
 				rendererToRestart: null,
 			};
 		} catch (error) {
@@ -2190,7 +2205,8 @@
 	}
 
 	async function updateSettingValue(field: string, value: ProfileSettingValue): Promise<void> {
-		if (!selectedSetting) return;
+		const targetSetting = selectedSetting;
+		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
 			message = "Browser preview: setting changes require Tauri";
 			return;
@@ -2198,7 +2214,7 @@
 		if (field === "avatar_path" && typeof value === "string") {
 			busy = true;
 			try {
-				await requestAvatarPathUpdate(value, restartableRendererForField(field));
+				await requestAvatarPathUpdate(value, restartableRendererForField(field), targetSetting);
 			} catch (error) {
 				message = String(error);
 			} finally {
@@ -2207,7 +2223,7 @@
 			return;
 		}
 
-		const previousSetting = selectedSetting;
+		const previousSetting = targetSetting;
 		const rendererToRestart = restartableRendererForField(field);
 		try {
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
