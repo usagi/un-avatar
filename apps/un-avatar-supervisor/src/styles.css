@@ -4973,6 +4973,23 @@ textarea {
 	min-height: 15px;
 }
 
+.unavatar-rights-warning {
+	border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+	background:
+		linear-gradient(90deg, color-mix(in srgb, var(--warning) 10%, transparent), transparent 56%),
+		color-mix(in srgb, var(--panel-subtle) 60%, transparent);
+}
+
+.unavatar-rights-checks {
+	display: grid;
+	gap: 8px;
+	margin: 0;
+	padding-left: 18px;
+	color: var(--text);
+	font-size: 13px;
+	line-height: 1.45;
+}
+
 @media (max-width: 760px) {
 	.shell {
 		min-width: 0;

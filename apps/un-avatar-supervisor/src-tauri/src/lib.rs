@@ -472,6 +472,24 @@ struct VrmMetadataInfo {
 	permissions: Vec<VrmMetadataField>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct UnavatarMetadataInfo {
+	path: String,
+	file_name: String,
+	name: Option<String>,
+	spec_version: Option<String>,
+	generator: Option<String>,
+	source_type: Option<String>,
+	export_mode: Option<String>,
+	created_utc: Option<String>,
+	wardrobe_set_count: u32,
+	dynamics_count: u32,
+	contact_count: u32,
+	modular_avatar_component_count: u32,
+	redistribution_allowed: Option<bool>,
+	sample_screenshot_data_url: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 struct UnavatarWardrobeOptions {
 	available: bool,
@@ -2002,6 +2020,7 @@ pub fn run() {
 			create_taskbar_launcher_shortcuts,
 			pick_file_path,
 			read_vrm_metadata,
+			read_unavatar_metadata,
 			save_avatar_thumbnail_icon,
 			read_diagnostics_export,
 			reveal_profiles_dir,
@@ -3080,6 +3099,105 @@ fn read_vrm_metadata(path: String, manifest_path: Option<String>) -> Result<Opti
 		technical_stats: vrm_metadata_technical_stats(vrm, &root, &bytes, &resolved, file_size),
 		permissions: vrm_metadata_permissions(meta),
 	}))
+}
+
+#[tauri::command]
+fn read_unavatar_metadata(path: String, manifest_path: Option<String>) -> Result<Option<UnavatarMetadataInfo>, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let bytes = fs::read(&resolved).map_err(|e| format!("read {}: {e}", resolved.display()))?;
+	let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let Some(unavatar) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+	else {
+		return Ok(None);
+	};
+	let manifest = unavatar.get("manifest").unwrap_or(&serde_json::Value::Null);
+	let provenance = unavatar.get("provenance").unwrap_or(&serde_json::Value::Null);
+	let wardrobe_set_count = unavatar
+		.get("wardrobe")
+		.and_then(|wardrobe| wardrobe.get("sets"))
+		.and_then(serde_json::Value::as_array)
+		.map(|sets| sets.len() as u32)
+		.unwrap_or_default();
+	let modular_avatar_component_count = unavatar
+		.get("modularAvatar")
+		.and_then(|ma| ma.get("componentCount"))
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or_else(|| {
+			unavatar
+				.get("modularAvatar")
+				.and_then(|ma| ma.get("components"))
+				.and_then(serde_json::Value::as_array)
+				.map(|components| components.len() as u64)
+				.unwrap_or_default()
+		}) as u32;
+	let file_name = resolved
+		.file_name()
+		.and_then(|name| name.to_str())
+		.unwrap_or(path.as_str())
+		.to_string();
+	Ok(Some(UnavatarMetadataInfo {
+		path,
+		file_name,
+		name: first_meta_string(manifest, &["name", "title"]),
+		spec_version: first_meta_string(unavatar, &["specVersion", "spec_version"]),
+		generator: first_meta_string(unavatar, &["generator"]),
+		source_type: first_meta_string(manifest, &["sourceType", "source_type"]),
+		export_mode: first_meta_string(manifest, &["exportMode", "export_mode"]),
+		created_utc: first_meta_string(manifest, &["createdUtc", "created_utc"]),
+		wardrobe_set_count,
+		dynamics_count: unavatar.get("dynamics").and_then(serde_json::Value::as_array).map(|v| v.len() as u32).unwrap_or_default(),
+		contact_count: unavatar.get("contacts").and_then(serde_json::Value::as_array).map(|v| v.len() as u32).unwrap_or_default(),
+		modular_avatar_component_count,
+		redistribution_allowed: provenance.get("redistributionAllowed").and_then(serde_json::Value::as_bool),
+		sample_screenshot_data_url: unavatar_sample_screenshot_data_url(unavatar, &root, &bytes, &resolved),
+	}))
+}
+
+fn unavatar_sample_screenshot_data_url(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source_bytes: &[u8],
+	path: &Path,
+) -> Option<String> {
+	let index = unavatar_preview_image_index(unavatar)? as usize;
+	let image = root.get("images")?.as_array()?.get(index)?;
+	let bytes = gltf_image_bytes(image, root, source_bytes, path)?;
+	let mime = image_mime_type(image, "")?;
+	Some(format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)))
+}
+
+fn unavatar_preview_image_index(unavatar: &serde_json::Value) -> Option<u64> {
+	for object in [
+		unavatar.get("preview"),
+		unavatar.get("manifest"),
+		unavatar.get("sample"),
+		unavatar.get("thumbnail"),
+	]
+	.into_iter()
+	.flatten()
+	{
+		for key in ["sampleScreenshotImage", "screenshotImage", "thumbnailImage", "image", "imageIndex"] {
+			if let Some(index) = object.get(key).and_then(serde_json::Value::as_u64) {
+				return Some(index);
+			}
+		}
+	}
+	for key in ["sampleScreenshots", "screenshots", "previews"] {
+		let Some(first) = unavatar.get(key).and_then(serde_json::Value::as_array).and_then(|items| items.first()) else {
+			continue;
+		};
+		for image_key in ["image", "imageIndex", "sampleScreenshotImage", "screenshotImage"] {
+			if let Some(index) = first.get(image_key).and_then(serde_json::Value::as_u64) {
+				return Some(index);
+			}
+		}
+	}
+	None
 }
 
 #[tauri::command]
@@ -10175,6 +10293,58 @@ mod tests {
 		assert_eq!(encoded, "AAAA");
 		assert!(data_image_base64_parts("data:image/svg+xml;base64,AAAA").is_none());
 		assert!(data_image_base64_parts("data:image/png,AAAA").is_none());
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_summary_and_preview_image() {
+		let path = std::env::temp_dir().join(format!("un-avatar-unavatar-metadata-{}.unavatar", crate::current_unix_secs()));
+		fs::write(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "generator": "Unit Test Exporter",
+      "manifest": {
+        "name": "Metadata UNAvatar",
+        "sourceType": "VRChat Avatar",
+        "exportMode": "Split Wardrobe",
+        "createdUtc": "2026-06-14T00:00:00Z",
+        "sampleScreenshotImage": 0
+      },
+      "dynamics": [{}, {}],
+      "contacts": [{}],
+      "wardrobe": { "sets": [{ "id": "base" }, { "id": "field" }] },
+      "modularAvatar": { "componentCount": 7 },
+      "provenance": { "redistributionAllowed": false }
+    }
+  },
+  "images": [
+    {
+      "mimeType": "image/png",
+      "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    }
+  ]
+}"#,
+		)
+		.unwrap();
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None).unwrap().unwrap();
+		let _ = fs::remove_file(&path);
+		assert_eq!(metadata.name.as_deref(), Some("Metadata UNAvatar"));
+		assert_eq!(metadata.spec_version.as_deref(), Some("0.1-preview"));
+		assert_eq!(metadata.generator.as_deref(), Some("Unit Test Exporter"));
+		assert_eq!(metadata.source_type.as_deref(), Some("VRChat Avatar"));
+		assert_eq!(metadata.export_mode.as_deref(), Some("Split Wardrobe"));
+		assert_eq!(metadata.wardrobe_set_count, 2);
+		assert_eq!(metadata.dynamics_count, 2);
+		assert_eq!(metadata.contact_count, 1);
+		assert_eq!(metadata.modular_avatar_component_count, 7);
+		assert_eq!(metadata.redistribution_allowed, Some(false));
+		assert!(metadata
+			.sample_screenshot_data_url
+			.as_deref()
+			.is_some_and(|value: &str| value.starts_with("data:image/png;base64,")));
 	}
 
 	#[test]

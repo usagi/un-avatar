@@ -628,6 +628,27 @@ avatar_selection_canceled = "Avatar selection canceled"
 tauri_required = "Browser preview: VRM metadata requires Tauri"
 no_metadata = "Selected avatar has no VRM metadata"
 
+[unavatar_rights]
+title = ".unavatar Asset Check"
+eyebrow = "Important: Asset Rights Check"
+summary = ".unavatar summary"
+important = "Important: Asset Rights Check"
+body_1 = "UNAvatar cannot determine or display the license, terms of use, rights status, or allowed usage for loaded assets."
+body_2 = "VRM, VRChat avatars, outfits, hair, accessories, textures, motions, and other assets may have conditions set by their distributor or rights holder for streaming, modification, redistribution, credit, expression, monetization, or corporate use."
+body_3 = "Users are responsible for checking those conditions and loading only assets that may be used for their intended purpose."
+body_4 = "UNAvatar, its Author, and its Committers are not involved in and are not responsible for issues arising from asset use, conversion, display, streaming, monetization, or third-party rights relationships."
+confirm_heading = "Confirm the following before continuing."
+check_terms = "I checked the distributor terms, license, store page, bundled documents, or equivalent source."
+check_usage = "I confirmed that this asset can be used for my intended purpose."
+check_responsibility = "I agree to take responsibility for asset usage."
+accept_and_use = "Confirm and Load"
+
+[unavatar_rights.stats]
+wardrobe = "Wardrobe"
+dynamics = "UNPhysics"
+contacts = "Contacts"
+modular_avatar = "Modular Avatar"
+
 [tray]
 open = "Open UN Avatar"
 stop_all = "Stop All Renderers"

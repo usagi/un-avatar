@@ -636,6 +636,27 @@ avatar_selection_canceled = "アバター選択をキャンセルしました"
 tauri_required = "ブラウザプレビューでは VRM メタデータ確認に対応していません"
 no_metadata = "選択中のアバターに VRM メタデータはありません"
 
+[unavatar_rights]
+title = ".unavatar アセット確認"
+eyebrow = "重要: アセットの権利確認"
+summary = ".unavatar summary"
+important = "重要: アセットの権利確認"
+body_1 = "UNAvatar は、読み込まれるアセットのライセンス、利用規約、権利状態、または用途ごとの利用可否を判定/表示できません。"
+body_2 = "VRM、VRChat Avatar、衣装、髪型、アクセサリ、テクスチャ、モーション等のアセットには、配布元または権利者により、配信利用、改変、再配布、クレジット表記、表現内容、収益性、法人利用等に関する条件が設定されている場合があります。"
+body_3 = "これらの条件を確認し、あなたの用途で利用できるアセットだけを読み込む責任は、ユーザー自身にあります。"
+body_4 = "UNAvatar およびその Author ならびに Committer らは、ユーザーによるアセットの利用、変換、表示、配信、収益化、または第三者との権利関係に起因する問題について、関与せず、責任を負いません。"
+confirm_heading = "続行するには、以下を確認してください。"
+check_terms = "配布元の利用規約、ライセンス、販売ページ、同梱文書等を確認した"
+check_usage = "自分の用途で利用できるアセットであることを確認した"
+check_responsibility = "アセット利用に関する責任を自分で負うことに同意する"
+accept_and_use = "確認して読み込む"
+
+[unavatar_rights.stats]
+wardrobe = "Wardrobe"
+dynamics = "UNPhysics"
+contacts = "Contacts"
+modular_avatar = "Modular Avatar"
+
 [tray]
 open = "UN Avatar を開く"
 stop_all = "全 Renderer を停止"

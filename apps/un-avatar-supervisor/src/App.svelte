@@ -37,6 +37,7 @@
 	import RendererReadyStage from "./lib/RendererReadyStage.svelte";
 	import RendererStage from "./lib/RendererStage.svelte";
 	import RenderersToolbar from "./lib/RenderersToolbar.svelte";
+	import UnavatarRightsModal from "./lib/UnavatarRightsModal.svelte";
 	import VrmMetadataModal from "./lib/VrmMetadataModal.svelte";
 	import type {
 		RendererCameraSnapshot,
@@ -46,6 +47,12 @@
 		RendererState,
 	} from "./lib/rendererTypes";
 	import { fallbackVrmMetadata, looksLikeVrmPath, type VrmMetadataDialogState, type VrmMetadataInfo } from "./lib/vrmMetadata";
+	import {
+		fallbackUnavatarMetadata,
+		looksLikeUnavatarPath,
+		type UnavatarMetadataDialogState,
+		type UnavatarMetadataInfo,
+	} from "./lib/unavatarMetadata";
 	import { loadAppSettings, saveAppSettings, type AppSettings, type ThemeMode } from "./lib/appSettings";
 	import type { AppNotification, DiagnosticsExportEntry, NativeNotificationStatus } from "./lib/appTypes";
 	import { cameraOrbitPresetAngles, type CameraOrbitPreset } from "./lib/cameraPresets";
@@ -191,6 +198,10 @@
 		rendererToRestart: RendererInstance | null;
 	};
 
+	type UnavatarMetadataModalState = UnavatarMetadataDialogState & {
+		rendererToRestart: RendererInstance | null;
+	};
+
 	const appSettingsStorageKey = "un-avatar-supervisor.app-settings";
 	const legacyThemeModeStorageKey = "un-avatar-supervisor.theme-mode";
 	const launchTargetStorageKey = "un-avatar-supervisor.launch-target-id";
@@ -252,6 +263,7 @@
 		fieldLabel: string;
 	} | null>(null);
 	let vrmMetadataModal = $state<VrmMetadataModalState | null>(null);
+	let unavatarMetadataModal = $state<UnavatarMetadataModalState | null>(null);
 	let useThumbnailForProfileIconOnAccept = $state(true);
 	let lastDiagnosticsPath = $state<string | null>(null);
 	let lastDiagnosticsArchivePath = $state<string | null>(null);
@@ -855,6 +867,21 @@
 		} catch (error) {
 			if (looksLikeVrmPath(path)) {
 				return fallbackVrmMetadata(path, error, $_);
+			}
+			throw error;
+		}
+	}
+
+	async function readUnavatarMetadataForPath(path: string): Promise<UnavatarMetadataInfo | null> {
+		if (!selectedSetting) return null;
+		try {
+			return await invoke<UnavatarMetadataInfo | null>("read_unavatar_metadata", {
+				path,
+				manifestPath: selectedSetting.manifest_path,
+			});
+		} catch (error) {
+			if (looksLikeUnavatarPath(path)) {
+				return fallbackUnavatarMetadata(path);
 			}
 			throw error;
 		}
@@ -1757,6 +1784,16 @@
 			await saveAvatarPath(path, rendererToRestart);
 			return;
 		}
+		if (looksLikeUnavatarPath(path)) {
+			const metadata = (await readUnavatarMetadataForPath(path)) ?? fallbackUnavatarMetadata(path);
+			unavatarMetadataModal = {
+				metadata,
+				pendingPath: path,
+				rendererToRestart,
+			};
+			message = $_("unavatar_rights.title");
+			return;
+		}
 		const metadata = await readVrmMetadataForPath(path);
 		if (metadata) {
 			vrmMetadataModal = {
@@ -1800,6 +1837,21 @@
 			} else {
 				message = $_("vrm_metadata.messages.updated_after_confirmation");
 			}
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function acceptUnavatarMetadataAndUse(): Promise<void> {
+		const modal = unavatarMetadataModal;
+		if (!modal?.pendingPath) return;
+		unavatarMetadataModal = null;
+		busy = true;
+		try {
+			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart);
+			message = $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1854,6 +1906,14 @@
 		}
 	}
 
+	function closeUnavatarMetadataModal(): void {
+		const wasPending = Boolean(unavatarMetadataModal?.pendingPath);
+		unavatarMetadataModal = null;
+		if (wasPending) {
+			message = $_("vrm_metadata.messages.avatar_selection_canceled");
+		}
+	}
+
 	async function reviewSelectedVrmMetadata(): Promise<void> {
 		if (!selectedSetting?.avatar_path) return;
 		if (!hasTauriRuntime()) {
@@ -1862,6 +1922,15 @@
 		}
 		busy = true;
 		try {
+			if (looksLikeUnavatarPath(selectedSetting.avatar_path)) {
+				const metadata = (await readUnavatarMetadataForPath(selectedSetting.avatar_path)) ?? fallbackUnavatarMetadata(selectedSetting.avatar_path);
+				unavatarMetadataModal = {
+					metadata,
+					pendingPath: null,
+					rendererToRestart: null,
+				};
+				return;
+			}
 			const metadata = await readVrmMetadataForPath(selectedSetting.avatar_path);
 			if (!metadata) {
 				message = $_("vrm_metadata.messages.no_metadata");
@@ -3152,6 +3221,14 @@
 			bind:useThumbnailForProfileIconOnAccept
 			onClose={closeVrmMetadataModal}
 			onAcceptAndUse={acceptVrmMetadataAndUse}
+		/>
+	{/if}
+	{#if unavatarMetadataModal}
+		<UnavatarRightsModal
+			modal={unavatarMetadataModal}
+			{busy}
+			onClose={closeUnavatarMetadataModal}
+			onAcceptAndUse={acceptUnavatarMetadataAndUse}
 		/>
 	{/if}
 </main>

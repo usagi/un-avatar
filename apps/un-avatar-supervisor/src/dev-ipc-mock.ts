@@ -334,6 +334,23 @@ export function installDevIpcMock(): void {
 						{ label: "Redistribution", value: "false" },
 					],
 				};
+			case "read_unavatar_metadata":
+				return {
+					path: String(args.path ?? "assets/example/main.unavatar"),
+					file_name: "main.unavatar",
+					name: "Main UNAvatar",
+					spec_version: "0.1-preview",
+					generator: "UN Avatar Preview",
+					source_type: "VRChat Avatar",
+					export_mode: "Split Wardrobe",
+					created_utc: "2026-06-14T00:00:00Z",
+					wardrobe_set_count: 3,
+					dynamics_count: 12,
+					contact_count: 2,
+					modular_avatar_component_count: 18,
+					redistribution_allowed: null,
+					sample_screenshot_data_url: null,
+				};
 			case "read_unavatar_wardrobe_options":
 				return {
 					available: true,
