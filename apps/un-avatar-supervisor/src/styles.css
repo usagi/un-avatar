@@ -5021,6 +5021,45 @@ textarea {
 	border-radius: 4px;
 }
 
+.unavatar-preview-set-select {
+	width: min(100%, 330px);
+	margin-top: 12px;
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--panel-subtle) 62%, transparent);
+	color: var(--text);
+}
+
+.unavatar-crop-frame {
+	overflow: hidden;
+}
+
+.unavatar-crop-frame .vrm-metadata-thumbnail {
+	will-change: transform;
+}
+
+.unavatar-icon-crop-controls {
+	display: grid;
+	grid-template-columns: minmax(180px, auto) repeat(3, minmax(90px, 140px));
+	align-items: center;
+	gap: 8px;
+	margin-right: auto;
+}
+
+.unavatar-icon-crop-controls label:not(.vrm-thumbnail-icon-toggle) {
+	display: grid;
+	gap: 3px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 700;
+}
+
+.unavatar-icon-crop-controls input[type="range"] {
+	width: 100%;
+	min-width: 90px;
+}
+
 @media (max-width: 760px) {
 	.shell {
 		min-width: 0;

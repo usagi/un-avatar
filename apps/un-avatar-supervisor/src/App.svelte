@@ -51,6 +51,7 @@
 		looksLikeUnavatarPath,
 		type UnavatarMetadataDialogState,
 		type UnavatarMetadataInfo,
+		type UnavatarProfileIconCrop,
 	} from "./lib/unavatarMetadata";
 	import { loadAppSettings, saveAppSettings, type AppSettings, type ThemeMode } from "./lib/appSettings";
 	import type { AppNotification, DiagnosticsExportEntry, NativeNotificationStatus } from "./lib/appTypes";
@@ -266,6 +267,13 @@
 	let vrmMetadataModal = $state<VrmMetadataModalState | null>(null);
 	let unavatarMetadataModal = $state<UnavatarMetadataModalState | null>(null);
 	let useThumbnailForProfileIconOnAccept = $state(true);
+	let unavatarProfileIconCrop = $state<UnavatarProfileIconCrop>({
+		enabled: true,
+		imageDataUrl: null,
+		zoom: 1,
+		offsetX: 0,
+		offsetY: 0,
+	});
 	let lastDiagnosticsPath = $state<string | null>(null);
 	let lastDiagnosticsArchivePath = $state<string | null>(null);
 	let diagnosticsPreviewTitle = $state<string | null>(null);
@@ -1790,6 +1798,13 @@
 				message = "Selected avatar has no UNAvatar metadata";
 				return;
 			}
+			unavatarProfileIconCrop = {
+				enabled: Boolean(metadata.preview_images.length || metadata.preview_sets.some((set) => set.preview_images.length)),
+				imageDataUrl: metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null,
+				zoom: 1,
+				offsetX: 0,
+				offsetY: 0,
+			};
 			unavatarMetadataModal = {
 				metadata,
 				pendingPath: path,
@@ -1861,6 +1876,19 @@
 		busy = true;
 		try {
 			await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
+			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
+				const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
+					settingId: modal.settingId,
+					imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
+					crop: {
+						zoom: Number(unavatarProfileIconCrop.zoom) || 1,
+						offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
+						offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
+					},
+				});
+				replaceAvatarSetting(setting);
+				queueRendererRestart(modal.rendererToRestart, "icon_path");
+			}
 			message = $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
 			message = String(error);
@@ -1938,6 +1966,13 @@
 					message = "Selected avatar has no UNAvatar metadata";
 					return;
 				}
+				unavatarProfileIconCrop = {
+					enabled: false,
+					imageDataUrl: metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null,
+					zoom: 1,
+					offsetX: 0,
+					offsetY: 0,
+				};
 				unavatarMetadataModal = {
 					metadata,
 					pendingPath: null,
@@ -3244,6 +3279,7 @@
 		<UnavatarRightsModal
 			modal={unavatarMetadataModal}
 			{busy}
+			bind:profileIconCrop={unavatarProfileIconCrop}
 			onClose={closeUnavatarMetadataModal}
 			onAcceptAndUse={acceptUnavatarMetadataAndUse}
 		/>

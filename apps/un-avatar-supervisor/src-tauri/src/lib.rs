@@ -490,12 +490,27 @@ struct UnavatarMetadataInfo {
 	modular_avatar_component_count: u32,
 	redistribution_allowed: Option<bool>,
 	preview_images: Vec<UnavatarPreviewImage>,
+	preview_sets: Vec<UnavatarPreviewSet>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct UnavatarPreviewImage {
 	view: Option<String>,
 	data_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct UnavatarPreviewSet {
+	id: String,
+	name: String,
+	preview_images: Vec<UnavatarPreviewImage>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ProfileIconCropRequest {
+	zoom: f32,
+	offset_x: f32,
+	offset_y: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -2036,6 +2051,7 @@ pub fn run() {
 			read_vrm_metadata,
 			read_unavatar_metadata,
 			save_avatar_thumbnail_icon,
+			save_profile_icon_from_data_url,
 			read_diagnostics_export,
 			reveal_profiles_dir,
 			reorder_avatar_settings,
@@ -3154,6 +3170,8 @@ fn read_unavatar_metadata(
 		.and_then(|name| name.to_str())
 		.unwrap_or(path.as_str())
 		.to_string();
+	let preview_sets = unavatar_wardrobe_preview_sets(unavatar, &root, &source);
+	let preview_images = unavatar_preview_images(unavatar, &root, &source, wardrobe_set.as_deref(), &preview_sets);
 	Ok(Some(UnavatarMetadataInfo {
 		path,
 		file_name,
@@ -3176,7 +3194,8 @@ fn read_unavatar_metadata(
 			.unwrap_or_default(),
 		modular_avatar_component_count,
 		redistribution_allowed: provenance.get("redistributionAllowed").and_then(serde_json::Value::as_bool),
-		preview_images: unavatar_preview_images(unavatar, &root, &source, wardrobe_set.as_deref()),
+		preview_images,
+		preview_sets,
 	}))
 }
 
@@ -3185,8 +3204,9 @@ fn unavatar_preview_images(
 	root: &serde_json::Value,
 	source: &GltfMetadataSource,
 	wardrobe_set: Option<&str>,
+	preview_sets: &[UnavatarPreviewSet],
 ) -> Vec<UnavatarPreviewImage> {
-	let mut out = unavatar_wardrobe_preview_images(unavatar, root, source, wardrobe_set);
+	let mut out = unavatar_selected_preview_images(unavatar, preview_sets, wardrobe_set);
 	if out.is_empty() {
 		if let Some(data_url) = unavatar_sample_screenshot_data_url(unavatar, root, source) {
 			out.push(UnavatarPreviewImage { view: None, data_url });
@@ -3195,53 +3215,73 @@ fn unavatar_preview_images(
 	out
 }
 
-fn unavatar_wardrobe_preview_images(
+fn unavatar_selected_preview_images(
+	unavatar: &serde_json::Value,
+	preview_sets: &[UnavatarPreviewSet],
+	wardrobe_set: Option<&str>,
+) -> Vec<UnavatarPreviewImage> {
+	let selected = wardrobe_set
+		.and_then(|id| {
+			let id = id.trim();
+			(!id.is_empty()).then_some(id)
+		})
+		.and_then(|id| preview_sets.iter().find(|set| set.id == id))
+		.or_else(|| {
+			unavatar
+				.get("wardrobe")
+				.and_then(|wardrobe| wardrobe.get("baseSet"))
+				.and_then(serde_json::Value::as_str)
+				.and_then(|base| preview_sets.iter().find(|set| set.id == base))
+		})
+		.or_else(|| preview_sets.first());
+	selected.map(|set| set.preview_images.clone()).unwrap_or_default()
+}
+
+fn unavatar_wardrobe_preview_sets(
 	unavatar: &serde_json::Value,
 	root: &serde_json::Value,
 	source: &GltfMetadataSource,
-	wardrobe_set: Option<&str>,
-) -> Vec<UnavatarPreviewImage> {
+) -> Vec<UnavatarPreviewSet> {
 	let Some(wardrobe) = unavatar.get("wardrobe") else {
 		return Vec::new();
 	};
 	let Some(sets) = wardrobe.get("sets").and_then(serde_json::Value::as_array) else {
 		return Vec::new();
 	};
-	let selected_set = wardrobe_set
-		.and_then(|id| {
-			let id = id.trim();
-			(!id.is_empty()).then_some(id)
-		})
-		.and_then(|id| {
-			sets.iter()
-				.find(|set| set.get("id").and_then(serde_json::Value::as_str) == Some(id))
-		})
-		.or_else(|| {
-			wardrobe.get("baseSet").and_then(serde_json::Value::as_str).and_then(|base| {
-				sets.iter()
-					.find(|set| set.get("id").and_then(serde_json::Value::as_str) == Some(base))
-			})
-		})
-		.or_else(|| sets.first());
-	let previews = selected_set
-		.and_then(unavatar_set_preview_images)
-		.or_else(|| sets.iter().find_map(unavatar_set_preview_images));
-	let Some(previews) = previews else {
-		return Vec::new();
-	};
-	previews
-		.iter()
-		.take(6)
-		.filter_map(|preview| {
-			let buffer_view = preview.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
-			let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
-			let mime = preview
-				.get("mimeType")
-				.and_then(serde_json::Value::as_str)
-				.and_then(supported_image_mime_type)?;
-			Some(UnavatarPreviewImage {
-				view: preview.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
-				data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+	sets.iter()
+		.filter_map(|set| {
+			let id = set.get("id").and_then(serde_json::Value::as_str)?.trim();
+			if id.is_empty() {
+				return None;
+			}
+			let previews = unavatar_set_preview_images(set)?;
+			let preview_images = previews
+				.iter()
+				.take(6)
+				.filter_map(|preview| {
+					let buffer_view = preview.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
+					let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
+					let mime = preview
+						.get("mimeType")
+						.and_then(serde_json::Value::as_str)
+						.and_then(supported_image_mime_type)?;
+					Some(UnavatarPreviewImage {
+						view: preview.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+						data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+					})
+				})
+				.collect::<Vec<_>>();
+			(!preview_images.is_empty()).then(|| UnavatarPreviewSet {
+				id: id.to_string(),
+				name: set
+					.get("name")
+					.or_else(|| set.get("displayName"))
+					.and_then(serde_json::Value::as_str)
+					.map(str::trim)
+					.filter(|name| !name.is_empty())
+					.unwrap_or(id)
+					.to_string(),
+				preview_images,
 			})
 		})
 		.collect()
@@ -3602,6 +3642,41 @@ fn encode_profile_icon_thumbnail_webp(bytes: &[u8]) -> Result<Vec<u8>, String> {
 	Ok(output)
 }
 
+fn encode_profile_icon_crop_webp(bytes: &[u8], crop: ProfileIconCropRequest) -> Result<Vec<u8>, String> {
+	let image = image::load_from_memory(bytes).map_err(|e| format!("decode profile icon source: {e}"))?;
+	let width = image.width();
+	let height = image.height();
+	if width == 0 || height == 0 {
+		return Err("profile icon source image is empty".to_string());
+	}
+	let base = width.min(height) as f32;
+	let zoom = crop.zoom.clamp(1.0, 4.0);
+	let side = (base / zoom).round().clamp(1.0, base) as u32;
+	let max_x = width.saturating_sub(side);
+	let max_y = height.saturating_sub(side);
+	let center_x = (width as f32 * 0.5) + crop.offset_x.clamp(-1.0, 1.0) * (max_x as f32 * 0.5);
+	let center_y = (height as f32 * 0.5) + crop.offset_y.clamp(-1.0, 1.0) * (max_y as f32 * 0.5);
+	let x = (center_x - side as f32 * 0.5).round().clamp(0.0, max_x as f32) as u32;
+	let y = (center_y - side as f32 * 0.5).round().clamp(0.0, max_y as f32) as u32;
+	let cropped = image.crop_imm(x, y, side, side);
+	let resized = cropped.resize(
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		image::imageops::FilterType::Lanczos3,
+	);
+	let mut output = Vec::new();
+	let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut output);
+	encoder
+		.write_image(
+			resized.to_rgba8().as_raw(),
+			resized.width(),
+			resized.height(),
+			image::ExtendedColorType::Rgba8,
+		)
+		.map_err(|e| format!("encode profile icon WebP: {e}"))?;
+	Ok(output)
+}
+
 fn remove_profile_icon_thumbnail_files(cache_dir: &Path, stem: &str) {
 	for extension in ["webp", "png", "jpg", "jpeg"] {
 		let _ = fs::remove_file(cache_dir.join(format!("{stem}.{extension}")));
@@ -3612,6 +3687,37 @@ fn remove_profile_icon_thumbnail_cache(setting: &AvatarSetting) {
 	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
 	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
 	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
+}
+
+fn save_profile_icon_thumbnail_bytes(
+	setting: &AvatarSetting,
+	manifest_path: &Path,
+	bytes: Vec<u8>,
+	app: &tauri::AppHandle,
+) -> Result<AvatarSetting, String> {
+	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
+	fs::create_dir_all(&cache_dir).map_err(|e| format!("create {}: {e}", cache_dir.display()))?;
+	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
+	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
+	let file_name = format!("{file_stem}.webp");
+	let icon_path = cache_dir.join(file_name);
+	fs::write(&icon_path, bytes).map_err(|e| format!("write {}: {e}", icon_path.display()))?;
+
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let icon_path_text = icon_path.display().to_string();
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
+	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
+	ensure_avatar_profile_metadata(&mut manifest, manifest_path, None)?;
+	write_manifest_value(manifest_path, &manifest)?;
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	let manifest_path = rename_avatar_setting_file_if_needed(manifest_path, &setting)?;
+	let setting = if manifest_path == Path::new(&setting.manifest_path) {
+		Ok(setting)
+	} else {
+		read_avatar_setting(&manifest_path, ProfileStorage::User)
+	}?;
+	refresh_tray_menu(app)?;
+	Ok(setting)
 }
 
 fn thumbnail_protocol_response(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
@@ -3701,29 +3807,25 @@ fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, a
 	let (_mime, thumbnail_bytes) =
 		vrm_metadata_thumbnail_image(meta, &root, &bytes, &resolved_avatar).ok_or_else(|| "avatar thumbnail not found".to_string())?;
 	let thumbnail_bytes = encode_profile_icon_thumbnail_webp(&thumbnail_bytes)?;
-	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
-	fs::create_dir_all(&cache_dir).map_err(|e| format!("create {}: {e}", cache_dir.display()))?;
-	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
-	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
-	let file_name = format!("{file_stem}.webp");
-	let icon_path = cache_dir.join(file_name);
-	fs::write(&icon_path, thumbnail_bytes).map_err(|e| format!("write {}: {e}", icon_path.display()))?;
+	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, thumbnail_bytes, &app)
+}
 
-	let mut manifest = read_manifest_value(&manifest_path)?;
-	let icon_path_text = icon_path.display().to_string();
-	migrate_avatar_manifest_to_v2(&mut manifest)?;
-	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
-	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
-	write_manifest_value(&manifest_path, &manifest)?;
-	let setting = read_avatar_setting(&manifest_path, ProfileStorage::User)?;
-	let manifest_path = rename_avatar_setting_file_if_needed(&manifest_path, &setting)?;
-	let setting = if manifest_path == Path::new(&setting.manifest_path) {
-		Ok(setting)
-	} else {
-		read_avatar_setting(&manifest_path, ProfileStorage::User)
-	}?;
-	refresh_tray_menu(&app)?;
-	Ok(setting)
+#[tauri::command]
+fn save_profile_icon_from_data_url(
+	setting_id: String,
+	image_data_url: String,
+	crop: ProfileIconCropRequest,
+	app: tauri::AppHandle,
+) -> Result<AvatarSetting, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = editable_avatar_setting_path(&setting)?;
+	let (_mime, encoded) =
+		data_image_base64_parts(&image_data_url).ok_or_else(|| "profile icon image must be a data:image/* base64 URL".to_string())?;
+	let bytes = BASE64_STANDARD
+		.decode(encoded)
+		.map_err(|e| format!("decode profile icon image: {e}"))?;
+	let icon_bytes = encode_profile_icon_crop_webp(&bytes, crop)?;
+	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, icon_bytes, &app)
 }
 
 #[derive(Default)]
@@ -10028,13 +10130,14 @@ mod tests {
 
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
-		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp,
-		migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count,
-		read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, renderer_launch_control_commands,
-		repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileStorage,
-		RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_crop_webp,
+		encode_profile_icon_thumbnail_webp, migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8,
+		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
+		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
+		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
+		spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting,
+		AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
+		RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -10617,6 +10720,9 @@ mod tests {
 		assert_eq!(metadata.redistribution_allowed, Some(false));
 		assert_eq!(metadata.preview_images.len(), 1);
 		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "field");
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 1);
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
 	}
 
@@ -10677,8 +10783,32 @@ mod tests {
 		assert_eq!(metadata.name.as_deref(), Some("Partial UNAvatar"));
 		assert_eq!(metadata.wardrobe_set_count, 1);
 		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
 		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn profile_icon_crop_encoder_outputs_square_webp() {
+		let source = image::RgbaImage::from_pixel(320, 180, image::Rgba([96, 180, 255, 255]));
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let webp = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.8,
+				offset_x: 0.25,
+				offset_y: -0.25,
+			},
+		)
+		.unwrap();
+		assert!(webp.starts_with(b"RIFF"));
+		assert_eq!(&webp[8..12], b"WEBP");
+		let decoded = image::load_from_memory(&webp).unwrap();
+		assert_eq!(decoded.width(), PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
+		assert_eq!(decoded.height(), PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
 	}
 
 	#[test]
@@ -10882,6 +11012,7 @@ mod tests {
 			"read_vrm_metadata",
 			"read_unavatar_metadata",
 			"read_unavatar_wardrobe_options",
+			"save_profile_icon_from_data_url",
 			"update_avatar_setting_value",
 		] {
 			assert!(

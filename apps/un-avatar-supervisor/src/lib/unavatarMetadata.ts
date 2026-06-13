@@ -13,6 +13,7 @@ export type UnavatarMetadataInfo = {
 	modular_avatar_component_count: number;
 	redistribution_allowed: boolean | null;
 	preview_images: UnavatarPreviewImage[];
+	preview_sets: UnavatarPreviewSet[];
 };
 
 export type UnavatarPreviewImage = {
@@ -20,9 +21,23 @@ export type UnavatarPreviewImage = {
 	data_url: string;
 };
 
+export type UnavatarPreviewSet = {
+	id: string;
+	name: string;
+	preview_images: UnavatarPreviewImage[];
+};
+
 export type UnavatarMetadataDialogState = {
 	metadata: UnavatarMetadataInfo;
 	pendingPath: string | null;
+};
+
+export type UnavatarProfileIconCrop = {
+	enabled: boolean;
+	imageDataUrl: string | null;
+	zoom: number;
+	offsetX: number;
+	offsetY: number;
 };
 
 export function looksLikeUnavatarPath(path: string): boolean {

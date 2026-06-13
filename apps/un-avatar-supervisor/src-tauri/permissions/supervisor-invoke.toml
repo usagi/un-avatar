@@ -27,6 +27,7 @@ commands.allow = [
 	"read_unavatar_metadata",
 	"read_vrm_metadata",
 	"save_avatar_thumbnail_icon",
+	"save_profile_icon_from_data_url",
 	"read_diagnostics_export",
 	"reveal_profiles_dir",
 	"reorder_avatar_settings",

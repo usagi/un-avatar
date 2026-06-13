@@ -356,7 +356,22 @@ export function installDevIpcMock(): void {
 								"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
 						},
 					],
+					preview_sets: [
+						{
+							id: "base",
+							name: "Base",
+							preview_images: [
+								{
+									view: "front",
+									data_url:
+										"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+								},
+							],
+						},
+					],
 				};
+			case "save_profile_icon_from_data_url":
+				return { ...avatarSettings[0], icon_path: "C:/Users/the/AppData/Roaming/UN Avatar/profiles/assets/thumbnails/main-avatar-thumbnail.webp" };
 			case "read_unavatar_wardrobe_options":
 				return {
 					available: true,
