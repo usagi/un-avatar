@@ -11,7 +11,10 @@
 </script>
 
 <div class="profile-wide-field dynamics-overrides">
-	<div class="field-note">{$_("profiles.editor.dynamics_category_overrides")}</div>
+	<div class="field-note-block">
+		<div class="field-note">{$_("profiles.editor.dynamics_category_overrides")}</div>
+		<div>{$_("profiles.editor.dynamics_category_overrides_hint")}</div>
+	</div>
 	<div class="dynamics-override-list">
 		{#each overrides as override}
 			<ProfileDynamicsOverrideRow {override} {dynamicsEnabled} {busy} {onUpdateSettingValue} />

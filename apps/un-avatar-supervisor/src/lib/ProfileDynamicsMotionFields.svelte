@@ -17,15 +17,17 @@
 </script>
 
 <div class="section-grid profile-channel-fields">
-	<ProfileToggleField
-		label={$_("profiles.editor.dynamics")}
-		hint={$_("profiles.hints.motion.dynamics")}
-		checked={setting.dynamics_enabled}
-		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
-	/>
-	<div class="physics-compat-badges" data-hint={$_("profiles.hints.motion.dynamics_compat")}>
-		<span>{$_("profiles.editor.dynamics_compat_vrm_spring_bone")}</span>
-		<span>{$_("profiles.editor.dynamics_compat_vrc_physbone")}</span>
+	<div class="physics-main-control" data-hint={$_("profiles.hints.motion.dynamics_compat")}>
+		<ProfileToggleField
+			label={$_("profiles.editor.dynamics")}
+			hint={$_("profiles.hints.motion.dynamics")}
+			checked={setting.dynamics_enabled}
+			onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
+		/>
+		<div class="physics-compat-badges" aria-label={$_("profiles.editor.dynamics_compat_sources")}>
+			<span>{$_("profiles.editor.dynamics_compat_vrm_spring_bone")}</span>
+			<span>{$_("profiles.editor.dynamics_compat_vrc_physbone")}</span>
+		</div>
 	</div>
 	<ProfileToggleField
 		label={$_("profiles.editor.dynamics_enable_all_on_launch")}

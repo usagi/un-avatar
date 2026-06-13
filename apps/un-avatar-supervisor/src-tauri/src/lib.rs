@@ -10291,6 +10291,61 @@ mod tests {
 	}
 
 	#[test]
+	fn static_profile_section_nav_and_body_order_match() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let expected = [
+			"identity",
+			"avatar",
+			"quality",
+			"lighting",
+			"look",
+			"motion",
+			"physics",
+			"camera",
+			"window",
+			"output",
+		];
+		let nav_positions = expected
+			.iter()
+			.map(|id| {
+				app_svelte
+					.find(&format!("id: \"{id}\""))
+					.unwrap_or_else(|| panic!("profile nav section {id} should exist"))
+			})
+			.collect::<Vec<_>>();
+		assert!(
+			nav_positions.windows(2).all(|pair| pair[0] < pair[1]),
+			"profile section nav order should match v2 profile workflow: {expected:?}"
+		);
+
+		let body_markers = [
+			"ProfileIdentitySection",
+			"ProfileAvatarSection",
+			"ProfileQualitySection",
+			"ProfileLightingSection",
+			"ProfileLookSection",
+			"ProfileMotionSection",
+			"ProfilePhysicsSection",
+			"ProfileCameraSection",
+			"ProfileWindowSection",
+			"ProfileOutputSection",
+		];
+		let body_positions = body_markers
+			.iter()
+			.map(|marker| {
+				app_svelte
+					.find(&format!("<{marker}"))
+					.unwrap_or_else(|| panic!("profile body section {marker} should exist"))
+			})
+			.collect::<Vec<_>>();
+		assert!(
+			body_positions.windows(2).all(|pair| pair[0] < pair[1]),
+			"profile section body order should match the profile nav order: {body_markers:?}"
+		);
+	}
+
+	#[test]
 	fn renderer_window_icon_falls_back_to_renderer_artwork() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		assert_eq!(
