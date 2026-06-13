@@ -2098,6 +2098,7 @@ impl AvatarApp {
 		let wardrobe_set = self.opts.wardrobe_set.clone();
 		let contact_parameter_emission = self.opts.contact_parameter_emission;
 		let defer_initial_image_decode = self.opts.processed_texture_cache;
+		let profile_import = self.opts.bench_frames.is_some() || std::env::var_os("UN_AVATAR_IMPORT_PROFILE").is_some();
 		self.startup_pending_document = true;
 		self.set_startup_progress("model", 0, 0, "Loading model");
 		let spawn_result = thread::Builder::new().name("un-avatar-startup-load".to_string()).spawn(move || {
@@ -2130,12 +2131,21 @@ impl AvatarApp {
 				total: 0,
 				message: startup_message("Loading model", startup_started),
 			});
-			let document = match model_loader::load_document(
-				&path,
-				wardrobe_set.as_deref(),
-				contact_parameter_emission,
-				defer_initial_image_decode,
-			) {
+			let document = match if profile_import {
+				model_loader::load_document_profiled(
+					&path,
+					wardrobe_set.as_deref(),
+					contact_parameter_emission,
+					defer_initial_image_decode,
+				)
+			} else {
+				model_loader::load_document(
+					&path,
+					wardrobe_set.as_deref(),
+					contact_parameter_emission,
+					defer_initial_image_decode,
+				)
+			} {
 				Ok(document) => document,
 				Err(e) => {
 					heartbeat_done.store(true, Ordering::Release);
