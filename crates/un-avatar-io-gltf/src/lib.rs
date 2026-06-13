@@ -5,7 +5,9 @@
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hasher;
 use std::io::Cursor;
 use std::ops::Range;
 use std::path::Path;
@@ -346,7 +348,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 						height,
 						byte_offset: Some(start as u64),
 						byte_length: bytes.len() as u64,
-						source_hash: fnv1a64(bytes),
+						source_hash: source_hash64(bytes),
 						source_file_path: None,
 						encoded_bytes: None,
 					})
@@ -386,7 +388,7 @@ fn collect_image_source_metadata(document: &gltf::Document, buffers: &[gltf::buf
 					height: None,
 					byte_offset: None,
 					byte_length: 0,
-					source_hash: fnv1a64(uri.as_bytes()),
+					source_hash: source_hash64(uri.as_bytes()),
 					source_file_path: None,
 					encoded_bytes: None,
 				}),
@@ -571,7 +573,7 @@ fn glb_image_source_metadata_from_json_image(
 			height: None,
 			byte_offset: None,
 			byte_length: 0,
-			source_hash: fnv1a64(uri.as_bytes()),
+			source_hash: source_hash64(uri.as_bytes()),
 			source_file_path: None,
 			encoded_bytes: None,
 		});
@@ -588,7 +590,7 @@ fn glb_image_source_metadata_from_json_image(
 	}
 	let encoded_bytes = (retain_encoded && source_file_path.is_none()).then(|| bytes.to_vec());
 	let hash_started = Instant::now();
-	let source_hash = fnv1a64(bytes);
+	let source_hash = source_hash64(bytes);
 	if let Some(profile) = profile {
 		profile.record_hash(hash_started.elapsed(), bytes.len());
 	}
@@ -845,7 +847,7 @@ fn append_unavatar_texture_assets(
 			height: Some(decoded_height),
 			byte_offset: None,
 			byte_length: bytes.len() as u64,
-			source_hash: fnv1a64(bytes),
+			source_hash: source_hash64(bytes),
 			source_file_path: None,
 			encoded_bytes: Some(bytes.to_vec()),
 		}));
@@ -1366,13 +1368,10 @@ fn texture_asset_ref(value: &Value, key: &str, asset_map: &BTreeMap<String, usiz
 	asset_map.get(id).copied()
 }
 
-fn fnv1a64(bytes: &[u8]) -> u64 {
-	let mut hash = 0xcbf29ce484222325u64;
-	for &byte in bytes {
-		hash ^= byte as u64;
-		hash = hash.wrapping_mul(0x100000001b3);
-	}
-	hash
+fn source_hash64(bytes: &[u8]) -> u64 {
+	let mut hasher = DefaultHasher::new();
+	hasher.write(bytes);
+	hasher.finish()
 }
 
 fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
@@ -12110,7 +12109,7 @@ mod tests {
 		assert_eq!(source.name.as_deref(), Some("main"));
 		assert_eq!(source.mime_type.as_deref(), Some("image/png"));
 		assert_eq!(source.byte_length, 3);
-		assert_eq!(source.source_hash, fnv1a64(&[1, 2, 3]));
+		assert_eq!(source.source_hash, source_hash64(&[1, 2, 3]));
 		assert!(source.encoded_bytes.is_none());
 	}
 
