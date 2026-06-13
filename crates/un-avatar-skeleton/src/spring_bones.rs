@@ -1063,6 +1063,9 @@ fn constrain_tail_colliders(
 		return next_tail;
 	}
 	let pushed = push_out_of_world_colliders(next_tail, bone_colliders, hit_radius.max(0.0));
+	if (pushed - next_tail).length_squared() <= 1e-12 {
+		return next_tail;
+	}
 	let pushed_dir = (pushed - child_pos).normalize_or_zero();
 	if pushed_dir.length_squared() >= 1e-12 {
 		child_pos + pushed_dir * length
