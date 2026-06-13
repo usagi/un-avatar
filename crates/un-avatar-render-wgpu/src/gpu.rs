@@ -422,6 +422,11 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) inactive_image_textures_used_by_active_draw: Vec<usize>,
 	pub(crate) inactive_image_textures_used_by_active_draw_truncated: bool,
+	pub(crate) active_draws_using_inactive_cube_texture_count: usize,
+	pub(crate) inactive_cube_textures_used_by_active_draw_count: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) inactive_cube_textures_used_by_active_draw: Vec<usize>,
+	pub(crate) inactive_cube_textures_used_by_active_draw_truncated: bool,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -431,6 +436,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) inactive_material_slots_used_by_active_draw: Vec<usize>,
 	pub(crate) inactive_material_slots_used_by_active_draw_truncated: bool,
 	pub(crate) pending_image_texture_upload_count: usize,
+	pub(crate) pending_cube_texture_upload_count: usize,
 	pub(crate) pending_material_slot_upload_count: usize,
 	pub(crate) last_residency_refresh_active_draw_change_count: usize,
 	pub(crate) last_residency_refresh_image_load_count: usize,
@@ -468,14 +474,16 @@ struct WardrobeResidencyGapIndexStatus {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct WardrobeScopedUploadWork {
 	image_texture_indices: Vec<usize>,
+	cube_texture_indices: Vec<usize>,
 	material_slot_indices: Vec<usize>,
 	active_draws_using_inactive_image_texture_count: usize,
+	active_draws_using_inactive_cube_texture_count: usize,
 	active_draws_using_inactive_material_slot_count: usize,
 }
 
 impl WardrobeScopedUploadWork {
 	fn has_pending_uploads(&self) -> bool {
-		!self.image_texture_indices.is_empty() || !self.material_slot_indices.is_empty()
+		!self.image_texture_indices.is_empty() || !self.cube_texture_indices.is_empty() || !self.material_slot_indices.is_empty()
 	}
 }
 
@@ -485,8 +493,10 @@ fn wardrobe_scoped_upload_work_for_active_gaps(active_gaps: Option<SceneMeshActi
 	};
 	WardrobeScopedUploadWork {
 		image_texture_indices: active_gaps.inactive_image_texture_indices,
+		cube_texture_indices: active_gaps.inactive_cube_texture_indices,
 		material_slot_indices: active_gaps.inactive_material_slot_indices,
 		active_draws_using_inactive_image_texture_count: active_gaps.active_draws_using_inactive_image_texture_count,
+		active_draws_using_inactive_cube_texture_count: active_gaps.active_draws_using_inactive_cube_texture_count,
 		active_draws_using_inactive_material_slot_count: active_gaps.active_draws_using_inactive_material_slot_count,
 	}
 }
@@ -560,6 +570,10 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		inactive_image_textures_used_by_active_draw_count: 0,
 		inactive_image_textures_used_by_active_draw: Vec::new(),
 		inactive_image_textures_used_by_active_draw_truncated: false,
+		active_draws_using_inactive_cube_texture_count: 0,
+		inactive_cube_textures_used_by_active_draw_count: 0,
+		inactive_cube_textures_used_by_active_draw: Vec::new(),
+		inactive_cube_textures_used_by_active_draw_truncated: false,
 		total_material_slot_count: 0,
 		resident_material_slot_count: 0,
 		inactive_material_slot_count: 0,
@@ -568,6 +582,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		inactive_material_slots_used_by_active_draw: Vec::new(),
 		inactive_material_slots_used_by_active_draw_truncated: false,
 		pending_image_texture_upload_count: 0,
+		pending_cube_texture_upload_count: 0,
 		pending_material_slot_upload_count: 0,
 		last_residency_refresh_active_draw_change_count: 0,
 		last_residency_refresh_image_load_count: 0,
@@ -626,6 +641,12 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 		wardrobe_residency_gap_index_status_list(draw_counts.inactive_image_textures_used_by_active_draw);
 	plan.inactive_image_textures_used_by_active_draw = inactive_image_textures_used_by_active_draw.indices;
 	plan.inactive_image_textures_used_by_active_draw_truncated = inactive_image_textures_used_by_active_draw.truncated;
+	plan.active_draws_using_inactive_cube_texture_count = draw_counts.active_draws_using_inactive_cube_texture_count;
+	plan.inactive_cube_textures_used_by_active_draw_count = draw_counts.inactive_cube_textures_used_by_active_draw_count;
+	let inactive_cube_textures_used_by_active_draw =
+		wardrobe_residency_gap_index_status_list(draw_counts.inactive_cube_textures_used_by_active_draw);
+	plan.inactive_cube_textures_used_by_active_draw = inactive_cube_textures_used_by_active_draw.indices;
+	plan.inactive_cube_textures_used_by_active_draw_truncated = inactive_cube_textures_used_by_active_draw.truncated;
 	plan.total_material_slot_count = draw_counts.total_material_slot_count;
 	plan.resident_material_slot_count = draw_counts.resident_material_slot_count;
 	plan.inactive_material_slot_count = draw_counts.inactive_material_slot_count;
@@ -636,11 +657,13 @@ fn wardrobe_asset_upload_plan_with_draw_counts(
 	plan.inactive_material_slots_used_by_active_draw = inactive_material_slots_used_by_active_draw.indices;
 	plan.inactive_material_slots_used_by_active_draw_truncated = inactive_material_slots_used_by_active_draw.truncated;
 	plan.pending_image_texture_upload_count = draw_counts.inactive_image_textures_used_by_active_draw_count;
+	plan.pending_cube_texture_upload_count = draw_counts.inactive_cube_textures_used_by_active_draw_count;
 	plan.pending_material_slot_upload_count = draw_counts.inactive_material_slots_used_by_active_draw_count;
 	plan.scoped_draw_supported =
 		draw_counts.inactive_draw_mesh_primitive_count > 0 || plan.mode == WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED;
-	plan.active_residency_gaps_detected =
-		draw_counts.active_draws_using_inactive_image_texture_count > 0 || draw_counts.active_draws_using_inactive_material_slot_count > 0;
+	plan.active_residency_gaps_detected = draw_counts.active_draws_using_inactive_image_texture_count > 0
+		|| draw_counts.active_draws_using_inactive_cube_texture_count > 0
+		|| draw_counts.active_draws_using_inactive_material_slot_count > 0;
 	plan
 }
 
@@ -4108,7 +4131,15 @@ impl GpuState {
 				.copied()
 				.filter(|index| !image_load_set.contains(index))
 				.collect::<Vec<_>>();
-			let cube_load_indices = self.last_asset_residency_refresh.cube_texture_load_indices.clone();
+			let mut cube_load_indices = self
+				.last_asset_residency_refresh
+				.cube_texture_load_indices
+				.iter()
+				.chain(active_gaps.inactive_cube_texture_indices.iter())
+				.copied()
+				.collect::<Vec<_>>();
+			cube_load_indices.sort_unstable();
+			cube_load_indices.dedup();
 			let cube_load_set = cube_load_indices.iter().copied().collect::<BTreeSet<_>>();
 			let cube_unload_indices = self
 				.last_asset_residency_refresh
@@ -4118,6 +4149,7 @@ impl GpuState {
 				.filter(|index| !cube_load_set.contains(index))
 				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
+			sm.promote_cube_texture_residency(&cube_load_indices);
 			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) = sm
 				.apply_image_texture_view_residency(
 					&self.device,
@@ -5161,6 +5193,7 @@ impl GpuState {
 		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
 		let mut plan = wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts);
 		plan.pending_image_texture_upload_count = scoped_upload_work.image_texture_indices.len();
+		plan.pending_cube_texture_upload_count = scoped_upload_work.cube_texture_indices.len();
 		plan.pending_material_slot_upload_count = scoped_upload_work.material_slot_indices.len();
 		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
 		plan.last_residency_refresh_active_draw_change_count = self.last_asset_residency_refresh.active_draw_state_changed_count;
@@ -8054,6 +8087,9 @@ mod tests {
 				active_draws_using_inactive_image_texture_count: 1,
 				inactive_image_textures_used_by_active_draw_count: 1,
 				inactive_image_textures_used_by_active_draw: vec![3],
+				active_draws_using_inactive_cube_texture_count: 1,
+				inactive_cube_textures_used_by_active_draw_count: 1,
+				inactive_cube_textures_used_by_active_draw: vec![6],
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
@@ -8076,6 +8112,9 @@ mod tests {
 		assert_eq!(plan.active_draws_using_inactive_image_texture_count, 1);
 		assert_eq!(plan.inactive_image_textures_used_by_active_draw_count, 1);
 		assert_eq!(plan.inactive_image_textures_used_by_active_draw, vec![3]);
+		assert_eq!(plan.active_draws_using_inactive_cube_texture_count, 1);
+		assert_eq!(plan.inactive_cube_textures_used_by_active_draw_count, 1);
+		assert_eq!(plan.inactive_cube_textures_used_by_active_draw, vec![6]);
 		assert_eq!(plan.total_material_slot_count, 5);
 		assert_eq!(plan.resident_material_slot_count, 4);
 		assert_eq!(plan.inactive_material_slot_count, 1);
@@ -8083,6 +8122,7 @@ mod tests {
 		assert_eq!(plan.inactive_material_slots_used_by_active_draw_count, 1);
 		assert_eq!(plan.inactive_material_slots_used_by_active_draw, vec![4]);
 		assert_eq!(plan.pending_image_texture_upload_count, 1);
+		assert_eq!(plan.pending_cube_texture_upload_count, 1);
 		assert_eq!(plan.pending_material_slot_upload_count, 1);
 		assert!(plan.scoped_draw_supported);
 		assert!(plan.scoped_upload_supported);
@@ -8154,18 +8194,23 @@ mod tests {
 	#[test]
 	fn wardrobe_scoped_upload_work_keeps_full_active_gap_lists() {
 		let image_indices = (0..WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 2).collect::<Vec<_>>();
+		let cube_indices = (50..50 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 1).collect::<Vec<_>>();
 		let material_indices = (100..100 + WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT + 3).collect::<Vec<_>>();
 		let work = wardrobe_scoped_upload_work_for_active_gaps(Some(SceneMeshActiveResidencyGaps {
 			inactive_image_texture_indices: image_indices.clone(),
+			inactive_cube_texture_indices: cube_indices.clone(),
 			inactive_material_slot_indices: material_indices.clone(),
 			active_draws_using_inactive_image_texture_count: 4,
+			active_draws_using_inactive_cube_texture_count: 3,
 			active_draws_using_inactive_material_slot_count: 5,
 		}));
 
 		assert!(work.has_pending_uploads());
 		assert_eq!(work.image_texture_indices, image_indices);
+		assert_eq!(work.cube_texture_indices, cube_indices);
 		assert_eq!(work.material_slot_indices, material_indices);
 		assert_eq!(work.active_draws_using_inactive_image_texture_count, 4);
+		assert_eq!(work.active_draws_using_inactive_cube_texture_count, 3);
 		assert_eq!(work.active_draws_using_inactive_material_slot_count, 5);
 	}
 

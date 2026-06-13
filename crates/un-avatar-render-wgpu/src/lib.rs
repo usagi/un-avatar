@@ -5553,6 +5553,9 @@ mod tests {
 				active_draws_using_inactive_image_texture_count: 1,
 				inactive_image_textures_used_by_active_draw_count: 1,
 				inactive_image_textures_used_by_active_draw: vec![3],
+				active_draws_using_inactive_cube_texture_count: 1,
+				inactive_cube_textures_used_by_active_draw_count: 1,
+				inactive_cube_textures_used_by_active_draw: vec![6],
 				total_material_slot_count: 5,
 				resident_material_slot_count: 4,
 				inactive_material_slot_count: 1,
@@ -5560,6 +5563,7 @@ mod tests {
 				inactive_material_slots_used_by_active_draw_count: 1,
 				inactive_material_slots_used_by_active_draw: vec![4],
 				pending_image_texture_upload_count: 1,
+				pending_cube_texture_upload_count: 1,
 				pending_material_slot_upload_count: 1,
 				last_mesh_buffer_scoped_load_count: 1,
 				last_mesh_buffer_scoped_unload_count: 2,
@@ -6201,6 +6205,25 @@ mod tests {
 				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
 			Some(vec![3])
 		);
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_cube_texture_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_cube_textures_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_cube_textures_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![6])
+		);
 		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
 		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(upload.get("inactive_material_slot_count").and_then(|value| value.as_u64()), Some(1));
@@ -6225,6 +6248,10 @@ mod tests {
 		);
 		assert_eq!(
 			upload.get("pending_image_texture_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("pending_cube_texture_upload_count").and_then(|value| value.as_u64()),
 			Some(1)
 		);
 		assert_eq!(

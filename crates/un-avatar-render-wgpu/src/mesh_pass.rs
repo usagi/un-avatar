@@ -1876,6 +1876,7 @@ struct MeshDraw {
 	material_slot_index: Option<usize>,
 	material: UnaMaterialPbr,
 	texture_indices: Vec<usize>,
+	cube_texture_indices: Vec<usize>,
 	mesh_index: usize,
 	primitive_index: usize,
 	probe_anchor_node: Option<usize>,
@@ -1994,6 +1995,9 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 	pub(crate) active_draws_using_inactive_image_texture_count: usize,
 	pub(crate) inactive_image_textures_used_by_active_draw_count: usize,
 	pub(crate) inactive_image_textures_used_by_active_draw: Vec<usize>,
+	pub(crate) active_draws_using_inactive_cube_texture_count: usize,
+	pub(crate) inactive_cube_textures_used_by_active_draw_count: usize,
+	pub(crate) inactive_cube_textures_used_by_active_draw: Vec<usize>,
 	pub(crate) total_material_slot_count: usize,
 	pub(crate) resident_material_slot_count: usize,
 	pub(crate) inactive_material_slot_count: usize,
@@ -2005,8 +2009,10 @@ pub(crate) struct SceneMeshAssetResidencyCounts {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SceneMeshActiveResidencyGaps {
 	pub(crate) inactive_image_texture_indices: Vec<usize>,
+	pub(crate) inactive_cube_texture_indices: Vec<usize>,
 	pub(crate) inactive_material_slot_indices: Vec<usize>,
 	pub(crate) active_draws_using_inactive_image_texture_count: usize,
+	pub(crate) active_draws_using_inactive_cube_texture_count: usize,
 	pub(crate) active_draws_using_inactive_material_slot_count: usize,
 }
 
@@ -2033,6 +2039,59 @@ impl SceneMeshAssetResidencyRefresh {
 			|| !self.cube_texture_unload_indices.is_empty()
 			|| !self.material_slot_load_indices.is_empty()
 			|| !self.material_slot_unload_indices.is_empty()
+	}
+}
+
+fn active_residency_gaps_from_draws<'a>(
+	draws: impl IntoIterator<Item = (bool, &'a [usize], &'a [usize], Option<usize>)>,
+	image_texture_residency: &[bool],
+	cube_texture_residency: &[bool],
+	material_slot_residency: &[bool],
+) -> SceneMeshActiveResidencyGaps {
+	let mut inactive_image_texture_indices = BTreeSet::new();
+	let mut inactive_cube_texture_indices = BTreeSet::new();
+	let mut inactive_material_slot_indices = BTreeSet::new();
+	let mut active_draws_using_inactive_image_texture_count = 0;
+	let mut active_draws_using_inactive_cube_texture_count = 0;
+	let mut active_draws_using_inactive_material_slot_count = 0;
+	for (active, texture_indices, cube_texture_indices, material_slot_index) in draws {
+		if !active {
+			continue;
+		}
+		let mut draw_uses_inactive_image_texture = false;
+		let mut draw_uses_inactive_cube_texture = false;
+		for texture_index in texture_indices {
+			if image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
+				inactive_image_texture_indices.insert(*texture_index);
+				draw_uses_inactive_image_texture = true;
+			}
+		}
+		for texture_index in cube_texture_indices {
+			if cube_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
+				inactive_cube_texture_indices.insert(*texture_index);
+				draw_uses_inactive_cube_texture = true;
+			}
+		}
+		if draw_uses_inactive_image_texture {
+			active_draws_using_inactive_image_texture_count += 1;
+		}
+		if draw_uses_inactive_cube_texture {
+			active_draws_using_inactive_cube_texture_count += 1;
+		}
+		if let Some(material_slot_index) = material_slot_index {
+			if material_slot_residency.get(material_slot_index).is_some_and(|resident| !resident) {
+				inactive_material_slot_indices.insert(material_slot_index);
+				active_draws_using_inactive_material_slot_count += 1;
+			}
+		}
+	}
+	SceneMeshActiveResidencyGaps {
+		inactive_image_texture_indices: inactive_image_texture_indices.into_iter().collect(),
+		inactive_cube_texture_indices: inactive_cube_texture_indices.into_iter().collect(),
+		inactive_material_slot_indices: inactive_material_slot_indices.into_iter().collect(),
+		active_draws_using_inactive_image_texture_count,
+		active_draws_using_inactive_cube_texture_count,
+		active_draws_using_inactive_material_slot_count,
 	}
 }
 
@@ -9553,6 +9612,7 @@ impl SceneMeshes {
 					material_slot_index,
 					material: mat.clone(),
 					texture_indices: material_texture_indices(mat),
+					cube_texture_indices: material_cube_texture_indices(mat),
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
 					probe_anchor_node: node.probe_anchor_node,
@@ -9859,15 +9919,20 @@ impl SceneMeshes {
 		};
 		let active_gaps = scene_meshes.active_residency_gaps();
 		report("gpu-upload", total_steps, "Resolving active asset residency".to_string());
-		if !active_gaps.inactive_image_texture_indices.is_empty() || !active_gaps.inactive_material_slot_indices.is_empty() {
+		if !active_gaps.inactive_image_texture_indices.is_empty()
+			|| !active_gaps.inactive_cube_texture_indices.is_empty()
+			|| !active_gaps.inactive_material_slot_indices.is_empty()
+		{
 			let active_residency_start = Instant::now();
 			scene_meshes.promote_image_texture_residency(&active_gaps.inactive_image_texture_indices);
+			scene_meshes.promote_cube_texture_residency(&active_gaps.inactive_cube_texture_indices);
 			report(
 				"gpu-upload",
 				total_steps,
 				format!(
-					"Uploading active deferred textures image={} material={}",
+					"Uploading active deferred textures image={} cube={} material={}",
 					active_gaps.inactive_image_texture_indices.len(),
+					active_gaps.inactive_cube_texture_indices.len(),
 					active_gaps.inactive_material_slot_indices.len()
 				),
 			);
@@ -9878,7 +9943,7 @@ impl SceneMeshes {
 				scene,
 				&active_gaps.inactive_image_texture_indices,
 				&[],
-				&[],
+				&active_gaps.inactive_cube_texture_indices,
 				&[],
 			);
 			log_slow_gpu_scene_step("active image texture residency upload", texture_residency_start.elapsed());
@@ -10835,6 +10900,9 @@ impl SceneMeshes {
 			active_draws_using_inactive_image_texture_count: active_gaps.active_draws_using_inactive_image_texture_count,
 			inactive_image_textures_used_by_active_draw_count: active_gaps.inactive_image_texture_indices.len(),
 			inactive_image_textures_used_by_active_draw: active_gaps.inactive_image_texture_indices,
+			active_draws_using_inactive_cube_texture_count: active_gaps.active_draws_using_inactive_cube_texture_count,
+			inactive_cube_textures_used_by_active_draw_count: active_gaps.inactive_cube_texture_indices.len(),
+			inactive_cube_textures_used_by_active_draw: active_gaps.inactive_cube_texture_indices,
 			total_material_slot_count,
 			resident_material_slot_count,
 			inactive_material_slot_count: total_material_slot_count.saturating_sub(resident_material_slot_count),
@@ -10845,38 +10913,19 @@ impl SceneMeshes {
 	}
 
 	pub(crate) fn active_residency_gaps(&self) -> SceneMeshActiveResidencyGaps {
-		let mut inactive_image_texture_indices = BTreeSet::new();
-		let mut inactive_material_slot_indices = BTreeSet::new();
-		let mut active_draws_using_inactive_image_texture_count = 0;
-		let mut active_draws_using_inactive_material_slot_count = 0;
-		for draw in self.draws.iter().filter(|draw| draw.active()) {
-			let mut draw_uses_inactive_image_texture = false;
-			for texture_index in &draw.texture_indices {
-				if self.image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-					inactive_image_texture_indices.insert(*texture_index);
-					draw_uses_inactive_image_texture = true;
-				}
-			}
-			if draw_uses_inactive_image_texture {
-				active_draws_using_inactive_image_texture_count += 1;
-			}
-			if let Some(material_slot_index) = draw.material_slot_index {
-				if self
-					.material_slot_residency
-					.get(material_slot_index)
-					.is_some_and(|resident| !resident)
-				{
-					inactive_material_slot_indices.insert(material_slot_index);
-					active_draws_using_inactive_material_slot_count += 1;
-				}
-			}
-		}
-		SceneMeshActiveResidencyGaps {
-			inactive_image_texture_indices: inactive_image_texture_indices.into_iter().collect(),
-			inactive_material_slot_indices: inactive_material_slot_indices.into_iter().collect(),
-			active_draws_using_inactive_image_texture_count,
-			active_draws_using_inactive_material_slot_count,
-		}
+		active_residency_gaps_from_draws(
+			self.draws.iter().map(|draw| {
+				(
+					draw.active(),
+					draw.texture_indices.as_slice(),
+					draw.cube_texture_indices.as_slice(),
+					draw.material_slot_index,
+				)
+			}),
+			&self.image_texture_residency,
+			&self.cube_texture_residency,
+			&self.material_slot_residency,
+		)
 	}
 
 	pub(crate) fn promote_material_slot_residency(&mut self, material_slot_indices: &[usize]) -> usize {
@@ -10885,6 +10934,10 @@ impl SceneMeshes {
 
 	pub(crate) fn promote_image_texture_residency(&mut self, image_texture_indices: &[usize]) -> usize {
 		promote_residency_indices(&mut self.image_texture_residency, image_texture_indices)
+	}
+
+	pub(crate) fn promote_cube_texture_residency(&mut self, cube_texture_indices: &[usize]) -> usize {
+		promote_residency_indices(&mut self.cube_texture_residency, cube_texture_indices)
 	}
 
 	pub(crate) fn apply_image_texture_view_residency(
@@ -11187,6 +11240,32 @@ mod tests {
 	}
 
 	#[test]
+	fn active_residency_gaps_include_cube_textures() {
+		let draw_a_textures = [1usize];
+		let draw_a_cubes = [3usize];
+		let draw_b_textures = [2usize];
+		let draw_b_cubes = [4usize];
+		let draws = [
+			(true, draw_a_textures.as_slice(), draw_a_cubes.as_slice(), Some(1usize)),
+			(false, draw_b_textures.as_slice(), draw_b_cubes.as_slice(), Some(2usize)),
+		];
+
+		let gaps = active_residency_gaps_from_draws(
+			draws,
+			&[true, false, true],
+			&[true, true, true, false, false],
+			&[true, false, false],
+		);
+
+		assert_eq!(gaps.inactive_image_texture_indices, vec![1]);
+		assert_eq!(gaps.inactive_cube_texture_indices, vec![3]);
+		assert_eq!(gaps.inactive_material_slot_indices, vec![1]);
+		assert_eq!(gaps.active_draws_using_inactive_image_texture_count, 1);
+		assert_eq!(gaps.active_draws_using_inactive_cube_texture_count, 1);
+		assert_eq!(gaps.active_draws_using_inactive_material_slot_count, 1);
+	}
+
+	#[test]
 	fn asset_residency_refresh_reports_scoped_resource_changes() {
 		let refresh = SceneMeshAssetResidencyRefresh {
 			mesh_buffer_load_indices: vec![1],
@@ -11470,7 +11549,8 @@ mod tests {
 			}],
 			..Default::default()
 		};
-		let residency = SceneAssetResidencySets::for_scene(&scene, &[]);
+		let active_asset_groups = vec!["outfit:base".to_string()];
+		let residency = SceneAssetResidencySets::for_scene(&scene, &active_asset_groups);
 		let effective_visibility = scene_effective_visibility(&scene);
 
 		assert_eq!(
