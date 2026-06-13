@@ -5035,20 +5035,33 @@ textarea {
 	position: relative;
 	overflow: hidden;
 	touch-action: none;
-	cursor: grab;
-}
-
-.unavatar-crop-frame .vrm-metadata-thumbnail {
-	will-change: transform;
-}
-
-.unavatar-crop-frame.disabled {
 	cursor: default;
 }
 
+.unavatar-crop-frame .vrm-metadata-thumbnail {
+	object-fit: contain;
+}
+
+.unavatar-crop-frame:not(.disabled) {
+	cursor: grab;
+}
+
 .unavatar-crop-frame.disabled .vrm-metadata-thumbnail {
-	opacity: 0.72;
-	filter: saturate(0.86);
+	opacity: 1;
+	filter: none;
+}
+
+.unavatar-icon-mask {
+	position: absolute;
+	aspect-ratio: 1;
+	transform: translate(-50%, -50%);
+	border: 2px solid color-mix(in srgb, var(--accent-cool) 82%, white);
+	border-radius: 10px;
+	box-shadow:
+		0 0 0 999px color-mix(in srgb, #02050a 54%, transparent),
+		0 0 0 1px color-mix(in srgb, #ffffff 28%, transparent) inset,
+		0 8px 30px color-mix(in srgb, #000 44%, transparent);
+	pointer-events: none;
 }
 
 .unavatar-crop-hint {
@@ -5077,9 +5090,14 @@ textarea {
 	margin-top: 10px;
 }
 
-.unavatar-icon-crop-panel > button {
+.unavatar-icon-crop-toggle {
+	display: inline-flex;
+	grid-template-columns: none;
+	align-items: center;
+	gap: 8px;
 	flex: 0 0 auto;
-	min-width: 118px;
+	min-width: 132px;
+	min-height: 30px;
 	padding: 7px 10px;
 	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
 	border-radius: 999px;
@@ -5091,10 +5109,16 @@ textarea {
 	cursor: pointer;
 }
 
-.unavatar-icon-crop-panel > button.active {
+.unavatar-icon-crop-toggle:has(input:checked) {
 	border-color: color-mix(in srgb, var(--accent-cool) 70%, var(--border));
 	background: color-mix(in srgb, var(--accent-cool) 14%, var(--panel-subtle));
 	color: var(--text);
+}
+
+.unavatar-icon-crop-toggle input {
+	width: 14px;
+	height: 14px;
+	min-height: 14px;
 }
 
 .unavatar-crop-zoom-actions {
@@ -5103,10 +5127,10 @@ textarea {
 }
 
 .unavatar-crop-zoom-actions button {
-	width: 34px;
+	min-width: 34px;
 	height: 30px;
 	min-height: 30px;
-	padding: 0;
+	padding: 0 8px;
 	border-radius: 7px;
 	font-size: 12px;
 	font-weight: 800;

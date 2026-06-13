@@ -36,6 +36,9 @@
 		[$_("unavatar_rights.stats.contacts"), metadata.contact_count],
 		[$_("unavatar_rights.stats.modular_avatar"), metadata.modular_avatar_component_count],
 	];
+	$: maskSize = `${clamp(100 / (Number(profileIconCrop.zoom) || 1), 25, 100)}%`;
+	$: maskLeft = `${50 + (Number(profileIconCrop.offsetX) || 0) * 50}%`;
+	$: maskTop = `${50 + (Number(profileIconCrop.offsetY) || 0) * 50}%`;
 
 	function clamp(value: number, min: number, max: number) {
 		return Math.min(max, Math.max(min, value));
@@ -48,7 +51,6 @@
 	function adjustZoom(delta: number) {
 		profileIconCrop = {
 			...profileIconCrop,
-			enabled: true,
 			zoom: clamp(Number(profileIconCrop.zoom) + delta, 1, 4),
 		};
 	}
@@ -56,7 +58,6 @@
 	function resetCrop() {
 		profileIconCrop = {
 			...profileIconCrop,
-			enabled: true,
 			zoom: 1,
 			offsetX: 0,
 			offsetY: 0,
@@ -79,11 +80,10 @@
 	function moveCropDrag(event: PointerEvent) {
 		if (!dragStart || dragStart.pointerId !== event.pointerId || !cropFrame) return;
 		const rect = cropFrame.getBoundingClientRect();
-		const scale = Math.max(1, Math.min(rect.width, rect.height) * 0.5);
 		profileIconCrop = {
 			...profileIconCrop,
-			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / scale, -1, 1),
-			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / scale, -1, 1),
+			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / Math.max(1, rect.width * 0.5), -1, 1),
+			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / Math.max(1, rect.height * 0.5), -1, 1),
 		};
 	}
 
@@ -113,9 +113,12 @@
 						class="vrm-metadata-thumbnail"
 						src={selectedPreview.data_url}
 						alt=""
-						style={`transform: translate(${profileIconCrop.offsetX * 32}px, ${profileIconCrop.offsetY * 32}px) scale(${profileIconCrop.zoom});`}
 					/>
 					{#if modal.pendingPath && profileIconCrop.enabled}
+						<span
+							class="unavatar-icon-mask"
+							style={`width: ${maskSize}; left: ${maskLeft}; top: ${maskTop};`}
+						></span>
 						<span class="unavatar-crop-hint">{$_("unavatar_rights.icon_drag_hint")}</span>
 					{/if}
 				</div>
@@ -124,17 +127,13 @@
 			{/if}
 			{#if modal.pendingPath && selectedPreview}
 				<div class="unavatar-icon-crop-panel">
-					<button
-						type="button"
-						class:active={profileIconCrop.enabled}
-						title={$_("unavatar_rights.use_preview_as_profile_icon")}
-						onclick={() => setCropEnabled(!profileIconCrop.enabled)}
-					>
-						{$_("unavatar_rights.profile_icon")}
-					</button>
+					<label class="unavatar-icon-crop-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
+						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
+						<span>{$_("unavatar_rights.profile_icon")}</span>
+					</label>
 					<div class="unavatar-crop-zoom-actions" aria-label={$_("unavatar_rights.icon_zoom")}>
 						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_out")} onclick={() => adjustZoom(-0.15)}>&minus;</button>
-						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}>1:1</button>
+						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}>{$_("unavatar_rights.icon_reset")}</button>
 						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_in")} onclick={() => adjustZoom(0.15)}>+</button>
 					</div>
 				</div>

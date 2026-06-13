@@ -269,7 +269,7 @@
 	let unavatarMetadataModal = $state<UnavatarMetadataModalState | null>(null);
 	let useThumbnailForProfileIconOnAccept = $state(true);
 	let unavatarProfileIconCrop = $state<UnavatarProfileIconCrop>({
-		enabled: true,
+		enabled: false,
 		imageDataUrl: null,
 		zoom: 1,
 		offsetX: 0,
@@ -1811,7 +1811,7 @@
 				return;
 			}
 			unavatarProfileIconCrop = {
-				enabled: Boolean(metadata.preview_images.length || metadata.preview_sets.some((set) => set.preview_images.length)),
+				enabled: false,
 				imageDataUrl: metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null,
 				zoom: 1,
 				offsetX: 0,
