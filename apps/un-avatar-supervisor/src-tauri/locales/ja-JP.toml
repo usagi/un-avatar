@@ -835,6 +835,7 @@ card_copy_title = "この Renderer の stderr バッファをクリップボー�
 [logs.toolbar]
 per_renderer = "Per renderer"
 unified = "Unified"
+renderer = "Renderer"
 renderer_label = "Renderer"
 all_renderers = "All renderers"
 filter = "Filter"

@@ -9579,6 +9579,7 @@ mod windows_integration {
 #[cfg(test)]
 mod tests {
 	use std::{
+		collections::BTreeSet,
 		fs,
 		io::{BufRead, BufReader, Cursor, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
@@ -9737,6 +9738,56 @@ mod tests {
 			startup_progress: None,
 			startup_message: None,
 			note: None,
+		}
+	}
+
+	fn collect_static_i18n_keys_from_source_dir(dir: &Path, out: &mut BTreeSet<String>) {
+		let Ok(entries) = fs::read_dir(dir) else { return };
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.is_dir() {
+				collect_static_i18n_keys_from_source_dir(&path, out);
+				continue;
+			}
+			let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+				continue;
+			};
+			if !matches!(ext, "svelte" | "ts") {
+				continue;
+			}
+			let Ok(text) = fs::read_to_string(&path) else {
+				continue;
+			};
+			collect_static_i18n_keys_from_text(&text, out);
+		}
+	}
+
+	fn collect_static_i18n_keys_from_text(text: &str, out: &mut BTreeSet<String>) {
+		for marker in ["$_(\"", "labelKey: \"", "hintKey: \""] {
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let key_start = pos + marker.len();
+				let after = &rest[key_start..];
+				let Some(key_end) = after.find('"') else { break };
+				let key = &after[..key_end];
+				if key.contains("${") || key.ends_with('.') {
+					rest = &after[key_end + 1..];
+					continue;
+				}
+				out.insert(key.to_string());
+				rest = &after[key_end + 1..];
+			}
+		}
+
+		let mut rest = text;
+		while let Some(pos) = rest.find("\"profiles.") {
+			let after = &rest[pos + 1..];
+			let Some(key_end) = after.find('"') else { break };
+			let key = &after[..key_end];
+			if !key.contains("${") && !key.ends_with('.') {
+				out.insert(key.to_string());
+			}
+			rest = &after[key_end + 1..];
 		}
 	}
 
@@ -10212,6 +10263,25 @@ mod tests {
 		assert_eq!(setting.audio_link_input_device_name_hint, None);
 		assert!(setting.transparent);
 		assert!(!setting.input_passthrough);
+	}
+
+	#[test]
+	fn static_svelte_i18n_keys_exist_in_all_locales() {
+		let mut keys = BTreeSet::new();
+		collect_static_i18n_keys_from_source_dir(&repo_root().join("apps").join("un-avatar-supervisor").join("src"), &mut keys);
+		assert!(!keys.is_empty(), "expected to find static svelte i18n keys");
+
+		for locale in crate::i18n::UN_I18N_STORE.available_locales() {
+			let messages = crate::i18n::UN_I18N_STORE
+				.messages_for_locale(&locale)
+				.unwrap_or_else(|| panic!("locale {locale} should be loaded"));
+			let missing = keys
+				.iter()
+				.filter(|key| !messages.contains_key(key.as_str()))
+				.cloned()
+				.collect::<Vec<_>>();
+			assert!(missing.is_empty(), "missing static i18n keys in {locale}: {missing:?}");
+		}
 	}
 
 	#[test]
