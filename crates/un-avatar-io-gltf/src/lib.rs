@@ -7,8 +7,9 @@
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::hash::Hasher;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -788,13 +789,7 @@ fn append_unavatar_texture_assets(
 ) -> BTreeMap<String, usize> {
 	let started = Instant::now();
 	let mut map = BTreeMap::new();
-	let Some(assets) = root
-		.get("extensions")
-		.and_then(Value::as_object)
-		.and_then(|extensions| extensions.get(UN_AVATAR_EXTENSION_NAME))
-		.and_then(|ext| ext.get("textureAssets"))
-		.and_then(Value::as_array)
-	else {
+	let Some(assets) = unavatar_texture_assets(root) else {
 		return map;
 	};
 	let mut source_bytes = 0u64;
@@ -804,7 +799,6 @@ fn append_unavatar_texture_assets(
 		if id.is_empty() {
 			continue;
 		}
-		let mime_type = asset.get("mimeType").and_then(Value::as_str).unwrap_or("");
 		let Some(bytes) = texture_asset_bytes(root, bin, asset) else {
 			report.lost_features.push(un_avatar_core::LostFeature {
 				feature: format!("UN_avatar.textureAssets[{id}]"),
@@ -812,46 +806,18 @@ fn append_unavatar_texture_assets(
 			});
 			continue;
 		};
-		let source_pixel_format = asset.get("sourcePixelFormat").and_then(Value::as_str);
-		let channels = asset.get("channels").and_then(Value::as_str);
-		let decoded = match decode_unavatar_texture_asset(bytes, mime_type, source_pixel_format, channels) {
-			Ok(image) => image,
-			Err(error) => {
-				report.lost_features.push(un_avatar_core::LostFeature {
-					feature: format!("UN_avatar.textureAssets[{id}]"),
-					detail: Some(error),
-				});
-				continue;
-			}
-		};
-		source_bytes += bytes.len() as u64;
-		decoded_pixels += u64::from(decoded.width) * u64::from(decoded.height);
-		let decoded_width = decoded.width;
-		let decoded_height = decoded.height;
-		let image_index = scene.images.len();
-		scene.images.push(decoded);
-		scene.image_sources.push(Some(UnaImageSourceMetadata {
-			name: asset.get("name").and_then(Value::as_str).map(str::to_string),
-			mime_type: Some(mime_type.to_string()),
-			uri: asset.get("assetPath").and_then(Value::as_str).map(str::to_string),
-			source_pixel_format: source_pixel_format.map(str::to_string),
-			channels: channels.map(str::to_string),
-			color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
-			texture_type: asset.get("textureType").and_then(Value::as_str).map(str::to_string),
-			texture_shape: asset.get("textureShape").and_then(Value::as_str).map(str::to_string),
-			source_layout: asset.get("sourceLayout").and_then(Value::as_str).map(str::to_string),
-			unity_generate_cubemap: asset.get("unityGenerateCubemap").and_then(Value::as_str).map(str::to_string),
-			srgb: asset.get("sRGB").or_else(|| asset.get("srgb")).and_then(Value::as_bool),
-			sampler: asset.get("sampler").map(sampler_from_root_json),
-			width: Some(decoded_width),
-			height: Some(decoded_height),
-			byte_offset: None,
-			byte_length: bytes.len() as u64,
-			source_hash: source_hash64(bytes),
-			source_file_path: None,
-			encoded_bytes: Some(bytes.to_vec()),
-		}));
-		map.insert(id.to_string(), image_index);
+		append_unavatar_texture_asset(
+			scene,
+			report,
+			&mut map,
+			&mut source_bytes,
+			&mut decoded_pixels,
+			asset,
+			bytes,
+			None,
+			None,
+			true,
+		);
 	}
 	report.push_info(format!(
 		".unavatar textureAssets: decoded={} source_bytes={} decoded_pixels={} decode_ms={}",
@@ -863,12 +829,150 @@ fn append_unavatar_texture_assets(
 	map
 }
 
-fn texture_asset_bytes<'a>(root: &Value, bin: &'a [u8], asset: &Value) -> Option<&'a [u8]> {
+fn append_unavatar_texture_assets_from_file(
+	scene: &mut UnaSceneSnapshot,
+	root: &Value,
+	source_file_path: &Path,
+	bin_offset: u64,
+	report: &mut ImportReport,
+) -> BTreeMap<String, usize> {
+	let started = Instant::now();
+	let mut map = BTreeMap::new();
+	let Some(assets) = unavatar_texture_assets(root) else {
+		return map;
+	};
+	let mut file = match File::open(source_file_path) {
+		Ok(file) => file,
+		Err(error) => {
+			report.lost_features.push(un_avatar_core::LostFeature {
+				feature: "UN_avatar.textureAssets".to_string(),
+				detail: Some(format!("source file open: {error}")),
+			});
+			return map;
+		}
+	};
+	let mut source_bytes = 0u64;
+	let mut decoded_pixels = 0u64;
+	for asset in assets {
+		let id = asset.get("id").and_then(Value::as_str).unwrap_or("");
+		if id.is_empty() {
+			continue;
+		}
+		let Some(range) = texture_asset_bin_range(root, asset) else {
+			report.lost_features.push(un_avatar_core::LostFeature {
+				feature: format!("UN_avatar.textureAssets[{id}]"),
+				detail: Some("missing or invalid bufferView".to_string()),
+			});
+			continue;
+		};
+		let byte_offset = bin_offset + range.start as u64;
+		let mut bytes = vec![0; range.len()];
+		if let Err(error) = file.seek(SeekFrom::Start(byte_offset)).and_then(|_| file.read_exact(&mut bytes)) {
+			report.lost_features.push(un_avatar_core::LostFeature {
+				feature: format!("UN_avatar.textureAssets[{id}]"),
+				detail: Some(format!("source bytes read: {error}")),
+			});
+			continue;
+		}
+		append_unavatar_texture_asset(
+			scene,
+			report,
+			&mut map,
+			&mut source_bytes,
+			&mut decoded_pixels,
+			asset,
+			&bytes,
+			Some(source_file_path),
+			Some(byte_offset),
+			false,
+		);
+	}
+	report.push_info(format!(
+		".unavatar textureAssets: decoded={} source_bytes={} decoded_pixels={} decode_ms={} file_backed=true",
+		map.len(),
+		source_bytes,
+		decoded_pixels,
+		started.elapsed().as_millis()
+	));
+	map
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_unavatar_texture_asset(
+	scene: &mut UnaSceneSnapshot,
+	report: &mut ImportReport,
+	map: &mut BTreeMap<String, usize>,
+	source_bytes: &mut u64,
+	decoded_pixels: &mut u64,
+	asset: &Value,
+	bytes: &[u8],
+	source_file_path: Option<&Path>,
+	byte_offset: Option<u64>,
+	keep_encoded_bytes: bool,
+) {
+	let id = asset.get("id").and_then(Value::as_str).unwrap_or("");
+	let mime_type = asset.get("mimeType").and_then(Value::as_str).unwrap_or("");
+	let source_pixel_format = asset.get("sourcePixelFormat").and_then(Value::as_str);
+	let channels = asset.get("channels").and_then(Value::as_str);
+	let decoded = match decode_unavatar_texture_asset(bytes, mime_type, source_pixel_format, channels) {
+		Ok(image) => image,
+		Err(error) => {
+			report.lost_features.push(un_avatar_core::LostFeature {
+				feature: format!("UN_avatar.textureAssets[{id}]"),
+				detail: Some(error),
+			});
+			return;
+		}
+	};
+	*source_bytes += bytes.len() as u64;
+	*decoded_pixels += u64::from(decoded.width) * u64::from(decoded.height);
+	let decoded_width = decoded.width;
+	let decoded_height = decoded.height;
+	let image_index = scene.images.len();
+	scene.images.push(decoded);
+	scene.image_sources.push(Some(UnaImageSourceMetadata {
+		name: asset.get("name").and_then(Value::as_str).map(str::to_string),
+		mime_type: Some(mime_type.to_string()),
+		uri: asset.get("assetPath").and_then(Value::as_str).map(str::to_string),
+		source_pixel_format: source_pixel_format.map(str::to_string),
+		channels: channels.map(str::to_string),
+		color_space: asset.get("colorSpace").and_then(Value::as_str).map(str::to_string),
+		texture_type: asset.get("textureType").and_then(Value::as_str).map(str::to_string),
+		texture_shape: asset.get("textureShape").and_then(Value::as_str).map(str::to_string),
+		source_layout: asset.get("sourceLayout").and_then(Value::as_str).map(str::to_string),
+		unity_generate_cubemap: asset.get("unityGenerateCubemap").and_then(Value::as_str).map(str::to_string),
+		srgb: asset.get("sRGB").or_else(|| asset.get("srgb")).and_then(Value::as_bool),
+		sampler: asset.get("sampler").map(sampler_from_root_json),
+		width: Some(decoded_width),
+		height: Some(decoded_height),
+		byte_offset,
+		byte_length: bytes.len() as u64,
+		source_hash: source_hash64(bytes),
+		source_file_path: source_file_path.map(Path::to_path_buf),
+		encoded_bytes: keep_encoded_bytes.then(|| bytes.to_vec()),
+	}));
+	map.insert(id.to_string(), image_index);
+}
+
+fn unavatar_texture_assets(root: &Value) -> Option<&Vec<Value>> {
+	root.get("extensions")
+		.and_then(Value::as_object)
+		.and_then(|extensions| extensions.get(UN_AVATAR_EXTENSION_NAME))
+		.and_then(|ext| ext.get("textureAssets"))
+		.and_then(Value::as_array)
+}
+
+fn texture_asset_bin_range(root: &Value, asset: &Value) -> Option<Range<usize>> {
 	let view_index = asset.get("bufferView").and_then(Value::as_u64)? as usize;
 	let view = root.get("bufferViews").and_then(Value::as_array)?.get(view_index)?;
 	let offset = view.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
 	let length = view.get("byteLength").and_then(Value::as_u64)? as usize;
-	bin.get(offset..offset.checked_add(length)?)
+	Some(offset..offset.checked_add(length)?)
+}
+
+fn texture_asset_bytes<'a>(root: &Value, bin: &'a [u8], asset: &Value) -> Option<&'a [u8]> {
+	let range = texture_asset_bin_range(root, asset)?;
+	bin.get(range)
 }
 
 fn decode_unavatar_texture_asset(
@@ -10723,7 +10827,7 @@ impl AvatarImporter for GltfImporter {
 		let mut root_json: Option<Value> = None;
 		let mut original_image_sources: Option<Vec<Option<UnaImageSourceMetadata>>> = None;
 		let mut original_glb_bin: Option<Vec<u8>> = None;
-		let mut original_glb_bytes: Option<Vec<u8>> = None;
+		let mut original_glb_file_path: Option<std::path::PathBuf> = None;
 		let mut original_glb_bin_range: Option<Range<usize>> = None;
 		let import_started = Instant::now();
 		let mut import_profile_messages = Vec::new();
@@ -10829,7 +10933,7 @@ impl AvatarImporter for GltfImporter {
 						imported.3.image_decode_workers
 					));
 					if bytes.starts_with(b"glTF") {
-						original_glb_bytes = Some(bytes);
+						original_glb_file_path = Some(path.clone());
 					}
 					(Some(path), imported.0, imported.1, imported.2)
 				} else if path
@@ -10977,12 +11081,17 @@ impl AvatarImporter for GltfImporter {
 			scene_started.elapsed().as_millis()
 		));
 		let mut texture_asset_map = BTreeMap::new();
-		let original_glb_bin_slice = original_glb_bin.as_deref().or_else(|| {
-			let bytes = original_glb_bytes.as_deref()?;
-			let range = original_glb_bin_range.as_ref()?;
-			bytes.get(range.clone())
-		});
-		if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin_slice) {
+		if let (Some(root), Some(source_file_path), Some(bin_range)) =
+			(root_json.as_ref(), original_glb_file_path.as_ref(), original_glb_bin_range.as_ref())
+		{
+			let step_started = Instant::now();
+			texture_asset_map =
+				append_unavatar_texture_assets_from_file(&mut scene, root, source_file_path, bin_range.start as u64, &mut report);
+			record_gltf_import_profile_step(&mut report, "append_texture_assets", step_started);
+			let step_started = Instant::now();
+			apply_unavatar_material_texture_asset_refs(&mut scene, root, &texture_asset_map);
+			record_gltf_import_profile_step(&mut report, "apply_texture_asset_refs", step_started);
+		} else if let (Some(root), Some(bin)) = (root_json.as_ref(), original_glb_bin.as_deref()) {
 			let step_started = Instant::now();
 			texture_asset_map = append_unavatar_texture_assets(&mut scene, root, bin, &mut report);
 			record_gltf_import_profile_step(&mut report, "append_texture_assets", step_started);
