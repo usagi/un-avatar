@@ -9763,7 +9763,7 @@ mod tests {
 	}
 
 	fn collect_static_i18n_keys_from_text(text: &str, out: &mut BTreeSet<String>) {
-		for marker in ["$_(\"", "labelKey: \"", "hintKey: \""] {
+		for marker in ["$_(\"", "translate(\"", "labelKey: \"", "hintKey: \""] {
 			let mut rest = text;
 			while let Some(pos) = rest.find(marker) {
 				let key_start = pos + marker.len();
