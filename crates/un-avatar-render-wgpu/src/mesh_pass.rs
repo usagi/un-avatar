@@ -1577,6 +1577,17 @@ fn liltoon_uses_id_mask(id_mask: &un_avatar_core::UnaLilToonLikeIdMask) -> bool 
 	id_mask.compile_factor > 0.5 || liltoon_id_mask_has_runtime_controls(id_mask)
 }
 
+fn liltoon_udim_discard_has_runtime_rows(udim: &un_avatar_core::UnaLilToonLikeUdimDiscard) -> bool {
+	udim.row0_factor.iter().any(|value| *value > 0.0001)
+		|| udim.row1_factor.iter().any(|value| *value > 0.0001)
+		|| udim.row2_factor.iter().any(|value| *value > 0.0001)
+		|| udim.row3_factor.iter().any(|value| *value > 0.0001)
+}
+
+fn liltoon_uses_udim_discard(udim: &un_avatar_core::UnaLilToonLikeUdimDiscard) -> bool {
+	udim.compile_factor > 0.5 || liltoon_udim_discard_has_runtime_rows(udim)
+}
+
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = BTreeSet::new();
 	push_texture_index(&mut indices, material.base_color_texture_index);
@@ -2233,7 +2244,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			dissolve: has_dissolve,
 			parallax: lil_enabled(liltoon_like.parallax.enabled_factor),
 			id_mask: liltoon_uses_id_mask(&liltoon_like.id_mask),
-			udim_discard: liltoon_like.udim_discard.compile_factor > 0.5,
+			udim_discard: liltoon_uses_udim_discard(&liltoon_like.udim_discard),
 			audio_link: material_needs_audio_link_texture(material, shading),
 			shadow_layers: lil_enabled(liltoon_like.shadow.enabled_factor),
 			matcap,
@@ -7102,14 +7113,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		.unwrap_or([0.0; 4]);
 	let udim_discard_params = liltoon_like
 		.map(|u| {
-			let row_sum = u.udim_discard.row0_factor.iter().copied().sum::<f32>()
-				+ u.udim_discard.row1_factor.iter().copied().sum::<f32>()
-				+ u.udim_discard.row2_factor.iter().copied().sum::<f32>()
-				+ u.udim_discard.row3_factor.iter().copied().sum::<f32>();
 			[
 				u.udim_discard
 					.compile_factor
-					.max(if row_sum > 0.0001 { 1.0 } else { 0.0 })
+					.max(if liltoon_udim_discard_has_runtime_rows(&u.udim_discard) {
+						1.0
+					} else {
+						0.0
+					})
 					.clamp(0.0, 1.0),
 				u.udim_discard.mode_factor.clamp(0.0, 1.0),
 				u.udim_discard.uv_factor.clamp(0.0, 3.0),
@@ -11338,6 +11349,20 @@ mod tests {
 
 		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
 		assert!(features.id_mask);
+	}
+
+	#[test]
+	fn untoon_shader_features_enable_udim_discard_from_runtime_rows() {
+		let mut liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon.udim_discard.row0_factor[1] = 1.0;
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon),
+			..Default::default()
+		};
+
+		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(features.udim_discard);
 	}
 
 	#[test]
