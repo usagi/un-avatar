@@ -108,6 +108,10 @@ fn mark_texture_role(roles: &mut [TextureRole], index: Option<usize>, role: Text
 	*slot = merge_texture_role(*slot, role);
 }
 
+fn lil_enabled(value: f32) -> bool {
+	value > 0.5
+}
+
 fn texture_role_from_source_metadata(source: &un_avatar_core::UnaImageSourceMetadata) -> Option<TextureRole> {
 	let texture_type = source.texture_type.as_deref().unwrap_or("").to_ascii_lowercase();
 	let color_space = source.color_space.as_deref().unwrap_or("").to_ascii_lowercase();
@@ -147,102 +151,147 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
 		if let Some(liltoon_like) = mat.liltoon_like_runtime() {
-			mark_texture_role(&mut roles, liltoon_like.main_color.gradation_texture_index, TextureRole::Data);
 			mark_texture_role(
 				&mut roles,
 				liltoon_like.main_color.main_color_adjust_mask_texture_index,
 				TextureRole::Data,
 			);
-			mark_texture_role(&mut roles, liltoon_like.main_color.second_texture_index, TextureRole::GenericColor);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.second_blend_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.second_dissolve.mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.second_dissolve.noise_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(&mut roles, liltoon_like.main_color.third_texture_index, TextureRole::GenericColor);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.third_blend_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.third_dissolve.mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.third_dissolve.noise_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(&mut roles, liltoon_like.normal.second_texture_index, TextureRole::Normal);
-			mark_texture_role(&mut roles, liltoon_like.shadow.color_texture_index, TextureRole::GenericColor);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.shadow.second_color_texture_index,
-				TextureRole::GenericColor,
-			);
-			mark_texture_role(&mut roles, liltoon_like.shadow.third_color_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.shadow.strength_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.shadow.border_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.shadow.blur_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.matcap.texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.matcap.blend_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.matcap.second_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.matcap.second_blend_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.reflection.color_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.reflection.smoothness_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.reflection.metallic_texture_index, TextureRole::Data);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.reflection.anisotropy_tangent_texture_index,
-				TextureRole::Normal,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.reflection.anisotropy_scale_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index,
-				TextureRole::Data,
-			);
-			mark_texture_role(&mut roles, liltoon_like.rim.texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.rim.shade_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.backlight.texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.glitter.color_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.glitter.shape_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.dissolve.mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.dissolve.noise_mask_texture_index, TextureRole::Data);
+			if lil_enabled(liltoon_like.main_color.gradation_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.main_color.gradation_texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.main_color.second_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.main_color.second_texture_index, TextureRole::GenericColor);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.second_blend_mask_texture_index,
+					TextureRole::Data,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.second_dissolve.mask_texture_index,
+					TextureRole::Data,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.second_dissolve.noise_mask_texture_index,
+					TextureRole::Data,
+				);
+			}
+			if lil_enabled(liltoon_like.main_color.third_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.main_color.third_texture_index, TextureRole::GenericColor);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.third_blend_mask_texture_index,
+					TextureRole::Data,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.third_dissolve.mask_texture_index,
+					TextureRole::Data,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.third_dissolve.noise_mask_texture_index,
+					TextureRole::Data,
+				);
+			}
+			if lil_enabled(liltoon_like.normal.second_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.normal.second_texture_index, TextureRole::Normal);
+				mark_texture_role(&mut roles, liltoon_like.normal.second_scale_mask_texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.shadow.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.shadow.color_texture_index, TextureRole::GenericColor);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.shadow.second_color_texture_index,
+					TextureRole::GenericColor,
+				);
+				mark_texture_role(&mut roles, liltoon_like.shadow.third_color_texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.shadow.strength_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.shadow.border_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.shadow.blur_mask_texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.matcap.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.matcap.texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.matcap.blend_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.matcap.bump_texture_index, TextureRole::Normal);
+			}
+			if lil_enabled(liltoon_like.matcap.second_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.matcap.second_texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.matcap.second_blend_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.matcap.second_bump_texture_index, TextureRole::Normal);
+			}
+			if lil_enabled(liltoon_like.reflection.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.reflection.color_texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.reflection.smoothness_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.reflection.metallic_texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.reflection.anisotropy_enabled_factor) {
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.reflection.anisotropy_tangent_texture_index,
+					TextureRole::Normal,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.reflection.anisotropy_scale_mask_texture_index,
+					TextureRole::Data,
+				);
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index,
+					TextureRole::Data,
+				);
+			}
+			if lil_enabled(liltoon_like.rim.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.rim.texture_index, TextureRole::GenericColor);
+			}
+			if lil_enabled(liltoon_like.rim.shade_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.rim.shade_mask_texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.backlight.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.backlight.texture_index, TextureRole::GenericColor);
+			}
+			if lil_enabled(liltoon_like.glitter.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.glitter.color_texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.glitter.shape_texture_index, TextureRole::Data);
+			}
+			if liltoon_like.dissolve.params_factor[0] > 0.5 {
+				mark_texture_role(&mut roles, liltoon_like.dissolve.mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.dissolve.noise_mask_texture_index, TextureRole::Data);
+			}
 			mark_texture_role(&mut roles, liltoon_like.parallax.texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.emission.texture_index, TextureRole::Emissive);
-			mark_texture_role(&mut roles, liltoon_like.emission.blend_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.emission.gradation_texture_index, TextureRole::Emissive);
-			mark_texture_role(&mut roles, liltoon_like.emission.second_texture_index, TextureRole::Emissive);
-			mark_texture_role(&mut roles, liltoon_like.emission.second_blend_mask_texture_index, TextureRole::Data);
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.emission.second_gradation_texture_index,
-				TextureRole::Emissive,
-			);
-			mark_texture_role(&mut roles, liltoon_like.outline.texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, liltoon_like.outline.width_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.alpha_mask.texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.fur.vector_texture_index, TextureRole::Normal);
-			mark_texture_role(&mut roles, liltoon_like.fur.length_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.fur.noise_mask_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, liltoon_like.fur.mask_texture_index, TextureRole::Data);
+			if lil_enabled(liltoon_like.emission.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.emission.texture_index, TextureRole::Emissive);
+				mark_texture_role(&mut roles, liltoon_like.emission.blend_mask_texture_index, TextureRole::Data);
+				if lil_enabled(liltoon_like.emission.gradation_enabled_factor) {
+					mark_texture_role(&mut roles, liltoon_like.emission.gradation_texture_index, TextureRole::Emissive);
+				}
+			}
+			if lil_enabled(liltoon_like.emission.second_enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.emission.second_texture_index, TextureRole::Emissive);
+				mark_texture_role(&mut roles, liltoon_like.emission.second_blend_mask_texture_index, TextureRole::Data);
+				if lil_enabled(liltoon_like.emission.second_gradation_enabled_factor) {
+					mark_texture_role(
+						&mut roles,
+						liltoon_like.emission.second_gradation_texture_index,
+						TextureRole::Emissive,
+					);
+				}
+			}
+			if lil_enabled(liltoon_like.outline.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.outline.texture_index, TextureRole::GenericColor);
+				mark_texture_role(&mut roles, liltoon_like.outline.width_mask_texture_index, TextureRole::Data);
+			}
+			if liltoon_like.alpha_mask.mode_factor > 0.5 {
+				mark_texture_role(&mut roles, liltoon_like.alpha_mask.texture_index, TextureRole::Data);
+			}
+			if lil_enabled(liltoon_like.fur.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.fur.vector_texture_index, TextureRole::Normal);
+				mark_texture_role(&mut roles, liltoon_like.fur.length_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.fur.noise_mask_texture_index, TextureRole::Data);
+				mark_texture_role(&mut roles, liltoon_like.fur.mask_texture_index, TextureRole::Data);
+			}
 		}
 	}
 	for (index, source) in scene.image_sources.iter().enumerate() {
@@ -491,6 +540,7 @@ mod tests {
 		scene.images.push(image());
 		scene.image_sources.push(None);
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.normal.second_enabled_factor = 1.0;
 		liltoon_like.normal.second_texture_index = Some(2);
 		scene.materials.push(UnaMaterialPbr {
 			shading: un_avatar_core::UnaShadingModel::LilToonLike,
@@ -502,11 +552,17 @@ mod tests {
 		scene.images.extend([image(), image(), image(), image(), image(), image()]);
 		scene.image_sources.extend([None, None, None, None, None, None]);
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
 		liltoon_like.shadow.strength_mask_texture_index = Some(3);
+		liltoon_like.emission.enabled_factor = 1.0;
+		liltoon_like.emission.gradation_enabled_factor = 1.0;
 		liltoon_like.emission.gradation_texture_index = Some(4);
+		liltoon_like.reflection.anisotropy_enabled_factor = 1.0;
 		liltoon_like.reflection.anisotropy_tangent_texture_index = Some(5);
+		liltoon_like.alpha_mask.mode_factor = 1.0;
 		liltoon_like.alpha_mask.texture_index = Some(6);
 		liltoon_like.main_color.main_color_adjust_mask_texture_index = Some(7);
+		liltoon_like.main_color.gradation_enabled_factor = 1.0;
 		liltoon_like.main_color.gradation_texture_index = Some(8);
 		scene.materials.push(UnaMaterialPbr {
 			shading: un_avatar_core::UnaShadingModel::LilToonLike,
@@ -520,5 +576,43 @@ mod tests {
 		assert_eq!(roles[6], TextureRole::Data);
 		assert_eq!(roles[7], TextureRole::Data);
 		assert_eq!(roles[8], TextureRole::Data);
+	}
+
+	#[test]
+	fn texture_roles_skip_disabled_liltoon_feature_slots() {
+		let image = || un_avatar_core::UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.normal.second_texture_index = Some(0);
+		liltoon_like.shadow.enabled_factor = 0.0;
+		liltoon_like.shadow.strength_mask_texture_index = Some(1);
+		liltoon_like.emission.enabled_factor = 0.0;
+		liltoon_like.emission.texture_index = Some(2);
+		liltoon_like.alpha_mask.mode_factor = 0.0;
+		liltoon_like.alpha_mask.texture_index = Some(3);
+		let scene = UnaSceneSnapshot {
+			images: vec![image(), image(), image(), image()],
+			image_sources: vec![None, None, None, None],
+			materials: vec![UnaMaterialPbr {
+				shading: un_avatar_core::UnaShadingModel::LilToonLike,
+				liltoon_like: Some(liltoon_like),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(
+			texture_roles_for_scene(&scene),
+			vec![
+				TextureRole::GenericColor,
+				TextureRole::GenericColor,
+				TextureRole::GenericColor,
+				TextureRole::GenericColor
+			]
+		);
 	}
 }
