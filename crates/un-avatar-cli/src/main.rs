@@ -25,7 +25,6 @@ use un_avatar_io::{
 	FormatDescriptor, FormatId, ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
 };
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer, WardrobeApplyReport};
-use un_avatar_io_una::{io_registry_with_una, read_una_any, UnaFileV0};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
 
@@ -65,7 +64,26 @@ struct ValidateReport {
 #[derive(Serialize)]
 struct InspectReport {
 	path: String,
-	una: UnaFileV0,
+	import_format_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	import_provider_plugin_id: Option<String>,
+	import_report: ImportReport,
+	document: InspectDocumentSummary,
+}
+
+#[derive(Serialize)]
+struct InspectDocumentSummary {
+	has_scene: bool,
+	has_vrm: bool,
+	has_unavatar: bool,
+	node_count: usize,
+	root_count: usize,
+	mesh_count: usize,
+	mesh_primitive_count: usize,
+	material_count: usize,
+	image_count: usize,
+	skin_count: usize,
+	morph_target_count: usize,
 }
 
 #[derive(Serialize)]
@@ -1180,7 +1198,7 @@ fn merge_unique_plugin_dirs(env_entries: Vec<PathBuf>, cli: &[PathBuf]) -> Vec<P
 
 fn io_registry_for_cli(cli_plugin_dirs: &[PathBuf]) -> Result<IoRegistry, String> {
 	let dirs = merge_unique_plugin_dirs(plugin_dirs_from_env(), cli_plugin_dirs);
-	let mut reg = io_registry_with_una();
+	let mut reg = IoRegistry::new();
 	register_vrm_importer(&mut reg);
 	register_gltf_importer(&mut reg);
 	for dir in dirs {
@@ -1286,13 +1304,13 @@ enum Commands {
 		#[command(subcommand)]
 		command: FormatsCommands,
 	},
-	/// アバターを別形式へ書き出す（現状は UNA v0 のみ）
+	/// アバターを別形式へ書き出す
 	Convert {
-		/// 入力ファイル、または `.una.d` ディレクトリ
+		/// 入力ファイル
 		input: PathBuf,
-		/// 出力 `.una` ファイル、または `.una.d` ディレクトリ
+		/// 出力ファイル
 		output: PathBuf,
-		/// 使う importer の FormatId（例: io.un-avatar.una）。省略時はパスから probe
+		/// 使う importer の FormatId。省略時はパスから probe
 		#[arg(long, value_name = "FORMAT_ID")]
 		input_format: Option<String>,
 		/// 使う exporter の FormatId。省略時は出力パスから選択
@@ -1302,9 +1320,9 @@ enum Commands {
 		#[arg(long, value_name = "PATH")]
 		json_report: Option<PathBuf>,
 	},
-	/// UNA など、Importer 経由で読めるか検証する（終了コード 0/1）
+	/// Importer 経由で読めるか検証する（終了コード 0/1）
 	Validate {
-		/// `.una` ファイルまたは `.una.d` ディレクトリ
+		/// 入力ファイル
 		path: PathBuf,
 		/// 使う importer の FormatId。省略時はパスから probe
 		#[arg(long, value_name = "FORMAT_ID")]
@@ -1313,7 +1331,7 @@ enum Commands {
 		#[arg(long)]
 		json: bool,
 	},
-	/// UNA ファイル／バンドルを読み、スキーマ上の概要を表示する
+	/// Importer 経由でモデルを読み、軽量な概要を表示する
 	Inspect {
 		path: PathBuf,
 		#[arg(long)]
@@ -1321,7 +1339,7 @@ enum Commands {
 	},
 	/// Importer 経由でモデルを読み、材質・Humanoid・表情・VRM ヒントを診断する
 	Diagnose {
-		/// 入力ファイル、または `.una.d` ディレクトリ
+		/// 入力ファイル
 		path: PathBuf,
 		/// 使う importer の FormatId。省略時はパスから probe
 		#[arg(long, value_name = "FORMAT_ID")]
@@ -1408,7 +1426,7 @@ fn looks_like_input_path(arg: &OsStr) -> bool {
 		.map(|ext| {
 			matches!(
 				ext.to_ascii_lowercase().as_str(),
-				"vrm" | "glb" | "gltf" | "unavatar" | "una" | "exampleavatar"
+				"vrm" | "glb" | "gltf" | "unavatar" | "exampleavatar"
 			)
 		})
 		.unwrap_or(false);
@@ -1461,7 +1479,7 @@ fn run(cli: Cli) -> Result<(), String> {
 			json_report,
 		} => run_convert(&plugin_dirs, input, output, input_format, output_format, json_report),
 		Commands::Validate { path, input_format, json } => run_validate(&plugin_dirs, path, input_format, json),
-		Commands::Inspect { path, json } => run_inspect(path, json),
+		Commands::Inspect { path, json } => run_inspect(&plugin_dirs, path, json),
 		Commands::Diagnose {
 			path,
 			input_format,
@@ -1614,9 +1632,8 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 		match reg.best_importer_for(&probe) {
 			Some(i) => i,
 			None => {
-				let msg =
-					"入力に合う importer が見つかりません（`.una` または `manifest.toml` 付き `.una.d` を指定、`--plugin-dir`、または --input-format）"
-						.to_string();
+				let msg = "入力に合う importer が見つかりません（VRM / glTF / .unavatar、`--plugin-dir`、または --input-format を確認）"
+					.to_string();
 				if json {
 					write_validate_stdout(&ValidateReport {
 						valid: false,
@@ -1674,17 +1691,88 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 	}
 }
 
-fn run_inspect(path: PathBuf, json: bool) -> Result<(), String> {
+fn inspect_document_summary(document: &UnaDocument) -> InspectDocumentSummary {
+	let Some(scene) = document.scene.as_ref() else {
+		return InspectDocumentSummary {
+			has_scene: false,
+			has_vrm: document.vrm.is_some(),
+			has_unavatar: document.unavatar.is_some(),
+			node_count: 0,
+			root_count: 0,
+			mesh_count: 0,
+			mesh_primitive_count: 0,
+			material_count: 0,
+			image_count: 0,
+			skin_count: 0,
+			morph_target_count: 0,
+		};
+	};
+	let mesh_primitive_count = scene.meshes.iter().map(Vec::len).sum();
+	let morph_target_count = scene.meshes.iter().flatten().map(|primitive| primitive.morph_targets.len()).sum();
+	InspectDocumentSummary {
+		has_scene: true,
+		has_vrm: document.vrm.is_some(),
+		has_unavatar: document.unavatar.is_some(),
+		node_count: scene.nodes.len(),
+		root_count: scene.roots.len(),
+		mesh_count: scene.meshes.len(),
+		mesh_primitive_count,
+		material_count: scene.materials.len(),
+		image_count: scene.images.len(),
+		skin_count: scene.skins.len(),
+		morph_target_count,
+	}
+}
+
+fn run_inspect(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Result<(), String> {
 	let path_str = path.to_string_lossy().to_string();
-	let file = read_una_any(&path).map_err(|e| e.to_string())?;
+	let reg = io_registry_for_cli(plugin_dirs)?;
+	let cached_bytes = cached_binary_import_bytes(&path);
+	let probe = import_probe_for_path(&path, cached_bytes.clone());
+	let importer = reg.best_importer_for(&probe).ok_or_else(|| {
+		"入力に合う importer が見つかりません（VRM / glTF / .unavatar、`--plugin-dir`、または --input-format を確認）".to_string()
+	})?;
+	let desc = importer.descriptor();
+	let mut ictx = ImportContext {
+		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
+		temp_dir: std::env::temp_dir(),
+		initial_wardrobe_set: None,
+		defer_initial_image_decode: false,
+		profile: false,
+	};
+	let imported = importer
+		.import(&mut ictx, import_input_for_path(&path, &desc.id, cached_bytes), ImportOptions)
+		.map_err(|e| e.to_string())?;
+	let summary = inspect_document_summary(&imported.document);
 	if json {
-		let out = InspectReport { path: path_str, una: file };
+		let out = InspectReport {
+			path: path_str,
+			import_format_id: desc.id.0,
+			import_provider_plugin_id: desc.provider_plugin_id,
+			import_report: imported.report,
+			document: summary,
+		};
 		write_json_stdout(&out)?;
 		return Ok(());
 	}
 	println!("path: {}", path.display());
-	println!("format_version: {}", file.format_version);
-	println!("scene.empty: {}", file.scene.empty);
+	let plug = desc.provider_plugin_id.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
+	println!("importer: {}{}", desc.id.0, plug);
+	println!(
+		"document: scene={} vrm={} unavatar={}",
+		summary.has_scene, summary.has_vrm, summary.has_unavatar
+	);
+	println!(
+		"scene: nodes={} roots={} meshes={} primitives={} materials={} images={} skins={} morph_targets={}",
+		summary.node_count,
+		summary.root_count,
+		summary.mesh_count,
+		summary.mesh_primitive_count,
+		summary.material_count,
+		summary.image_count,
+		summary.skin_count,
+		summary.morph_target_count
+	);
 	Ok(())
 }
 
@@ -6161,7 +6249,7 @@ fn run_convert(
 			.ok_or_else(|| format!("指定の importer が登録されていません: {s}"))?
 	} else {
 		reg.best_importer_for(&probe).ok_or_else(|| {
-			"入力に合う importer が見つかりません（`.una` または `manifest.toml` 付き `.una.d` を指定、`--plugin-dir`、または --input-format）".to_string()
+			"入力に合う importer が見つかりません（VRM / glTF / .unavatar、`--plugin-dir`、または --input-format を確認）".to_string()
 		})?
 	};
 	let mut ictx = ImportContext {
@@ -6189,9 +6277,8 @@ fn run_convert(
 		}
 		exp
 	} else {
-		reg.best_exporter_for(&imported.document, &output).ok_or_else(|| {
-			"出力に使える exporter が見つかりません（`.una` または `.una.d` のパスを指定、または --output-format）".to_string()
-		})?
+		reg.best_exporter_for(&imported.document, &output)
+			.ok_or_else(|| "出力に使える exporter が見つかりません（拡張子、`--plugin-dir`、または --output-format を確認）".to_string())?
 	};
 	let export_desc = exporter.descriptor();
 	let mut ectx = ExportContext {
@@ -6225,10 +6312,6 @@ fn debug_preview<T: std::fmt::Debug>(items: &[T], limit: usize) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	use std::fs;
-
-	use un_avatar_io_una::write_una_path;
 
 	fn test_scene_node(name: &str, transform: [f32; 16], children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
 		un_avatar_core::UnaSceneNode {
@@ -6346,47 +6429,10 @@ mod tests {
 	}
 
 	#[test]
-	fn io_registry_for_cli_empty_is_una_vrm_and_gltf() {
+	fn io_registry_for_cli_empty_is_vrm_and_gltf() {
 		let reg = io_registry_for_cli(&[]).unwrap();
-		assert_eq!(reg.importer_descriptors().len(), 3);
-		assert_eq!(reg.exporter_descriptors().len(), 1);
-	}
-
-	#[test]
-	fn validate_import_pipeline_accepts_default_una_file() {
-		let dir = std::env::temp_dir().join(format!("ua-cli-val-{}", std::process::id()));
-		let _ = fs::remove_dir_all(&dir);
-		fs::create_dir_all(&dir).unwrap();
-		let path = dir.join("t.una");
-		write_una_path(&path, &UnaFileV0::default()).unwrap();
-		let reg = io_registry_with_una();
-		let probe = ImportProbe {
-			path_hint: Some(path.clone()),
-			bytes: None,
-		};
-		let imp = reg.best_importer_for(&probe).expect("importer");
-		let mut ctx = ImportContext {
-			asset_root: dir.clone(),
-			temp_dir: std::env::temp_dir(),
-			initial_wardrobe_set: None,
-			defer_initial_image_decode: false,
-			profile: false,
-		};
-		imp.import(&mut ctx, ImportInput::Path(path), ImportOptions).unwrap();
-		let _ = fs::remove_dir_all(&dir);
-	}
-
-	#[test]
-	fn inspect_reads_una_summary_fields() {
-		let dir = std::env::temp_dir().join(format!("ua-cli-inspect-{}", std::process::id()));
-		let _ = fs::remove_dir_all(&dir);
-		fs::create_dir_all(&dir).unwrap();
-		let path = dir.join("x.una");
-		write_una_path(&path, &UnaFileV0::default()).unwrap();
-		let f = read_una_any(&path).unwrap();
-		assert_eq!(f.format_version, un_avatar_io_una::UNA_FORMAT_VERSION_V0);
-		assert!(f.scene.empty);
-		let _ = fs::remove_dir_all(&dir);
+		assert_eq!(reg.importer_descriptors().len(), 2);
+		assert_eq!(reg.exporter_descriptors().len(), 0);
 	}
 
 	#[test]
@@ -6689,7 +6735,7 @@ mod tests {
 		assert_eq!(report.scene.scoped_resident_material_count, 1);
 		assert_eq!(report.scene.scoped_resident_image_count, 1);
 		assert_eq!(report.scene.scoped_resident_dynamics_count, 1);
-		assert_eq!(unavatar.asset_group_count, 3);
+		assert_eq!(unavatar.asset_group_count, 2);
 		assert_eq!(unavatar.modular_avatar_component_count, 10);
 		assert_eq!(unavatar.modular_avatar_component_count_alias, 10);
 		assert_eq!(unavatar.modular_avatar_support_counts.get("resolver"), Some(&1));
@@ -7867,43 +7913,14 @@ mod tests {
 	}
 
 	#[test]
-	fn validate_import_works_with_explicit_format_on_path_without_una_suffix() {
-		let dir = std::env::temp_dir().join(format!("ua-cli-val-fmt-{}", std::process::id()));
-		let _ = fs::remove_dir_all(&dir);
-		fs::create_dir_all(&dir).unwrap();
-		let path = dir.join("blob");
-		write_una_path(&path, &UnaFileV0::default()).unwrap();
-		let reg = io_registry_with_una();
-		let imp = reg.importer_by_id(&FormatId::new("io.un-avatar.una")).expect("una importer");
-		let mut ctx = ImportContext {
-			asset_root: dir.clone(),
-			temp_dir: std::env::temp_dir(),
-			initial_wardrobe_set: None,
-			defer_initial_image_decode: false,
-			profile: false,
-		};
-		imp.import(&mut ctx, ImportInput::Path(path), ImportOptions).unwrap();
-		let _ = fs::remove_dir_all(&dir);
-	}
-
-	#[test]
-	fn best_exporter_matches_una_d_suffix() {
-		let reg = io_registry_with_una();
-		let doc = un_avatar_io::UnaDocument::default();
-		let out = PathBuf::from("avatar.una.d");
-		let e = reg.best_exporter_for(&doc, &out).expect("exporter");
-		assert_eq!(e.descriptor().id.0, "io.un-avatar.una");
-	}
-
-	#[test]
 	fn convert_json_report_serializes() {
 		let mut import_report = ImportReport::default();
 		import_report.push_info("import line");
 		let mut export_report = ExportReport::default();
 		export_report.push_info("export line");
 		let bundle = ConvertJsonReport {
-			import_format_id: "io.un-avatar.una".into(),
-			export_format_id: "io.un-avatar.una".into(),
+			import_format_id: "io.un-avatar.gltf".into(),
+			export_format_id: "io.un-avatar.example.avatar".into(),
 			import_provider_plugin_id: None,
 			export_provider_plugin_id: None,
 			import_report,
@@ -7912,7 +7929,7 @@ mod tests {
 		let v = serde_json::to_value(&bundle).unwrap();
 		assert!(v.get("import_report").is_some());
 		assert!(v.get("export_report").is_some());
-		assert_eq!(v["import_format_id"], "io.un-avatar.una");
+		assert_eq!(v["import_format_id"], "io.un-avatar.gltf");
 		assert!(v.get("import_provider_plugin_id").is_none());
 		assert!(v.get("export_provider_plugin_id").is_none());
 		assert!(v["import_report"]["diagnostics"].is_array());
@@ -7924,7 +7941,7 @@ mod tests {
 	fn convert_json_report_includes_provider_ids_when_set() {
 		let bundle = ConvertJsonReport {
 			import_format_id: "io.un-avatar.example.avatar".into(),
-			export_format_id: "io.un-avatar.una".into(),
+			export_format_id: "io.un-avatar.example.avatar".into(),
 			import_provider_plugin_id: Some("network.usagi.un_avatar.plugin.sample_io".into()),
 			export_provider_plugin_id: None,
 			import_report: ImportReport::default(),
@@ -7941,12 +7958,12 @@ mod tests {
 			valid: true,
 			path: "p".into(),
 			error: None,
-			format_id: Some("io.un-avatar.una".into()),
+			format_id: Some("io.un-avatar.gltf".into()),
 			provider_plugin_id: None,
 		};
 		let v = serde_json::to_value(&r).unwrap();
 		assert!(v.get("provider_plugin_id").is_none());
-		assert_eq!(v["format_id"], "io.un-avatar.una");
+		assert_eq!(v["format_id"], "io.un-avatar.gltf");
 	}
 
 	#[test]
@@ -7985,44 +8002,24 @@ mod tests {
 			.find(|x| x["id"] == "io.un-avatar.example.avatar")
 			.expect("sample exporter row");
 		assert_eq!(exp["provider_plugin_id"], "network.usagi.un_avatar.plugin.sample_io");
-		let una = v["importers"]
-			.as_array()
-			.unwrap()
-			.iter()
-			.find(|x| x["id"] == "io.un-avatar.una")
-			.expect("una");
-		assert!(una.get("provider_plugin_id").is_none());
 	}
 
 	#[test]
-	fn formats_list_json_contains_una() {
-		let reg = io_registry_with_una();
+	fn formats_list_json_contains_builtin_importers() {
+		let reg = io_registry_for_cli(&[]).unwrap();
 		let out = FormatsListJson {
 			importers: reg.importer_descriptors(),
 			exporters: reg.exporter_descriptors(),
 		};
 		let v = serde_json::to_value(&out).unwrap();
-		assert!(!v["importers"].as_array().unwrap().is_empty());
-		assert_eq!(v["importers"][0]["id"], "io.un-avatar.una");
-	}
-
-	#[test]
-	fn formats_probe_json_has_positive_confidence_for_una_path() {
-		let reg = io_registry_with_una();
-		let v = serde_json::to_value(super::build_formats_probe_json(&reg, std::path::Path::new("model.una"))).unwrap();
-		let arr = v["importers"].as_array().expect("array");
-		let row = arr.iter().find(|x| x["format_id"] == "io.un-avatar.una").expect("una row");
-		assert!(row["confidence"].as_u64().unwrap() > 0);
-		assert!(row.get("provider_plugin_id").is_none());
-		assert_eq!(v["best_importer"], "io.un-avatar.una");
-		assert!(v.get("best_importer_provider_plugin_id").is_none());
-
-		let ex = v["exporters"].as_array().expect("exporters");
-		let erow = ex.iter().find(|x| x["format_id"] == "io.un-avatar.una").expect("una exporter row");
-		assert_eq!(erow["confidence"], 120);
-		assert!(erow.get("provider_plugin_id").is_none());
-		assert_eq!(v["best_exporter"], "io.un-avatar.una");
-		assert!(v.get("best_exporter_provider_plugin_id").is_none());
+		let ids: Vec<_> = v["importers"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.map(|x| x["id"].as_str().unwrap())
+			.collect();
+		assert!(ids.contains(&"io.un-avatar.vrm"));
+		assert!(ids.contains(&"io.un-avatar.gltf"));
 	}
 
 	#[test]
@@ -8049,13 +8046,5 @@ mod tests {
 		assert_eq!(erow["provider_plugin_id"], "network.usagi.un_avatar.plugin.sample_io");
 		assert_eq!(v["best_exporter"], "io.un-avatar.example.avatar");
 		assert_eq!(v["best_exporter_provider_plugin_id"], "network.usagi.un_avatar.plugin.sample_io");
-	}
-
-	#[test]
-	fn io_una_registry_resolves_importer_exporter_by_id() {
-		let reg = io_registry_with_una();
-		let id = FormatId::new("io.un-avatar.una");
-		assert!(reg.importer_by_id(&id).is_some());
-		assert!(reg.exporter_by_id(&id).is_some());
 	}
 }

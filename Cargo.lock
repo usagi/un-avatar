@@ -7058,7 +7058,6 @@ dependencies = [
  "un-avatar-core",
  "un-avatar-io",
  "un-avatar-io-gltf",
- "un-avatar-io-una",
  "un-avatar-io-vrm",
  "un-avatar-plugin-host",
  "un-avatar-skeleton",
@@ -7099,16 +7098,6 @@ dependencies = [
  "un-avatar-core",
  "un-avatar-io",
  "un-avatar-types",
-]
-
-[[package]]
-name = "un-avatar-io-una"
-version = "1.0.0"
-dependencies = [
- "serde",
- "toml 1.1.2+spec-1.1.0",
- "un-avatar-core",
- "un-avatar-io",
 ]
 
 [[package]]

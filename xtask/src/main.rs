@@ -968,31 +968,16 @@ fn run_un_avatar(repo: &Path, args: &[&str]) -> process::ExitStatus {
 		.expect("cargo run un-avatar を実行できない")
 }
 
-/// 最小 `.una` で validate / formats list / convert ラウンドトリップを確認する（CI と同趣旨）。
+/// CLI formats / sample plugin / convert 経路を確認する（CI と同趣旨）。
 fn run_smoke(repo: &Path) -> bool {
 	let mut dir = env::temp_dir();
 	dir.push(format!("un-avatar-xtask-smoke-{}", process::id()));
 	if fs::create_dir_all(&dir).is_err() {
 		return false;
 	}
-	let in_una = dir.join("in.una");
-	let out_una = dir.join("out.una");
-	let write_ok = (|| {
-		let mut f = fs::File::create(&in_una).ok()?;
-		writeln!(f, "format_version = 1").ok()?;
-		writeln!(f).ok()?;
-		writeln!(f, "[scene]").ok()?;
-		writeln!(f, "empty = true").ok()?;
-		Some(())
-	})();
-	if write_ok.is_none() {
-		let _ = fs::remove_dir_all(&dir);
-		return false;
-	}
-
-	let validate_in = run_un_avatar(repo, &["validate", in_una.to_str().expect("utf8 path")]).success();
-	if !validate_in {
-		eprintln!("smoke: validate in.una failed");
+	let in_plugin = dir.join("in.exampleavatar");
+	let out_plugin = dir.join("out.exampleavatar");
+	if fs::write(&in_plugin, b"sample plugin input\n").is_err() {
 		let _ = fs::remove_dir_all(&dir);
 		return false;
 	}
@@ -1014,11 +999,14 @@ fn run_smoke(repo: &Path) -> bool {
 		.current_dir(repo)
 		.output();
 	let list_ok = match list_out {
-		Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).contains("io.un-avatar.una"),
+		Ok(o) if o.status.success() => {
+			let s = String::from_utf8_lossy(&o.stdout);
+			s.contains("io.un-avatar.vrm") && s.contains("io.un-avatar.gltf")
+		}
 		_ => false,
 	};
 	if !list_ok {
-		eprintln!("smoke: formats list --json missing io.un-avatar.una");
+		eprintln!("smoke: formats list --json missing built-in importer");
 		let _ = fs::remove_dir_all(&dir);
 		return false;
 	}
@@ -1095,36 +1083,39 @@ fn run_smoke(repo: &Path) -> bool {
 		return false;
 	}
 
-	let convert_ok = run_un_avatar(repo, &["convert", in_una.to_str().expect("utf8"), out_una.to_str().expect("utf8")]).success();
-	if !convert_ok {
-		eprintln!("smoke: convert in.una -> out.una failed");
+	let validate_in = run_un_avatar(
+		repo,
+		&[
+			"--plugin-dir",
+			plugins_dir.to_str().expect("plugins path utf-8"),
+			"validate",
+			in_plugin.to_str().expect("utf8 path"),
+		],
+	)
+	.success();
+	if !validate_in {
+		eprintln!("smoke: validate in.exampleavatar failed");
 		let _ = fs::remove_dir_all(&dir);
 		return false;
 	}
 
-	let validate_out = run_un_avatar(repo, &["validate", out_una.to_str().expect("utf8")]).success();
-	if !validate_out {
-		eprintln!("smoke: validate out.una after convert failed");
-		let _ = fs::remove_dir_all(&dir);
-		return false;
-	}
-
-	let via_plugin = dir.join("via-plugin.exampleavatar");
 	let plugin_convert_ok = run_un_avatar(
 		repo,
 		&[
 			"--plugin-dir",
 			plugins_dir.to_str().expect("plugins path utf-8"),
 			"convert",
-			in_una.to_str().expect("utf8"),
-			via_plugin.to_str().expect("utf8"),
+			in_plugin.to_str().expect("utf8"),
+			out_plugin.to_str().expect("utf8"),
+			"--input-format",
+			"io.un-avatar.example.avatar",
 			"--output-format",
 			"io.un-avatar.example.avatar",
 		],
 	)
 	.success();
 	if !plugin_convert_ok {
-		eprintln!("smoke: convert in.una -> via-plugin.exampleavatar (stdio exporter) failed");
+		eprintln!("smoke: convert in.exampleavatar -> out.exampleavatar (stdio importer/exporter) failed");
 		let _ = fs::remove_dir_all(&dir);
 		return false;
 	}
@@ -3147,7 +3138,7 @@ commands:\n\
   fmt          cargo fmt --all\n\
   check        cargo check --workspace\n\
   test         cargo test --workspace\n\
-  smoke        一時 .una で CLI validate / formats list / sample plugin / convert を確認\n\
+  smoke        CLI formats list / sample plugin / convert を確認\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
   run-renderer  profile名またはmanifest pathからrenderer windowを起動\n\
   summarize-renderer-log renderer stderr log の主要startup/bench値をTSV要約\n\

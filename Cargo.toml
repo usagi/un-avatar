@@ -12,7 +12,6 @@ members = [
  "crates/un-avatar-io",
  "crates/un-avatar-io-gltf",
  "crates/un-avatar-io-vrm",
- "crates/un-avatar-io-una",
  "crates/un-avatar-optimizer",
  "crates/un-avatar-plugin-host",
  "plugins/sample-io-plugin",

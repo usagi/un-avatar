@@ -9054,14 +9054,14 @@ mod tests {
 	#[test]
 	fn import_report_serializes_source_format_when_set() {
 		let mut r = ImportReport::default();
-		r.source_format = Some(FormatId::new("io.un-avatar.una"));
+		r.source_format = Some(FormatId::new("io.un-avatar.gltf"));
 		r.status = ReportStatus::PartialSuccess;
 		r.preserved_extensions.push(PreservedExtension {
 			id: "ext".into(),
 			note: Some("blob".into()),
 		});
 		let v = serde_json::to_value(&r).unwrap();
-		assert_eq!(v["source_format"], "io.un-avatar.una");
+		assert_eq!(v["source_format"], "io.un-avatar.gltf");
 		assert_eq!(v["status"], "partial_success");
 		assert!(v["preserved_extensions"].is_array());
 	}
