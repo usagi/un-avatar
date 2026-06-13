@@ -33,6 +33,9 @@
 			</span>
 		{/if}
 	</div>
+	<button type="button" disabled={busy} onclick={() => onPrewarmSceneCache(settingId)}
+		><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
+	>
 	{#if liveRenderer}
 		<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}
 			><Monitor size={14} />{$_("profiles.live.view_renderer")}</button
@@ -44,9 +47,6 @@
 			><Camera size={14} />{$_("renderers.toolbar.screenshot")}</button
 		>
 	{:else}
-		<button type="button" disabled={busy} onclick={() => onPrewarmSceneCache(settingId)}
-			><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
-		>
 		<button type="button" disabled={busy} onclick={() => onLaunchProfile(settingId)}
 			><Play size={14} />{$_("profiles.actions.quick_run")}</button
 		>
