@@ -2187,22 +2187,20 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 		let has_dissolve = liltoon_like.dissolve.mask_texture_index.is_some()
 			|| liltoon_like.dissolve.noise_mask_texture_index.is_some()
 			|| liltoon_like.dissolve.params_factor[0].abs() > 0.00001
-			|| has_main_layer_dissolve;
+			|| ((lil_enabled(liltoon_like.main_color.second_enabled_factor) || lil_enabled(liltoon_like.main_color.third_enabled_factor))
+				&& has_main_layer_dissolve);
 		let main_layers = liltoon_like.main_color.second_enabled_factor > 0.5
 			|| liltoon_like.main_color.third_enabled_factor > 0.5
 			|| liltoon_like.main_color.gradation_enabled_factor > 0.5
 			|| liltoon_like.main_color.main_color_adjust_mask_texture_index.is_some();
-		let matcap = liltoon_like.matcap.enabled_factor > 0.5 || liltoon_like.matcap.texture_index.is_some();
-		let matcap_second = liltoon_like.matcap.second_enabled_factor > 0.5 || liltoon_like.matcap.second_texture_index.is_some();
+		let matcap = lil_enabled(liltoon_like.matcap.enabled_factor);
+		let matcap_second = lil_enabled(liltoon_like.matcap.second_enabled_factor);
 		let reflection = lil_enabled(liltoon_like.reflection.enabled_factor);
 		let reflection_cube = liltoon_uses_reflection_cube_texture(liltoon_like);
-		let anisotropy = liltoon_like.reflection.anisotropy_enabled_factor > 0.5
-			|| liltoon_like.reflection.anisotropy_tangent_texture_index.is_some()
-			|| liltoon_like.reflection.anisotropy_scale_mask_texture_index.is_some()
-			|| liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index.is_some();
-		let rim = liltoon_like.rim.enabled_factor > 0.5 || liltoon_like.rim.texture_index.is_some();
-		let emission = liltoon_like.emission.enabled_factor > 0.5 || liltoon_like.emission.texture_index.is_some();
-		let emission_second = liltoon_like.emission.second_enabled_factor > 0.5 || liltoon_like.emission.second_texture_index.is_some();
+		let anisotropy = lil_enabled(liltoon_like.reflection.anisotropy_enabled_factor);
+		let rim = lil_enabled(liltoon_like.rim.enabled_factor);
+		let emission = lil_enabled(liltoon_like.emission.enabled_factor);
+		let emission_second = lil_enabled(liltoon_like.emission.second_enabled_factor);
 		UntoonShaderFeatures {
 			profile_extensions: true,
 			main_layers,
@@ -2212,10 +2210,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			id_mask: liltoon_like.id_mask.compile_factor > 0.5,
 			udim_discard: liltoon_like.udim_discard.compile_factor > 0.5,
 			audio_link: material_needs_audio_link_texture(material, shading),
-			shadow_layers: liltoon_like.shadow.enabled_factor > 0.5
-				|| liltoon_like.shadow.color_texture_index.is_some()
-				|| liltoon_like.shadow.second_color_texture_index.is_some()
-				|| liltoon_like.shadow.third_color_texture_index.is_some(),
+			shadow_layers: lil_enabled(liltoon_like.shadow.enabled_factor),
 			matcap,
 			matcap_second,
 			matcap_custom_normal: liltoon_like.matcap.custom_normal_factor > 0.5 || liltoon_like.matcap.second_custom_normal_factor > 0.5,
@@ -2223,11 +2218,9 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			reflection_cube,
 			anisotropy,
 			rim,
-			rim_shade: liltoon_like.rim.shade_enabled_factor > 0.5 || liltoon_like.rim.shade_mask_texture_index.is_some(),
-			backlight: liltoon_like.backlight.enabled_factor > 0.5 || liltoon_like.backlight.texture_index.is_some(),
-			glitter: liltoon_like.glitter.enabled_factor > 0.5
-				|| liltoon_like.glitter.color_texture_index.is_some()
-				|| liltoon_like.glitter.shape_texture_index.is_some(),
+			rim_shade: lil_enabled(liltoon_like.rim.shade_enabled_factor),
+			backlight: lil_enabled(liltoon_like.backlight.enabled_factor),
+			glitter: lil_enabled(liltoon_like.glitter.enabled_factor),
 			emission,
 			emission_second,
 			distance_fade: liltoon_like.rendering.distance_fade_color_factor[3] > 0.00001
@@ -2236,7 +2229,7 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			fur: material_has_fur(material, shading, opts),
 			gem: liltoon_like.is_gem_profile(),
 			refraction: liltoon_like.needs_screen_refraction(),
-			normal_second: liltoon_like.normal.second_enabled_factor > 0.5 || liltoon_like.normal.second_texture_index.is_some(),
+			normal_second: lil_enabled(liltoon_like.normal.second_enabled_factor),
 		}
 	} else {
 		let mtoon = material.mtoon_like_runtime();
@@ -11208,6 +11201,59 @@ mod tests {
 
 		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13]);
 		assert_eq!(material_cube_texture_indices(&mat), vec![14]);
+	}
+
+	#[test]
+	fn untoon_shader_features_skip_disabled_liltoon_feature_slots() {
+		let mut liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon.shadow.enabled_factor = 0.0;
+		liltoon.shadow.color_texture_index = Some(10);
+		liltoon.matcap.texture_index = Some(11);
+		liltoon.reflection.color_texture_index = Some(12);
+		liltoon.reflection.anisotropy_tangent_texture_index = Some(13);
+		liltoon.rim.texture_index = Some(14);
+		liltoon.emission.texture_index = Some(15);
+		liltoon.backlight.texture_index = Some(16);
+		liltoon.glitter.color_texture_index = Some(17);
+		liltoon.normal.second_texture_index = Some(18);
+		let mut mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon),
+			..Default::default()
+		};
+
+		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(!features.shadow_layers);
+		assert!(!features.matcap);
+		assert!(!features.reflection);
+		assert!(!features.anisotropy);
+		assert!(!features.rim);
+		assert!(!features.emission);
+		assert!(!features.backlight);
+		assert!(!features.glitter);
+		assert!(!features.normal_second);
+
+		let liltoon = mat.liltoon_like.as_mut().unwrap();
+		liltoon.shadow.enabled_factor = 1.0;
+		liltoon.matcap.enabled_factor = 1.0;
+		liltoon.reflection.enabled_factor = 1.0;
+		liltoon.reflection.anisotropy_enabled_factor = 1.0;
+		liltoon.rim.enabled_factor = 1.0;
+		liltoon.emission.enabled_factor = 1.0;
+		liltoon.backlight.enabled_factor = 1.0;
+		liltoon.glitter.enabled_factor = 1.0;
+		liltoon.normal.second_enabled_factor = 1.0;
+
+		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(features.shadow_layers);
+		assert!(features.matcap);
+		assert!(features.reflection);
+		assert!(features.anisotropy);
+		assert!(features.rim);
+		assert!(features.emission);
+		assert!(features.backlight);
+		assert!(features.glitter);
+		assert!(features.normal_second);
 	}
 
 	#[test]
