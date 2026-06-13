@@ -1040,7 +1040,7 @@ enum RendererControlCommand {
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
 	},
-	SetSpringBones {
+	SetDynamics {
 		enabled: bool,
 		bone_colliders: RendererBoneColliderConfig,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -5144,7 +5144,7 @@ fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: Sta
 	send_renderer_command_by_id(
 		id,
 		state.inner(),
-		RendererControlCommand::SetSpringBones {
+		RendererControlCommand::SetDynamics {
 			enabled: setting.spring_bones,
 			bone_colliders: renderer_bone_collider_config(&setting),
 			physics_config: renderer_spring_bone_physics_config(&setting),
