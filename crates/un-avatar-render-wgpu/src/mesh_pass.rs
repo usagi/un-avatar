@@ -1559,6 +1559,14 @@ fn lil_enabled(value: f32) -> bool {
 	value > 0.5
 }
 
+fn liltoon_uses_main_color_adjustment(main: &un_avatar_core::UnaLilToonLikeMainColor) -> bool {
+	main.main_texture_hsvg_factor
+		.iter()
+		.zip([0.0, 1.0, 1.0, 1.0])
+		.any(|(value, default)| (*value - default).abs() > 0.00001)
+		|| lil_enabled(main.gradation_enabled_factor)
+}
+
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = BTreeSet::new();
 	push_texture_index(&mut indices, material.base_color_texture_index);
@@ -1574,7 +1582,9 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 		push_texture_index(&mut indices, mtoon.uv_animation_mask_texture_index);
 	}
 	if let Some(liltoon) = material.liltoon_like_runtime() {
-		push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
+		if liltoon_uses_main_color_adjustment(&liltoon.main_color) {
+			push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
+		}
 		if lil_enabled(liltoon.main_color.gradation_enabled_factor) {
 			push_texture_index(&mut indices, liltoon.main_color.gradation_texture_index);
 		}
@@ -2195,10 +2205,9 @@ fn material_untoon_shader_features(material: &UnaMaterialPbr, shading: UnaShadin
 			|| liltoon_like.dissolve.params_factor[0].abs() > 0.00001
 			|| ((lil_enabled(liltoon_like.main_color.second_enabled_factor) || lil_enabled(liltoon_like.main_color.third_enabled_factor))
 				&& has_main_layer_dissolve);
-		let main_layers = liltoon_like.main_color.second_enabled_factor > 0.5
-			|| liltoon_like.main_color.third_enabled_factor > 0.5
-			|| liltoon_like.main_color.gradation_enabled_factor > 0.5
-			|| liltoon_like.main_color.main_color_adjust_mask_texture_index.is_some();
+		let main_layers = lil_enabled(liltoon_like.main_color.second_enabled_factor)
+			|| lil_enabled(liltoon_like.main_color.third_enabled_factor)
+			|| liltoon_uses_main_color_adjustment(&liltoon_like.main_color);
 		let matcap = lil_enabled(liltoon_like.matcap.enabled_factor);
 		let matcap_second = lil_enabled(liltoon_like.matcap.second_enabled_factor);
 		let reflection = lil_enabled(liltoon_like.reflection.enabled_factor);
@@ -11222,6 +11231,7 @@ mod tests {
 		liltoon.reflection.cube_texture_index = Some(14);
 		liltoon.reflection.cube_override_factor = 1.0;
 		liltoon.parallax.texture_index = Some(15);
+		liltoon.main_color.main_color_adjust_mask_texture_index = Some(16);
 		let mut mat = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			base_color_texture_index: Some(3),
@@ -11238,8 +11248,9 @@ mod tests {
 		liltoon.fur.enabled_factor = 1.0;
 		liltoon.reflection.enabled_factor = 1.0;
 		liltoon.parallax.enabled_factor = 1.0;
+		liltoon.main_color.main_texture_hsvg_factor = [0.1, 1.0, 1.0, 1.0];
 
-		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13, 15]);
+		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13, 15, 16]);
 		assert_eq!(material_cube_texture_indices(&mat), vec![14]);
 	}
 
@@ -11257,6 +11268,7 @@ mod tests {
 		liltoon.glitter.color_texture_index = Some(17);
 		liltoon.normal.second_texture_index = Some(18);
 		liltoon.parallax.texture_index = Some(19);
+		liltoon.main_color.main_color_adjust_mask_texture_index = Some(20);
 		let mut mat = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			liltoon_like: Some(liltoon),
@@ -11264,6 +11276,7 @@ mod tests {
 		};
 
 		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(!features.main_layers);
 		assert!(!features.shadow_layers);
 		assert!(!features.matcap);
 		assert!(!features.reflection);
@@ -11286,8 +11299,10 @@ mod tests {
 		liltoon.glitter.enabled_factor = 1.0;
 		liltoon.normal.second_enabled_factor = 1.0;
 		liltoon.parallax.enabled_factor = 1.0;
+		liltoon.main_color.main_texture_hsvg_factor = [0.1, 1.0, 1.0, 1.0];
 
 		let features = material_untoon_shader_features(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
+		assert!(features.main_layers);
 		assert!(features.shadow_layers);
 		assert!(features.matcap);
 		assert!(features.reflection);
