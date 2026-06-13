@@ -10867,6 +10867,31 @@ mod tests {
 	}
 
 	#[test]
+	fn supervisor_permission_allows_avatar_file_review_flow() {
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		for command in [
+			"pick_file_path",
+			"read_vrm_metadata",
+			"read_unavatar_metadata",
+			"read_unavatar_wardrobe_options",
+			"update_avatar_setting_value",
+		] {
+			assert!(
+				permissions.contains(&format!("\"{command}\"")),
+				"supervisor permission must allow {command} for avatar file selection/review"
+			);
+		}
+	}
+
+	#[test]
 	fn static_profile_section_nav_and_body_order_match() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");
