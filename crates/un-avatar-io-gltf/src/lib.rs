@@ -7765,77 +7765,84 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 	} else {
 		merged_wardrobe_asset_groups(&base_asset_groups, &selected_asset_groups)
 	};
-	let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
-		return Err("document has no scene".to_string());
-	};
-	let lookup = WardrobeLookupContext::new(runtime.scene, Some(&unavatar));
-	let step_started = Instant::now();
-	reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
-	log_wardrobe_profile_step("reset_runtime_dynamics_enabled", step_started);
-	if base_id.as_deref() == Some(set_id) {
-		let step_started = Instant::now();
-		let Some((base_operations, _skipped, reset_operations)) =
-			filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup)
-		else {
-			log_wardrobe_profile_step("filtered_base_operations_none", step_started);
-			drop(runtime);
-			document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
-			document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
-			let mut report = WardrobeApplyReport {
-				active_asset_groups: document.runtime_model().active_asset_groups().to_vec(),
-				..Default::default()
-			};
-			let step_started = Instant::now();
-			refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
-			log_wardrobe_profile_step("refresh_scoped_assets", step_started);
-			return Ok(report);
+	let mut report = {
+		let Some(mut runtime) = document.runtime_scene_and_dynamics_mut() else {
+			return Err("document has no scene".to_string());
 		};
-		log_wardrobe_profile_step("filtered_base_operations", step_started);
+		let lookup = WardrobeLookupContext::new(runtime.scene, Some(&unavatar));
 		let step_started = Instant::now();
-		reset_scene_visibility(runtime.scene);
-		log_wardrobe_profile_step("reset_scene_visibility", step_started);
-		let step_started = Instant::now();
-		let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, &lookup);
-		log_wardrobe_profile_step("apply_base_reset_operations", step_started);
-		let step_started = Instant::now();
-		let mut report =
-			apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &base_operations, &lookup);
-		log_wardrobe_profile_step("apply_base_operations", step_started);
-		report.active_asset_groups = active_asset_groups.clone();
-		drop(runtime);
-		document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
-		document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
-		let step_started = Instant::now();
-		refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
-		log_wardrobe_profile_step("refresh_scoped_assets", step_started);
-		return Ok(report);
-	}
-	if base_id.as_deref() != Some(set_id) {
-		let step_started = Instant::now();
-		if let Some((base_operations, _skipped, reset_operations)) =
-			filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup)
-		{
-			log_wardrobe_profile_step("filtered_base_operations", step_started);
+		reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
+		log_wardrobe_profile_step("reset_runtime_dynamics_enabled", step_started);
+		if base_id.as_deref() == Some(set_id) {
 			let step_started = Instant::now();
-			reset_scene_visibility(runtime.scene);
-			log_wardrobe_profile_step("reset_scene_visibility", step_started);
-			let step_started = Instant::now();
-			let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &reset_operations, &lookup);
-			log_wardrobe_profile_step("apply_base_reset_operations", step_started);
-			let step_started = Instant::now();
-			let _ = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), &base_operations, &lookup);
-			log_wardrobe_profile_step("apply_base_operations", step_started);
+			match filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup) {
+				Some((base_operations, _skipped, reset_operations)) => {
+					log_wardrobe_profile_step("filtered_base_operations", step_started);
+					let step_started = Instant::now();
+					reset_scene_visibility(runtime.scene);
+					log_wardrobe_profile_step("reset_scene_visibility", step_started);
+					let step_started = Instant::now();
+					let _ = apply_unavatar_wardrobe_operations_with_lookup(
+						runtime.scene,
+						Some(&mut runtime.dynamics),
+						&reset_operations,
+						&lookup,
+					);
+					log_wardrobe_profile_step("apply_base_reset_operations", step_started);
+					let step_started = Instant::now();
+					let report = apply_unavatar_wardrobe_operations_with_lookup(
+						runtime.scene,
+						Some(&mut runtime.dynamics),
+						&base_operations,
+						&lookup,
+					);
+					log_wardrobe_profile_step("apply_base_operations", step_started);
+					report
+				}
+				None => {
+					log_wardrobe_profile_step("filtered_base_operations_none", step_started);
+					WardrobeApplyReport::default()
+				}
+			}
 		} else {
-			log_wardrobe_profile_step("filtered_base_operations_none", step_started);
+			if base_id.as_deref() != Some(set_id) {
+				let step_started = Instant::now();
+				if let Some((base_operations, _skipped, reset_operations)) =
+					filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup)
+				{
+					log_wardrobe_profile_step("filtered_base_operations", step_started);
+					let step_started = Instant::now();
+					reset_scene_visibility(runtime.scene);
+					log_wardrobe_profile_step("reset_scene_visibility", step_started);
+					let step_started = Instant::now();
+					let _ = apply_unavatar_wardrobe_operations_with_lookup(
+						runtime.scene,
+						Some(&mut runtime.dynamics),
+						&reset_operations,
+						&lookup,
+					);
+					log_wardrobe_profile_step("apply_base_reset_operations", step_started);
+					let step_started = Instant::now();
+					let _ = apply_unavatar_wardrobe_operations_with_lookup(
+						runtime.scene,
+						Some(&mut runtime.dynamics),
+						&base_operations,
+						&lookup,
+					);
+					log_wardrobe_profile_step("apply_base_operations", step_started);
+				} else {
+					log_wardrobe_profile_step("filtered_base_operations_none", step_started);
+				}
+			}
+			let step_started = Instant::now();
+			let report = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), operations, &lookup);
+			log_wardrobe_profile_step("apply_selected_operations", step_started);
+			report
 		}
-	}
-	let step_started = Instant::now();
-	let mut report = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), operations, &lookup);
-	log_wardrobe_profile_step("apply_selected_operations", step_started);
-	report.active_asset_groups = active_asset_groups.clone();
-	drop(runtime);
+	};
 	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 	document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
+	report.active_asset_groups = document.runtime_model().active_asset_groups().to_vec();
 	let step_started = Instant::now();
 	refresh_wardrobe_apply_report_scoped_assets(document, &mut report);
 	log_wardrobe_profile_step("refresh_scoped_assets", step_started);
@@ -10329,21 +10336,36 @@ fn mesh_buffers_from_vertex_payload(
 	}
 }
 
-fn read_primitive(
-	prim: gltf::Primitive<'_>,
-	buffers: &[gltf::buffer::Data],
-	mesh_weights: Option<&[f32]>,
-	mesh_target_names: &[String],
+struct PrimitiveReadInput<'a> {
+	prim: gltf::Primitive<'a>,
+	buffers: &'a [gltf::buffer::Data],
+	mesh_weights: Option<&'a [f32]>,
+	mesh_target_names: &'a [String],
 	payload_key: PrimitiveVertexPayloadKey,
 	vertex_payload_id: Option<u64>,
 	vertex_payload_cache_last_use: bool,
-	vertex_payload_cache: &mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
-	vertex_payload_key_counts: &BTreeMap<PrimitiveVertexPayloadKey, usize>,
+	vertex_payload_cache: &'a mut BTreeMap<PrimitiveVertexPayloadKey, PrimitiveVertexPayload>,
+	vertex_payload_key_counts: &'a BTreeMap<PrimitiveVertexPayloadKey, usize>,
 	cache_config: PrimitiveVertexPayloadCacheConfig,
-	_report: &mut ImportReport,
-) -> Result<Option<(UnaMeshBuffers, bool, bool, PrimitiveReadProfile)>, ImportError> {
+	report: &'a mut ImportReport,
+}
+
+fn read_primitive(input: PrimitiveReadInput<'_>) -> Result<Option<(UnaMeshBuffers, bool, bool, PrimitiveReadProfile)>, ImportError> {
+	let PrimitiveReadInput {
+		prim,
+		buffers,
+		mesh_weights,
+		mesh_target_names,
+		payload_key,
+		vertex_payload_id,
+		vertex_payload_cache_last_use,
+		vertex_payload_cache,
+		vertex_payload_key_counts,
+		cache_config,
+		report,
+	} = input;
 	if prim.mode() != gltf::mesh::Mode::Triangles {
-		_report.approximations.push(Approximation {
+		report.approximations.push(Approximation {
 			feature: "primitive.mode".into(),
 			detail: Some(format!("{:?} はスキップ（Triangles のみ）", prim.mode())),
 		});
@@ -10720,19 +10742,19 @@ fn scene_snapshot_from_gltf_inner(
 			} else {
 				false
 			};
-			if let Some((buf, cache_hit, cacheable, primitive_profile)) = read_primitive(
+			if let Some((buf, cache_hit, cacheable, primitive_profile)) = read_primitive(PrimitiveReadInput {
 				prim,
 				buffers,
-				mw,
-				&target_names,
+				mesh_weights: mw,
+				mesh_target_names: &target_names,
 				payload_key,
 				vertex_payload_id,
 				vertex_payload_cache_last_use,
-				&mut vertex_payload_cache,
-				&vertex_payload_key_counts,
-				vertex_payload_cache_config,
+				vertex_payload_cache: &mut vertex_payload_cache,
+				vertex_payload_key_counts: &vertex_payload_key_counts,
+				cache_config: vertex_payload_cache_config,
 				report,
-			)? {
+			})? {
 				mesh_read_profile.add(primitive_profile);
 				mesh_primitive_count += 1;
 				mesh_cacheable_primitive_count += usize::from(cacheable);
