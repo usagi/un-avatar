@@ -4,7 +4,12 @@
 	import ProfileDynamicsPresetActions from "./ProfileDynamicsPresetActions.svelte";
 	import ProfileSelectField from "./ProfileSelectField.svelte";
 	import type { ProfileSettingValue } from "./profileTypes";
-	import { DYNAMICS_MODE_OPTIONS, dynamicsRecommendedPresets, type DynamicsCategoryOverrideSetting } from "./dynamicsPresets";
+	import {
+		DYNAMICS_MODE_OPTIONS,
+		dynamicsOverrideFieldPrefix,
+		dynamicsRecommendedPresets,
+		type DynamicsCategoryOverrideSetting,
+	} from "./dynamicsPresets";
 
 	export let override: DynamicsCategoryOverrideSetting;
 	export let dynamicsEnabled = false;
@@ -12,6 +17,7 @@
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
 
 	$: recommendedPresets = dynamicsRecommendedPresets(override.category);
+	$: fieldPrefix = dynamicsOverrideFieldPrefix(override.category);
 	$: disabled = !dynamicsEnabled || busy;
 </script>
 
@@ -34,16 +40,11 @@
 		value={override.mode}
 		{disabled}
 		options={DYNAMICS_MODE_OPTIONS}
-		onChange={(value) => onUpdateSettingValue(`physics.spring_bone.overrides.${override.category}.mode`, value)}
+		onChange={(value) => onUpdateSettingValue(`${fieldPrefix}.mode`, value)}
 	/>
 	{#if override.mode !== "authored"}
 		<ProfileDynamicsOverrideFields {override} {disabled} {onUpdateSettingValue} />
-		<button
-			type="button"
-			class="secondary"
-			{disabled}
-			onclick={() => onUpdateSettingValue(`physics.spring_bone.overrides.${override.category}.reset`, true)}
-		>
+		<button type="button" class="secondary" {disabled} onclick={() => onUpdateSettingValue(`${fieldPrefix}.reset`, true)}>
 			{$_("profiles.editor.spring_bone_category_reset")}
 		</button>
 	{/if}

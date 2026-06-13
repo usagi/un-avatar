@@ -1,3 +1,10 @@
+import {
+	DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
+	DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD,
+	DYNAMICS_ENABLED_FIELD,
+	DYNAMICS_OVERRIDE_FIELD_PREFIX,
+} from "./dynamicsPresets";
+
 export function isLaunchTimeRendererField(field: string): boolean {
 	return (
 		field === "avatar_path" ||
@@ -22,10 +29,10 @@ export function canApplyWithoutRestart(field: string): boolean {
 	return (
 		field === "icon_path" ||
 		field.startsWith("motion.") ||
-		field === "spring_bones" ||
-		field === "physics.dynamics.enable_all_on_launch" ||
-		field.startsWith("physics.spring_bone.") ||
-		field.startsWith("physics.bone_colliders.") ||
+		field === DYNAMICS_ENABLED_FIELD ||
+		field === DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD ||
+		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
+		field.startsWith(DYNAMICS_BONE_COLLIDER_FIELD_PREFIX) ||
 		field.startsWith("effects.avatar.outline.") ||
 		field.startsWith("effects.avatar.contact_shadow.") ||
 		field.startsWith("effects.post.ssao.") ||

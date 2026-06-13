@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ProfileSettingValue } from "./profileTypes";
 	import { _ } from "svelte-i18n";
-	import { BONE_COLLIDER_PARTS, type BoneColliderSetting } from "./boneColliderFields";
+	import { BONE_COLLIDER_ENABLED_FIELD, BONE_COLLIDER_PARTS, type BoneColliderSetting } from "./boneColliderFields";
 	import ProfileBoneColliderRadiusRow from "./ProfileBoneColliderRadiusRow.svelte";
 
 	export let setting: BoneColliderSetting;
@@ -14,7 +14,7 @@
 		<input
 			type="checkbox"
 			checked={setting.bone_colliders_enabled}
-			onchange={(event) => onUpdateSettingValue("physics.bone_colliders.enabled", (event.currentTarget as HTMLInputElement).checked)}
+			onchange={(event) => onUpdateSettingValue(BONE_COLLIDER_ENABLED_FIELD, (event.currentTarget as HTMLInputElement).checked)}
 		/>
 		<span>{$_("profiles.editor.bone_colliders")}</span>
 	</label>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
+	import { boneColliderRadiusField } from "./boneColliderFields";
 	import { colliderRadiusMmFromInput, colliderRadiusMmText } from "./formInputs";
 	import type { ProfileSettingValue } from "./profileTypes";
 
@@ -8,6 +9,8 @@
 	export let radiusMm = 0;
 	export let disabled = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
+
+	$: radiusField = boneColliderRadiusField(fieldKey);
 </script>
 
 <label class="collider-scale-row">
@@ -19,7 +22,7 @@
 		step="1"
 		value={radiusMm}
 		{disabled}
-		onchange={(event) => onUpdateSettingValue(`physics.bone_colliders.radius_mm.${fieldKey}`, colliderRadiusMmFromInput(event))}
+		onchange={(event) => onUpdateSettingValue(radiusField, colliderRadiusMmFromInput(event))}
 	/>
 	<input
 		type="text"
@@ -28,7 +31,7 @@
 		step="1"
 		value={colliderRadiusMmText(radiusMm)}
 		{disabled}
-		onchange={(event) => onUpdateSettingValue(`physics.bone_colliders.radius_mm.${fieldKey}`, colliderRadiusMmFromInput(event))}
+		onchange={(event) => onUpdateSettingValue(radiusField, colliderRadiusMmFromInput(event))}
 	/>
 	<span class="unit">mm</span>
 </label>

@@ -36,3 +36,10 @@ export type BoneColliderSettingKey = (typeof BONE_COLLIDER_PARTS)[number]["setti
 export type BoneColliderSetting = Record<BoneColliderSettingKey, number> & {
 	bone_colliders_enabled: boolean;
 };
+
+export const BONE_COLLIDER_ENABLED_FIELD = "physics.bone_colliders.enabled";
+export const BONE_COLLIDER_RADIUS_FIELD_PREFIX = "physics.bone_colliders.radius_mm.";
+
+export function boneColliderRadiusField(partKey: string): string {
+	return `${BONE_COLLIDER_RADIUS_FIELD_PREFIX}${partKey}`;
+}

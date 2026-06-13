@@ -113,7 +113,13 @@
 		rendererSsaoPayload,
 		rendererWindowPayload,
 	} from "./lib/runtimePayloads";
-	import { defaultDynamicsCategoryOverrides } from "./lib/dynamicsPresets";
+	import {
+		DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
+		DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD,
+		DYNAMICS_ENABLED_FIELD,
+		DYNAMICS_OVERRIDE_FIELD_PREFIX,
+		defaultDynamicsCategoryOverrides,
+	} from "./lib/dynamicsPresets";
 	import {
 		loadColorDisplayMode,
 		loadLaunchTargetId,
@@ -1947,15 +1953,15 @@
 		setting: AvatarSetting,
 		renderersToApply: RendererInstance[]
 	): Promise<void> {
-		if (fieldSetIncludes(fields, "physics.dynamics.enable_all_on_launch")) {
+		if (fieldSetIncludes(fields, DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_all_dynamics_launch_setting", () => ({ setting }));
 			await setAppliedMessage(applied, "Updated dynamics override", (count) => `Updated dynamics override on ${count} renderers`);
 			return;
 		}
 		if (
-			fieldSetIncludes(fields, "spring_bones") ||
-			fieldSetStartsWith(fields, "physics.spring_bone.") ||
-			fieldSetStartsWith(fields, "physics.bone_colliders.")
+			fieldSetIncludes(fields, DYNAMICS_ENABLED_FIELD) ||
+			fieldSetStartsWith(fields, DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
+			fieldSetStartsWith(fields, DYNAMICS_BONE_COLLIDER_FIELD_PREFIX)
 		) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_spring_bones", () => ({ setting }));
 			await setAppliedMessage(applied, "Updated motion physics", (count) => `Updated motion physics on ${count} renderers`);

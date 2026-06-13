@@ -1,9 +1,10 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import enLocaleToml from "../src-tauri/locales/en-US.toml?raw";
 import jaLocaleToml from "../src-tauri/locales/ja-JP.toml?raw";
+import { BONE_COLLIDER_RADIUS_FIELD_PREFIX } from "./lib/boneColliderFields";
 import { hasTauriRuntime } from "./lib/environment";
 import { defaultTextureCompressionAdvanced } from "./lib/qualityOptions";
-import { defaultDynamicsCategoryOverrides } from "./lib/dynamicsPresets";
+import { DYNAMICS_BONE_COLLIDER_FIELD_PREFIX, defaultDynamicsCategoryOverrides } from "./lib/dynamicsPresets";
 
 type LocaleBundle = {
 	locale: string;
@@ -459,8 +460,8 @@ export function installDevIpcMock(): void {
 				}
 				const directField = field
 					.replace("debug.", "")
-					.replace("physics.bone_colliders.radius_mm.", "bone_collider_")
-					.replace("physics.bone_colliders.", "bone_colliders_")
+					.replace(BONE_COLLIDER_RADIUS_FIELD_PREFIX, "bone_collider_")
+					.replace(DYNAMICS_BONE_COLLIDER_FIELD_PREFIX, "bone_colliders_")
 					.replaceAll(".", "_");
 				if (setting && directField in setting) {
 					(setting as any)[directField] = args.value;

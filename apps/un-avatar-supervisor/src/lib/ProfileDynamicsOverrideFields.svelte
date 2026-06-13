@@ -6,6 +6,7 @@
 		DYNAMICS_DAMPING_FIELD,
 		DYNAMICS_VERLET_FIELDS,
 		DYNAMICS_XPBD_FIELDS,
+		dynamicsOverrideFieldPrefix,
 		type DynamicsCategoryOverrideSetting,
 	} from "./dynamicsPresets";
 
@@ -13,7 +14,7 @@
 	export let disabled = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
 
-	$: fieldPrefix = `physics.spring_bone.overrides.${override.category}`;
+	$: fieldPrefix = dynamicsOverrideFieldPrefix(override.category);
 </script>
 
 <ProfileNumberInputField

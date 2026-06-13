@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
+	import { DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD, DYNAMICS_ENABLED_FIELD } from "./dynamicsPresets";
 	import ProfileDynamicsOverrides from "./ProfileDynamicsOverrides.svelte";
 	import ProfileToggleField from "./ProfileToggleField.svelte";
 	import type { MotionSetting, ProfileSettingValue } from "./profileTypes";
@@ -22,14 +23,14 @@
 		phaseTag="UNPhysics"
 		hint={$_("profiles.hints.motion.spring_bone")}
 		checked={setting.spring_bones}
-		onChange={(checked) => onUpdateSettingValue("spring_bones", checked)}
+		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLED_FIELD, checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.dynamics_enable_all_on_launch")}
 		phaseTag="UNAvatar"
 		hint={$_("profiles.hints.motion.dynamics_enable_all_on_launch")}
 		checked={setting.dynamics_enable_all_on_launch}
-		onChange={(checked) => onUpdateSettingValue("physics.dynamics.enable_all_on_launch", checked)}
+		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD, checked)}
 	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.contact_parameter_emission")}

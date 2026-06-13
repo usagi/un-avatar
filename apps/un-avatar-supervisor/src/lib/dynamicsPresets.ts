@@ -16,6 +16,15 @@ export type DynamicsCategoryOverrideSetting = {
 	authored_xpbd_compliance: number;
 };
 
+export const DYNAMICS_ENABLED_FIELD = "spring_bones";
+export const DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD = "physics.dynamics.enable_all_on_launch";
+export const DYNAMICS_OVERRIDE_FIELD_PREFIX = "physics.spring_bone.";
+export const DYNAMICS_BONE_COLLIDER_FIELD_PREFIX = "physics.bone_colliders.";
+
+export function dynamicsOverrideFieldPrefix(category: string): string {
+	return `${DYNAMICS_OVERRIDE_FIELD_PREFIX}overrides.${category}`;
+}
+
 export const DYNAMICS_MODE_OPTIONS = [
 	["authored", "profiles.editor.spring_bone_mode_authored_verlet"],
 	["override_verlet", "profiles.editor.spring_bone_mode_override_verlet"],
