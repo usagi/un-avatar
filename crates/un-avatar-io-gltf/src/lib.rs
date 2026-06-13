@@ -484,12 +484,10 @@ fn collect_glb_image_source_metadata_inner(
 		let mut handles = Vec::with_capacity(worker_count);
 		for start in (0..image_count).step_by(chunk_size) {
 			let end = (start + chunk_size).min(image_count);
-			let images = images;
 			let samplers = &samplers;
 			handles.push(scope.spawn(move || {
 				let mut out = Vec::with_capacity(end - start);
-				for image_index in start..end {
-					let image = &images[image_index];
+				for (image_index, image) in images.iter().enumerate().take(end).skip(start) {
 					let retain_encoded = retain_encoded_indices.is_some_and(|indices| indices.contains(&image_index));
 					out.push((
 						image_index,
@@ -1652,7 +1650,7 @@ fn write_glb_u32(out: &mut Vec<u8>, value: u32) {
 }
 
 fn align_to_4(bytes: &mut Vec<u8>, padding: u8) {
-	while bytes.len() % 4 != 0 {
+	while !bytes.len().is_multiple_of(4) {
 		bytes.push(padding);
 	}
 }
@@ -2890,7 +2888,6 @@ fn unavatar_dynamics_settings(
 			colliders,
 			contacts,
 			constraint_refs,
-			..Default::default()
 		})
 	}
 }
@@ -3769,7 +3766,7 @@ fn unavatar_usize_array(value: Option<&Value>) -> Vec<usize> {
 		.unwrap_or_default()
 }
 
-fn unavatar_base_wardrobe_set<'a>(unavatar: &'a UnaUnavatarExtension) -> Option<(&'a str, &'a [Value])> {
+fn unavatar_base_wardrobe_set(unavatar: &UnaUnavatarExtension) -> Option<(&str, &[Value])> {
 	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
 	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
 	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
@@ -5424,10 +5421,8 @@ fn order_merge_armature_components(components: &[MergeArmatureComponentMapping],
 			if i == j {
 				continue;
 			}
-			if scene_is_descendant_of(parents, components[j].target_node, components[i].target_node) {
-				if !predecessors[j].contains(&i) {
-					predecessors[j].push(i);
-				}
+			if scene_is_descendant_of(parents, components[j].target_node, components[i].target_node) && !predecessors[j].contains(&i) {
+				predecessors[j].push(i);
 			}
 		}
 	}
@@ -5481,7 +5476,7 @@ fn count_merge_armature_cycle_nodes(mappings: &[(usize, usize)]) -> usize {
 		indegree.entry(source).or_insert(0);
 		indegree.entry(target).or_insert(0);
 	}
-	for (_source, targets) in &outgoing {
+	for targets in outgoing.values() {
 		for &target in targets {
 			if let Some(entry) = indegree.get_mut(&target) {
 				*entry = entry.saturating_add(1);
@@ -6334,12 +6329,9 @@ fn animation_curve_segment_evaluate(a: AnimationCurveKey, b: AnimationCurveKey, 
 }
 
 fn animation_curve_evaluate(curve: Option<&Value>, input: f32) -> Option<f32> {
-	let Some(keys) = curve
+	let keys = curve
 		.and_then(|curve| curve.get("keys").or_else(|| curve.get("Keys")))
-		.and_then(Value::as_array)
-	else {
-		return None;
-	};
+		.and_then(Value::as_array)?;
 	if keys.len() < 2 {
 		return None;
 	}
@@ -6950,7 +6942,7 @@ fn modular_avatar_skinned_rest_positions_for_axis(
 			let inverse_bind = skin
 				.inverse_bind_matrices
 				.get(joint_index)
-				.map(|matrix| Mat4::from_cols_array(matrix))
+				.map(Mat4::from_cols_array)
 				.unwrap_or(Mat4::IDENTITY);
 			baked += (context.target_world_inv * joint_world * inverse_bind * source).truncate() * weight;
 			total_weight += weight;
@@ -8100,24 +8092,22 @@ fn filtered_unavatar_base_wardrobe_operations_with_lookup(
 			}
 			resolved_visibility_targets = Some(resolved);
 		}
-		if !skip_inherited_hidden {
-			if is_hidden_visibility {
-				let resolved = resolved_visibility_targets.unwrap_or_else(|| {
-					lookup_operation_targets_all(
-						&lookup.node_ids,
-						&lookup.registry_paths,
-						&lookup.paths,
-						&lookup.normalized_paths,
-						op,
-					)
-				});
-				skip_inherited_hidden = base_operation_is_inherited_hidden_under_base_resolved(
+		if !skip_inherited_hidden && is_hidden_visibility {
+			let resolved = resolved_visibility_targets.unwrap_or_else(|| {
+				lookup_operation_targets_all(
+					&lookup.node_ids,
+					&lookup.registry_paths,
+					&lookup.paths,
+					&lookup.normalized_paths,
 					op,
-					&base_hidden_normalized_paths,
-					&resolved,
-					&lookup.paths_by_index,
-				);
-			}
+				)
+			});
+			skip_inherited_hidden = base_operation_is_inherited_hidden_under_base_resolved(
+				op,
+				&base_hidden_normalized_paths,
+				&resolved,
+				&lookup.paths_by_index,
+			);
 		}
 		if skip_inherited_hidden {
 			let ty = op.get("type").or_else(|| op.get("op")).and_then(|v| v.as_str()).unwrap_or("");
@@ -10892,7 +10882,7 @@ impl AvatarImporter for GltfImporter {
 						if ctx.profile {
 							let (image_sources, source_profile) = collect_glb_image_source_metadata_profiled(
 								&root,
-								&bin,
+								bin,
 								retain_encoded_indices.as_ref(),
 								Some(&path),
 								bin_range.start as u64,
@@ -10907,7 +10897,7 @@ impl AvatarImporter for GltfImporter {
 						} else {
 							original_image_sources = Some(collect_glb_image_source_metadata(
 								&root,
-								&bin,
+								bin,
 								retain_encoded_indices.as_ref(),
 								Some(&path),
 								bin_range.start as u64,
