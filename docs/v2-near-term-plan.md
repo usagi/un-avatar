@@ -150,6 +150,11 @@ Renderer tray / Supervisor operation policy:
 - Implementation should map tray menu clicks into existing Renderer control commands / `RendererControlEvent` paths and refresh menu state from throttled runtime status snapshots, not per-frame polling. A native tray crate or thin Windows `Shell_NotifyIcon` wrapper is preferred over adding a UI framework dependency to the Renderer.
 - Supervisor may keep its own tray icon for Supervisor/global app tasks, but it must not be the only way to operate a running Renderer.
 
+Release distribution policy:
+
+- v2 Windows distribution source of truth is the portable zip produced by `cargo xtask release-package`. Installer formats such as MSI, NSIS, WiX, or cargo-wix are not part of the v2 release requirement and remain undecided.
+- Authenticode code signing is also undecided for v2. Self-signed Windows certificates are not used, because they do not solve trust for ordinary Windows users and add certificate-installation burden. UN Avatar is OSS / MIT; release trust should come from public source, documented build steps, release notes, and published hashes / checksums rather than installer or certificate-industry dependency.
+
 ## UNPhysics / UNDynamics Runtime Normalization
 
 SpringBone / PhysBone は source format ごとの physics component ではなく、UNAvatar の UNPhysics umbrella 下にある UNDynamics runtime model へ正規化してから solver / renderer へ渡す。

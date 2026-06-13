@@ -70,6 +70,12 @@ cargo xtask release-package --version 1.0.0
 `release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` を作る。
 `unity-exporter-package` は Unity Editor を起動せず、`unity/un-avatar-unity-exporter` を `target/unity/un-avatar-unity-exporter` へ UPM package layout としてコピーする。
 
+### Windows 配布方針
+
+v2 の Windows 配布正本は portable zip とする。Installer（MSI / NSIS / WiX / cargo-wix 等）は v2 では未対応・対応未定であり、release pipeline の必須成果物にしない。
+
+Authenticode 署名も v2 では未対応・対応未定とする。自己署名証明書は Windows 一般ユーザー向けの信頼問題を解決せず、証明書導入を求める運用は逆に負担になるため採用しない。UN Avatar は OSS / MIT として、配布物の透明性は source、build 手順、release notes、hash / checksum の公開で担保する。
+
 ## v1 リリース前の手動確認
 
 最低限、次を確認する。

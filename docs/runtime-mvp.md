@@ -79,6 +79,7 @@ Windows配布ではSpout2を標準機能として扱う。
 - `cargo xtask spout2` でSpout2を取得・CMake Releaseビルドする
 - `cargo xtask package` は既定で `cargo xtask spout2` を実行し、Spout2込みの配布レイアウトを作る
 - `cargo xtask release-package` は `target/package/un-avatar` を `release-packages/un-avatar-<version>.zip` に固める
+- v2 の Windows 配布正本は portable zip とし、Installer（MSI / NSIS / WiX / cargo-wix 等）と Authenticode 署名は未対応・対応未定とする。自己署名証明書は Windows 一般ユーザー向けの信頼問題を解決しないため採用しない。
 - 配布物には package root の `Spout.dll` と `LICENSES/Spout2-BSD-2-Clause.txt` を含める
 - renderer起動前にSupervisorが package root を `PATH` へ追加する
 - 開発時に手動で `spout-sdk` featureを使う場合は `SPOUT2_SDK_DIR` / `SPOUT2_LIB_DIR` / `PATH` を明示する
