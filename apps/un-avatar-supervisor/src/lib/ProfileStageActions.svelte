@@ -33,7 +33,12 @@
 			</span>
 		{/if}
 	</div>
-	<button type="button" disabled={busy} onclick={() => onPrewarmSceneCache(settingId)}
+	<button
+		type="button"
+		disabled={busy}
+		data-hint={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
+		title={liveRenderer ? $_("profiles.actions.warm_cache_live_hint") : $_("profiles.actions.warm_cache_hint")}
+		onclick={() => onPrewarmSceneCache(settingId)}
 		><DatabaseZap size={14} />{$_("profiles.actions.warm_cache")}</button
 	>
 	{#if liveRenderer}

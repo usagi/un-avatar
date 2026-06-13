@@ -66,7 +66,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
    - Vulkan `PipelineCache` は既に導入済み。透明 window など backend 制約で Vulkan cache を使えない場合は UI / profile diagnostics に明示する。
    - Supervisor / renderer warmup mode は、実用前に共有 pipeline cache と texture / compressed texture cache を作る用途として扱う。warmup は通常起動の見た目品質を落とす代替ではない。Renderer CLI は `--prewarm-scene-cache` で、ウィンドウなしに対象profile / wardrobe setのGPU sceneを構築して終了できる。
    - 通常の Quick Launch は prewarm 専用 renderer を同期実行しない。warmup はユーザーが明示的に `キャッシュ準備` を押した時だけ行い、2 回目以降の実用起動を速くするための準備作業として扱う。
-   - `キャッシュ準備` は Renderer 起動中でも profile actions に表示する。launch-time quality 設定を変えたあと、既存 Renderer を止めずに次回起動用 cache を明示準備できるようにする。
+   - `キャッシュ準備` は Renderer 起動中でも profile actions に表示する。launch-time quality 設定を変えたあと、既存 Renderer を止めずに次回起動用 cache を明示準備できるようにする。live Renderer がある場合は別プロセス warmup による一時的な GPU / disk 負荷を hint で明示する。
    - Supervisor の `キャッシュ準備` 完了通知は、Renderer stderr の `gpu scene texture prepare summary` と `pipeline cache store` から processed / compressed texture cache と pipeline cache の結果を要約する。`mizuki-split / field_drape` の prewarm 確認では `processed_cache=38/0/0`、`compressed_cache=21/0/0`、pipeline cache store あり、`scene cache prewarm total=4591.5ms`。
 3. Texture upload / source cache
    - inactive wardrobe image decode は defer 済み。次は deferred cubemap conversion、source-native upload、processed texture cache の役割を分離する。
