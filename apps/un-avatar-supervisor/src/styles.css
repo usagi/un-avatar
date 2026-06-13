@@ -3672,8 +3672,24 @@ dd {
 	display: inline-flex;
 }
 
+.rendering-presentation-section .color-grading-subgroup {
+	display: block;
+}
+
+.rendering-presentation-section .color-grading-subgroup > .profile-group-heading {
+	margin: 2px 6px 8px;
+}
+
+.rendering-presentation-section .color-look-subgroup > .look-preset-row,
+.rendering-presentation-section .color-look-subgroup > label:has(.range-number-field) {
+	display: grid;
+	width: calc(100% - 12px);
+	min-width: 0;
+	margin: 6px;
+}
+
 .look-preset-row {
-	grid-template-columns: repeat(5, minmax(0, 1fr));
+	grid-template-columns: repeat(6, minmax(0, 1fr));
 	gap: 6px;
 	padding: 8px 10px;
 	border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
@@ -3688,6 +3704,13 @@ dd {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.look-preset-row button.active,
+.look-preset-row button[aria-pressed="true"] {
+	border-color: color-mix(in srgb, var(--accent-cool) 72%, var(--border));
+	background: color-mix(in srgb, var(--accent-cool) 18%, var(--panel));
+	color: var(--text);
 }
 
 .rendering-presentation-section .range-number-field {

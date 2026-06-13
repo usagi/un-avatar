@@ -18,7 +18,16 @@
 		<small>{$_("profiles.editor.look_color_grading_summary")}</small>
 		<span class="effect-panel-status">{setting.color_look} · {formatFixed(setting.color_look_intensity, 2)} · exp {formatFixed(setting.color_exposure, 2)}</span>
 	</summary>
-	<ProfileLookColorBasicFields {setting} {busy} {onUpdateSettingValue} />
-	<ProfileLookColorPresetFields {setting} {busy} {onUpdateSettingValue} />
-	<ProfileLookColorWhiteBalanceFields {setting} {busy} {onUpdateSettingValue} />
+	<div class="subgroup effect-subgroup color-grading-subgroup color-basic-subgroup">
+		<div class="profile-group-heading">{$_("profiles.editor.look_color_basic")}</div>
+		<ProfileLookColorBasicFields {setting} {busy} {onUpdateSettingValue} />
+	</div>
+	<div class="subgroup effect-subgroup color-grading-subgroup color-look-subgroup">
+		<div class="profile-group-heading">{$_("profiles.editor.look_color_look")}</div>
+		<ProfileLookColorPresetFields {setting} {busy} {onUpdateSettingValue} />
+	</div>
+	<div class="subgroup effect-subgroup color-grading-subgroup color-white-balance-subgroup">
+		<div class="profile-group-heading">{$_("profiles.editor.look_white_balance")}</div>
+		<ProfileLookColorWhiteBalanceFields {setting} {busy} {onUpdateSettingValue} />
+	</div>
 </details>

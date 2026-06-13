@@ -16,6 +16,7 @@
 	rangeMin={-1}
 	rangeMax={1}
 	step={0.01}
+	decimals={2}
 	disabled={busy}
 	onChange={(value) => onUpdateSettingValue("environment.color.temperature", value)}
 />
@@ -26,6 +27,7 @@
 	rangeMin={-1}
 	rangeMax={1}
 	step={0.01}
+	decimals={2}
 	disabled={busy}
 	onChange={(value) => onUpdateSettingValue("environment.color.tint", value)}
 />
