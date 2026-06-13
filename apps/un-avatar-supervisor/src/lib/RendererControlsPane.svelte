@@ -29,7 +29,7 @@
 </script>
 
 <div class="renderer-pane-scroll renderer-control-list">
-	<RendererOutputControls {renderer} {runtimeStatus} {busy} {onSetSpoutOutput} />
+	<RendererOutputControls {renderer} {runtimeStatus} {busy} {onSetSpoutOutput} {onSetWindow} />
 	<RendererWindowControls {renderer} {runtimeStatus} {busy} {onSetWindow} {onSaveWindow} {onRestoreWindow} />
 	<RendererDisplayControls {renderer} {runtimeStatus} {busy} {onSetShowAxes} {onSetShowBoneColliders} {onSetCameraLock} />
 	<RendererWardrobeMenuControls {renderer} {runtimeStatus} {busy} {onActivateWardrobeMenuCandidate} />
