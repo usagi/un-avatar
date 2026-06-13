@@ -2090,6 +2090,32 @@ pub(crate) struct PreparedDocumentScene {
 	bone_collider_source: BoneColliderSource,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	expression_presets: Vec<String>,
+	timings: PreparedDocumentSceneTimings,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PreparedDocumentSceneTimings {
+	pub(crate) total: Duration,
+	pub(crate) document_unwrap: Duration,
+	pub(crate) physics: Duration,
+	pub(crate) rest_nodes: Duration,
+	pub(crate) expressions: Duration,
+	pub(crate) mesh_build: Duration,
+	pub(crate) initial_draw_state: Duration,
+	pub(crate) pipeline_cache_store: Duration,
+}
+
+impl PreparedDocumentSceneTimings {
+	fn log_slow(self) {
+		log_slow_gpu_scene_context_step("prepare document total", self.total);
+		log_slow_gpu_scene_context_step("prepare document unwrap", self.document_unwrap);
+		log_slow_gpu_scene_context_step("prepare physics", self.physics);
+		log_slow_gpu_scene_context_step("prepare rest nodes", self.rest_nodes);
+		log_slow_gpu_scene_context_step("prepare expression presets", self.expressions);
+		log_slow_gpu_scene_context_step("prepare mesh build", self.mesh_build);
+		log_slow_gpu_scene_context_step("prepare initial draw state", self.initial_draw_state);
+		log_slow_gpu_scene_context_step("prepare pipeline cache store", self.pipeline_cache_store);
+	}
 }
 
 struct MotionRetargetRuntime {
@@ -5800,6 +5826,8 @@ impl GpuState {
 			..
 		} = options;
 		let options_elapsed = attach_start.elapsed();
+		let prepared_timings = prepared.timings;
+		prepared_timings.log_slow();
 		self.runtime_dynamics_enabled = dynamics_enabled;
 		self.runtime_bone_collider_config = bone_colliders;
 		self.runtime_dynamics_physics = spring_bone_physics;
@@ -5852,6 +5880,8 @@ impl GpuSceneBuildContext {
 		options: &DocumentAttachOptions,
 		mut progress: impl FnMut(SceneMeshBuildProgress),
 	) -> Result<PreparedDocumentScene, String> {
+		let prepare_start = Instant::now();
+		let mut timings = PreparedDocumentSceneTimings::default();
 		let GpuSceneBuildContext {
 			device,
 			queue,
@@ -5860,21 +5890,29 @@ impl GpuSceneBuildContext {
 			shader_variant_tier,
 			pipeline_cache,
 		} = self;
+		let document_unwrap_start = Instant::now();
 		let document = Arc::try_unwrap(document).unwrap_or_else(|document| (*document).clone());
+		timings.document_unwrap = document_unwrap_start.elapsed();
 		let runtime_model = document.runtime_model();
+		let physics_start = Instant::now();
 		let physics = build_runtime_physics_for_document(
 			&document,
 			options.dynamics_enabled,
 			options.bone_colliders,
 			&options.spring_bone_physics,
 		);
+		timings.physics = physics_start.elapsed();
 		let needs_rest_nodes = runtime_model.has_humanoid_scene() || physics.dynamics_sim.is_some();
+		let rest_nodes_start = Instant::now();
 		let rest_nodes = if needs_rest_nodes {
 			runtime_model.scene_nodes().map(|nodes| Arc::new(nodes.to_vec()))
 		} else {
 			None
 		};
+		timings.rest_nodes = rest_nodes_start.elapsed();
+		let expressions_start = Instant::now();
 		let expression_presets = expression_preset_names(runtime_model.expression_catalog());
+		timings.expressions = expressions_start.elapsed();
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
 		let mut runtime_requirements = SceneMeshRuntimeRequirements::default();
@@ -5887,6 +5925,7 @@ impl GpuSceneBuildContext {
 					options.texture_compression,
 					TextureCompressionMode::Source | TextureCompressionMode::Compat
 				);
+			let mesh_build_start = Instant::now();
 			let mut sm = SceneMeshes::new(
 				&device,
 				&queue,
@@ -5911,6 +5950,7 @@ impl GpuSceneBuildContext {
 				gpu_texture_compression_enabled,
 				&mut progress,
 			)?;
+			timings.mesh_build = mesh_build_start.elapsed();
 			if !sm.is_empty() {
 				texture_summary = Some(sm.texture_summary());
 				progress(SceneMeshBuildProgress {
@@ -5933,6 +5973,7 @@ impl GpuSceneBuildContext {
 				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
 				log_slow_gpu_scene_context_step("initial draw transform upload", transform_start.elapsed());
 				log_slow_gpu_scene_context_step("initial draw state preparation", initial_draw_start.elapsed());
+				timings.initial_draw_state = initial_draw_start.elapsed();
 				runtime_requirements = sm.runtime_requirements();
 				if runtime_requirements.audio_link_texture && options.audio_link.source == AudioLinkSource::InputDevice {
 					eprintln!("un-avatar-renderer: external AudioLink texture needed by visible material set");
@@ -5942,7 +5983,9 @@ impl GpuSceneBuildContext {
 		}
 		let pipeline_cache_store_start = Instant::now();
 		pipeline_cache.store();
-		log_slow_gpu_scene_context_step("pipeline cache store", pipeline_cache_store_start.elapsed());
+		timings.pipeline_cache_store = pipeline_cache_store_start.elapsed();
+		log_slow_gpu_scene_context_step("pipeline cache store", timings.pipeline_cache_store);
+		timings.total = prepare_start.elapsed();
 		let document_wrapped = Arc::new(RwLock::new(document));
 		Ok(PreparedDocumentScene {
 			document: document_wrapped,
@@ -5955,6 +5998,7 @@ impl GpuSceneBuildContext {
 			bone_collider_source: physics.stats.source,
 			runtime_requirements,
 			expression_presets,
+			timings,
 		})
 	}
 }
