@@ -259,6 +259,11 @@ fn summarize_renderer_log(path: &Path) -> Result<RendererLogSummary, String> {
 		path: path.to_path_buf(),
 		..Default::default()
 	};
+	summarize_renderer_log_text(&text, &mut summary);
+	Ok(summary)
+}
+
+fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 	for line in text.lines() {
 		if line.contains("model import profile") && line.contains("step=import_gltf_path") {
 			summary.import_ms = metric_token(line, "elapsed=").map(strip_ms);
@@ -286,7 +291,6 @@ fn summarize_renderer_log(path: &Path) -> Result<RendererLogSummary, String> {
 			summary.pipeline_store_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
 		}
 	}
-	Ok(summary)
 }
 
 fn metric_token(line: &str, key: &str) -> Option<String> {
@@ -3087,4 +3091,46 @@ fn main() {
 	};
 
 	process::exit(if ok { 0 } else { 1 });
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn renderer_log_summary_parses_benchmark_and_texture_lines() {
+		let mut summary = RendererLogSummary::default();
+		summarize_renderer_log_text(
+			"un-avatar-renderer: Vulkan pipeline cache load path=x bytes=6025281\n\
+un-avatar-renderer: gpu scene benchmark import path=model elapsed=1120.9ms\n\
+un-avatar-renderer: gpu scene texture prepare summary: total=1271.4ms images=231 cache_read=70.4ms upload=387.5ms processed_cache=39/0/0 compressed_cache=21/0/0\n\
+un-avatar-renderer: gpu scene mesh prepare summary: total=121.9ms prepared=625\n\
+un-avatar-renderer: frame bench frames=180 warmup=5 fps_avg=60.1 cpu_no_surface_avg=1.29ms gpu_avg=0.69ms\n\
+un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
+			&mut summary,
+		);
+		assert_eq!(summary.import_ms.as_deref(), Some("1120.9"));
+		assert_eq!(summary.texture_total_ms.as_deref(), Some("1271.4"));
+		assert_eq!(summary.mesh_total_ms.as_deref(), Some("121.9"));
+		assert_eq!(summary.cache_read_ms.as_deref(), Some("70.4"));
+		assert_eq!(summary.upload_ms.as_deref(), Some("387.5"));
+		assert_eq!(summary.processed_cache.as_deref(), Some("39/0/0"));
+		assert_eq!(summary.compressed_cache.as_deref(), Some("21/0/0"));
+		assert_eq!(summary.fps_avg.as_deref(), Some("60.1"));
+		assert_eq!(summary.cpu_no_surface_ms.as_deref(), Some("1.29"));
+		assert_eq!(summary.gpu_ms.as_deref(), Some("0.69"));
+		assert_eq!(summary.pipeline_load_mb.as_deref(), Some("5.7"));
+		assert_eq!(summary.pipeline_store_mb.as_deref(), Some("5.7"));
+	}
+
+	#[test]
+	fn renderer_log_summary_prefers_precise_model_import_profile() {
+		let mut summary = RendererLogSummary::default();
+		summarize_renderer_log_text(
+			"un-avatar-renderer: scene cache prewarm import path=model elapsed=1018.3ms\n\
+un-avatar-renderer: model import profile path=model step=import_gltf_path elapsed=978.5ms\n",
+			&mut summary,
+		);
+		assert_eq!(summary.import_ms.as_deref(), Some("978.5"));
+	}
 }
