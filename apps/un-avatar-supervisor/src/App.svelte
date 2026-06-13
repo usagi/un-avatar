@@ -584,6 +584,9 @@
 			allow_multiple_renderers: false,
 			notes: "OBS main streaming setup",
 			group: "Main",
+			scene_cache_fingerprint: "preview-main-v1",
+			scene_cache_prewarmed_fingerprint: null,
+			scene_cache_prewarmed_at: null,
 		},
 		{
 			id: "browser-preview-debug",
@@ -702,6 +705,9 @@
 			allow_multiple_renderers: false,
 			notes: "Diagnostics profile",
 			group: "Debug",
+			scene_cache_fingerprint: "preview-debug-v1",
+			scene_cache_prewarmed_fingerprint: "preview-debug-v1",
+			scene_cache_prewarmed_at: "20260517T000001Z",
 		},
 	];
 
@@ -1435,6 +1441,7 @@
 			message = "Warming renderer cache...";
 			const result = await invoke<string>("prewarm_renderer_scene_cache", { settingId });
 			message = result;
+			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
 		} catch (error) {
 			message = String(error);

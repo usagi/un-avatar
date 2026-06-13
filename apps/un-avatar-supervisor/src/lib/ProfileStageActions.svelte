@@ -5,6 +5,9 @@
 	import type { RendererRef } from "./rendererTypes";
 
 	export let settingId: string;
+	export let sceneCacheFingerprint = "";
+	export let sceneCachePrewarmedFingerprint: string | null = null;
+	export let sceneCachePrewarmedAt: string | null = null;
 	export let liveRenderer: RendererRef | null;
 	export let pendingRestart: ProfilePendingRestart | null;
 	export let busy = false;
@@ -16,6 +19,22 @@
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
 	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
 	export let onCreateTaskbarLauncher: (settingId: string) => void | Promise<void>;
+
+	$: sceneCacheReady =
+		Boolean(sceneCacheFingerprint) &&
+		Boolean(sceneCachePrewarmedFingerprint) &&
+		sceneCachePrewarmedFingerprint === sceneCacheFingerprint;
+	$: sceneCacheNeedsRefresh = Boolean(sceneCachePrewarmedFingerprint) && !sceneCacheReady;
+	$: sceneCacheActionLabel = sceneCacheReady
+		? $_("profiles.actions.cache_ready")
+		: sceneCacheNeedsRefresh
+			? $_("profiles.actions.cache_refresh_needed")
+			: $_("profiles.actions.cache_not_ready");
+	$: sceneCacheActionHint = sceneCacheReady
+		? $_("profiles.actions.cache_ready_hint", { values: { at: sceneCachePrewarmedAt ?? "-" } })
+		: liveRenderer
+			? $_("profiles.actions.warm_cache_live_hint")
+			: $_("profiles.actions.warm_cache_hint");
 </script>
 
 <div class="profile-stage-actions">
@@ -42,11 +61,13 @@
 			>
 			<button
 				type="button"
+				class:profile-stage-primary-action={!sceneCacheReady}
 				disabled={busy}
-				data-hint={$_("profiles.actions.warm_cache_live_hint")}
-				title={$_("profiles.actions.warm_cache_live_hint")}
-				aria-label={$_("profiles.actions.warm_cache")}
-				onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /></button
+				data-hint={sceneCacheActionHint}
+				title={sceneCacheActionHint}
+				aria-label={sceneCacheActionLabel}
+				onclick={() => onPrewarmSceneCache(settingId)}
+				><DatabaseZap size={14} />{#if !sceneCacheReady}<span>{sceneCacheActionLabel}</span>{/if}</button
 			>
 			<button
 				type="button"
@@ -91,11 +112,13 @@
 			>
 			<button
 				type="button"
+				class:profile-stage-primary-action={!sceneCacheReady}
 				disabled={busy}
-				data-hint={$_("profiles.actions.warm_cache_hint")}
-				title={$_("profiles.actions.warm_cache_hint")}
-				aria-label={$_("profiles.actions.warm_cache")}
-				onclick={() => onPrewarmSceneCache(settingId)}><DatabaseZap size={14} /></button
+				data-hint={sceneCacheActionHint}
+				title={sceneCacheActionHint}
+				aria-label={sceneCacheActionLabel}
+				onclick={() => onPrewarmSceneCache(settingId)}
+				><DatabaseZap size={14} />{#if !sceneCacheReady}<span>{sceneCacheActionLabel}</span>{/if}</button
 			>
 			<button
 				type="button"

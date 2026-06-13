@@ -16,4 +16,7 @@ export type ProfileStageSetting = ProfileStageSummarySetting & {
 	name: string;
 	group: string;
 	icon_path: string | null;
+	scene_cache_fingerprint: string;
+	scene_cache_prewarmed_fingerprint: string | null;
+	scene_cache_prewarmed_at: string | null;
 };

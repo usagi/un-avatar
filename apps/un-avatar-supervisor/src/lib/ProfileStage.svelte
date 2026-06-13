@@ -36,6 +36,9 @@
 			<ProfileStageTitle {setting} />
 			<ProfileStageActions
 				settingId={setting.id}
+				sceneCacheFingerprint={setting.scene_cache_fingerprint}
+				sceneCachePrewarmedFingerprint={setting.scene_cache_prewarmed_fingerprint}
+				sceneCachePrewarmedAt={setting.scene_cache_prewarmed_at}
 				{liveRenderer}
 				{pendingRestart}
 				{busy}

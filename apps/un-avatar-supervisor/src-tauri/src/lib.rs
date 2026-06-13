@@ -1291,6 +1291,9 @@ struct AvatarSetting {
 	allow_multiple_renderers: bool,
 	notes: Option<String>,
 	group: String,
+	scene_cache_fingerprint: String,
+	scene_cache_prewarmed_fingerprint: Option<String>,
+	scene_cache_prewarmed_at: Option<String>,
 }
 
 struct PostEffectSettings {
@@ -1525,6 +1528,14 @@ struct ManifestProfile {
 	allow_multiple_renderers: Option<bool>,
 	notes: Option<String>,
 	group: Option<String>,
+	scene_cache: Option<ManifestProfileSceneCache>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestProfileSceneCache {
+	fingerprint: Option<String>,
+	prewarmed_at: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -4796,8 +4807,9 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
 	let elapsed = started.elapsed().as_secs_f64();
 	let stderr = String::from_utf8_lossy(&output.stderr);
-	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	if output.status.success() {
+		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
+		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 		let detail = prewarm_renderer_scene_cache_detail(&stderr)
 			.map(|detail| format!(" ({detail})"))
 			.unwrap_or_default();
@@ -4810,6 +4822,7 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		);
 		return Ok(message);
 	}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	let last_line = stderr
 		.lines()
 		.rev()
@@ -6837,9 +6850,12 @@ fn refresh_renderer_stderr(renderer: &mut ManagedRenderer) {
 
 fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let manifest_value: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+	let scene_cache_fingerprint = scene_cache_manifest_fingerprint(&manifest_value);
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
 	let profile = manifest.profile.unwrap_or_default();
+	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
 	let motion = motion_settings(manifest.motion.unwrap_or_default(), manifest.vmc_address, manifest.vmc_port);
 	let audio_link = audio_link_settings(manifest.audio_link.unwrap_or_default());
@@ -6995,6 +7011,9 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		allow_multiple_renderers: profile.allow_multiple_renderers.unwrap_or(false),
 		notes: profile.notes,
 		group: profile.group.unwrap_or_default().trim().to_string(),
+		scene_cache_fingerprint,
+		scene_cache_prewarmed_fingerprint: scene_cache.and_then(|cache| cache.fingerprint.clone()),
+		scene_cache_prewarmed_at: scene_cache.and_then(|cache| cache.prewarmed_at.clone()),
 	})
 }
 
@@ -7576,6 +7595,47 @@ fn ensure_avatar_profile_metadata(manifest: &mut toml::Value, path: &Path, sort_
 		.unwrap_or(u32::MAX);
 	profile.insert("sort_order".to_string(), toml::Value::Integer(order as i64));
 	Ok(())
+}
+
+fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
+	let mut normalized = manifest.clone();
+	if let Some(profile) = normalized
+		.as_table_mut()
+		.and_then(|table| table.get_mut("profile"))
+		.and_then(toml::Value::as_table_mut)
+	{
+		profile.remove("scene_cache");
+	}
+	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
+	format!("{:016x}", fnv1a64(serialized.as_bytes()))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+	let mut hash = 0xcbf29ce484222325u64;
+	for byte in bytes {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x100000001b3);
+	}
+	hash
+}
+
+fn mark_scene_cache_prewarmed(manifest_path: &Path, fingerprint: &str) -> Result<(), String> {
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let profile = manifest
+		.as_table_mut()
+		.ok_or_else(|| "manifest root must be a table".to_string())?
+		.entry("profile".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "profile must be a table".to_string())?;
+	let scene_cache = profile
+		.entry("scene_cache".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "profile.scene_cache must be a table".to_string())?;
+	scene_cache.insert("fingerprint".to_string(), toml::Value::String(fingerprint.to_string()));
+	scene_cache.insert("prewarmed_at".to_string(), toml::Value::String(current_timestamp_compact()));
+	write_manifest_value(manifest_path, &manifest)
 }
 
 fn rename_avatar_setting_file_if_needed(path: &Path, setting: &AvatarSetting) -> Result<PathBuf, String> {
@@ -11076,6 +11136,38 @@ un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\
 		assert_eq!(
 			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
 			Some("processed 0/0/0, compressed 59/0/0, pipeline cache stored")
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_ignores_previous_prewarm_record() {
+		let base: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[profile]
+display_name = "Main"
+"#,
+		)
+		.unwrap();
+		let warmed: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[profile]
+display_name = "Main"
+
+[profile.scene_cache]
+fingerprint = "old"
+prewarmed_at = "20260614T000000Z"
+"#,
+		)
+		.unwrap();
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&base),
+			crate::scene_cache_manifest_fingerprint(&warmed)
 		);
 	}
 

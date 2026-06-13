@@ -203,6 +203,9 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	allow_multiple_renderers: boolean;
 	notes: string | null;
 	group: string;
+	scene_cache_fingerprint: string;
+	scene_cache_prewarmed_fingerprint: string | null;
+	scene_cache_prewarmed_at: string | null;
 };
 
 export type SpoutOutputSetting = Pick<
