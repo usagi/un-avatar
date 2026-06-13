@@ -1551,6 +1551,10 @@ fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
 	}
 }
 
+fn lil_enabled(value: f32) -> bool {
+	value > 0.5
+}
+
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = BTreeSet::new();
 	push_texture_index(&mut indices, material.base_color_texture_index);
@@ -1567,58 +1571,102 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	}
 	if let Some(liltoon) = material.liltoon_like_runtime() {
 		push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.gradation_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.second_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.second_blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.second_dissolve.mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.second_dissolve.noise_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.third_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.third_blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.third_dissolve.mask_texture_index);
-		push_texture_index(&mut indices, liltoon.main_color.third_dissolve.noise_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.color_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.strength_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.border_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.blur_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.second_color_texture_index);
-		push_texture_index(&mut indices, liltoon.shadow.third_color_texture_index);
-		push_texture_index(&mut indices, liltoon.normal.second_texture_index);
-		push_texture_index(&mut indices, liltoon.normal.second_scale_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.bump_texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.second_texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.second_blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.matcap.second_bump_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.metallic_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.color_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.smoothness_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.anisotropy_tangent_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.anisotropy_scale_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.reflection.anisotropy_shift_noise_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.rim.texture_index);
-		push_texture_index(&mut indices, liltoon.rim.shade_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.emission.texture_index);
-		push_texture_index(&mut indices, liltoon.emission.blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.emission.gradation_texture_index);
-		push_texture_index(&mut indices, liltoon.emission.second_texture_index);
-		push_texture_index(&mut indices, liltoon.emission.second_blend_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.emission.second_gradation_texture_index);
-		push_texture_index(&mut indices, liltoon.alpha_mask.texture_index);
-		push_texture_index(&mut indices, liltoon.audio_link.mask_texture_index);
-		push_texture_index(&mut indices, liltoon.audio_link.local_map_texture_index);
-		push_texture_index(&mut indices, liltoon.outline.texture_index);
-		push_texture_index(&mut indices, liltoon.outline.width_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.backlight.texture_index);
-		push_texture_index(&mut indices, liltoon.glitter.color_texture_index);
-		push_texture_index(&mut indices, liltoon.glitter.shape_texture_index);
-		push_texture_index(&mut indices, liltoon.dissolve.mask_texture_index);
-		push_texture_index(&mut indices, liltoon.dissolve.noise_mask_texture_index);
+		if lil_enabled(liltoon.main_color.gradation_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.main_color.gradation_texture_index);
+		}
+		if lil_enabled(liltoon.main_color.second_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.main_color.second_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.second_blend_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.second_dissolve.mask_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.second_dissolve.noise_mask_texture_index);
+		}
+		if lil_enabled(liltoon.main_color.third_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.main_color.third_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.third_blend_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.third_dissolve.mask_texture_index);
+			push_texture_index(&mut indices, liltoon.main_color.third_dissolve.noise_mask_texture_index);
+		}
+		if lil_enabled(liltoon.shadow.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.shadow.color_texture_index);
+			push_texture_index(&mut indices, liltoon.shadow.strength_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.shadow.border_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.shadow.blur_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.shadow.second_color_texture_index);
+			push_texture_index(&mut indices, liltoon.shadow.third_color_texture_index);
+		}
+		if lil_enabled(liltoon.normal.second_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.normal.second_texture_index);
+			push_texture_index(&mut indices, liltoon.normal.second_scale_mask_texture_index);
+		}
+		if lil_enabled(liltoon.matcap.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.matcap.texture_index);
+			push_texture_index(&mut indices, liltoon.matcap.blend_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.matcap.bump_texture_index);
+		}
+		if lil_enabled(liltoon.matcap.second_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.matcap.second_texture_index);
+			push_texture_index(&mut indices, liltoon.matcap.second_blend_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.matcap.second_bump_texture_index);
+		}
+		if lil_enabled(liltoon.reflection.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.reflection.metallic_texture_index);
+			push_texture_index(&mut indices, liltoon.reflection.color_texture_index);
+			push_texture_index(&mut indices, liltoon.reflection.smoothness_texture_index);
+		}
+		if lil_enabled(liltoon.reflection.anisotropy_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.reflection.anisotropy_tangent_texture_index);
+			push_texture_index(&mut indices, liltoon.reflection.anisotropy_scale_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.reflection.anisotropy_shift_noise_mask_texture_index);
+		}
+		if lil_enabled(liltoon.rim.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.rim.texture_index);
+		}
+		if lil_enabled(liltoon.rim.shade_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.rim.shade_mask_texture_index);
+		}
+		if lil_enabled(liltoon.emission.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.emission.texture_index);
+			push_texture_index(&mut indices, liltoon.emission.blend_mask_texture_index);
+			if lil_enabled(liltoon.emission.gradation_enabled_factor) {
+				push_texture_index(&mut indices, liltoon.emission.gradation_texture_index);
+			}
+		}
+		if lil_enabled(liltoon.emission.second_enabled_factor) {
+			push_texture_index(&mut indices, liltoon.emission.second_texture_index);
+			push_texture_index(&mut indices, liltoon.emission.second_blend_mask_texture_index);
+			if lil_enabled(liltoon.emission.second_gradation_enabled_factor) {
+				push_texture_index(&mut indices, liltoon.emission.second_gradation_texture_index);
+			}
+		}
+		if liltoon.alpha_mask.mode_factor > 0.5 {
+			push_texture_index(&mut indices, liltoon.alpha_mask.texture_index);
+		}
+		if lil_enabled(liltoon.audio_link.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.audio_link.mask_texture_index);
+			push_texture_index(&mut indices, liltoon.audio_link.local_map_texture_index);
+		}
+		if lil_enabled(liltoon.outline.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.outline.texture_index);
+			push_texture_index(&mut indices, liltoon.outline.width_mask_texture_index);
+		}
+		if lil_enabled(liltoon.backlight.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.backlight.texture_index);
+		}
+		if lil_enabled(liltoon.glitter.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.glitter.color_texture_index);
+			push_texture_index(&mut indices, liltoon.glitter.shape_texture_index);
+		}
+		if liltoon.dissolve.params_factor[0] > 0.5 {
+			push_texture_index(&mut indices, liltoon.dissolve.mask_texture_index);
+			push_texture_index(&mut indices, liltoon.dissolve.noise_mask_texture_index);
+		}
 		push_texture_index(&mut indices, liltoon.parallax.texture_index);
-		push_texture_index(&mut indices, liltoon.fur.vector_texture_index);
-		push_texture_index(&mut indices, liltoon.fur.length_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.fur.noise_mask_texture_index);
-		push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
+		if lil_enabled(liltoon.fur.enabled_factor) {
+			push_texture_index(&mut indices, liltoon.fur.vector_texture_index);
+			push_texture_index(&mut indices, liltoon.fur.length_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.fur.noise_mask_texture_index);
+			push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
+		}
 	}
 	indices.into_iter().collect()
 }
@@ -11125,6 +11173,31 @@ mod tests {
 		assert_eq!(material_texture_indices(&mat), vec![3]);
 		assert_eq!(material_cube_texture_indices(&mat), vec![9]);
 		assert_eq!(material_resident_texture_indices(&mat), vec![3, 9]);
+	}
+
+	#[test]
+	fn material_texture_indices_skip_disabled_liltoon_feature_slots() {
+		let mut liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon.main_color.second_texture_index = Some(10);
+		liltoon.matcap.texture_index = Some(11);
+		liltoon.emission.texture_index = Some(12);
+		liltoon.fur.mask_texture_index = Some(13);
+		let mut mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			base_color_texture_index: Some(3),
+			liltoon_like: Some(liltoon),
+			..Default::default()
+		};
+
+		assert_eq!(material_texture_indices(&mat), vec![3]);
+
+		let liltoon = mat.liltoon_like.as_mut().unwrap();
+		liltoon.main_color.second_enabled_factor = 1.0;
+		liltoon.matcap.enabled_factor = 1.0;
+		liltoon.emission.enabled_factor = 1.0;
+		liltoon.fur.enabled_factor = 1.0;
+
+		assert_eq!(material_texture_indices(&mat), vec![3, 10, 11, 12, 13]);
 	}
 
 	#[test]
