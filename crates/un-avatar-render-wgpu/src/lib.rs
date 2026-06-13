@@ -13,6 +13,8 @@ mod model_loader;
 mod options;
 mod pipeline_cache;
 mod post_process;
+#[cfg(windows)]
+mod renderer_tray;
 mod scene_transform;
 #[cfg(test)]
 mod shader_validation;
@@ -361,6 +363,12 @@ enum RendererControlEvent {
 		softness: Option<f32>,
 		height: Option<f32>,
 	},
+	#[cfg(windows)]
+	TrayMenu {
+		id: String,
+	},
+	#[cfg(windows)]
+	TrayIconActivate,
 	StartupProgress {
 		phase: StartupPhase,
 		current: u32,
@@ -1215,6 +1223,8 @@ struct AvatarApp {
 	close_hotkey: Option<CloseHotkey>,
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
+	#[cfg(windows)]
+	renderer_tray: Option<renderer_tray::RendererTray>,
 }
 
 #[derive(Clone, Debug)]
@@ -1478,7 +1488,8 @@ impl AvatarApp {
 		} else {
 			opts.runtime_status_address
 				.map(|address| start_runtime_status_server(address, &opts))
-		};
+		}
+		.or_else(|| Some(Arc::new(Mutex::new(initial_runtime_snapshot(&opts)))));
 		let close_hotkey = match CloseHotkey::parse(&opts.close_hotkey) {
 			Ok(close_hotkey) => close_hotkey,
 			Err(error) => {
@@ -1519,6 +1530,8 @@ impl AvatarApp {
 			close_hotkey,
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
+			#[cfg(windows)]
+			renderer_tray: None,
 		}
 	}
 
@@ -1586,6 +1599,156 @@ impl AvatarApp {
 		let size = window.inner_size();
 		status.window_inner_size = Some([size.width, size.height]);
 		status.minimized = window.is_minimized().unwrap_or(false);
+	}
+
+	#[cfg(windows)]
+	fn ensure_renderer_tray(&mut self) {
+		if self.renderer_tray.is_some() {
+			return;
+		}
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+			return;
+		};
+		match renderer_tray::RendererTray::new(&self.opts, &snapshot) {
+			Ok(tray) => {
+				self.renderer_tray = Some(tray);
+			}
+			Err(error) => eprintln!("un-avatar-renderer: renderer tray disabled: {error}"),
+		}
+	}
+
+	#[cfg(windows)]
+	fn refresh_renderer_tray(&mut self) {
+		let Some(tray) = self.renderer_tray.as_mut() else {
+			return;
+		};
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+			return;
+		};
+		tray.refresh(&self.opts, &snapshot);
+	}
+
+	#[cfg(windows)]
+	fn handle_renderer_tray_menu(&mut self, event_loop: &ActiveEventLoop, id: String) {
+		let Some(action) = self.renderer_tray.as_ref().and_then(|tray| tray.action(&id)) else {
+			return;
+		};
+		self.handle_renderer_tray_action(event_loop, action);
+	}
+
+	#[cfg(windows)]
+	fn handle_renderer_tray_action(&mut self, event_loop: &ActiveEventLoop, action: renderer_tray::RendererTrayAction) {
+		use renderer_tray::RendererTrayAction;
+		match action {
+			RendererTrayAction::ActivatePreview => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+			}
+			RendererTrayAction::MinimizePreview => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: None,
+					always_on_top: None,
+					minimized: Some(true),
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetWindowPreview => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+					enabled: false,
+					name: None,
+					width: None,
+					height: None,
+				});
+				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+			}
+			RendererTrayAction::SetSpoutPreview => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+					enabled: true,
+					name: None,
+					width: None,
+					height: None,
+				});
+				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+			}
+			RendererTrayAction::SetSpoutOnly => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+					enabled: true,
+					name: None,
+					width: Some(self.opts.spout.width.unwrap_or(1920)),
+					height: Some(self.opts.spout.height.unwrap_or(1080)),
+				});
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: None,
+					always_on_top: None,
+					minimized: Some(true),
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetAlwaysOnTop(always_on_top) => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: None,
+					always_on_top: Some(always_on_top),
+					minimized: None,
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetInputPassthrough(input_passthrough) => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: Some(input_passthrough),
+					always_on_top: None,
+					minimized: None,
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetAllDynamics(enabled) => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self
+					.event_proxy
+					.send_event(RendererControlEvent::SetAllDynamicsEnabled { enabled, result });
+			}
+			RendererTrayAction::ActivateAction(action_id) => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self.event_proxy.send_event(RendererControlEvent::ActivateAction {
+					action_id: Some(action_id),
+					supervisor_command: None,
+					expression_menu_path: None,
+					menu_path: None,
+					wardrobe_set_id: None,
+					parameter_name: None,
+					parameter_value: None,
+					result,
+				});
+			}
+			RendererTrayAction::OpenSupervisor => {
+				if let Err(error) = renderer_tray::open_supervisor() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::ResetCamera => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::ResetCamera);
+			}
+			RendererTrayAction::Quit => {
+				self.hide_window_for_shutdown();
+				event_loop.exit();
+			}
+		}
 	}
 
 	fn update_runtime_focus_status(&self) {
@@ -1822,6 +1985,7 @@ impl AvatarApp {
 			status.clear_color = [c.r, c.g, c.b, c.a];
 			status.transparent_window = self.opts.transparent;
 			status.input_passthrough = self.opts.input_passthrough;
+			status.always_on_top = self.opts.always_on_top;
 		}
 	}
 
@@ -2470,6 +2634,8 @@ impl AvatarApp {
 		self.fps_smooth = self.fps_smooth * 0.9 + inst_fps * 0.1;
 		self.update_runtime_frame(&timings);
 		self.update_runtime_spout_stats();
+		#[cfg(windows)]
+		self.refresh_renderer_tray();
 
 		if self.startup_progress.is_some() {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
@@ -2617,6 +2783,8 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		win.request_redraw();
 		self.window = Some(win);
 		self.update_runtime_window_geometry();
+		#[cfg(windows)]
+		self.ensure_renderer_tray();
 		self.start_async_model_load(self.event_proxy.clone());
 	}
 
@@ -3235,6 +3403,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					gpu.set_contact_shadow(next);
 				}
 				self.request_redraw();
+			}
+			#[cfg(windows)]
+			RendererControlEvent::TrayMenu { id } => {
+				self.handle_renderer_tray_menu(event_loop, id);
+			}
+			#[cfg(windows)]
+			RendererControlEvent::TrayIconActivate => {
+				self.handle_renderer_tray_action(event_loop, renderer_tray::RendererTrayAction::ActivatePreview);
 			}
 			RendererControlEvent::StartupProgress {
 				phase,
@@ -3977,6 +4153,9 @@ struct RendererRuntimeSnapshot {
 	/// 現在 click-through (input passthrough) が有効か。
 	#[serde(default)]
 	input_passthrough: bool,
+	/// 現在 always-on-top が有効か。
+	#[serde(default)]
+	always_on_top: bool,
 	#[serde(default)]
 	startup_phase: Option<String>,
 	#[serde(default)]
@@ -4134,6 +4313,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		clear_color: [opts.clear_color.r, opts.clear_color.g, opts.clear_color.b, opts.clear_color.a],
 		transparent_window: opts.transparent,
 		input_passthrough: opts.input_passthrough,
+		always_on_top: opts.always_on_top,
 		startup_phase: None,
 		startup_progress: None,
 		startup_message: None,
@@ -4656,6 +4836,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 		.build()
 		.map_err(|e| RunError::EventLoop(e.to_string()))?;
 	let event_proxy = event_loop.create_proxy();
+	#[cfg(windows)]
+	renderer_tray::install_event_handlers(event_proxy.clone());
 	if opts.runtime_bus_key.is_none() {
 		if let Some(address) = opts.runtime_control_address {
 			start_runtime_control_server(address, event_proxy.clone());
