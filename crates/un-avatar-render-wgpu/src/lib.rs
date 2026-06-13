@@ -2408,7 +2408,7 @@ impl AvatarApp {
 			texture_compression_astc_supported: false,
 			texture_compression_etc2_supported: false,
 			processed_texture_cache: self.opts.processed_texture_cache,
-			enable_spring_bones: self.opts.enable_spring_bones,
+			dynamics_enabled: self.opts.dynamics_enabled,
 			dynamics_enable_all_on_launch: self.opts.dynamics_enable_all_on_launch,
 			bone_colliders: self.opts.bone_colliders,
 			spring_bone_physics: self.opts.spring_bone_physics.clone(),
@@ -3261,7 +3261,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				bone_colliders,
 				physics_config,
 			} => {
-				self.opts.enable_spring_bones = enabled;
+				self.opts.dynamics_enabled = enabled;
 				self.opts.bone_colliders = bone_colliders;
 				self.opts.spring_bone_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
 				if let Some(gpu) = self.gpu.as_mut() {
@@ -5153,7 +5153,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			b: cli.cb,
 			a: cli.ca,
 		},
-		enable_spring_bones: !cli.no_dynamics,
+		dynamics_enabled: !cli.no_dynamics,
 		dynamics_enable_all_on_launch: false,
 		bone_colliders: Default::default(),
 		spring_bone_physics: DynamicsPhysicsConfig::default(),
@@ -5413,8 +5413,8 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	// CLI で `--no-dynamics` が指定されたときだけ強制 OFF。指定なしは
 	// manifest 値（または既定値 true）をそのまま使う。
-	if !cli.enable_spring_bones {
-		opts.enable_spring_bones = false;
+	if !cli.dynamics_enabled {
+		opts.dynamics_enabled = false;
 	}
 	if cli.debug.log_path.is_some() {
 		opts.debug.log_path = cli.debug.log_path;

@@ -2068,7 +2068,7 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) texture_compression_astc_supported: bool,
 	pub(crate) texture_compression_etc2_supported: bool,
 	pub(crate) processed_texture_cache: bool,
-	pub(crate) enable_spring_bones: bool,
+	pub(crate) dynamics_enabled: bool,
 	pub(crate) dynamics_enable_all_on_launch: bool,
 	pub(crate) bone_colliders: BoneColliderConfig,
 	pub(crate) spring_bone_physics: DynamicsPhysicsConfig,
@@ -2134,7 +2134,7 @@ struct RuntimePhysicsBuild {
 
 fn build_runtime_physics_for_document(
 	document: &UnaDocument,
-	enable_spring_bones: bool,
+	dynamics_enabled: bool,
 	bone_collider_config: BoneColliderConfig,
 	spring_bone_physics: &DynamicsPhysicsConfig,
 ) -> RuntimePhysicsBuild {
@@ -2146,7 +2146,7 @@ fn build_runtime_physics_for_document(
 		Vec::new()
 	};
 	let stats = collider_stats(&bone_colliders);
-	let dynamics_sim = if enable_spring_bones {
+	let dynamics_sim = if dynamics_enabled {
 		if let Some(runtime) = scene_profile_dynamics {
 			if runtime.dynamics.has_groups() {
 				DynamicsSimulator::new_with_runtime_dynamics(
@@ -2453,7 +2453,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		texture_compression_astc_supported: false,
 		texture_compression_etc2_supported: false,
 		processed_texture_cache: opts.processed_texture_cache,
-		enable_spring_bones: opts.enable_spring_bones,
+		dynamics_enabled: opts.dynamics_enabled,
 		dynamics_enable_all_on_launch: opts.dynamics_enable_all_on_launch,
 		bone_colliders: opts.bone_colliders,
 		spring_bone_physics: opts.spring_bone_physics.clone(),
@@ -5793,14 +5793,14 @@ impl GpuState {
 			unmotion_zenoh,
 			audio_link,
 			debug_vmc,
-			enable_spring_bones,
+			dynamics_enabled,
 			dynamics_enable_all_on_launch,
 			bone_colliders,
 			spring_bone_physics,
 			..
 		} = options;
 		let options_elapsed = attach_start.elapsed();
-		self.runtime_dynamics_enabled = enable_spring_bones;
+		self.runtime_dynamics_enabled = dynamics_enabled;
 		self.runtime_bone_collider_config = bone_colliders;
 		self.runtime_dynamics_physics = spring_bone_physics;
 		self.expression_presets = prepared.expression_presets;
@@ -5864,7 +5864,7 @@ impl GpuSceneBuildContext {
 		let runtime_model = document.runtime_model();
 		let physics = build_runtime_physics_for_document(
 			&document,
-			options.enable_spring_bones,
+			options.dynamics_enabled,
 			options.bone_colliders,
 			&options.spring_bone_physics,
 		);

@@ -933,7 +933,7 @@ impl PhysicsManifest {
 impl DynamicsPhysicsManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
 		if let Some(enabled) = self.enabled {
-			opts.enable_spring_bones = enabled;
+			opts.dynamics_enabled = enabled;
 		}
 		if let Some(enabled) = self.enable_all_on_launch {
 			opts.dynamics_enable_all_on_launch = enabled;
@@ -1370,7 +1370,7 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
 		assert!(opts.dynamics_enable_all_on_launch);
-		assert!(opts.enable_spring_bones);
+		assert!(opts.dynamics_enabled);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);
 		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");
@@ -1399,7 +1399,7 @@ enabled = true
 
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert!(opts.enable_spring_bones);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]
@@ -1413,7 +1413,7 @@ spring_bones = false
 
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert!(opts.enable_spring_bones);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]

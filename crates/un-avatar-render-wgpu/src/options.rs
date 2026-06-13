@@ -580,12 +580,12 @@ pub struct AvatarWindowOptions {
 	pub runtime_bus_key: Option<String>,
 	/// UNPhysics / UNDynamics を毎フレームシミュレーションする（既定 ON。揺れもの表現はアバターの基本機能のため）。
 	/// 静止画として表示したいときだけ manifest `[physics.dynamics] enabled = false` で OFF にする。
-	pub enable_spring_bones: bool,
+	pub dynamics_enabled: bool,
 	/// 起動直後にすべての runtime dynamics group を明示 ON にする。VRC PhysBone 既定 OFF モデル向けの opt-in。
 	pub dynamics_enable_all_on_launch: bool,
-	/// SpringBone めり込み抑制用のボーンベースコライダー設定。
+	/// UNDynamics めり込み抑制用のボーンベースコライダー設定。
 	pub bone_colliders: BoneColliderConfig,
-	/// SpringBone 物理 solver / time model / category override 設定。
+	/// UNDynamics solver backend / time model / category override 設定。
 	pub spring_bone_physics: SpringBonePhysicsConfig,
 	/// 調査用ログ（`run_cli` の `--debug-*` と対応）。
 	pub debug: WindowDebugOptions,
@@ -702,7 +702,7 @@ impl Default for AvatarWindowOptions {
 			runtime_status_address: None,
 			runtime_control_address: None,
 			runtime_bus_key: None,
-			enable_spring_bones: true,
+			dynamics_enabled: true,
 			dynamics_enable_all_on_launch: false,
 			bone_colliders: BoneColliderConfig::default(),
 			spring_bone_physics: SpringBonePhysicsConfig::default(),
