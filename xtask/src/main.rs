@@ -186,6 +186,7 @@ struct RendererLogSummary {
 	pipeline_store_mb: Option<String>,
 	top_texture_ms: f64,
 	top_texture: Option<String>,
+	texture_roles: Option<String>,
 }
 
 fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -> bool {
@@ -231,11 +232,11 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 		})
 		.collect::<Vec<_>>();
 	println!(
-		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture"
+		"file\timport_ms\tprewarm_total_ms\ttexture_ms\tmesh_ms\tcache_read_ms\tupload_ms\tprocessed_cache\tcompressed_cache\tfps\tcpu_no_surface_ms\tgpu_ms\tpipeline_load_mb\tpipeline_store_mb\ttop_texture\ttexture_roles"
 	);
 	for summary in summaries {
 		println!(
-			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+			"{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
 			summary.path.display(),
 			summary.import_ms.as_deref().unwrap_or("-"),
 			summary.prewarm_total_ms.as_deref().unwrap_or("-"),
@@ -250,7 +251,8 @@ fn run_summarize_renderer_log(repo: &Path, args: impl Iterator<Item = String>) -
 			summary.gpu_ms.as_deref().unwrap_or("-"),
 			summary.pipeline_load_mb.as_deref().unwrap_or("-"),
 			summary.pipeline_store_mb.as_deref().unwrap_or("-"),
-			summary.top_texture.as_deref().unwrap_or("-")
+			summary.top_texture.as_deref().unwrap_or("-"),
+			summary.texture_roles.as_deref().unwrap_or("-")
 		);
 	}
 	true
@@ -294,6 +296,8 @@ fn summarize_renderer_log_text(text: &str, summary: &mut RendererLogSummary) {
 			summary.pipeline_store_mb = metric_token(line, "bytes=").and_then(bytes_to_mb);
 		} else if line.contains("gpu scene texture image=") {
 			record_top_texture_line(line, summary);
+		} else if let Some(roles) = line.strip_prefix("un-avatar-renderer: gpu scene texture prepare roles: ") {
+			summary.texture_roles = Some(roles.to_string());
 		}
 	}
 }
@@ -3143,6 +3147,7 @@ mod tests {
 un-avatar-renderer: gpu scene benchmark import path=model elapsed=1120.9ms\n\
 un-avatar-renderer: gpu scene texture image=6 name=\"Body_b\" mime=\"image/png\" resident=true role=GenericColor: 72.5ms cube=0.0ms source=0.0ms rgba=0.0ms cache_lookup=0.0ms cache_read=25.9ms processed=0.0ms payload=0.0ms upload=46.5ms read_mb=85.3\n\
 un-avatar-renderer: gpu scene texture prepare summary: total=1271.4ms images=231 cache_read=70.4ms upload=387.5ms processed_cache=39/0/0 compressed_cache=21/0/0\n\
+un-avatar-renderer: gpu scene texture prepare roles: GenericColor=27/161 read=985.9MB/291.2ms upload=101.6ms cache_hits=15 compressed_hits=12 Data=20/39 read=1239.8MB/350.4ms upload=84.5ms cache_hits=20 compressed_hits=0\n\
 un-avatar-renderer: gpu scene mesh prepare summary: total=121.9ms prepared=625\n\
 un-avatar-renderer: frame bench frames=180 warmup=5 fps_avg=60.1 cpu_no_surface_avg=1.29ms gpu_avg=0.69ms\n\
 un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
@@ -3163,6 +3168,12 @@ un-avatar-renderer: Vulkan pipeline cache store path=x bytes=6025281\n",
 		assert_eq!(
 			summary.top_texture.as_deref(),
 			Some("image=6 role=GenericColor name=Body_b total_ms=72.5 cache_read_ms=25.9 upload_ms=46.5 read_mb=85.3")
+		);
+		assert_eq!(
+			summary.texture_roles.as_deref(),
+			Some(
+				"GenericColor=27/161 read=985.9MB/291.2ms upload=101.6ms cache_hits=15 compressed_hits=12 Data=20/39 read=1239.8MB/350.4ms upload=84.5ms cache_hits=20 compressed_hits=0"
+			)
 		);
 	}
 
