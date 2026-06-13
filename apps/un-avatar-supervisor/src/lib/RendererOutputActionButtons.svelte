@@ -11,8 +11,8 @@
 
 	$: spoutDisabled = disabled || (runtimeStatus?.connected === true && !runtimeStatus.spout_available);
 
-	async function setSpoutOnly1080p(): Promise<void> {
-		await onSetSpoutOutput(true, { width: 1920, height: 1080 }, "1080p");
+	async function setSpoutOnly(): Promise<void> {
+		await onSetSpoutOutput(true, null, "spout2 only");
 		await onSetWindow({ minimized: true }, "spout2 only");
 	}
 </script>
@@ -29,7 +29,7 @@
 	</label>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1280, height: 720 }, "720p")}>720p</button>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1920, height: 1080 }, "1080p")}>1080p</button>
-	<button disabled={spoutDisabled} onclick={() => setSpoutOnly1080p()} title={$_("renderers.controls.spout_only_title")}
+	<button disabled={spoutDisabled} onclick={() => setSpoutOnly()} title={$_("renderers.controls.spout_only_title")}
 		>{$_("renderers.controls.spout_only")}</button
 	>
 </div>
