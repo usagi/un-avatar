@@ -112,6 +112,14 @@ fn lil_enabled(value: f32) -> bool {
 	value > 0.5
 }
 
+fn liltoon_uses_main_color_adjustment(main: &un_avatar_core::UnaLilToonLikeMainColor) -> bool {
+	main.main_texture_hsvg_factor
+		.iter()
+		.zip([0.0, 1.0, 1.0, 1.0])
+		.any(|(value, default)| (*value - default).abs() > 0.00001)
+		|| lil_enabled(main.gradation_enabled_factor)
+}
+
 fn texture_role_from_source_metadata(source: &un_avatar_core::UnaImageSourceMetadata) -> Option<TextureRole> {
 	let texture_type = source.texture_type.as_deref().unwrap_or("").to_ascii_lowercase();
 	let color_space = source.color_space.as_deref().unwrap_or("").to_ascii_lowercase();
@@ -151,11 +159,13 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
 		}
 		if let Some(liltoon_like) = mat.liltoon_like_runtime() {
-			mark_texture_role(
-				&mut roles,
-				liltoon_like.main_color.main_color_adjust_mask_texture_index,
-				TextureRole::Data,
-			);
+			if liltoon_uses_main_color_adjustment(&liltoon_like.main_color) {
+				mark_texture_role(
+					&mut roles,
+					liltoon_like.main_color.main_color_adjust_mask_texture_index,
+					TextureRole::Data,
+				);
+			}
 			if lil_enabled(liltoon_like.main_color.gradation_enabled_factor) {
 				mark_texture_role(&mut roles, liltoon_like.main_color.gradation_texture_index, TextureRole::Data);
 			}
@@ -260,7 +270,9 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 				mark_texture_role(&mut roles, liltoon_like.dissolve.mask_texture_index, TextureRole::Data);
 				mark_texture_role(&mut roles, liltoon_like.dissolve.noise_mask_texture_index, TextureRole::Data);
 			}
-			mark_texture_role(&mut roles, liltoon_like.parallax.texture_index, TextureRole::Data);
+			if lil_enabled(liltoon_like.parallax.enabled_factor) {
+				mark_texture_role(&mut roles, liltoon_like.parallax.texture_index, TextureRole::Data);
+			}
 			if lil_enabled(liltoon_like.emission.enabled_factor) {
 				mark_texture_role(&mut roles, liltoon_like.emission.texture_index, TextureRole::Emissive);
 				mark_texture_role(&mut roles, liltoon_like.emission.blend_mask_texture_index, TextureRole::Data);
@@ -594,9 +606,11 @@ mod tests {
 		liltoon_like.emission.texture_index = Some(2);
 		liltoon_like.alpha_mask.mode_factor = 0.0;
 		liltoon_like.alpha_mask.texture_index = Some(3);
+		liltoon_like.main_color.main_color_adjust_mask_texture_index = Some(4);
+		liltoon_like.parallax.texture_index = Some(5);
 		let scene = UnaSceneSnapshot {
-			images: vec![image(), image(), image(), image()],
-			image_sources: vec![None, None, None, None],
+			images: vec![image(), image(), image(), image(), image(), image()],
+			image_sources: vec![None, None, None, None, None, None],
 			materials: vec![UnaMaterialPbr {
 				shading: un_avatar_core::UnaShadingModel::LilToonLike,
 				liltoon_like: Some(liltoon_like),
@@ -611,8 +625,37 @@ mod tests {
 				TextureRole::GenericColor,
 				TextureRole::GenericColor,
 				TextureRole::GenericColor,
+				TextureRole::GenericColor,
+				TextureRole::GenericColor,
 				TextureRole::GenericColor
 			]
 		);
+	}
+
+	#[test]
+	fn texture_roles_mark_liltoon_adjust_and_parallax_only_when_enabled() {
+		let image = || un_avatar_core::UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.main_color.main_color_adjust_mask_texture_index = Some(0);
+		liltoon_like.main_color.main_texture_hsvg_factor = [0.1, 1.0, 1.0, 1.0];
+		liltoon_like.parallax.texture_index = Some(1);
+		liltoon_like.parallax.enabled_factor = 1.0;
+		let scene = UnaSceneSnapshot {
+			images: vec![image(), image()],
+			image_sources: vec![None, None],
+			materials: vec![UnaMaterialPbr {
+				shading: un_avatar_core::UnaShadingModel::LilToonLike,
+				liltoon_like: Some(liltoon_like),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(texture_roles_for_scene(&scene), vec![TextureRole::Data, TextureRole::Data]);
 	}
 }
