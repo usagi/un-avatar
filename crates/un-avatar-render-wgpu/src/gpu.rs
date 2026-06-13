@@ -523,7 +523,8 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		.unwrap_or_default();
 	declared_asset_groups.sort();
 	declared_asset_groups.dedup();
-	let active_asset_groups = document.runtime_model().active_asset_groups().to_vec();
+	let runtime_model = document.runtime_model();
+	let active_asset_groups = runtime_model.active_asset_groups().to_vec();
 	let has_declared_groups = !declared_asset_groups.is_empty();
 	let ownership = document
 		.scene
@@ -531,7 +532,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		.map(|scene| scene.asset_group_ownership_counts())
 		.unwrap_or_default();
 	let has_ownership = ownership.groups > 0;
-	let source_asset_work = document.scoped_asset_selection();
+	let source_asset_work = runtime_model.scoped_asset_selection();
 	let inactive_owned_asset_group_count = ownership.groups.saturating_sub(source_asset_work.owned_active_groups.len());
 	let has_active_asset_groups = !active_asset_groups.is_empty();
 	WardrobeAssetUploadPlan {

@@ -2257,17 +2257,7 @@ impl UnaDocument {
 	}
 
 	pub fn scoped_asset_selection(&self) -> UnaSceneScopedAssetSelection {
-		let active_asset_groups = self.runtime_model().active_asset_groups();
-		if active_asset_groups.is_empty() {
-			return UnaSceneScopedAssetSelection::default();
-		}
-		let Some(scene) = self.scene.as_ref() else {
-			return UnaSceneScopedAssetSelection {
-				missing_active_asset_groups: active_asset_groups.to_vec(),
-				..Default::default()
-			};
-		};
-		scene.scoped_asset_selection(active_asset_groups)
+		self.runtime_model().scoped_asset_selection()
 	}
 }
 
@@ -2667,6 +2657,20 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn active_asset_groups(self) -> &'a [String] {
 		&self.runtime_state().active_asset_groups
+	}
+
+	pub fn scoped_asset_selection(self) -> UnaSceneScopedAssetSelection {
+		let active_asset_groups = self.active_asset_groups();
+		if active_asset_groups.is_empty() {
+			return UnaSceneScopedAssetSelection::default();
+		}
+		let Some(scene) = self.scene() else {
+			return UnaSceneScopedAssetSelection {
+				missing_active_asset_groups: active_asset_groups.to_vec(),
+				..Default::default()
+			};
+		};
+		scene.scoped_asset_selection(active_asset_groups)
 	}
 
 	pub fn last_action_id(self) -> Option<&'a str> {
@@ -6412,6 +6416,33 @@ mod tests {
 		assert!(selection.materials.is_empty());
 		assert!(selection.images.is_empty());
 		assert!(selection.dynamics_source_ids.is_empty());
+	}
+
+	#[test]
+	fn runtime_model_scoped_asset_selection_uses_runtime_active_groups() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				asset_group_ownership: vec![UnaSceneAssetGroupOwnership {
+					group_id: "outfit:coat".to_string(),
+					materials: vec![3],
+					images: vec![4],
+					dynamics_source_ids: vec!["physbone:coat".to_string()],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		document
+			.runtime_model_mut()
+			.set_active_asset_groups(vec!["outfit:coat".to_string(), "missing:hat".to_string()]);
+
+		let selection = document.runtime_model().scoped_asset_selection();
+		assert_eq!(selection.owned_active_groups, vec!["outfit:coat".to_string()]);
+		assert_eq!(selection.missing_active_asset_groups, vec!["missing:hat".to_string()]);
+		assert_eq!(selection.materials, vec![3]);
+		assert_eq!(selection.images, vec![4]);
+		assert_eq!(selection.dynamics_source_ids, vec!["physbone:coat".to_string()]);
 	}
 
 	#[test]
