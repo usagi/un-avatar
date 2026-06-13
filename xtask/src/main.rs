@@ -262,6 +262,10 @@ fn summarize_renderer_log(path: &Path) -> Result<RendererLogSummary, String> {
 	for line in text.lines() {
 		if line.contains("model import profile") && line.contains("step=import_gltf_path") {
 			summary.import_ms = metric_token(line, "elapsed=").map(strip_ms);
+		} else if summary.import_ms.is_none()
+			&& (line.contains("gpu scene benchmark import") || line.contains("scene cache prewarm import"))
+		{
+			summary.import_ms = metric_token(line, "elapsed=").map(strip_ms);
 		} else if line.contains("scene cache prewarm scene") {
 			summary.prewarm_total_ms = metric_token(line, "total=").map(strip_ms);
 		} else if line.contains("gpu scene texture prepare summary") {
