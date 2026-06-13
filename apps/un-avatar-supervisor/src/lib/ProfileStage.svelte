@@ -23,6 +23,7 @@
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
 	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
+	export let onCreateTaskbarLauncher: (settingId: string) => void | Promise<void>;
 	export let onScrollSection: (section: ProfileSectionId) => void;
 
 	$: summaryItems = profileStageSummaryItems(setting, $_);
@@ -45,6 +46,7 @@
 				{onLaunchProfile}
 				{onPrewarmSceneCache}
 				{onCreateDesktopShortcut}
+				{onCreateTaskbarLauncher}
 			/>
 		</div>
 		<ProfileSummaryGrid items={summaryItems} {activeSection} {onScrollSection} />

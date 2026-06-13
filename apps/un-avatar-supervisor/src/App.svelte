@@ -1448,6 +1448,22 @@
 		}
 	}
 
+	async function createTaskbarLauncher(settingId: string): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = $_("profiles.messages.taskbar_launcher_requires_tauri");
+			return;
+		}
+		busy = true;
+		try {
+			const path = await invoke<string>("create_taskbar_launcher_shortcuts", { settingId });
+			message = $_("profiles.messages.taskbar_launcher_created", { values: { path } });
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function maybeAutoLaunchSelectedOnStartup(): Promise<void> {
 		if (startupAutoLaunchAttempted) return;
 		startupAutoLaunchAttempted = true;
@@ -2935,6 +2951,7 @@
 						onLaunchProfile={(settingId) => launchSetting(settingId, false)}
 						onPrewarmSceneCache={(settingId) => prewarmSceneCache(settingId)}
 						onCreateDesktopShortcut={(settingId) => createDesktopShortcut(settingId)}
+						onCreateTaskbarLauncher={(settingId) => createTaskbarLauncher(settingId)}
 						onScrollSection={(section) => scrollProfileSection(section)}
 					/>
 				{/if}

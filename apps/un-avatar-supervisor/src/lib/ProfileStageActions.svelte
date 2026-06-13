@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { Camera, DatabaseZap, ExternalLink, Monitor, Play, RefreshCw } from "lucide-svelte";
+	import { Camera, DatabaseZap, ExternalLink, Monitor, Pin, Play, RefreshCw } from "lucide-svelte";
 	import type { ProfilePendingRestart } from "./profileStageTypes";
 	import type { RendererRef } from "./rendererTypes";
 
@@ -15,6 +15,7 @@
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
 	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
+	export let onCreateTaskbarLauncher: (settingId: string) => void | Promise<void>;
 </script>
 
 <div class="profile-stage-actions">
@@ -49,6 +50,14 @@
 		title={$_("profiles.actions.desktop_shortcut_hint")}
 		onclick={() => onCreateDesktopShortcut(settingId)}
 		><Monitor size={14} />{$_("profiles.actions.desktop_shortcut")}</button
+	>
+	<button
+		type="button"
+		disabled={busy}
+		data-hint={$_("profiles.actions.taskbar_launcher_hint")}
+		title={$_("profiles.actions.taskbar_launcher_hint")}
+		onclick={() => onCreateTaskbarLauncher(settingId)}
+		><Pin size={14} />{$_("profiles.actions.taskbar_launcher")}</button
 	>
 	{#if liveRenderer}
 		<button type="button" onclick={() => onViewRenderer(liveRenderer.id)}

@@ -112,6 +112,8 @@ warm_cache_hint = "Prepare texture and shader cache for the next launch of the s
 warm_cache_live_hint = "Prepare next-launch cache in a separate process without stopping the live Renderer. GPU and disk load may rise while it runs."
 desktop_shortcut = "Desktop Shortcut"
 desktop_shortcut_hint = "Create or update a desktop shortcut that launches this profile directly in Renderer."
+taskbar_launcher = "Taskbar Launcher"
+taskbar_launcher_hint = "Create or update Start Menu shortcuts for pinning UN Avatar to the taskbar and launching this profile from the same launcher identity."
 duplicate = "Duplicate"
 delete = "Delete"
 delete_hold_hint = "Hold to delete"
@@ -514,6 +516,8 @@ avatar_path_required_for_thumbnail = "Avatar file is not set"
 thumbnail_requires_tauri = "Browser preview: thumbnail cache saving requires Tauri"
 desktop_shortcut_requires_tauri = "Browser preview: desktop shortcut creation requires Tauri"
 desktop_shortcut_created = "Created desktop shortcut: %{path}"
+taskbar_launcher_requires_tauri = "Browser preview: taskbar launcher setup requires Tauri"
+taskbar_launcher_created = "Updated Start Menu launcher shortcuts. Pin UN Avatar from this folder: %{path}"
 
 [profiles.sections]
 identity = "Profile Settings"

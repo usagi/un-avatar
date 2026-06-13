@@ -120,6 +120,8 @@ warm_cache_hint = "選択中のプロファイルで次回起動用の texture /
 warm_cache_live_hint = "実行中の Renderer は止めず、別プロセスで次回起動用 cache を準備します。実行中は GPU とディスク負荷が一時的に増えます。"
 desktop_shortcut = "デスクトップショートカット"
 desktop_shortcut_hint = "このプロファイルを Renderer で直接起動するデスクトップショートカットを作成または更新します。"
+taskbar_launcher = "タスクバーLauncher"
+taskbar_launcher_hint = "UN Avatar をタスクバーにピン留めし、このプロファイルも同じ launcher identity から起動するためのスタートメニューショートカットを作成または更新します。"
 duplicate = "複製"
 delete = "削除"
 delete_hold_hint = "長押しで削除"
@@ -526,6 +528,8 @@ avatar_path_required_for_thumbnail = "アバターファイルが設定されて
 thumbnail_requires_tauri = "ブラウザプレビューではサムネイルのキャッシュ保存に対応していません"
 desktop_shortcut_requires_tauri = "ブラウザプレビューではデスクトップショートカット作成に対応していません"
 desktop_shortcut_created = "デスクトップショートカットを作成しました: %{path}"
+taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバー launcher 設定に対応していません"
+taskbar_launcher_created = "スタートメニューの launcher ショートカットを更新しました。ここから UN Avatar をピン留めできます: %{path}"
 
 [profiles.sections]
 identity = "プロファイル設定"

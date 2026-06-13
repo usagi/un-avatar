@@ -57,6 +57,7 @@ type SpringBoneAuthoredParamsCache = BTreeMap<String, SpringBoneAuthoredParamsBy
 static SPRING_BONE_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<SpringBoneAuthoredParamsCache>> = OnceLock::new();
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
+const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -1919,6 +1920,11 @@ struct AvatarManifestSummary {
 }
 
 pub fn run() {
+	match run_startup_proxy_command() {
+		Ok(true) => return,
+		Ok(false) => {}
+		Err(error) => eprintln!("un-avatar-supervisor: startup proxy command failed: {error}"),
+	}
 	// Phase E settings policy (decision 1+2): user dir が空のとき限定で
 	// bundled テンプレートをコピーする。app builder 構築前 (Tauri 依存無し)
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
@@ -1971,6 +1977,7 @@ pub fn run() {
 			new_avatar_setting,
 			prewarm_renderer_scene_cache,
 			create_renderer_desktop_shortcut,
+			create_taskbar_launcher_shortcuts,
 			pick_file_path,
 			read_vrm_metadata,
 			save_avatar_thumbnail_icon,
@@ -4689,6 +4696,34 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 }
 
 #[tauri::command]
+fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let supervisor_exe = supervisor_executable_path()?;
+	let renderer_exe = renderer_executable_path();
+	if !renderer_exe.is_file() {
+		return Err(format!("renderer executable not found: {}", renderer_exe.display()));
+	}
+	let start_menu_dir = start_menu_un_avatar_dir()?;
+	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
+	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	let launcher_path = start_menu_dir.join("UN Avatar.lnk");
+	create_windows_shortcut(&launcher_path, &supervisor_exe, "", &supervisor_working_dir, Some(&supervisor_exe))?;
+
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let profile_path = start_menu_dir.join(format!("UN Avatar - {}.lnk", sanitize_shortcut_file_stem(&setting.name)));
+	let profile_args = format!("{} {}", SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG, quote_windows_arg(&manifest_path));
+	let icon_path = shortcut_icon_path(&setting, &renderer_exe);
+	create_windows_shortcut(
+		&profile_path,
+		&supervisor_exe,
+		&profile_args,
+		&supervisor_working_dir,
+		icon_path.as_deref().or(Some(&supervisor_exe)),
+	)?;
+	Ok(start_menu_dir.display().to_string())
+}
+
+#[tauri::command]
 fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<String, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
@@ -7015,6 +7050,66 @@ fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf>
 		})
 }
 
+fn run_startup_proxy_command() -> Result<bool, String> {
+	let mut args = env::args_os().skip(1);
+	while let Some(arg) = args.next() {
+		if arg == SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG {
+			let manifest_path = args
+				.next()
+				.map(PathBuf::from)
+				.ok_or_else(|| format!("{SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG} requires a manifest path"))?;
+			spawn_standalone_renderer_manifest(&manifest_path)?;
+			return Ok(true);
+		}
+	}
+	Ok(false)
+}
+
+fn spawn_standalone_renderer_manifest(manifest_path: &Path) -> Result<(), String> {
+	let exe = renderer_executable_path();
+	if !exe.is_file() {
+		return Err(format!("renderer executable not found: {}", exe.display()));
+	}
+	let mut command = Command::new(&exe);
+	command.arg("--manifest").arg(manifest_path);
+	if let Ok(setting) = read_avatar_setting(manifest_path, ProfileStorage::User) {
+		if let Some(icon_path) = resolve_renderer_window_icon_path(&setting) {
+			command.arg("--icon").arg(icon_path);
+		}
+	}
+	if let Some(parent) = exe.parent() {
+		command.current_dir(parent);
+	}
+	prepend_spout2_runtime_path(&mut command);
+	configure_hidden_child(&mut command);
+	command
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.spawn()
+		.map_err(|e| format!("launch renderer from supervisor proxy: {e}"))?;
+	Ok(())
+}
+
+fn supervisor_executable_path() -> Result<PathBuf, String> {
+	let exe = env::current_exe().map_err(|e| format!("current supervisor executable: {e}"))?;
+	if exe.is_file() {
+		Ok(exe)
+	} else {
+		Err(format!("supervisor executable not found: {}", exe.display()))
+	}
+}
+
+fn start_menu_un_avatar_dir() -> Result<PathBuf, String> {
+	let appdata = env::var_os("APPDATA").ok_or_else(|| "APPDATA is not set".to_string())?;
+	Ok(PathBuf::from(appdata)
+		.join("Microsoft")
+		.join("Windows")
+		.join("Start Menu")
+		.join("Programs")
+		.join("UN Avatar"))
+}
+
 fn shortcut_icon_path<'a>(setting: &'a AvatarSetting, renderer_exe: &'a Path) -> Option<PathBuf> {
 	resolve_renderer_window_icon_path(setting)
 		.filter(|path| {
@@ -7096,7 +7191,7 @@ fn create_windows_shortcut(
 	_working_dir: &Path,
 	_icon_path: Option<&Path>,
 ) -> Result<(), String> {
-	Err("desktop shortcut creation is currently implemented for Windows only".to_string())
+	Err("shortcut creation is currently implemented for Windows only".to_string())
 }
 
 fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathBuf> {
