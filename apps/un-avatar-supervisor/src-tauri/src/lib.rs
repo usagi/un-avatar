@@ -900,6 +900,13 @@ struct DiagnosticsExportEntry {
 	archive_size_bytes: Option<u64>,
 }
 
+#[derive(Clone, Serialize)]
+struct PrewarmSceneCacheResult {
+	profile_name: String,
+	elapsed_secs: f64,
+	detail: Option<String>,
+}
+
 #[derive(Serialize)]
 struct SupervisorBuildInfo {
 	supervisor_version: &'static str,
@@ -5381,7 +5388,7 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 }
 
 #[tauri::command]
-fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<String, String> {
+fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<PrewarmSceneCacheResult, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let started = Instant::now();
@@ -5396,17 +5403,22 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 	if output.status.success() {
 		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
 		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-		let detail = prewarm_renderer_scene_cache_detail(&stderr)
-			.map(|detail| format!(" ({detail})"))
-			.unwrap_or_default();
-		let message = format!("Renderer cache prewarm finished for {} in {:.1}s{detail}", setting.name, elapsed);
+		let detail = prewarm_renderer_scene_cache_detail(&stderr);
+		let message = detail
+			.as_ref()
+			.map(|detail| format!("Renderer cache prewarm finished for {} in {:.1}s ({detail})", setting.name, elapsed))
+			.unwrap_or_else(|| format!("Renderer cache prewarm finished for {} in {:.1}s", setting.name, elapsed));
 		push_notification(
 			&mut state,
 			NotificationLevel::Info,
 			"Renderer cache ready".to_string(),
 			message.clone(),
 		);
-		return Ok(message);
+		return Ok(PrewarmSceneCacheResult {
+			profile_name: setting.name,
+			elapsed_secs: elapsed,
+			detail,
+		});
 	}
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	let last_line = stderr

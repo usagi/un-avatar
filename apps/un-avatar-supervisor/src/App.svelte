@@ -211,6 +211,12 @@
 
 	const appSettingsStorageKey = "un-avatar-supervisor.app-settings";
 	const legacyThemeModeStorageKey = "un-avatar-supervisor.theme-mode";
+
+	type PrewarmSceneCacheResult = {
+		profile_name: string;
+		elapsed_secs: number;
+		detail: string | null;
+	};
 	const launchTargetStorageKey = "un-avatar-supervisor.launch-target-id";
 	const defaultIconSrc = DEFAULT_PROFILE_ICON_SRC;
 
@@ -1503,8 +1509,14 @@
 		busy = true;
 		try {
 			message = $_("profiles.messages.cache_warming");
-			const result = await invoke<string>("prewarm_renderer_scene_cache", { settingId });
-			message = result;
+			const result = await invoke<PrewarmSceneCacheResult>("prewarm_renderer_scene_cache", { settingId });
+			message = result.detail
+				? $_("profiles.messages.cache_warmed_detail", {
+						values: { name: result.profile_name, seconds: formatFixed(result.elapsed_secs, 1), detail: result.detail },
+					})
+				: $_("profiles.messages.cache_warmed", {
+						values: { name: result.profile_name, seconds: formatFixed(result.elapsed_secs, 1) },
+					});
 			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
 		} catch (error) {
