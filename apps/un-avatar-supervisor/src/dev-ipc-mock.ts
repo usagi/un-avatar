@@ -16,6 +16,9 @@ const localeBundles: Record<string, LocaleBundle> = {
 	"en-US": { locale: "en-US", messages: parseFlatTomlMessages(enLocaleToml) },
 };
 
+const mockUnavatarPreviewDataUrl =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 let appSettings = {
 	system_tray_enabled: false,
 	minimize_to_tray: true,
@@ -334,7 +337,13 @@ export function installDevIpcMock(): void {
 						{ label: "Redistribution", value: "false" },
 					],
 				};
-			case "read_unavatar_metadata":
+			case "read_unavatar_metadata": {
+				const mockPreview = (view: string) => ({
+					view,
+					width: 1024,
+					height: 1024,
+					data_url: mockUnavatarPreviewDataUrl,
+				});
 				return {
 					path: String(args.path ?? "assets/example/main.unavatar"),
 					file_name: "main.unavatar",
@@ -349,33 +358,34 @@ export function installDevIpcMock(): void {
 					contact_count: 2,
 					modular_avatar_component_count: 18,
 					redistribution_allowed: null,
-					preview_images: [
-						{
-							view: "front",
-							width: 1024,
-							height: 1024,
-							data_url:
-								"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-						},
-					],
+					preview_images: [mockPreview("front"), mockPreview("side")],
 					preview_sets: [
 						{
 							id: "base",
 							name: "Base",
-							preview_images: [
-								{
-									view: "front",
-									width: 1024,
-									height: 1024,
-									data_url:
-										"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-								},
-							],
+							preview_images: [mockPreview("front"), mockPreview("side")],
+						},
+						{
+							id: "noble13",
+							name: "Noble 13",
+							preview_images: [mockPreview("front"), mockPreview("back")],
+						},
+						{
+							id: "field_drape",
+							name: "Field Drape",
+							preview_images: [mockPreview("front"), mockPreview("detail")],
 						},
 					],
 				};
-			case "save_profile_icon_from_data_url":
-				return { ...avatarSettings[0], icon_path: "C:/Users/the/AppData/Roaming/UN Avatar/profiles/assets/thumbnails/main-avatar-thumbnail.webp" };
+			}
+			case "save_profile_icon_from_data_url": {
+				const iconSettingId = String(args.settingId ?? "");
+				const iconSetting =
+					avatarSettings.find((item) => item.id === iconSettingId || item.manifest_path === iconSettingId) ?? avatarSettings[0];
+				(iconSetting as { icon_path: string | null }).icon_path =
+					"C:/Users/the/AppData/Roaming/UN Avatar/profiles/assets/thumbnails/main-avatar-thumbnail.webp";
+				return iconSetting;
+			}
 			case "read_unavatar_wardrobe_options":
 				return {
 					available: true,
