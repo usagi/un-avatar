@@ -32,7 +32,7 @@
 <section class="profile-stage" aria-label={$_("profiles.selected_summary")}>
 	<ProfileStageIdentity {iconUrl} {liveRendererCount} />
 	<div class="profile-stage-main">
-		<div class="stage-title-row">
+		<div class="stage-title-row profile-stage-title-row">
 			<ProfileStageTitle {setting} />
 			<ProfileStageActions
 				settingId={setting.id}

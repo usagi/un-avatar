@@ -95,7 +95,7 @@
 					data-hint={$_("profiles.actions.desktop_shortcut_hint")}
 					title={$_("profiles.actions.desktop_shortcut_hint")}
 					aria-label={$_("profiles.actions.desktop_shortcut")}
-					onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /></button
+					onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /><span>{$_("profiles.actions.desktop_shortcut_short")}</span></button
 				>
 				<button
 					type="button"
@@ -103,7 +103,7 @@
 					data-hint={$_("profiles.actions.taskbar_launcher_hint")}
 					title={$_("profiles.actions.taskbar_launcher_hint")}
 					aria-label={$_("profiles.actions.taskbar_launcher")}
-					onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /></button
+					onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /><span>{$_("profiles.actions.taskbar_launcher_short")}</span></button
 				>
 				<button
 					type="button"
@@ -146,7 +146,7 @@
 					data-hint={$_("profiles.actions.desktop_shortcut_hint")}
 					title={$_("profiles.actions.desktop_shortcut_hint")}
 					aria-label={$_("profiles.actions.desktop_shortcut")}
-					onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /></button
+					onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /><span>{$_("profiles.actions.desktop_shortcut_short")}</span></button
 				>
 				<button
 					type="button"
@@ -154,7 +154,7 @@
 					data-hint={$_("profiles.actions.taskbar_launcher_hint")}
 					title={$_("profiles.actions.taskbar_launcher_hint")}
 					aria-label={$_("profiles.actions.taskbar_launcher")}
-					onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /></button
+					onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /><span>{$_("profiles.actions.taskbar_launcher_short")}</span></button
 				>
 			</div>
 		{/if}
