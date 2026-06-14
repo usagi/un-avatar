@@ -578,7 +578,7 @@ export function diagnosticsComparisonDetails(
 			const beforeKey = leftStats.disconnected.join("\n");
 			const afterKey = rightStats.disconnected.join("\n");
 			return {
-				label: "Disconnected",
+				label: "No response",
 				before,
 				after,
 				level: beforeKey === afterKey ? "info" : "warning",
