@@ -19,7 +19,7 @@
 	$: previewSets = metadata.preview_sets.length
 		? metadata.preview_sets
 		: metadata.preview_images.length
-			? [{ id: "", name: "Preview", preview_images: metadata.preview_images }]
+			? [{ id: "", name: $_("unavatar_rights.default_preview_set"), preview_images: metadata.preview_images }]
 			: [];
 	$: if (!previewSets.some((set) => set.id === selectedSetId)) selectedSetId = previewSets[0]?.id ?? "";
 	$: selectedSet = previewSets.find((set) => set.id === selectedSetId) ?? previewSets[0] ?? null;
@@ -198,7 +198,7 @@
 						<button
 							type="button"
 							class:active={index === selectedPreviewIndex}
-							title={preview.view ?? `preview ${index + 1}`}
+							title={preview.view ?? $_("unavatar_rights.preview_image_title", { values: { index: index + 1 } })}
 							onclick={() => (selectedPreviewIndex = index)}
 						>
 							<img src={preview.data_url} alt="" />

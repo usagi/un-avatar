@@ -667,9 +667,11 @@ no_metadata = "選択中のアバターに VRM メタデータはありません
 [unavatar_rights]
 title = ".unavatar アセット確認"
 eyebrow = "重要: アセットの権利確認"
-summary = ".unavatar summary"
+summary = ".unavatar 内容"
 preview_images = "プレビュー画像"
 preview_set = "ワードローブセット"
+default_preview_set = "プレビュー"
+preview_image_title = "プレビュー %{index}"
 profile_icon = "アイコンに使う"
 use_preview_as_profile_icon = "選択中のサンプル画像をプロファイルアイコンに使う"
 icon_drag_hint = "ドラッグで位置調整"
@@ -692,7 +694,7 @@ check_responsibility = "アセット利用に関する責任を自分で負う�
 accept_and_use = "確認して読み込む"
 
 [unavatar_rights.stats]
-wardrobe = "Wardrobe"
+wardrobe = "ワードローブ"
 dynamics = "UNPhysics"
 contacts = "Contacts"
 modular_avatar = "Modular Avatar"
