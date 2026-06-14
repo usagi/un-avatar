@@ -83,7 +83,7 @@
 					disabled={busy}
 					data-hint={sceneCacheActionHint}
 					title={sceneCacheActionHint}
-					aria-label={sceneCacheActionLabel}
+					aria-label={sceneCacheButtonLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
 					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
 				>
@@ -130,7 +130,7 @@
 					disabled={busy}
 					data-hint={sceneCacheActionHint}
 					title={sceneCacheActionHint}
-					aria-label={sceneCacheActionLabel}
+					aria-label={sceneCacheButtonLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
 					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
 				>
