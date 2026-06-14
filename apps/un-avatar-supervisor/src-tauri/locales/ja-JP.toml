@@ -579,7 +579,7 @@ vmc_root_translation = "Root 移動: 受信した Root translation を scene roo
 root_translation = "Root 移動: 受信した Root translation を scene root に反映します。UNMF/Z と VMC のどちらでも、入力に Root translation が含まれる場合に使います。"
 
 [profiles.hints.physics]
-section = "UNPhysics とボーンベースコライダーを設定します。solver は Renderer 単位で扱い、分類別設定はパラメーター上書きとして事前解決されます。"
+section = "UNPhysics とボーンベースコライダーを設定します。ソルバーは Renderer 単位で扱い、分類別設定はパラメーター上書きとして事前解決されます。"
 
 [profiles.hints.output]
 section = "Output: 手元のプレビュー Window と、OBS などが取り込む Spout2 映像を別々に設定します。"
