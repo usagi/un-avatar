@@ -1,6 +1,8 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
-	env, fs,
+	env,
+	ffi::OsStr,
+	fs,
 	io::{BufRead, BufReader, Read, Seek, SeekFrom},
 	net::SocketAddr,
 	path::{Path, PathBuf},
@@ -2009,8 +2011,15 @@ pub fn run() {
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
 	tauri::Builder::default()
-		.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-			show_main_window(app);
+		.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+			match run_startup_proxy_args(args) {
+				Ok(true) => {}
+				Ok(false) => show_main_window(app),
+				Err(error) => {
+					eprintln!("un-avatar-supervisor: single-instance proxy command failed: {error}");
+					show_main_window(app);
+				}
+			}
 		}))
 		.plugin(tauri_plugin_notification::init())
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
@@ -7663,18 +7672,38 @@ fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf>
 }
 
 fn run_startup_proxy_command() -> Result<bool, String> {
-	let mut args = env::args_os().skip(1);
-	while let Some(arg) = args.next() {
-		if arg == SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG {
-			let manifest_path = args
-				.next()
-				.map(PathBuf::from)
-				.ok_or_else(|| format!("{SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG} requires a manifest path"))?;
-			spawn_standalone_renderer_manifest(&manifest_path)?;
-			return Ok(true);
-		}
+	run_startup_proxy_args(env::args_os().skip(1))
+}
+
+fn run_startup_proxy_args<I, S>(args: I) -> Result<bool, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	if let Some(manifest_path) = startup_proxy_manifest_arg(args)? {
+		spawn_standalone_renderer_manifest(&manifest_path)?;
+		return Ok(true);
 	}
 	Ok(false)
+}
+
+fn startup_proxy_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	let mut args = args.into_iter();
+	while let Some(arg) = args.next() {
+		if arg.as_ref() != OsStr::new(SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG) {
+			continue;
+		}
+		let manifest_path = args
+			.next()
+			.map(|path| PathBuf::from(path.as_ref()))
+			.ok_or_else(|| format!("{SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG} requires a manifest path"))?;
+		return Ok(Some(manifest_path));
+	}
+	Ok(None)
 }
 
 fn spawn_standalone_renderer_manifest(manifest_path: &Path) -> Result<(), String> {
@@ -10221,9 +10250,9 @@ mod tests {
 		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
 		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting,
-		AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
-		RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		spout_runtime_note, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id,
+		validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage,
+		RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -10494,6 +10523,26 @@ mod tests {
 			tasks[1].arguments,
 			r#"--launch-renderer-manifest "C:\Users\the\Profiles\usagi.toml""#
 		);
+	}
+
+	#[test]
+	fn startup_proxy_manifest_arg_accepts_single_instance_argv_shape() {
+		let args = [
+			r"C:\UN Avatar\un-avatar-supervisor.exe",
+			"--launch-renderer-manifest",
+			r"C:\Users\the\Profiles\usagi.toml",
+		];
+
+		let manifest = startup_proxy_manifest_arg(args).unwrap().unwrap();
+
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"));
+	}
+
+	#[test]
+	fn startup_proxy_manifest_arg_requires_manifest_path() {
+		let error = startup_proxy_manifest_arg(["--launch-renderer-manifest"]).unwrap_err();
+
+		assert!(error.contains("--launch-renderer-manifest requires a manifest path"));
 	}
 
 	#[test]
