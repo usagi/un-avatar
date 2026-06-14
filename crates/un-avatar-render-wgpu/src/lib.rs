@@ -93,6 +93,8 @@ const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
 const SCENE_STATE_FAILED: &str = "failed";
 const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
 const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
+#[cfg(windows)]
+const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -1211,6 +1213,8 @@ struct AvatarApp {
 	active_camera_transition: Option<ActiveCameraTransition>,
 	#[cfg(windows)]
 	renderer_tray: Option<renderer_tray::RendererTray>,
+	#[cfg(windows)]
+	last_renderer_tray_refresh_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -1518,6 +1522,8 @@ impl AvatarApp {
 			active_camera_transition: None,
 			#[cfg(windows)]
 			renderer_tray: None,
+			#[cfg(windows)]
+			last_renderer_tray_refresh_at: None,
 		}
 	}
 
@@ -1608,6 +1614,14 @@ impl AvatarApp {
 
 	#[cfg(windows)]
 	fn refresh_renderer_tray(&mut self) {
+		let now = Instant::now();
+		if self
+			.last_renderer_tray_refresh_at
+			.is_some_and(|last| now.saturating_duration_since(last) < RENDERER_TRAY_REFRESH_INTERVAL)
+		{
+			return;
+		}
+		self.last_renderer_tray_refresh_at = Some(now);
 		let Some(tray) = self.renderer_tray.as_mut() else {
 			return;
 		};
