@@ -8661,7 +8661,7 @@ fn normalize_spring_bone_solver(value: &str) -> Option<String> {
 }
 
 fn validate_spring_bone_solver(value: &str) -> Result<String, String> {
-	normalize_spring_bone_solver(value).ok_or_else(|| "spring bone solver must be one of verlet, xpbd".to_string())
+	normalize_spring_bone_solver(value).ok_or_else(|| "UNPhysics solver must be one of verlet, xpbd".to_string())
 }
 
 fn normalize_spring_bone_category_id(value: &str) -> String {
@@ -9679,7 +9679,7 @@ fn validate_spring_bone_override_mode(value: &str) -> Result<String, String> {
 		"authored" | "authored_verlet" => Ok("authored".to_string()),
 		"override_verlet" | "verlet" => Ok("override_verlet".to_string()),
 		"override_xpbd" | "xpbd" => Ok("override_xpbd".to_string()),
-		_ => Err("spring bone override mode must be authored, override_verlet, or override_xpbd".to_string()),
+		_ => Err("UNPhysics override mode must be authored, override_verlet, or override_xpbd".to_string()),
 	}
 }
 
@@ -9714,7 +9714,7 @@ fn set_spring_bone_category_mode(
 				("constraint_iterations".to_string(), toml::Value::Integer(4)),
 			],
 		),
-		_ => Err("spring bone override mode must be authored, override_verlet, or override_xpbd".to_string()),
+		_ => Err("UNPhysics override mode must be authored, override_verlet, or override_xpbd".to_string()),
 	}
 }
 
