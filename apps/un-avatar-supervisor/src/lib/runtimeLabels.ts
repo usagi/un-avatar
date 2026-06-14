@@ -149,23 +149,6 @@ export function runtimeAaLabel(status: RuntimeQualityStatusLabelData | null): st
 	return aaModeLabel(status?.aa ?? null);
 }
 
-export function qualitySummaryLabel(setting: ProfileQualityLabelData): string {
-	const textureLimit = setting.texture_resolution_limit === "off" ? "Unlimited" : textureModeLabel(setting.texture_resolution_limit);
-	const compression = textureModeLabel(setting.texture_compression);
-	const advanced = textureCompressionAdvancedSummary(setting.texture_compression_advanced);
-	const cache = setting.processed_texture_cache ? "cache on" : "cache off";
-	return `AA: ${aaModeLabel(setting.aa)} / Tex: ${textureLimit} / ${compression}${advanced} / ${cache}`;
-}
-
-function textureCompressionAdvancedSummary(advanced: TextureCompressionAdvanced): string {
-	const colorBc7 = advanced.clothing === "high_quality" && advanced.generic_color === "high_quality";
-	const dataBc7 = advanced.data === "high_quality";
-	if (colorBc7 && dataBc7) return " + BC7 color/data";
-	if (colorBc7) return " + BC7 color";
-	if (dataBc7) return " + BC7 data";
-	return "";
-}
-
 export function texturePolicyLabel(status: RuntimeQualityStatusLabelData | null, labels: RuntimeStatusLabels): string {
 	if (!status?.connected) return labels.pending;
 	const limit = textureModeLabel(status.texture_resolution_limit);

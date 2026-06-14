@@ -64,11 +64,3 @@ export function cameraSummaryLabel(setting: CameraSummaryLabelData): string {
 	const radius = (setting.camera_radius ?? 1.5) * 1000;
 	return `${formatFixed(lens, 0)}mm / ${formatFixed(radius, 0)}mm`;
 }
-
-export function lightingSummaryLabel(setting: LightingSummaryLabelData): string {
-	const env = setting.lighting_environment_enabled ? `Env ${formatFixed(setting.lighting_environment_intensity, 2)}` : "Env off";
-	const dir = setting.lighting_directional_enabled
-		? `Dir ${setting.lighting_directional_follow_camera_yaw ? "cam az" : "world"} ${formatFixed(setting.lighting_directional_intensity, 2)}`
-		: "Dir off";
-	return `${env} / ${dir}`;
-}
