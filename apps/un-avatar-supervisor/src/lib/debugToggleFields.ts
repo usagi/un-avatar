@@ -3,7 +3,7 @@ export const debugToggleFields = [
 		key: "debug_disable_rim_lighting",
 		field: "debug.disable_rim_lighting",
 		label: "Disable rim lighting",
-		hint: "MToon parametric Rim Lighting (rim_color × fresnel) を 0 に固定。目周辺のリングが rim 由来か切り分ける診断用。",
+		hint: "UNToon rim lighting (rim_color × fresnel) を 0 に固定。目周辺のリングが rim 由来か切り分ける診断用。",
 	},
 	{
 		key: "debug_force_shading_shift_zero",
@@ -15,7 +15,7 @@ export const debugToggleFields = [
 		key: "debug_disable_matcap",
 		field: "debug.disable_matcap",
 		label: "Disable matcap",
-		hint: "MToon matcap (sphere add) 寄与を 0 に固定。matcap テクスチャによる目周辺の擬似ハイライト/シャドウを切り分ける診断用。",
+		hint: "UNToon matcap / sphere add 寄与を 0 に固定。matcap テクスチャによる目周辺の擬似ハイライト/シャドウを切り分ける診断用。",
 	},
 	{
 		key: "debug_disable_emissive",
@@ -27,7 +27,7 @@ export const debugToggleFields = [
 		key: "debug_disable_shade_color",
 		field: "debug.disable_shade_color",
 		label: "Disable shade color",
-		hint: "MToon shade_term (shade_color × shade_tex) を base 色で置換。shade_tex そのものが肌色リングの原因か（=shade_tex の特定領域が肌色寄り）切り分ける診断用。",
+		hint: "UNToon shade term (shade_color × shade_tex) を base 色で置換。shade_tex そのものが肌色リングの原因か（=shade_tex の特定領域が肌色寄り）切り分ける診断用。",
 	},
 	{
 		key: "debug_disable_normal_map",
@@ -39,7 +39,7 @@ export const debugToggleFields = [
 		key: "debug_base_texture_only",
 		field: "debug.base_texture_only",
 		label: "Base texture only",
-		hint: "fs_mtoon の出力を base (alb × base_color) のみで早期 return する。shading / GI / rim / matcap / emissive / shade_term を全部スキップ。",
+		hint: "UNToon fragment output を base (alb × base_color) のみに固定。shading / GI / rim / matcap / emissive / shade term を全部スキップ。",
 	},
 ] as const;
 
