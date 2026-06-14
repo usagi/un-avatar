@@ -2565,7 +2565,7 @@
 	): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: runtime output control requires Tauri";
+			message = $_("renderers.messages.runtime_output_requires_tauri");
 			return;
 		}
 		busy = true;
@@ -2580,10 +2580,12 @@
 			const status = runtimeStatuses[renderer.id];
 			if (enabled && status?.connected && !status.spout_enabled) {
 				message = status.spout_available
-					? `Spout output did not activate for ${renderer.name}`
-					: "Spout2 SDK backend is not built into this renderer";
+					? $_("renderers.messages.spout_output_not_activated", { values: { name: renderer.name } })
+					: $_("renderers.messages.spout_backend_missing");
 			} else {
-				message = `${enabled ? "Set" : "Disabled"} Spout output ${label} for ${renderer.name}`;
+				message = enabled
+					? $_("renderers.messages.spout_output_set", { values: { label, name: renderer.name } })
+					: $_("renderers.messages.spout_output_disabled", { values: { label, name: renderer.name } });
 			}
 		} catch (error) {
 			message = String(error);

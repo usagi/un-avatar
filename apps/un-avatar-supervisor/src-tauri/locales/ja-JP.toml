@@ -753,6 +753,16 @@ status = "接続状態"
 connected = "接続済み"
 pending = "接続待ち"
 disconnected = "未接続"
+crashed = "クラッシュ"
+idle = "停止中"
+attention = "要確認"
+spout_unavailable = "Spout2 利用不可"
+spout_failing = "Spout2 送信失敗"
+spout_disabled = "無効"
+spout_backend_unavailable = "バックエンド利用不可"
+spout_waiting_first_frame = "初回フレーム待ち"
+spout_sending = "送信中"
+spout_failing_state = "失敗中"
 surface = "プレビュー"
 output = "出力"
 spout = "Spout2"
@@ -774,6 +784,13 @@ actions = "操作"
 
 [renderers.process]
 open_log_hint = "このプロセスのログを表示"
+
+[renderers.messages]
+runtime_output_requires_tauri = "ブラウザプレビューでは runtime 出力操作に対応していません"
+spout_output_not_activated = "%{name} の Spout2 出力を有効化できませんでした"
+spout_backend_missing = "この Renderer には Spout2 SDK backend が組み込まれていません"
+spout_output_set = "%{name} の Spout2 出力を %{label} に設定しました"
+spout_output_disabled = "%{name} の Spout2 出力を無効化しました (%{label})"
 
 [renderers.details]
 title = "選択中の Renderer"

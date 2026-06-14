@@ -114,6 +114,16 @@ export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 export type RuntimeStatusLabels = {
 	pending: string;
 	connected: string;
+	crashed?: string;
+	idle?: string;
+	spoutUnavailable?: string;
+	spoutFailing?: string;
+	attention?: string;
+	spoutDisabled?: string;
+	spoutBackendUnavailable?: string;
+	spoutWaitingFirstFrame?: string;
+	spoutSending?: string;
+	spoutFailingState?: string;
 };
 
 export function runtimeResolution(status: RuntimeQualityStatusLabelData | null): string {
@@ -205,13 +215,13 @@ export function rendererHealthLabel(
 	labels: RuntimeStatusLabels
 ): string {
 	const kind = rendererHealthKind(renderer, status);
-	if (kind === "error") return "Crashed";
-	if (kind === "idle") return "Idle";
+	if (kind === "error") return labels.crashed ?? "Crashed";
+	if (kind === "idle") return labels.idle ?? "Idle";
 	if (kind === "pending") return status?.startup_message ?? labels.pending;
 	if (kind === "warn") {
-		if (renderer.spout_enabled && !status?.spout_available) return "Spout unavailable";
-		if (status?.spout_last_send_ok === false) return "Spout failing";
-		return "Attention";
+		if (renderer.spout_enabled && !status?.spout_available) return labels.spoutUnavailable ?? "Spout unavailable";
+		if (status?.spout_last_send_ok === false) return labels.spoutFailing ?? "Spout failing";
+		return labels.attention ?? "Attention";
 	}
 	return labels.connected;
 }
@@ -234,6 +244,17 @@ export function spoutHealthLabel(status: RuntimeSpoutStatusLabelData | null, pen
 	const failed = status.spout_frame_failures;
 	const total = status.spout_frames_attempted;
 	const state = status.spout_last_send_ok === false ? "Failing" : "Sending";
+	return `${state}: ${status.spout_frames_sent}/${total} frames, ${failed} failed`;
+}
+
+export function localizedSpoutHealthLabel(status: RuntimeSpoutStatusLabelData | null, labels: RuntimeStatusLabels): string {
+	if (!status?.connected) return labels.pending;
+	if (!status.spout_enabled) return labels.spoutDisabled ?? "Disabled";
+	if (!status.spout_available) return labels.spoutBackendUnavailable ?? "Backend unavailable";
+	if (status.spout_frames_attempted === 0) return labels.spoutWaitingFirstFrame ?? "Waiting for first frame";
+	const failed = status.spout_frame_failures;
+	const total = status.spout_frames_attempted;
+	const state = status.spout_last_send_ok === false ? (labels.spoutFailingState ?? "Failing") : (labels.spoutSending ?? "Sending");
 	return `${state}: ${status.spout_frames_sent}/${total} frames, ${failed} failed`;
 }
 

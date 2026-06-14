@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import { localizedRuntimeOutputLabel } from "./profileStageSummary";
-	import { runtimeResolution, spoutHealthLabel, type RuntimeSummaryStatusData } from "./runtimeLabels";
+	import { localizedSpoutHealthLabel, runtimeResolution, type RuntimeSummaryStatusData } from "./runtimeLabels";
 	import type { RendererOutputView } from "./rendererTypes";
 
 	export let renderer: RendererOutputView;
@@ -19,6 +19,16 @@
 	</span>
 	<span>
 		<small>{$_("renderers.summary.spout")}</small>
-		<strong>{spoutHealthLabel(runtimeStatus, $_("renderers.summary.pending"))}</strong>
+		<strong
+			>{localizedSpoutHealthLabel(runtimeStatus, {
+				pending: $_("renderers.summary.pending"),
+				connected: $_("renderers.summary.connected"),
+				spoutDisabled: $_("renderers.summary.spout_disabled"),
+				spoutBackendUnavailable: $_("renderers.summary.spout_backend_unavailable"),
+				spoutWaitingFirstFrame: $_("renderers.summary.spout_waiting_first_frame"),
+				spoutSending: $_("renderers.summary.spout_sending"),
+				spoutFailingState: $_("renderers.summary.spout_failing_state"),
+			})}</strong
+		>
 	</span>
 </div>

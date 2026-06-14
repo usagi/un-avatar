@@ -745,6 +745,16 @@ status = "Connection"
 connected = "Connected"
 pending = "Pending"
 disconnected = "Disconnected"
+crashed = "Crashed"
+idle = "Idle"
+attention = "Attention"
+spout_unavailable = "Spout unavailable"
+spout_failing = "Spout failing"
+spout_disabled = "Disabled"
+spout_backend_unavailable = "Backend unavailable"
+spout_waiting_first_frame = "Waiting for first frame"
+spout_sending = "Sending"
+spout_failing_state = "Failing"
 surface = "Window"
 output = "Output"
 spout = "Spout2"
@@ -766,6 +776,13 @@ actions = "Actions"
 
 [renderers.process]
 open_log_hint = "Show logs for this process"
+
+[renderers.messages]
+runtime_output_requires_tauri = "Browser preview: runtime output control requires Tauri"
+spout_output_not_activated = "Spout output did not activate for %{name}"
+spout_backend_missing = "Spout2 SDK backend is not built into this Renderer"
+spout_output_set = "Set Spout output %{label} for %{name}"
+spout_output_disabled = "Disabled Spout output for %{name} (%{label})"
 
 [renderers.details]
 title = "Selected Renderer"

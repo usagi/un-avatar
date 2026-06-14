@@ -22,6 +22,11 @@
 		>{rendererHealthLabel(renderer, runtimeStatus, {
 			pending: $_("renderers.summary.pending"),
 			connected: $_("renderers.summary.connected"),
+			crashed: $_("renderers.summary.crashed"),
+			idle: $_("renderers.summary.idle"),
+			spoutUnavailable: $_("renderers.summary.spout_unavailable"),
+			spoutFailing: $_("renderers.summary.spout_failing"),
+			attention: $_("renderers.summary.attention"),
 		})}</span
 	>
 	<span>{motionLabel(renderer)}</span>
