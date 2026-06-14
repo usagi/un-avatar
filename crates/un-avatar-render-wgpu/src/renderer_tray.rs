@@ -14,7 +14,6 @@ use winit::event_loop::EventLoopProxy;
 use crate::{gpu, AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnapshot};
 
 const TRAY_ICON_ID: &str = "un-avatar-renderer-tray";
-const MAX_WARDROBE_ITEMS: usize = 24;
 
 #[derive(Clone, Debug)]
 pub(crate) enum RendererTrayAction {
@@ -287,7 +286,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 
 fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
 	let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
-	for candidate in snapshot.menu_wardrobe_candidates.iter().take(MAX_WARDROBE_ITEMS) {
+	for candidate in &snapshot.menu_wardrobe_candidates {
 		entries.push((
 			candidate.action_id.clone(),
 			menu_wardrobe_label(candidate),
@@ -295,7 +294,7 @@ fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayA
 		));
 	}
 	if entries.is_empty() {
-		for action in snapshot.wardrobe_actions.iter().take(MAX_WARDROBE_ITEMS) {
+		for action in &snapshot.wardrobe_actions {
 			entries.push((action.action_id.clone(), action.label.clone(), Some(action.set_id.clone())));
 		}
 	}
@@ -313,15 +312,6 @@ fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayA
 			true,
 			RendererTrayAction::ActivateAction(action_id),
 		);
-	}
-	let remaining = snapshot
-		.menu_wardrobe_candidates
-		.len()
-		.saturating_sub(MAX_WARDROBE_ITEMS)
-		.max(snapshot.wardrobe_actions.len().saturating_sub(MAX_WARDROBE_ITEMS));
-	if remaining > 0 {
-		append_separator(&wardrobe);
-		append_disabled(&wardrobe, format!("+{remaining} more in Supervisor"));
 	}
 	append_submenu(menu, &wardrobe);
 }
@@ -573,6 +563,27 @@ mod tests {
 			..Default::default()
 		};
 		assert_eq!(menu_wardrobe_label(&from_set_id), "base");
+	}
+
+	#[test]
+	fn wardrobe_menu_exposes_all_candidates_without_fixed_cap() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.menu_wardrobe_candidates = (0..32)
+			.map(|index| gpu::RuntimeMenuWardrobeCandidateStatus {
+				action_id: format!("wardrobe:{index}"),
+				wardrobe_set_id: format!("set_{index}"),
+				menu_path: vec!["Wardrobe".to_string(), format!("Set {index}")],
+				..Default::default()
+			})
+			.collect();
+
+		let (_menu, actions) = build_menu(&opts, &status);
+		let wardrobe_actions = actions
+			.values()
+			.filter(|action| matches!(action, RendererTrayAction::ActivateAction(_)))
+			.count();
+		assert_eq!(wardrobe_actions, 32);
 	}
 
 	#[test]
