@@ -5113,22 +5113,28 @@ fn apply_physics_setting_value(
 		"physics.dynamics.enable_all_on_launch" => {
 			set_nested_json_bool(manifest, &["physics", "dynamics", "enable_all_on_launch"], &value, field)
 		}
-		"physics.dynamics.solver.simulation_hz" | "physics.spring_bone.simulation_hz" => set_nested_ranged_float(
-			manifest,
-			&["physics", "dynamics", "solver", "simulation_hz"],
-			&value,
-			field,
-			30.0..=240.0,
-			"[30, 240]",
-		),
-		"physics.dynamics.solver.substeps" | "physics.spring_bone.substeps" => set_nested_ranged_u32(
-			manifest,
-			&["physics", "dynamics", "solver", "substeps"],
-			&value,
-			field,
-			1..=8,
-			"[1, 8]",
-		),
+		"physics.dynamics.solver.simulation_hz" | "physics.spring_bone.simulation_hz" => {
+			migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+			set_nested_ranged_float(
+				manifest,
+				&["physics", "dynamics", "solver", "simulation_hz"],
+				&value,
+				field,
+				30.0..=240.0,
+				"[30, 240]",
+			)
+		}
+		"physics.dynamics.solver.substeps" | "physics.spring_bone.substeps" => {
+			migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+			set_nested_ranged_u32(
+				manifest,
+				&["physics", "dynamics", "solver", "substeps"],
+				&value,
+				field,
+				1..=8,
+				"[1, 8]",
+			)
+		}
 		field if field.starts_with("physics.dynamics.solver.overrides.") || field.starts_with("physics.spring_bone.overrides.") => {
 			apply_spring_bone_category_override_value(manifest, setting, field, value)
 		}
@@ -9492,6 +9498,17 @@ fn migrate_avatar_manifest_to_v2(manifest: &mut toml::Value) -> Result<(), Strin
 	Ok(())
 }
 
+fn migrate_legacy_spring_bone_solver_to_v2(manifest: &mut toml::Value) -> Result<(), String> {
+	let legacy = manifest.get("physics").and_then(|physics| physics.get("spring_bone")).cloned();
+	let Some(legacy) = legacy else {
+		return Ok(());
+	};
+	if !manifest_has_nested_key(manifest, &["physics", "dynamics", "solver"]) {
+		set_nested_value(manifest, &["physics", "dynamics", "solver"], legacy)?;
+	}
+	remove_nested_key(manifest, &["physics", "spring_bone"])
+}
+
 fn remove_root_key(manifest: &mut toml::Value, key: &str) -> Result<(), String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	table.remove(key);
@@ -9643,6 +9660,7 @@ fn apply_spring_bone_category_override_value(
 	field: &str,
 	value: serde_json::Value,
 ) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
 	let rest = field
 		.strip_prefix("physics.dynamics.solver.overrides.")
 		.or_else(|| field.strip_prefix("physics.spring_bone.overrides."))
@@ -12920,6 +12938,53 @@ id = "test"
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
 		assert!(overrides.is_empty());
+	}
+
+	#[test]
+	fn spring_bone_solver_edits_migrate_legacy_table_to_v2_schema() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[physics.spring_bone]
+simulation_hz = 120.0
+substeps = 3
+
+[[physics.spring_bone.overrides]]
+category = "hair"
+solver = "xpbd"
+damping_half_life_ms = 90.0
+xpbd_compliance = 0.02
+constraint_iterations = 6
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.simulation_hz",
+			serde_json::json!(144.0),
+		)
+		.unwrap();
+
+		assert!(manifest.get("physics").and_then(|v| v.get("spring_bone")).is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(toml::Value::as_table)
+			.expect("v2 dynamics solver");
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(144.0));
+		assert_eq!(solver.get("substeps").and_then(toml::Value::as_integer), Some(3));
+		let overrides = solver.get("overrides").and_then(toml::Value::as_array).expect("legacy overrides migrated");
+		assert_eq!(overrides.len(), 1);
+		assert_eq!(overrides[0].get("category").and_then(toml::Value::as_str), Some("hair"));
+		assert_eq!(overrides[0].get("solver").and_then(toml::Value::as_str), Some("xpbd"));
 	}
 
 	#[test]
