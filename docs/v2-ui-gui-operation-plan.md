@@ -33,6 +33,8 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 
+Output mode controls must be semantic operations, not a bare Spout2 toggle. `Window Preview`, `Spout2 + Preview`, and `Spout2 Only` each update the necessary Spout2 and window-minimized state together so users cannot accidentally hide the preview by disabling Spout2 while the window remains minimized.
+
 ### Launcher / Shortcuts
 
 Shortcut and launcher UX is a bridge from prepared profiles to daily operation.

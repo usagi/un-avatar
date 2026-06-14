@@ -39,11 +39,12 @@ export function localizedRuntimeOutputLabel(
 ): string {
 	if (!status?.connected) return localizedOutputLabel(renderer, translate);
 	if (renderer.spout_enabled && !status.spout_available) return translate("profiles.summary.output_spout_unavailable");
-	if (!status.spout_enabled) return translate("profiles.summary.output_window");
+	if (!status.spout_enabled) return status.minimized ? translate("renderers.controls.window_minimized") : translate("profiles.summary.output_window_preview");
 	const name = status.spout_name ? ` / ${status.spout_name}` : "";
 	const size =
 		status.spout_sender_width && status.spout_sender_height ? ` / ${status.spout_sender_width} x ${status.spout_sender_height}` : "";
-	return `Spout2${name}${size}`;
+	const mode = status.minimized ? translate("profiles.summary.output_spout_only") : translate("profiles.summary.output_spout_preview");
+	return `${mode}${name}${size}`;
 }
 
 export function localizedMotionLabel(setting: MotionLabelData, translate: Translate): string {

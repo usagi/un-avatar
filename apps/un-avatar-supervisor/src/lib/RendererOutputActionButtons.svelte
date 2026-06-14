@@ -10,6 +10,19 @@
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 
 	$: spoutDisabled = disabled || (runtimeStatus?.connected === true && !runtimeStatus.spout_available);
+	$: windowPreviewActive = runtimeStatus?.connected ? !runtimeStatus.spout_enabled && !runtimeStatus.minimized : !renderer.spout_enabled;
+	$: spoutPreviewActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && !runtimeStatus.minimized : false;
+	$: spoutOnlyActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && Boolean(runtimeStatus.minimized) : false;
+
+	async function setWindowPreview(): Promise<void> {
+		await onSetSpoutOutput(false, null, "window preview");
+		await onSetWindow({ minimized: false }, "window preview");
+	}
+
+	async function setSpoutPreview(): Promise<void> {
+		await onSetSpoutOutput(true, null, "spout2 preview");
+		await onSetWindow({ minimized: false }, "spout2 preview");
+	}
 
 	async function setSpoutOnly(): Promise<void> {
 		await onSetSpoutOutput(true, null, "spout2 only");
@@ -18,18 +31,11 @@
 </script>
 
 <div class="runtime-button-row">
-	<label class="toggle-field renderer-output-toggle">
-		<input
-			type="checkbox"
-			checked={runtimeStatus?.connected ? runtimeStatus.spout_enabled : renderer.spout_enabled}
-			disabled={spoutDisabled}
-			onchange={(event) => onSetSpoutOutput((event.currentTarget as HTMLInputElement).checked, null)}
-		/>
-		<span>{$_("renderers.controls.spout")}</span>
-	</label>
+	<button class:active={windowPreviewActive} disabled={disabled} onclick={() => setWindowPreview()}>{$_("renderers.controls.window_preview")}</button>
+	<button class:active={spoutPreviewActive} disabled={spoutDisabled} onclick={() => setSpoutPreview()}>{$_("renderers.controls.spout_preview")}</button>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1280, height: 720 }, "720p")}>720p</button>
 	<button disabled={spoutDisabled} onclick={() => onSetSpoutOutput(true, { width: 1920, height: 1080 }, "1080p")}>1080p</button>
-	<button disabled={spoutDisabled} onclick={() => setSpoutOnly()} title={$_("renderers.controls.spout_only_title")}
+	<button class:active={spoutOnlyActive} disabled={spoutDisabled} onclick={() => setSpoutOnly()} title={$_("renderers.controls.spout_only_title")}
 		>{$_("renderers.controls.spout_only")}</button
 	>
 </div>

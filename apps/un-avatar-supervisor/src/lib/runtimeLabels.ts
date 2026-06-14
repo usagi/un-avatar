@@ -77,6 +77,7 @@ export type RendererHealthStatusData = RuntimeStartupStatusLabelData &
 
 export type RuntimeOutputStatusData = RuntimeConnectionStatusLabelData &
 	Pick<RuntimeSpoutStatusLabelData, "spout_available" | "spout_enabled" | "spout_name"> &
+	Partial<Pick<RuntimeQualityStatusLabelData, "minimized">> &
 	Partial<Pick<RuntimeSpoutStatusLabelData, "spout_sender_width" | "spout_sender_height">>;
 
 export type RuntimeSummaryStatusData = RuntimeQualityStatusLabelData & RuntimeSpoutStatusLabelData;
