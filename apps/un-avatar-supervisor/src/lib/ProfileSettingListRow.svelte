@@ -2,8 +2,8 @@
 	import { _ } from "svelte-i18n";
 	import { GripVertical } from "lucide-svelte";
 	import { aaModeLabel, basename } from "./formatting";
-	import { lookSummaryLabel, outputLabel } from "./profileLabels";
 	import { settingDragStyleValues, type ProfileListSetting, type SettingPointerDrag } from "./profileListTypes";
+	import { localizedLookLabel, localizedOutputLabel } from "./profileStageSummary";
 
 	export let setting: ProfileListSetting;
 	export let selected = false;
@@ -47,9 +47,9 @@
 		<strong>{setting.name}</strong>
 		<small>{setting.group ? `${setting.group} · ` : ""}{basename(setting.avatar_path)}</small>
 		<span class="setting-card-chips">
-			<span>{outputLabel(setting)}</span>
+			<span>{localizedOutputLabel(setting, $_)}</span>
 			<span>{aaModeLabel(setting.aa)}</span>
-			<span>{lookSummaryLabel(setting)}</span>
+			<span>{localizedLookLabel(setting, $_)}</span>
 		</span>
 	</span>
 	{#if runningCount > 0}
