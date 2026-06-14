@@ -5087,12 +5087,12 @@ textarea {
 }
 
 .unavatar-icon-crop-panel {
-	display: flex;
+	display: grid;
+	grid-template-columns: 138px 1fr;
 	align-items: center;
-	justify-content: space-between;
 	gap: 10px;
 	width: min(100%, 330px);
-	min-height: 34px;
+	height: 34px;
 	margin-top: 10px;
 }
 
@@ -5100,9 +5100,9 @@ textarea {
 	display: inline-flex;
 	grid-template-columns: none;
 	align-items: center;
+	justify-content: center;
 	gap: 8px;
-	flex: 0 0 auto;
-	min-width: 132px;
+	width: 138px;
 	min-height: 30px;
 	padding: 7px 10px;
 	border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
@@ -5129,7 +5129,9 @@ textarea {
 
 .unavatar-crop-zoom-actions {
 	display: inline-flex;
+	justify-content: flex-end;
 	gap: 4px;
+	width: 100%;
 }
 
 .unavatar-crop-zoom-actions button {
@@ -5140,6 +5142,10 @@ textarea {
 	border-radius: 7px;
 	font-size: 12px;
 	font-weight: 800;
+}
+
+.unavatar-crop-zoom-actions button:nth-child(2) {
+	width: 64px;
 }
 
 .unavatar-crop-zoom-actions button:disabled {
