@@ -776,10 +776,10 @@ check_responsibility = "I agree to take responsibility for asset usage."
 accept_and_use = "Confirm and Load"
 
 [unavatar_rights.stats]
-wardrobe = "Wardrobe"
-dynamics = "UNPhysics"
-contacts = "Contact checks"
-modular_avatar = "Modular Avatar"
+wardrobe = "Wardrobe sets"
+dynamics = "UNPhysics groups"
+contacts = "VRC Contacts"
+modular_avatar = "Modular Avatar components"
 
 [unavatar_rights.messages]
 avatar_selection_canceled = ".unavatar loading canceled"

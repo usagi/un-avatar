@@ -784,10 +784,10 @@ check_responsibility = "アセット利用に関する責任を自分で負う�
 accept_and_use = "確認して読み込む"
 
 [unavatar_rights.stats]
-wardrobe = "ワードローブ"
-dynamics = "UNPhysics"
-contacts = "接触判定"
-modular_avatar = "Modular Avatar"
+wardrobe = "ワードローブセット"
+dynamics = "UNPhysics グループ"
+contacts = "VRC Contact"
+modular_avatar = "Modular Avatar components"
 
 [unavatar_rights.messages]
 avatar_selection_canceled = ".unavatar の読み込みをキャンセルしました"
