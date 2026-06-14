@@ -544,7 +544,7 @@ pub struct AvatarWindowOptions {
 	pub spout: SpoutWindowOptions,
 	/// Final post color adjustment for avatar presentation. Identity by default.
 	pub environment_color: EnvironmentColorOptions,
-	/// Scene lighting used by Lit/MToon mesh shaders.
+	/// Scene lighting used by UNToon mesh shader variants.
 	pub lighting: LightingOptions,
 	/// Lightweight final-pass bloom. Disabled by default.
 	pub bloom: BloomOptions,
@@ -588,6 +588,7 @@ pub struct AvatarWindowOptions {
 	/// UNDynamics めり込み抑制用のボーンベースコライダー設定。
 	pub bone_colliders: BoneColliderConfig,
 	/// UNDynamics solver backend / time model / category override 設定。
+	/// Type name is kept for the current skeleton crate API; runtime input is normalized UNDynamics.
 	pub spring_bone_physics: SpringBonePhysicsConfig,
 	/// 調査用ログ（`run_cli` の `--debug-*` と対応）。
 	pub debug: WindowDebugOptions,
@@ -610,7 +611,7 @@ pub struct AvatarWindowOptions {
 	/// manifest `[motion] apply_vmc_root_translation = true` / IPC で明示的に ON にする。
 	/// **rotation は本フラグに関わらず常に適用される**。
 	pub apply_vmc_root_translation: bool,
-	/// 診断用: 全 draw を不透明 LitLambert + baseColor×texture のみに固定（MToon シェーダ分岐・base_color.a を無視）。
+	/// 診断用: 全 draw を不透明 LitLambert + baseColor×texture のみに固定（UNToon variant・base_color.a を無視）。
 	pub simple_basecolor_only: bool,
 	/// ロード時にマテリアル・スキン情報を stderr へ出力。
 	pub debug_material_dump: bool,
@@ -618,13 +619,13 @@ pub struct AvatarWindowOptions {
 	pub show_axes: bool,
 	/// ボーンベースコライダーの debug 表示。デフォルトは Off。
 	pub show_bone_colliders: bool,
-	/// MToon outline 描画を完全に無効化する診断フラグ。
+	/// UNToon geometry outline 描画を完全に無効化する診断フラグ。
 	/// 一部 VRM モデルで `_OutlineColor` が肌色寄りに設定されていると、目周辺の outline が
 	/// 「太い肌色のリング」として目立つ場合がある（VSeeFace では薄く出るが、UN Avatar の
 	/// 単純 mix(1, lighting, mix_factor) 式では明るすぎる傾向）。この toggle で outline 描画を
-	/// バイパスして原因切り分けに使う。manifest `[debug] disable_mtoon_outlines = true` で有効化。
+	/// バイパスして原因切り分けに使う。manifest key は legacy 互換で `[debug] disable_mtoon_outlines = true`。
 	pub disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断フラグ。
+	/// UNToon rim lighting 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_rim_lighting = true`。
 	pub debug_disable_rim_lighting: bool,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断フラグ。
@@ -636,7 +637,7 @@ pub struct AvatarWindowOptions {
 	/// emissive 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_emissive = true`。
 	pub debug_disable_emissive: bool,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断フラグ。
+	/// UNToon `shade_color × shade_tex` の代わりに base を使う診断フラグ。
 	/// manifest `[debug] disable_shade_color = true`。
 	pub debug_disable_shade_color: bool,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断フラグ。
