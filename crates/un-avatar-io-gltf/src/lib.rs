@@ -3785,14 +3785,23 @@ fn unavatar_usize_array(value: Option<&Value>) -> Vec<usize> {
 		.unwrap_or_default()
 }
 
+fn unavatar_base_wardrobe_set_id(wardrobe: &serde_json::Map<String, Value>) -> Option<&str> {
+	wardrobe.get("baseSet").and_then(Value::as_str)
+}
+
+fn unavatar_wardrobe_set_is_base(set: &Value, explicit_base_set: Option<&str>) -> bool {
+	if let Some(base_set) = explicit_base_set {
+		return set.get("id").and_then(Value::as_str) == Some(base_set);
+	}
+	set.get("default").and_then(Value::as_bool).unwrap_or(false) || set.get("id").and_then(Value::as_str) == Some("")
+}
+
 fn unavatar_base_wardrobe_set(unavatar: &UnaUnavatarExtension) -> Option<(&str, &[Value])> {
 	let wardrobe = unavatar.source.get("wardrobe").and_then(|v| v.as_object())?;
-	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
+	let explicit_base_set = unavatar_base_wardrobe_set_id(wardrobe);
 	let sets = wardrobe.get("sets").and_then(|v| v.as_array())?;
-	let base = sets.iter().find(|set| {
-		set.get("id").and_then(|v| v.as_str()) == Some(base_set) || set.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
-	})?;
-	let id = base.get("id").and_then(|v| v.as_str()).unwrap_or(base_set);
+	let base = sets.iter().find(|set| unavatar_wardrobe_set_is_base(set, explicit_base_set))?;
+	let id = base.get("id").and_then(Value::as_str).or(explicit_base_set).unwrap_or("");
 	let operations = base.get("operations").and_then(|v| v.as_array()).map(Vec::as_slice)?;
 	Some((id, operations))
 }
@@ -4870,13 +4879,11 @@ fn unavatar_base_hidden_subtree_paths(unavatar: &UnaUnavatarExtension) -> Vec<St
 	let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) else {
 		return Vec::new();
 	};
-	let base_set = wardrobe.get("baseSet").and_then(|v| v.as_str()).unwrap_or("base");
+	let explicit_base_set = unavatar_base_wardrobe_set_id(wardrobe);
 	let Some(sets) = wardrobe.get("sets").and_then(|v| v.as_array()) else {
 		return Vec::new();
 	};
-	let Some(base) = sets.iter().find(|set| {
-		set.get("id").and_then(|v| v.as_str()) == Some(base_set) || set.get("default").and_then(|v| v.as_bool()).unwrap_or(false)
-	}) else {
+	let Some(base) = sets.iter().find(|set| unavatar_wardrobe_set_is_base(set, explicit_base_set)) else {
 		return Vec::new();
 	};
 	base.get("operations")
@@ -18454,6 +18461,70 @@ mod tests {
 		};
 
 		let base = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
+		assert_eq!(base.active_asset_groups, vec!["".to_string()]);
+		assert_eq!(base.scoped_active_asset_group_count, 1);
+		assert!(base.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(base.scoped_resident_mesh_primitive_count, 1);
+		assert_eq!(base.scoped_resident_material_count, 1);
+		assert_eq!(base.scoped_resident_image_count, 1);
+
+		let coat = apply_unavatar_wardrobe_set(&mut doc, "coat").expect("apply coat wardrobe");
+		assert_eq!(coat.active_asset_groups, vec!["".to_string(), "outfit:coat".to_string()]);
+		assert_eq!(coat.scoped_active_asset_group_count, 2);
+		assert!(coat.scoped_missing_active_asset_groups.is_empty());
+		assert_eq!(coat.scoped_resident_mesh_primitive_count, 2);
+	}
+
+	#[test]
+	fn wardrobe_empty_string_base_set_id_is_explicit_base() {
+		let mut doc = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				asset_group_ownership: vec![
+					UnaSceneAssetGroupOwnership {
+						group_id: "".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 0,
+							primitive_index: 0,
+						}],
+						materials: vec![1],
+						images: vec![2],
+						..Default::default()
+					},
+					UnaSceneAssetGroupOwnership {
+						group_id: "outfit:coat".to_string(),
+						mesh_primitives: vec![UnaMeshPrimitiveKey {
+							mesh_index: 1,
+							primitive_index: 0,
+						}],
+						..Default::default()
+					},
+				],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"wardrobe": {
+						"baseSet": "",
+						"sets": [{
+							"id": "",
+							"assetGroups": [""],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let base = unavatar_base_wardrobe_set(doc.unavatar.as_ref().unwrap()).expect("base wardrobe");
+		assert_eq!(base.0, "");
+
+		let base = apply_unavatar_wardrobe_set(&mut doc, "").expect("apply empty base wardrobe");
 		assert_eq!(base.active_asset_groups, vec!["".to_string()]);
 		assert_eq!(base.scoped_active_asset_group_count, 1);
 		assert!(base.scoped_missing_active_asset_groups.is_empty());

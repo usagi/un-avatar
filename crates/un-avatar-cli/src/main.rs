@@ -2987,12 +2987,22 @@ fn unavatar_wardrobe_sets(doc: &UnaDocument) -> Vec<(String, Option<String>)> {
 }
 
 fn unavatar_base_set_id(doc: &UnaDocument) -> String {
-	doc.unavatar
-		.as_ref()
-		.and_then(|ext| ext.source.get("wardrobe"))
-		.and_then(|wardrobe| wardrobe.get("baseSet"))
-		.and_then(|v| v.as_str())
-		.unwrap_or("base")
+	let Some(wardrobe) = doc.unavatar.as_ref().and_then(|ext| ext.source.get("wardrobe")) else {
+		return String::new();
+	};
+	if let Some(base_set) = wardrobe.get("baseSet").and_then(|v| v.as_str()) {
+		return base_set.to_owned();
+	}
+	wardrobe
+		.get("sets")
+		.and_then(|sets| sets.as_array())
+		.and_then(|sets| {
+			sets.iter()
+				.find(|set| set.get("default").and_then(|v| v.as_bool()).unwrap_or(false))
+				.or_else(|| sets.iter().find(|set| set.get("id").and_then(|v| v.as_str()) == Some("")))
+		})
+		.and_then(|set| set.get("id").and_then(|v| v.as_str()))
+		.unwrap_or("")
 		.to_owned()
 }
 
@@ -3934,11 +3944,11 @@ fn unavatar_summary(ext: &un_avatar_core::UnaUnavatarExtension) -> DiagnoseUnava
 	let base_set = json_string(wardrobe.and_then(|w| w.get("baseSet")));
 	let base = sets.and_then(|sets| {
 		sets.iter().find(|set| {
-			let is_named_base = base_set
-				.as_deref()
-				.is_some_and(|base_set| set.get("id").and_then(|v| v.as_str()) == Some(base_set));
+			let set_id = set.get("id").and_then(|v| v.as_str());
+			let is_named_base = base_set.as_deref().is_some_and(|base_set| set_id == Some(base_set));
 			let is_default = set.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
-			is_named_base || is_default
+			let is_empty_id_base = base_set.is_none() && set_id == Some("");
+			is_named_base || is_default || is_empty_id_base
 		})
 	});
 	let base_operations = base.and_then(|set| set.get("operations")).and_then(|v| v.as_array());
