@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { Camera, DatabaseZap, ExternalLink, FilePlus2, Monitor, Pin, Play, RefreshCw } from "lucide-svelte";
+	import { Camera, DatabaseZap, ExternalLink, FilePlus2, Monitor, Pin, PinOff, Play, RefreshCw } from "lucide-svelte";
 	import type { ProfilePendingRestart } from "./profileStageTypes";
 	import type { RendererRef } from "./rendererTypes";
 
@@ -18,7 +18,8 @@
 	export let onLaunchProfile: (settingId: string) => void | Promise<void>;
 	export let onPrewarmSceneCache: (settingId: string) => void | Promise<void>;
 	export let onCreateDesktopShortcut: (settingId: string) => void | Promise<void>;
-	export let onCreateTaskbarLauncher: (settingId: string) => void | Promise<void>;
+	export let taskbarPinned = false;
+	export let onSetTaskbarPinned: (settingId: string, pinned: boolean) => void | Promise<void>;
 
 	$: sceneCacheReady =
 		Boolean(sceneCacheFingerprint) &&
@@ -120,11 +121,13 @@
 			>
 			<button
 				type="button"
+				class:profile-stage-pinned-action={taskbarPinned}
 				disabled={busy}
-				data-hint={$_("profiles.actions.taskbar_launcher_hint")}
-				title={$_("profiles.actions.taskbar_launcher_hint")}
+				data-hint={$_(taskbarPinned ? "profiles.actions.taskbar_unpin_hint" : "profiles.actions.taskbar_launcher_hint")}
+				title={$_(taskbarPinned ? "profiles.actions.taskbar_unpin_hint" : "profiles.actions.taskbar_launcher_hint")}
 				aria-label={$_("profiles.actions.taskbar_launcher")}
-				onclick={() => onCreateTaskbarLauncher(settingId)}><Pin size={14} /><span>{$_("profiles.actions.taskbar_launcher_short")}</span></button
+				onclick={() => onSetTaskbarPinned(settingId, !taskbarPinned)}
+				>{#if taskbarPinned}<PinOff size={14} />{:else}<Pin size={14} />{/if}<span>{$_(taskbarPinned ? "profiles.actions.taskbar_unpin_short" : "profiles.actions.taskbar_launcher_short")}</span></button
 			>
 			{#if liveRenderer}
 				<button

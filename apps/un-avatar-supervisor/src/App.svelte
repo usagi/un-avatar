@@ -1543,15 +1543,41 @@
 		}
 	}
 
-	async function createTaskbarLauncher(settingId: string): Promise<void> {
+	async function setTaskbarProfilePinned(settingId: string, pinned: boolean): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = $_("profiles.messages.taskbar_launcher_requires_tauri");
+			const ids = appSettings.pinned_taskbar_profile_ids.filter((id) => id !== settingId);
+			appSettings = {
+				...appSettings,
+				pinned_taskbar_profile_ids: pinned ? [...ids, settingId] : ids,
+			};
+			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
 			return;
 		}
 		busy = true;
 		try {
-			const path = await invoke<string>("create_taskbar_launcher_shortcuts", { settingId });
-			message = $_("profiles.messages.taskbar_launcher_created", { values: { path } });
+			appSettings = await invoke<AppSettings>("set_taskbar_profile_pinned", { settingId, pinned });
+			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
+			message = pinned
+				? $_("profiles.messages.taskbar_profile_pinned")
+				: $_("profiles.messages.taskbar_profile_unpinned");
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function clearTaskbarProfilePins(): Promise<void> {
+		if (!hasTauriRuntime()) {
+			appSettings = { ...appSettings, pinned_taskbar_profile_ids: [] };
+			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
+			return;
+		}
+		busy = true;
+		try {
+			appSettings = await invoke<AppSettings>("clear_taskbar_profile_pins");
+			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
+			message = $_("settings.messages.taskbar_profile_pins_cleared");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -3276,7 +3302,8 @@
 						onLaunchProfile={(settingId) => launchSetting(settingId, false)}
 						onPrewarmSceneCache={(settingId) => prewarmSceneCache(settingId)}
 						onCreateDesktopShortcut={(settingId) => createDesktopShortcut(settingId)}
-						onCreateTaskbarLauncher={(settingId) => createTaskbarLauncher(settingId)}
+						taskbarPinned={appSettings.pinned_taskbar_profile_ids.includes(selectedSetting.id)}
+						onSetTaskbarPinned={(settingId, pinned) => setTaskbarProfilePinned(settingId, pinned)}
 						onScrollSection={(section) => scrollProfileSection(section)}
 					/>
 				{/if}
@@ -3447,6 +3474,7 @@
 				onSetAppSetting={(key, value) => setAppSetting(key, value)}
 				onSetLocale={setLocaleSetting}
 				onSendTestNativeNotification={() => sendTestNativeNotification()}
+				onClearTaskbarProfilePins={() => clearTaskbarProfilePins()}
 				onOpenExternalLink={(url) => openExternalLink(url)}
 			/>
 		{/if}

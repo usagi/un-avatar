@@ -22,6 +22,8 @@ commands.allow = [
 	"prewarm_renderer_scene_cache",
 	"create_renderer_desktop_shortcut",
 	"create_taskbar_launcher_shortcuts",
+	"set_taskbar_profile_pinned",
+	"clear_taskbar_profile_pins",
 	"pick_file_path",
 	"read_unavatar_wardrobe_options",
 	"read_unavatar_metadata",

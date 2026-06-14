@@ -75,6 +75,11 @@ width_inner = "幅 (inner)"
 height_inner = "高さ (inner)"
 placeholder_default = "(default)"
 
+[settings.taskbar_launcher]
+title = "タスクバー起動"
+pinned_profiles = "ピン留めされたプロファイル"
+clear_pinned_profiles = "すべてクリア"
+
 [settings.language]
 title = "言語"
 note = "UI 表示言語を切り替えます。\"System\" を選択すると次回起動時に OS の言語設定から自動解決します (サポート外の言語の場合は日本語にフォールバック)。即時反映され、トレイメニューなどのネイティブ要素にも適用されます。"
@@ -105,6 +110,8 @@ auto_launch_selected_on_startup = "起動時に、Renderersタブで選択中の
 developer_controls = "開発者向けコントロール: Profile editor にデバッグ・診断用設定を表示します。"
 renderer_close_key = "Renderer終了キー: Rendererウィンドウ側で終了操作に使うキーです。"
 notifications = "通知: ネイティブ通知の状態確認とテスト送信を行います。"
+taskbar_launcher = "タスクバー起動: UN Avatar をタスクバーへピン留めしたときの右クリックメニューを管理します。"
+taskbar_pinned_profiles = "ピン留めされたプロファイル: タスクバーの UN Avatar 右クリックメニューから直接起動できるプロファイル数です。削除済みプロファイルは起動時に自動整理されます。"
 language = "言語: Supervisor Consoleの表示言語を切り替えます。"
 console_window = "Supervisor Consoleウィンドウ: 次回起動時の位置とサイズを調整します。空欄ならOS既定位置で開きます。"
 console_window_x = "X (outer): ウィンドウ外枠の左位置です。空欄ならOS既定です。"
@@ -112,6 +119,9 @@ console_window_y = "Y (outer): ウィンドウ外枠の上位置です。空欄�
 console_window_width = "幅 (inner): ウィンドウ内側の幅です。範囲外なら既定値へ戻ります。"
 console_window_height = "高さ (inner): ウィンドウ内側の高さです。範囲外なら既定値へ戻ります。"
 about = "このアプリについて: アプリ名、バージョン、リポジトリ、ライセンスを表示します。"
+
+[settings.messages]
+taskbar_profile_pins_cleared = "タスクバー右クリックのプロファイル起動リストをクリアしました"
 
 [profiles]
 aria = "プロファイル"
@@ -159,7 +169,9 @@ desktop_shortcut_short = "ショートカット作成"
 desktop_shortcut_hint = "このプロファイルを Renderer で直接起動するデスクトップショートカットを作成または更新します。"
 taskbar_launcher = "ピン留め"
 taskbar_launcher_short = "ピン留め"
-taskbar_launcher_hint = "UN Avatar のスタートメニュー起動項目、タスクバー識別、Jump List のプロファイル起動タスクを作成または更新します。"
+taskbar_launcher_hint = "このプロファイルをタスクバー右クリックの起動リストに追加します。UN Avatar 本体をタスクバーへピン留めすると使えます。"
+taskbar_unpin_short = "ピン解除"
+taskbar_unpin_hint = "このプロファイルをタスクバー右クリックの起動リストから外します。"
 duplicate = "複製"
 delete = "削除"
 delete_hold_hint = "長押しで削除"
@@ -648,7 +660,9 @@ cache_warmed_detail = "%{name} のキャッシュ準備が完了しました (%{
 desktop_shortcut_requires_tauri = "ブラウザプレビューではデスクトップショートカット作成に対応していません"
 desktop_shortcut_created = "デスクトップショートカットを作成しました: %{path}"
 taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバー起動設定に対応していません"
-taskbar_launcher_created = "UN Avatar 起動項目と Jump List のプロファイル起動タスクを更新しました。このフォルダーから UN Avatar をピン留めし、タスクバーアイコンの右クリックでプロファイルを起動できます: %{path}"
+taskbar_launcher_created = "UN Avatar 起動項目とタスクバー右クリックのプロファイル起動リストを更新しました。このフォルダーから UN Avatar をピン留めできます: %{path}"
+taskbar_profile_pinned = "このプロファイルをタスクバー右クリックの起動リストに追加しました"
+taskbar_profile_unpinned = "このプロファイルをタスクバー右クリックの起動リストから外しました"
 
 [profiles.summary]
 output_window = "Window"

@@ -14,6 +14,7 @@ export type AppSettings = {
 	auto_launch_selected_on_startup: boolean;
 	show_developer_controls: boolean;
 	last_selected_setting_id: string | null;
+	pinned_taskbar_profile_ids: string[];
 	console_window_x: number | null;
 	console_window_y: number | null;
 	console_window_width: number | null;
@@ -35,6 +36,7 @@ export const defaultAppSettings: AppSettings = {
 	auto_launch_selected_on_startup: false,
 	show_developer_controls: false,
 	last_selected_setting_id: null,
+	pinned_taskbar_profile_ids: [],
 	console_window_x: null,
 	console_window_y: null,
 	console_window_width: null,
@@ -80,6 +82,16 @@ function appSettingsFromPartial(parsed: Partial<AppSettings>): AppSettings {
 			typeof parsed.last_selected_setting_id === "string" && parsed.last_selected_setting_id.trim()
 				? parsed.last_selected_setting_id.trim()
 				: null,
+		pinned_taskbar_profile_ids: Array.isArray(parsed.pinned_taskbar_profile_ids)
+			? Array.from(
+					new Set(
+						parsed.pinned_taskbar_profile_ids
+							.filter((value): value is string => typeof value === "string")
+							.map((value) => value.trim())
+							.filter(Boolean)
+					)
+				)
+			: defaultAppSettings.pinned_taskbar_profile_ids,
 		locale: typeof parsed.locale === "string" ? parsed.locale : defaultAppSettings.locale,
 	};
 }

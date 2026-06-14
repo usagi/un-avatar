@@ -67,6 +67,11 @@ width_inner = "Width (inner)"
 height_inner = "Height (inner)"
 placeholder_default = "(default)"
 
+[settings.taskbar_launcher]
+title = "Taskbar Launch"
+pinned_profiles = "Pinned profiles"
+clear_pinned_profiles = "Clear all"
+
 [settings.language]
 title = "Language"
 note = "Switch the UI language. \"System\" follows the OS language at next startup (falling back to Japanese for unsupported locales). Changes apply immediately and also affect native elements such as tray menus."
@@ -97,6 +102,8 @@ auto_launch_selected_on_startup = "On startup, automatically launch the profile 
 developer_controls = "Developer controls: shows debug and diagnostic settings in the profile editor."
 renderer_close_key = "Renderer close key: key used to close renderer windows."
 notifications = "Notifications: checks native notification status and sends a test notification."
+taskbar_launcher = "Taskbar Launch: manages the profile tasks shown from the UN Avatar taskbar right-click menu."
+taskbar_pinned_profiles = "Pinned profiles: profiles available directly from the UN Avatar taskbar right-click menu. Missing profiles are cleaned up on startup."
 language = "Language: changes the Supervisor Console display language."
 console_window = "Supervisor Console Window: adjusts the next startup position and size. Blank values use OS defaults."
 console_window_x = "X (outer): left position of the window frame. Blank uses the OS default."
@@ -104,6 +111,9 @@ console_window_y = "Y (outer): top position of the window frame. Blank uses the 
 console_window_width = "Width (inner): inner window width. Out-of-range values fall back to defaults."
 console_window_height = "Height (inner): inner window height. Out-of-range values fall back to defaults."
 about = "About: app name, version, repository, and license."
+
+[settings.messages]
+taskbar_profile_pins_cleared = "Cleared the taskbar right-click profile list."
 
 [profiles]
 aria = "Profiles"
@@ -151,7 +161,9 @@ desktop_shortcut_short = "Create Shortcut"
 desktop_shortcut_hint = "Create or update a desktop shortcut that launches this profile directly in Renderer."
 taskbar_launcher = "Pin"
 taskbar_launcher_short = "Pin"
-taskbar_launcher_hint = "Create or update the Start Menu launcher, taskbar identity, and Jump List profile tasks for UN Avatar."
+taskbar_launcher_hint = "Add this profile to the taskbar right-click launch list. Pin UN Avatar itself to the taskbar to use it."
+taskbar_unpin_short = "Unpin"
+taskbar_unpin_hint = "Remove this profile from the taskbar right-click launch list."
 duplicate = "Duplicate"
 delete = "Delete"
 delete_hold_hint = "Hold to delete"
@@ -640,7 +652,9 @@ cache_warmed_detail = "Cache warmup finished for %{name} (%{seconds}s / %{detail
 desktop_shortcut_requires_tauri = "Browser preview: desktop shortcut creation requires Tauri"
 desktop_shortcut_created = "Created desktop shortcut: %{path}"
 taskbar_launcher_requires_tauri = "Browser preview: taskbar launcher setup requires Tauri"
-taskbar_launcher_created = "Updated the UN Avatar launcher and Jump List profile tasks. Pin UN Avatar from this folder, then right-click the taskbar icon to launch a profile: %{path}"
+taskbar_launcher_created = "Updated the UN Avatar launcher and taskbar right-click profile list. Pin UN Avatar from this folder: %{path}"
+taskbar_profile_pinned = "Added this profile to the taskbar right-click launch list."
+taskbar_profile_unpinned = "Removed this profile from the taskbar right-click launch list."
 
 [profiles.summary]
 output_window = "Window"

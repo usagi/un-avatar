@@ -4,6 +4,7 @@
 	import AppBehaviorSettingsCard from "./AppBehaviorSettingsCard.svelte";
 	import ConsoleWindowSettingsCard from "./ConsoleWindowSettingsCard.svelte";
 	import LanguageSettingsCard from "./LanguageSettingsCard.svelte";
+	import TaskbarLauncherSettingsCard from "./TaskbarLauncherSettingsCard.svelte";
 	import type { AppSettings, ThemeMode } from "./appSettings";
 	import type { AppSettingValue, NativeNotificationStatus } from "./appTypes";
 
@@ -20,6 +21,7 @@
 	export let onSetAppSetting: (key: keyof AppSettings, value: AppSettingValue) => void;
 	export let onSetLocale: (locale: string) => void | Promise<void>;
 	export let onSendTestNativeNotification: () => void | Promise<void>;
+	export let onClearTaskbarProfilePins: () => void | Promise<void>;
 	export let onOpenExternalLink: (url: string) => void | Promise<void>;
 </script>
 
@@ -43,6 +45,8 @@
 		<LanguageSettingsCard {appSettings} {availableLocales} {onSetLocale} />
 
 		<ConsoleWindowSettingsCard {appSettings} {onSetAppSetting} />
+
+		<TaskbarLauncherSettingsCard {appSettings} {busy} {onClearTaskbarProfilePins} />
 
 		<AboutSettingsCard {appVersion} {onOpenExternalLink} />
 	</div>

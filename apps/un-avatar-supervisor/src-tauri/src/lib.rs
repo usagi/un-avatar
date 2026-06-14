@@ -102,6 +102,9 @@ struct AppRuntimeSettings {
 	/// 直前に選択していたアバター設定 ID。Renderers/Avatar Settings 画面の Launch 対象と編集対象。
 	/// 起動時に存在するなら復元し、ユーザーが選び直したら都度書き戻す。
 	last_selected_setting_id: Option<String>,
+	/// Windows taskbar Jump List に表示する profile ids。削除済み profile は起動時や更新時に prune する。
+	#[serde(default)]
+	pinned_taskbar_profile_ids: Vec<String>,
 	/// Avatar model picker の直近ディレクトリ。未選択ならユーザーの Documents を初期位置にする。
 	last_avatar_model_dir: Option<String>,
 	/// 終了時の Supervisor Console ウィンドウの outer 位置（px）。None なら OS 既定位置で起動。
@@ -132,6 +135,7 @@ impl Default for AppRuntimeSettings {
 			auto_launch_selected_on_startup: false,
 			show_developer_controls: false,
 			last_selected_setting_id: None,
+			pinned_taskbar_profile_ids: Vec::new(),
 			last_avatar_model_dir: None,
 			console_window_x: None,
 			console_window_y: None,
@@ -2087,6 +2091,8 @@ pub fn run() {
 			prewarm_renderer_scene_cache,
 			create_renderer_desktop_shortcut,
 			create_taskbar_launcher_shortcuts,
+			set_taskbar_profile_pinned,
+			clear_taskbar_profile_pins,
 			pick_file_path,
 			read_vrm_metadata,
 			read_unavatar_metadata,
@@ -2675,10 +2681,11 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 
 #[tauri::command]
 fn get_app_settings(settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
-	settings
-		.lock()
-		.map(|settings| settings.clone())
-		.map_err(|_| "app settings state poisoned".to_string())
+	let mut settings = settings.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if prune_pinned_taskbar_profile_ids(&mut settings)? {
+		write_app_settings(&settings)?;
+	}
+	Ok(settings.clone())
 }
 
 /// Renderers / Avatar Settings 画面の選択中アバター設定 ID を記録し、終了 → 再起動時に復元できるようにする。
@@ -2765,6 +2772,33 @@ fn normalize_app_settings(settings: &mut AppRuntimeSettings) {
 		tracing::warn!(locale = %settings.locale, "i18n: unsupported locale value, resetting to auto");
 		settings.locale.clear();
 	}
+	settings.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&settings.pinned_taskbar_profile_ids);
+}
+
+fn normalized_taskbar_profile_ids(ids: &[String]) -> Vec<String> {
+	let mut seen = BTreeSet::new();
+	let mut normalized = Vec::new();
+	for id in ids {
+		let id = id.trim();
+		if id.is_empty() || !seen.insert(id.to_string()) {
+			continue;
+		}
+		normalized.push(id.to_string());
+	}
+	normalized
+}
+
+fn prune_pinned_taskbar_profile_ids(settings: &mut AppRuntimeSettings) -> Result<bool, String> {
+	let available = list_avatar_settings()?
+		.into_iter()
+		.map(|setting| setting.id)
+		.collect::<BTreeSet<_>>();
+	let before = settings.pinned_taskbar_profile_ids.clone();
+	settings.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&settings.pinned_taskbar_profile_ids)
+		.into_iter()
+		.filter(|id| available.contains(id))
+		.collect();
+	Ok(before != settings.pinned_taskbar_profile_ids)
 }
 
 fn write_app_settings(settings: &AppRuntimeSettings) -> Result<(), String> {
@@ -5433,8 +5467,49 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 }
 
 #[tauri::command]
-fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, String> {
+fn create_taskbar_launcher_shortcuts(setting_id: String, state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<String, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
+		state.pinned_taskbar_profile_ids.push(setting.id);
+	}
+	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
+	let path = update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(path)
+}
+
+#[tauri::command]
+fn set_taskbar_profile_pinned(
+	setting_id: String,
+	pinned: bool,
+	state: State<'_, Mutex<AppRuntimeSettings>>,
+) -> Result<AppRuntimeSettings, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if pinned {
+		if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
+			state.pinned_taskbar_profile_ids.push(setting.id);
+		}
+	} else {
+		state.pinned_taskbar_profile_ids.retain(|id| id != &setting.id);
+	}
+	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
+	update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(state.clone())
+}
+
+#[tauri::command]
+fn clear_taskbar_profile_pins(state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	state.pinned_taskbar_profile_ids.clear();
+	update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(state.clone())
+}
+
+fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Result<String, String> {
 	let supervisor_exe = supervisor_executable_path()?;
 	let renderer_exe = renderer_executable_path();
 	if !renderer_exe.is_file() {
@@ -5452,22 +5527,34 @@ fn create_taskbar_launcher_shortcuts(setting_id: String) -> Result<String, Strin
 		Some(&supervisor_exe),
 		Some(UN_AVATAR_LAUNCHER_APP_ID),
 	)?;
-
-	let manifest_path = PathBuf::from(&setting.manifest_path);
-	let profile_path = start_menu_dir.join(format!("UN Avatar - {}.lnk", sanitize_shortcut_file_stem(&setting.name)));
-	let profile_args = format!("{} {}", SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG, quote_windows_arg(&manifest_path));
-	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
-	create_windows_shortcut(
-		&profile_path,
-		&supervisor_exe,
-		&profile_args,
-		&supervisor_working_dir,
-		icon_path.as_deref().or(Some(&supervisor_exe)),
-		Some(UN_AVATAR_LAUNCHER_APP_ID),
-	)?;
+	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
 	let visible_settings = list_avatar_settings()?;
-	update_windows_jump_list(&supervisor_exe, &supervisor_working_dir, &visible_settings)?;
+	let pinned_ids = settings
+		.pinned_taskbar_profile_ids
+		.iter()
+		.map(String::as_str)
+		.collect::<BTreeSet<_>>();
+	let pinned_settings = visible_settings
+		.into_iter()
+		.filter(|setting| pinned_ids.contains(setting.id.as_str()))
+		.collect::<Vec<_>>();
+	update_windows_jump_list(&supervisor_exe, &supervisor_working_dir, &pinned_settings)?;
 	Ok(start_menu_dir.display().to_string())
+}
+
+fn remove_legacy_profile_launcher_shortcuts(start_menu_dir: &Path) {
+	let Ok(entries) = fs::read_dir(start_menu_dir) else {
+		return;
+	};
+	for entry in entries.flatten() {
+		let path = entry.path();
+		let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+			continue;
+		};
+		if name.starts_with("UN Avatar - ") && name.ends_with(".lnk") {
+			let _ = fs::remove_file(path);
+		}
+	}
 }
 
 #[tauri::command]
@@ -10741,6 +10828,31 @@ mod tests {
 	}
 
 	#[test]
+	fn legacy_profile_launcher_shortcuts_are_removed_without_touching_main_launcher() {
+		let dir = std::env::temp_dir().join(format!(
+			"un-avatar-launcher-test-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		std::fs::create_dir_all(&dir).unwrap();
+		let main = dir.join("UN Avatar.lnk");
+		let profile = dir.join("UN Avatar - usagi.lnk");
+		let unrelated = dir.join("Other.lnk");
+		std::fs::write(&main, b"main").unwrap();
+		std::fs::write(&profile, b"profile").unwrap();
+		std::fs::write(&unrelated, b"other").unwrap();
+
+		crate::remove_legacy_profile_launcher_shortcuts(&dir);
+
+		assert!(main.exists());
+		assert!(!profile.exists());
+		assert!(unrelated.exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
 	fn startup_proxy_manifest_arg_accepts_single_instance_argv_shape() {
 		let args = [
 			r"C:\UN Avatar\un-avatar-supervisor.exe",
@@ -12236,6 +12348,8 @@ mod tests {
 			"prewarm_renderer_scene_cache",
 			"create_renderer_desktop_shortcut",
 			"create_taskbar_launcher_shortcuts",
+			"set_taskbar_profile_pinned",
+			"clear_taskbar_profile_pins",
 			"launch_renderer",
 			"activate_renderer_window",
 			"capture_renderer_screenshot",
