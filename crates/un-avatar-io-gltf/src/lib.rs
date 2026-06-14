@@ -18295,6 +18295,42 @@ mod tests {
 	}
 
 	#[test]
+	fn initial_resident_image_indices_use_empty_string_base_set_id() {
+		let root = serde_json::json!({
+			"images": [{}, {}, {}, {}, {}, {}],
+			"extensions": {
+				"UN_avatar": {
+					"wardrobe": {
+						"baseSet": "",
+						"sets": [{
+							"id": "",
+							"assetGroups": [""],
+							"operations": []
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": []
+						}],
+						"assetGroupOwnership": [{
+							"groupId": "",
+							"images": [0]
+						}, {
+							"groupId": "outfit:coat",
+							"images": [1, 2]
+						}]
+					}
+				}
+			}
+		});
+
+		let base = initial_resident_image_indices(Some(&root), None).expect("base selection");
+		assert_eq!(base, [0, 3, 4, 5].into_iter().collect());
+
+		let coat = initial_resident_image_indices(Some(&root), Some("coat")).expect("coat selection");
+		assert_eq!(coat, [0, 1, 2, 3, 4, 5].into_iter().collect());
+	}
+
+	#[test]
 	fn initial_resident_image_indices_limit_unowned_images_to_active_material_refs() {
 		let root = serde_json::json!({
 			"images": [{}, {}, {}, {}, {}],
