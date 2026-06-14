@@ -19,7 +19,6 @@ const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 #[derive(Clone, Debug)]
 pub(crate) enum RendererTrayAction {
 	ActivatePreview,
-	MinimizePreview,
 	SetWindowPreview,
 	SetSpoutPreview,
 	SetSpoutOnly,
@@ -27,6 +26,7 @@ pub(crate) enum RendererTrayAction {
 	SetAlwaysOnTop(bool),
 	SetInputPassthrough(bool),
 	SetAllDynamics(bool),
+	SetWardrobe(String),
 	ActivateAction(String),
 	OpenSupervisor,
 	ResetCamera,
@@ -157,14 +157,6 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		true,
 		RendererTrayAction::ActivatePreview,
 	);
-	append_menu_item(
-		&menu,
-		&mut actions,
-		"preview:hide",
-		"Hide Preview",
-		true,
-		RendererTrayAction::MinimizePreview,
-	);
 
 	let output = Submenu::with_id("renderer:output", "Output", true);
 	append_menu_item(
@@ -248,7 +240,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 			&dynamics,
 			&mut actions,
 			"dynamics:on",
-			"Enable All",
+			"Enable Current Wardrobe",
 			true,
 			RendererTrayAction::SetAllDynamics(true),
 		);
@@ -256,7 +248,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 			&dynamics,
 			&mut actions,
 			"dynamics:off",
-			"Disable All",
+			"Disable Current Wardrobe",
 			true,
 			RendererTrayAction::SetAllDynamics(false),
 		);
@@ -313,32 +305,36 @@ fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTr
 }
 
 fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
-	let mut entries: Vec<(String, String, Option<String>)> = Vec::new();
+	let mut entries: Vec<(String, String)> = Vec::new();
 	for candidate in &snapshot.menu_wardrobe_candidates {
 		entries.push((
-			candidate.action_id.clone(),
 			menu_wardrobe_label(candidate),
-			Some(candidate.wardrobe_set_id.clone()),
+			candidate.wardrobe_set_id.clone(),
 		));
 	}
 	if entries.is_empty() {
 		for action in &snapshot.wardrobe_actions {
-			entries.push((action.action_id.clone(), action.label.clone(), Some(action.set_id.clone())));
+			entries.push((action.label.clone(), action.set_id.clone()));
 		}
+	}
+	if entries.iter().all(|(_, set_id)| !set_id.trim().is_empty()) {
+		entries.insert(0, ("Base".to_string(), String::new()));
 	}
 	if entries.is_empty() {
 		return;
 	}
-	let wardrobe = Submenu::with_id("renderer:wardrobe", "Wardrobe / VRC Menu", true);
-	for (index, (action_id, label, set_id)) in entries.into_iter().enumerate() {
-		let active = set_id.as_deref() == snapshot.active_wardrobe_set.as_deref();
+	let wardrobe = Submenu::with_id("renderer:wardrobe", "Wardrobe", true);
+	let active_set = snapshot.active_wardrobe_set.as_deref().unwrap_or("").trim();
+	for (index, (label, set_id)) in entries.into_iter().enumerate() {
+		let set_id = set_id.trim().to_string();
+		let active = set_id == active_set;
 		append_menu_item(
 			&wardrobe,
 			actions,
 			format!("wardrobe:{index}"),
 			check_label(truncate_label(&label, 56), active),
 			true,
-			RendererTrayAction::ActivateAction(action_id),
+			RendererTrayAction::SetWardrobe(set_id),
 		);
 	}
 	append_submenu(menu, &wardrobe);
@@ -751,9 +747,13 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 		let wardrobe_actions = actions
 			.values()
-			.filter(|action| matches!(action, RendererTrayAction::ActivateAction(_)))
+			.filter(|action| matches!(action, RendererTrayAction::SetWardrobe(_)))
 			.count();
-		assert_eq!(wardrobe_actions, 32);
+		assert_eq!(wardrobe_actions, 33);
+		assert!(matches!(
+			actions.get("renderer:wardrobe:0"),
+			Some(RendererTrayAction::SetWardrobe(set_id)) if set_id.is_empty()
+		));
 	}
 
 	#[test]
@@ -820,10 +820,7 @@ mod tests {
 			actions.get("renderer:preview:show"),
 			Some(RendererTrayAction::ActivatePreview)
 		));
-		assert!(matches!(
-			actions.get("renderer:preview:hide"),
-			Some(RendererTrayAction::MinimizePreview)
-		));
+		assert!(!actions.contains_key("renderer:preview:hide"));
 		assert!(matches!(
 			actions.get("renderer:output:window"),
 			Some(RendererTrayAction::SetWindowPreview)

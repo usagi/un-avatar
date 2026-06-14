@@ -5419,7 +5419,7 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 	let desktop_dir = dirs::desktop_dir().ok_or_else(|| "desktop directory was not found".to_string())?;
 	fs::create_dir_all(&desktop_dir).map_err(|e| format!("create desktop dir {}: {e}", desktop_dir.display()))?;
 	let shortcut_path = desktop_dir.join(format!("{}.lnk", sanitize_shortcut_file_stem(&setting.name)));
-	let working_dir = renderer_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	let working_dir = renderer_shortcut_working_dir(&renderer_exe);
 	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
 	create_windows_shortcut(
 		&shortcut_path,
@@ -8167,6 +8167,15 @@ fn prepend_spout2_runtime_path(command: &mut Command) {
 
 fn spout2_runtime_dir() -> Option<PathBuf> {
 	spout2_runtime_candidates().into_iter().find(|dir| dir.join("Spout.dll").is_file())
+}
+
+fn renderer_shortcut_working_dir(renderer_exe: &Path) -> PathBuf {
+	if renderer_exe.parent().is_some_and(|dir| dir.join("Spout.dll").is_file()) {
+		return renderer_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	}
+	spout2_runtime_dir()
+		.or_else(|| renderer_exe.parent().map(Path::to_path_buf))
+		.unwrap_or_else(repo_root)
 }
 
 fn spout2_runtime_candidates() -> Vec<PathBuf> {

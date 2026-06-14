@@ -259,6 +259,10 @@ enum RendererControlEvent {
 		enabled: bool,
 		result: CommandResultSlot,
 	},
+	SetCurrentWardrobeDynamicsEnabled {
+		enabled: bool,
+		result: CommandResultSlot,
+	},
 	SceneState {
 		result: SceneStateResultSlot,
 	},
@@ -1651,17 +1655,6 @@ impl AvatarApp {
 			RendererTrayAction::ActivatePreview => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
 			}
-			RendererTrayAction::MinimizePreview => {
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
-					decorations: None,
-					transparent: None,
-					input_passthrough: None,
-					always_on_top: None,
-					minimized: Some(true),
-					width: None,
-					height: None,
-				});
-			}
 			RendererTrayAction::SetWindowPreview => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
 					enabled: false,
@@ -1731,7 +1724,11 @@ impl AvatarApp {
 				let result = Arc::new(Mutex::new(None));
 				let _ = self
 					.event_proxy
-					.send_event(RendererControlEvent::SetAllDynamicsEnabled { enabled, result });
+					.send_event(RendererControlEvent::SetCurrentWardrobeDynamicsEnabled { enabled, result });
+			}
+			RendererTrayAction::SetWardrobe(set_id) => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWardrobe { set_id, result });
 			}
 			RendererTrayAction::ActivateAction(action_id) => {
 				let result = Arc::new(Mutex::new(None));
@@ -1844,6 +1841,7 @@ impl AvatarApp {
 				}
 			}
 		}
+		self.update_runtime_window_geometry();
 		self.request_redraw();
 	}
 
@@ -2798,8 +2796,17 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		self.start_async_model_load(self.event_proxy.clone());
 	}
 
-	fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-		if let Some(window) = &self.window {
+	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+		let spout_only = self
+			.window
+			.as_ref()
+			.is_some_and(|window| window.is_minimized().unwrap_or(false))
+			&& self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active());
+		if spout_only {
+			if self.render_frame() {
+				event_loop.exit();
+			}
+		} else if let Some(window) = &self.window {
 			window.request_redraw();
 		}
 	}
@@ -3127,6 +3134,18 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			RendererControlEvent::SetAllDynamicsEnabled { enabled, result } => {
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.set_all_runtime_dynamics_enabled(enabled),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetCurrentWardrobeDynamicsEnabled { enabled, result } => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_current_wardrobe_runtime_dynamics_enabled(enabled),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if outcome.is_ok() {

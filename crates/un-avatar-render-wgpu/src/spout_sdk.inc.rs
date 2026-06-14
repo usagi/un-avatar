@@ -514,7 +514,14 @@ impl SpoutCapture {
 		self.stats
 	}
 
-	pub fn encode_blit(&self, encoder: &mut wgpu::CommandEncoder, swap_view: &wgpu::TextureView, clear: wgpu::Color) {
+	pub fn encode_blit(
+		&self,
+		encoder: &mut wgpu::CommandEncoder,
+		swap_view: &wgpu::TextureView,
+		target_width: u32,
+		target_height: u32,
+		clear: wgpu::Color,
+	) {
 		{
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("spout-blit"),
@@ -532,6 +539,18 @@ impl SpoutCapture {
 				occlusion_query_set: None,
 				multiview_mask: None,
 			});
+			let target_w = target_width.max(1) as f32;
+			let target_h = target_height.max(1) as f32;
+			let source_aspect = self.logical_w.max(1) as f32 / self.logical_h.max(1) as f32;
+			let target_aspect = target_w / target_h;
+			let (viewport_x, viewport_y, viewport_w, viewport_h) = if target_aspect > source_aspect {
+				let h = target_w / source_aspect;
+				(0.0, (target_h - h) * 0.5, target_w, h)
+			} else {
+				let w = target_h * source_aspect;
+				((target_w - w) * 0.5, 0.0, w, target_h)
+			};
+			pass.set_viewport(viewport_x, viewport_y, viewport_w, viewport_h, 0.0, 1.0);
 			pass.set_pipeline(&self.blit_pipeline);
 			pass.set_bind_group(0, &self.blit_bind, &[]);
 			pass.draw(0..3, 0..1);

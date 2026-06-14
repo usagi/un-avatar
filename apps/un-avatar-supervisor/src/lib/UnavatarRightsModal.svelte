@@ -54,6 +54,12 @@
 		Number(profileIconCrop.offsetX) || 0,
 		Number(profileIconCrop.offsetY) || 0
 	);
+	$: cropEdges = {
+		left: clamp(cropLayout.left - cropLayout.side * 0.5, 0, 100),
+		right: clamp(100 - (cropLayout.left + cropLayout.side * 0.5), 0, 100),
+		top: clamp(cropLayout.top - cropLayout.side * 0.5, 0, 100),
+		bottom: clamp(100 - (cropLayout.top + cropLayout.side * 0.5), 0, 100),
+	};
 
 	function clamp(value: number, min: number, max: number) {
 		return Math.min(max, Math.max(min, value));
@@ -180,8 +186,18 @@
 						onload={updateNaturalPreviewSize}
 					/>
 					{#if selectedPreview && canEditProfileIcon && profileIconCrop.enabled}
+						<span class="unavatar-icon-mask-region top" style={`height: ${cropEdges.top}%;`}></span>
+						<span class="unavatar-icon-mask-region bottom" style={`height: ${cropEdges.bottom}%;`}></span>
 						<span
-							class="unavatar-icon-mask"
+							class="unavatar-icon-mask-region left"
+							style={`top: ${cropEdges.top}%; bottom: ${cropEdges.bottom}%; width: ${cropEdges.left}%;`}
+						></span>
+						<span
+							class="unavatar-icon-mask-region right"
+							style={`top: ${cropEdges.top}%; bottom: ${cropEdges.bottom}%; width: ${cropEdges.right}%;`}
+						></span>
+						<span
+							class="unavatar-icon-crop-border"
 							style={`width: ${cropLayout.side}%; left: ${cropLayout.left}%; top: ${cropLayout.top}%;`}
 						></span>
 					{/if}

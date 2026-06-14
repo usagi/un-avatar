@@ -5178,16 +5178,38 @@ textarea {
 	filter: none;
 }
 
-.unavatar-icon-mask {
+.unavatar-icon-mask-region,
+.unavatar-icon-crop-border {
 	position: absolute;
+	pointer-events: none;
+}
+
+.unavatar-icon-mask-region {
+	background: color-mix(in srgb, #02050a 58%, transparent);
+}
+
+.unavatar-icon-mask-region.top {
+	inset: 0 0 auto;
+}
+
+.unavatar-icon-mask-region.bottom {
+	inset: auto 0 0;
+}
+
+.unavatar-icon-mask-region.left {
+	left: 0;
+}
+
+.unavatar-icon-mask-region.right {
+	right: 0;
+}
+
+.unavatar-icon-crop-border {
 	aspect-ratio: 1;
 	transform: translate(-50%, -50%);
 	border: 2px solid color-mix(in srgb, #d7dce6 58%, transparent);
-	border-radius: 10px;
-	box-shadow:
-		0 0 0 999px color-mix(in srgb, #02050a 62%, transparent),
-		0 8px 30px color-mix(in srgb, #000 44%, transparent);
-	pointer-events: none;
+	border-radius: 4px;
+	box-shadow: 0 8px 30px color-mix(in srgb, #000 22%, transparent);
 }
 
 .unavatar-selected-preview-caption {

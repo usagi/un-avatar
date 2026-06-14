@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { Camera, DatabaseZap, ExternalLink, Monitor, Pin, Play, RefreshCw } from "lucide-svelte";
+	import { Camera, DatabaseZap, ExternalLink, FilePlus2, Monitor, Pin, Play, RefreshCw } from "lucide-svelte";
 	import type { ProfilePendingRestart } from "./profileStageTypes";
 	import type { RendererRef } from "./rendererTypes";
 
@@ -116,7 +116,7 @@
 				data-hint={$_("profiles.actions.desktop_shortcut_hint")}
 				title={$_("profiles.actions.desktop_shortcut_hint")}
 				aria-label={$_("profiles.actions.desktop_shortcut")}
-				onclick={() => onCreateDesktopShortcut(settingId)}><Monitor size={14} /><span>{$_("profiles.actions.desktop_shortcut_short")}</span></button
+				onclick={() => onCreateDesktopShortcut(settingId)}><FilePlus2 size={14} /><span>{$_("profiles.actions.desktop_shortcut_short")}</span></button
 			>
 			<button
 				type="button"

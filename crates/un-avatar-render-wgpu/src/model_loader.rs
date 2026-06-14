@@ -15,6 +15,24 @@ pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String
 	normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())
 }
 
+fn base_wardrobe_set_id(document: &UnaDocument) -> Option<String> {
+	let wardrobe = document.unavatar.as_ref()?.source.get("wardrobe")?.as_object()?;
+	let explicit_base = wardrobe.get("baseSet").and_then(serde_json::Value::as_str).map(str::trim);
+	let sets = wardrobe.get("sets").and_then(serde_json::Value::as_array)?;
+	if let Some(base_id) = explicit_base {
+		if sets.iter().any(|set| set.get("id").and_then(serde_json::Value::as_str).map(str::trim) == Some(base_id)) {
+			return Some(base_id.to_string());
+		}
+	}
+	sets.iter()
+		.find(|set| {
+			set.get("default").and_then(serde_json::Value::as_bool).unwrap_or(false)
+				|| set.get("id").and_then(serde_json::Value::as_str).map(str::trim) == Some("")
+		})
+		.and_then(|set| set.get("id").and_then(serde_json::Value::as_str))
+		.map(str::to_string)
+}
+
 fn wardrobe_apply_report_summary(set_id: &str, report: &WardrobeApplyReport) -> String {
 	format!(
 		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} material_applied={} material_missing={} material_slot_applied={} material_slot_missing={} active_asset_groups={:?} scoped_active_groups={} scoped_missing_groups={:?} scoped_resident=mesh:{} material:{} image:{} dynamics:{}",
@@ -128,7 +146,13 @@ fn log_import_report_profile(report: &ImportReport) {
 }
 
 pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
-	let set_id = require_wardrobe_set_id(wardrobe_set)?;
+	let resolved_base;
+	let set_id = if let Some(set_id) = normalize_wardrobe_set_id(Some(wardrobe_set)) {
+		set_id
+	} else {
+		resolved_base = base_wardrobe_set_id(document).ok_or_else(|| ".unavatar wardrobe base set not found".to_string())?;
+		resolved_base.as_str()
+	};
 	let report =
 		apply_unavatar_wardrobe_set(document, set_id).map_err(|e| format!(".unavatar wardrobe set `{set_id}` not applied: {e}"))?;
 	log_wardrobe_apply_report(set_id, &report);
@@ -305,10 +329,10 @@ mod tests {
 	}
 
 	#[test]
-	fn apply_required_wardrobe_set_rejects_empty_values() {
+	fn apply_required_wardrobe_set_resolves_empty_values_as_base() {
 		let mut document = UnaDocument::default();
-		let err = apply_required_wardrobe_set(&mut document, " \t ").expect_err("empty wardrobe id should be rejected");
-		assert_eq!(err, "wardrobe set id required");
+		let err = apply_required_wardrobe_set(&mut document, " \t ").expect_err("missing base wardrobe should be reported");
+		assert_eq!(err, ".unavatar wardrobe base set not found");
 		assert_eq!(require_wardrobe_set_id(" field_drape ").unwrap(), "field_drape");
 	}
 

@@ -5683,6 +5683,38 @@ impl GpuState {
 		Ok(())
 	}
 
+	pub(crate) fn set_current_wardrobe_runtime_dynamics_enabled(&mut self, enabled: bool) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let rest_nodes = self.rest_nodes.as_ref().map(Arc::clone);
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let scoped_source_ids = doc.runtime_model().scoped_asset_selection().dynamics_source_ids;
+		if scoped_source_ids.is_empty() {
+			drop(doc);
+			return self.set_all_runtime_dynamics_enabled(enabled);
+		}
+		let Some(mut runtime) = doc.runtime_scene_and_dynamics_mut() else {
+			return Err("document has no runtime scene".to_string());
+		};
+		let mut changed = 0usize;
+		for source_id in &scoped_source_ids {
+			if runtime.dynamics.set_group_enabled_by_source_id(source_id, enabled) {
+				changed += 1;
+				if let Some(rest_nodes) = rest_nodes.as_ref() {
+					reset_runtime_dynamics_nodes_to_rest_for_source_id(runtime.scene, runtime.dynamics.as_readonly(), rest_nodes, source_id);
+				}
+			}
+		}
+		if changed == 0 {
+			return Err("current wardrobe has no runtime dynamics source ids".to_string());
+		}
+		drop(doc);
+		self.rebuild_runtime_dynamics();
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	fn set_runtime_node_visible(&mut self, target: &un_avatar_core::UnaRuntimeNodeTarget, visible: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -7060,7 +7092,7 @@ impl GpuState {
 				let mut enc3 = self
 					.device
 					.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("spout-blit") });
-				sp.encode_blit(&mut enc3, swap_view, clear_color);
+				sp.encode_blit(&mut enc3, swap_view, self.config.width, self.config.height, clear_color);
 				self.queue.submit(std::iter::once(enc3.finish()));
 			}
 			spout_cpu_ms = t_spout0.elapsed().as_secs_f32() * 1000.0;
