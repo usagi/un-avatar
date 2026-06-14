@@ -109,6 +109,23 @@ field_name = "名前"
 field_note = "メモ"
 selected_summary = "選択中プロファイルの概要"
 
+[profiles.fields]
+avatar_file = "アバターファイル"
+wardrobe = "ワードローブ"
+icon = "アイコン"
+name = "名前"
+group = "グループ"
+render_quality = "描画品質"
+avatar_effects = "ルック"
+expression_settings = "表情設定"
+window_settings = "ウィンドウ設定"
+motion_settings = "モーション入力"
+contact_settings = "Contact 設定"
+dynamics_settings = "UNPhysics 設定"
+output_settings = "出力設定"
+transparent_background = "透明背景"
+this_setting = "この設定"
+
 [profiles.hints]
 default = "設定項目にカーソルを合わせると、この領域に短いヒントを表示します。迷った場合は既定値のまま使い、動作を見ながら必要な項目だけ調整してください。"
 
@@ -157,6 +174,8 @@ apply_requires_restart_suffix = "が必要"
 next_launch = "次回起動"
 saved_next_launch = "変更は次回起動に使われます"
 solo_profile = "単独プロファイル"
+restart_after = "%{field} は %{name} の再起動後に適用されます"
+transparent_restart = "透明背景は %{name} の再起動が必要な場合があります"
 
 [profiles.editor]
 profile_setting_heading = "プロファイル設定"

@@ -101,6 +101,23 @@ field_name = "Name"
 field_note = "Note"
 selected_summary = "Selected profile summary"
 
+[profiles.fields]
+avatar_file = "Avatar File"
+wardrobe = "Wardrobe"
+icon = "Icon"
+name = "Name"
+group = "Group"
+render_quality = "Render quality"
+avatar_effects = "Avatar effects"
+expression_settings = "Expression settings"
+window_settings = "Window settings"
+motion_settings = "Motion settings"
+contact_settings = "Contact settings"
+dynamics_settings = "Dynamics settings"
+output_settings = "Output settings"
+transparent_background = "Transparent background"
+this_setting = "This setting"
+
 [profiles.hints]
 default = "Hover a setting to show a short hint here. Keep defaults first, then adjust only what you need after checking behavior."
 
@@ -149,6 +166,8 @@ apply_requires_restart_suffix = "to apply"
 next_launch = "Next launch"
 saved_next_launch = "Changes are saved for the next launch"
 solo_profile = "Solo profile"
+restart_after = "%{field} will apply after %{name} restarts"
+transparent_restart = "Transparent background may require restarting %{name}"
 
 [profiles.editor]
 profile_setting_heading = "Profile Settings"

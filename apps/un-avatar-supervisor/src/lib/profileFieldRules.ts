@@ -42,19 +42,19 @@ export function canApplyWithoutRestart(field: string): boolean {
 	);
 }
 
-export function profileFieldLabel(field: string): string {
-	if (field === "avatar_path") return "Avatar File";
-	if (field === "wardrobe_set") return "Wardrobe";
-	if (field === "icon_path") return "Icon";
-	if (field === "profile.display_name") return "Name";
-	if (field === "profile.group") return "Group";
-	if (field.startsWith("render_quality.")) return "Render quality";
-	if (field.startsWith("effects.")) return "Avatar effects";
-	if (field.startsWith("expression.")) return "Expression settings";
-	if (field.startsWith("window.")) return "Window settings";
-	if (field.startsWith("motion.")) return "Motion settings";
-	if (field.startsWith("physics.contacts.")) return "Contact settings";
-	if (field.startsWith("physics.dynamics.")) return "Dynamics settings";
-	if (field.startsWith("output.")) return "Output settings";
-	return "This setting";
+export function profileFieldLabel(field: string, translate: (key: string) => string): string {
+	if (field === "avatar_path") return translate("profiles.fields.avatar_file");
+	if (field === "wardrobe_set") return translate("profiles.fields.wardrobe");
+	if (field === "icon_path") return translate("profiles.fields.icon");
+	if (field === "profile.display_name") return translate("profiles.fields.name");
+	if (field === "profile.group") return translate("profiles.fields.group");
+	if (field.startsWith("render_quality.")) return translate("profiles.fields.render_quality");
+	if (field.startsWith("effects.")) return translate("profiles.fields.avatar_effects");
+	if (field.startsWith("expression.")) return translate("profiles.fields.expression_settings");
+	if (field.startsWith("window.")) return translate("profiles.fields.window_settings");
+	if (field.startsWith("motion.")) return translate("profiles.fields.motion_settings");
+	if (field.startsWith("physics.contacts.")) return translate("profiles.fields.contact_settings");
+	if (field.startsWith("physics.dynamics.")) return translate("profiles.fields.dynamics_settings");
+	if (field.startsWith("output.")) return translate("profiles.fields.output_settings");
+	return translate("profiles.fields.this_setting");
 }

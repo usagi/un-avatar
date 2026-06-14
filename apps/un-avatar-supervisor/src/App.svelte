@@ -1174,17 +1174,18 @@
 
 	function queueRendererRestart(renderer: RendererInstance | null, field: string): void {
 		if (!renderer) return;
-		pendingRendererRestart = { renderer, fieldLabel: profileFieldLabel(field) };
-		message = `${profileFieldLabel(field)} will apply after ${renderer.name} restarts`;
+		const fieldLabel = profileFieldLabel(field, $_);
+		pendingRendererRestart = { renderer, fieldLabel };
+		message = $_("profiles.live.restart_after", { values: { field: fieldLabel, name: renderer.name } });
 	}
 
 	function queueTransparentEnableRestart(renderer: RendererInstance | null): void {
 		if (!renderer) return;
 		pendingRendererRestart = {
 			renderer,
-			fieldLabel: "Transparent background",
+			fieldLabel: $_("profiles.fields.transparent_background"),
 		};
-		message = `Transparent background may require restarting ${renderer.name}`;
+		message = $_("profiles.live.transparent_restart", { values: { name: renderer.name } });
 	}
 
 	async function restartPendingRenderer(): Promise<void> {
