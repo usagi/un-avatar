@@ -3585,13 +3585,26 @@ fn gltf_metadata_source_path(source: &GltfMetadataSource) -> &Path {
 
 fn gltf_buffer_view_bytes_from_source(root: &serde_json::Value, source: &GltfMetadataSource, buffer_view_index: usize) -> Option<Vec<u8>> {
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
-	if buffer_view.get("buffer").and_then(serde_json::Value::as_u64).unwrap_or(0) != 0 {
+	let buffer_index = buffer_view.get("buffer").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+	if buffer_index != 0 {
 		return None;
 	}
 	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0);
 	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())?;
 	if length > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
 		return None;
+	}
+	let end = offset.checked_add(length)?;
+	if let Some(buffer_length) = root
+		.get("buffers")
+		.and_then(serde_json::Value::as_array)
+		.and_then(|buffers| buffers.get(buffer_index))
+		.and_then(|buffer| buffer.get("byteLength"))
+		.and_then(serde_json::Value::as_u64)
+	{
+		if end > buffer_length {
+			return None;
+		}
 	}
 	match source {
 		GltfMetadataSource::Glb { path, bin_offset } => {
@@ -11633,6 +11646,67 @@ mod tests {
 		assert_eq!(metadata.preview_sets.len(), 1);
 		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_skips_preview_buffer_view_past_declared_buffer_length() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-oob-preview-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let json = r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 16 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 32, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Out Of Range Preview UNAvatar" },
+      "wardrobe": {
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "id": "front", "view": "front", "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#;
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let bin_len = 32_u32 + preview_png.len() as u32;
+		let total_len = 12_u32 + 8 + json_bytes.len() as u32 + 8 + bin_len;
+		let mut file = fs::File::create(&path).unwrap();
+		file.write_all(&0x46546C67u32.to_le_bytes()).unwrap();
+		file.write_all(&2u32.to_le_bytes()).unwrap();
+		file.write_all(&total_len.to_le_bytes()).unwrap();
+		file.write_all(&(json_bytes.len() as u32).to_le_bytes()).unwrap();
+		file.write_all(&0x4E4F534Au32.to_le_bytes()).unwrap();
+		file.write_all(&json_bytes).unwrap();
+		file.write_all(&bin_len.to_le_bytes()).unwrap();
+		file.write_all(&0x004E4942u32.to_le_bytes()).unwrap();
+		file.write_all(&[0u8; 32]).unwrap();
+		file.write_all(&preview_png).unwrap();
+		drop(file);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Out Of Range Preview UNAvatar"));
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_images.len(), 0);
+		assert_eq!(metadata.preview_sets.len(), 0);
 	}
 
 	#[test]
