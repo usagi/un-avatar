@@ -375,10 +375,10 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
 ```json
 {
   "wardrobe": {
-    "baseSet": "base",
+    "baseSet": "",
     "sets": [
       {
-        "id": "base",
+        "id": "",
         "displayName": "Base",
         "default": true,
         "previewImages": [
@@ -417,7 +417,7 @@ Runtime MVP は morph binding から始める。material binding / visibility bi
 
 `wardrobe.sets[].previewImages[]` は Unity Exporter が capture した wardrobe set の確認用画像である。現 exporter は `front` / `back` / `side` / `top` / `threeQuarterTop` の 5 視点を PNG (`mimeType: "image/png"`, `pixelFormat: "RGBA8"`, `colorSpace: "sRGB"`) として生成し、画像 bytes は GLB BIN chunk 内の `bufferView` で参照する。Supervisor の `.unavatar` 権利確認や profile icon 候補は、この set-local preview を正本として扱う。存在しない場合は generic thumbnail / sample screenshot へ fallback してよいが、fake count や fake preview を表示してはならない。
 
-`baseSet` は reset / fallback / startup の基準になる安全な初期表示状態であり、裸の素体である必要はない。むしろ配信用途では、意図しない wardrobe reset や操作ミスで露出事故が起きないよう、デフォルト衣装込みの状態を `baseSet` として保存する運用を推奨する。素体は source graph の一部であって、ユーザーに表示される baseline wardrobe state とは別概念である。
+`baseSet` は reset / fallback / startup の基準になる安全な初期表示状態であり、裸の素体である必要はない。v0.1 では Base を空文字列 set id `""` として扱い、profile の `wardrobe_set` 未指定 / 空文字もこの Base を選択する。むしろ配信用途では、意図しない wardrobe reset や操作ミスで露出事故が起きないよう、デフォルト衣装込みの状態を `baseSet` として保存する運用を推奨する。素体は source graph の一部であって、ユーザーに表示される baseline wardrobe state とは別概念である。
 
 v0.1 の operation 候補。
 
