@@ -427,11 +427,12 @@ fn tray_icon_id() -> String {
 
 fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
-		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
 		snapshot.scene_state,
 		snapshot.spout_available,
 		snapshot.spout_enabled,
 		snapshot.minimized,
+		snapshot.transparent_window,
 		snapshot.always_on_top,
 		snapshot.input_passthrough,
 		snapshot.spout_width.map_or(0, |value| value),
@@ -534,6 +535,18 @@ mod tests {
 		after.spout_height = Some(1080);
 		after.dynamics_enabled_group_count = 3;
 		after.active_wardrobe_set = Some("field_drape".to_string());
+
+		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_tracks_transparent_window_for_input_passthrough_availability() {
+		let mut before = snapshot();
+		before.transparent_window = false;
+		before.input_passthrough = false;
+
+		let mut after = before.clone();
+		after.transparent_window = true;
 
 		assert_ne!(menu_key(&before), menu_key(&after));
 	}
