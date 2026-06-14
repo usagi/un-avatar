@@ -7701,7 +7701,11 @@ fn launch_renderer_manifest_in_existing_app(app: &tauri::AppHandle, manifest_pat
 		.lock()
 		.map(|settings| settings.clone())
 		.map_err(|_| "app settings state poisoned".to_string())?;
-	launch_renderer_in_state(&manifest_path.display().to_string(), state.inner(), &settings)
+	let renderer = launch_renderer_in_state(&manifest_path.display().to_string(), state.inner(), &settings)?;
+	if let Some(pid) = renderer.pid {
+		let _ = activate_process_window(pid);
+	}
+	Ok(renderer)
 }
 
 fn startup_proxy_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
