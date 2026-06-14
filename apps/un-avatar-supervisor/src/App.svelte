@@ -940,7 +940,7 @@
 				settingId: previousSetting.id,
 				updates: updatePayload,
 			});
-			message = "Updated avatar setting";
+			message = $_("profiles.messages.updated_setting");
 			replaceAvatarSetting(setting);
 			await applyRuntimeProfileUpdates(updates, setting, previousSetting);
 			for (const { field, renderer } of restartTargets) {
@@ -1673,7 +1673,7 @@
 			await invoke<AvatarSetting[]>("reorder_avatar_settings", {
 				settingIds: avatarSettings.map((setting) => setting.id),
 			});
-			message = "Reordered profiles";
+			message = $_("profiles.messages.reordered");
 		} catch (error) {
 			message = String(error);
 			await refreshAll();
@@ -1768,7 +1768,7 @@
 		const targetSetting = selectedSetting;
 		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: file picker requires Tauri";
+			message = $_("profiles.messages.file_picker_requires_tauri");
 			return;
 		}
 		const rendererToRestart = restartableRendererForField(field);
@@ -2329,7 +2329,7 @@
 		const targetSetting = selectedSetting;
 		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: setting changes require Tauri";
+			message = $_("profiles.messages.setting_changes_require_tauri");
 			return;
 		}
 		if (field === "avatar_path" && typeof value === "string") {
@@ -2352,7 +2352,7 @@
 				field,
 				value,
 			});
-			message = "Updated avatar setting";
+			message = $_("profiles.messages.updated_setting");
 			replaceAvatarSetting(setting);
 			await applyRuntimeProfileUpdate(field, value, setting, previousSetting);
 			queueRendererRestart(rendererToRestart, field);

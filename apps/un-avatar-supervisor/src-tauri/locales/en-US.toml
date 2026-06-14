@@ -601,8 +601,12 @@ drag_reorder = "Drag to reorder"
 
 [profiles.messages]
 file_selection_canceled = "File selection canceled"
+file_picker_requires_tauri = "Browser preview: file picker requires Tauri"
 updated_icon_path = "Updated icon path"
 updated_avatar_path = "Updated avatar path"
+updated_setting = "Updated avatar setting"
+setting_changes_require_tauri = "Browser preview: setting changes require Tauri"
+reordered = "Reordered profiles"
 saving_thumbnail_icon = "Loading avatar thumbnail"
 updated_thumbnail_icon = "Set avatar thumbnail as the profile icon"
 avatar_path_required_for_thumbnail = "Avatar file is not set"

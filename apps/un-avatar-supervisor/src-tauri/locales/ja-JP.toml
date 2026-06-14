@@ -609,8 +609,12 @@ drag_reorder = "ドラッグして並び替え"
 
 [profiles.messages]
 file_selection_canceled = "ファイル選択をキャンセルしました"
+file_picker_requires_tauri = "ブラウザプレビューではファイル選択に対応していません"
 updated_icon_path = "アイコンのパスを更新しました"
 updated_avatar_path = "アバターのパスを更新しました"
+updated_setting = "プロファイル設定を更新しました"
+setting_changes_require_tauri = "ブラウザプレビューでは設定変更に対応していません"
+reordered = "プロファイルの並び順を更新しました"
 saving_thumbnail_icon = "アバターサムネイルを読み込んでいます"
 updated_thumbnail_icon = "アバターサムネイルをプロファイルアイコンに設定しました"
 avatar_path_required_for_thumbnail = "アバターファイルが設定されていません"
