@@ -19,9 +19,33 @@
 	<dl class="renderer-card-kv">
 		<dt>{$_("renderers.details.textures")}</dt>
 		<dd>
-			{texturePolicyLabel(runtimeStatus, $_("renderers.summary.pending"))}
-			<small>{textureSummaryLabel(runtimeStatus)}</small>
-			<small>{textureCacheLabel(runtimeStatus)}</small>
+			{texturePolicyLabel(runtimeStatus, {
+				pending: $_("renderers.summary.pending"),
+				connected: $_("renderers.summary.connected"),
+				cacheOn: $_("renderers.summary.cache_on"),
+				cacheOff: $_("renderers.summary.cache_off"),
+				cacheUnknown: $_("renderers.summary.cache_unknown"),
+			})}
+			<small
+				>{textureSummaryLabel(runtimeStatus, {
+					pending: $_("renderers.summary.pending"),
+					connected: $_("renderers.summary.connected"),
+					textureImages: $_("renderers.summary.texture_images"),
+					textureResized: $_("renderers.summary.texture_resized"),
+					textureCompressed: $_("renderers.summary.texture_compressed"),
+					textureFallback: $_("renderers.summary.texture_fallback"),
+					textureUploaded: $_("renderers.summary.texture_uploaded"),
+				})}</small
+			>
+			<small
+				>{textureCacheLabel(runtimeStatus, {
+					pending: $_("renderers.summary.pending"),
+					connected: $_("renderers.summary.connected"),
+					cacheOn: $_("renderers.summary.cache_on"),
+					cacheDisabled: $_("renderers.summary.cache_disabled"),
+					compressedCache: $_("renderers.summary.compressed_cache"),
+				})}</small
+			>
 		</dd>
 	</dl>
 </section>

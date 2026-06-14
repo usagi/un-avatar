@@ -124,6 +124,16 @@ export type RuntimeStatusLabels = {
 	spoutWaitingFirstFrame?: string;
 	spoutSending?: string;
 	spoutFailingState?: string;
+	cacheOn?: string;
+	cacheOff?: string;
+	cacheUnknown?: string;
+	cacheDisabled?: string;
+	textureImages?: string;
+	textureResized?: string;
+	textureCompressed?: string;
+	textureFallback?: string;
+	textureUploaded?: string;
+	compressedCache?: string;
 };
 
 export function runtimeResolution(status: RuntimeQualityStatusLabelData | null): string {
@@ -156,28 +166,29 @@ function textureCompressionAdvancedSummary(advanced: TextureCompressionAdvanced)
 	return "";
 }
 
-export function texturePolicyLabel(status: RuntimeQualityStatusLabelData | null, pendingLabel: string): string {
-	if (!status?.connected) return pendingLabel;
+export function texturePolicyLabel(status: RuntimeQualityStatusLabelData | null, labels: RuntimeStatusLabels): string {
+	if (!status?.connected) return labels.pending;
 	const limit = textureModeLabel(status.texture_resolution_limit);
 	const compression = textureModeLabel(status.texture_compression);
-	const cache = status.processed_texture_cache == null ? "cache --" : status.processed_texture_cache ? "cache on" : "cache off";
+	const cache =
+		status.processed_texture_cache == null ? (labels.cacheUnknown ?? "cache --") : status.processed_texture_cache ? (labels.cacheOn ?? "cache on") : (labels.cacheOff ?? "cache off");
 	return `${limit} / ${compression} / ${cache}`;
 }
 
-export function textureSummaryLabel(status: RuntimeQualityStatusLabelData | null): string {
+export function textureSummaryLabel(status: RuntimeQualityStatusLabelData | null, labels: RuntimeStatusLabels): string {
 	const summary = status?.texture_summary;
 	if (!summary) return "--";
-	const resized = summary.resized_count > 0 ? `, ${summary.resized_count} resized` : "";
-	const compressed = summary.compressed_count > 0 ? `, ${summary.compressed_count} compressed` : "";
-	const fallback = summary.compression_fallback_count > 0 ? `, ${summary.compression_fallback_count} fallback` : "";
-	return `${summary.image_count} images${resized}${compressed}${fallback}, ${formatBytes(summary.uploaded_mip_bytes)} uploaded`;
+	const resized = summary.resized_count > 0 ? `, ${summary.resized_count} ${labels.textureResized ?? "resized"}` : "";
+	const compressed = summary.compressed_count > 0 ? `, ${summary.compressed_count} ${labels.textureCompressed ?? "compressed"}` : "";
+	const fallback = summary.compression_fallback_count > 0 ? `, ${summary.compression_fallback_count} ${labels.textureFallback ?? "fallback"}` : "";
+	return `${summary.image_count} ${labels.textureImages ?? "images"}${resized}${compressed}${fallback}, ${formatBytes(summary.uploaded_mip_bytes)} ${labels.textureUploaded ?? "uploaded"}`;
 }
 
-export function textureCacheLabel(status: RuntimeQualityStatusLabelData | null): string {
+export function textureCacheLabel(status: RuntimeQualityStatusLabelData | null, labels: RuntimeStatusLabels): string {
 	const summary = status?.texture_summary;
 	if (!summary) return "--";
-	if (!summary.cache_enabled) return "cache disabled";
-	return `cache ${summary.cache_hits}/${summary.cache_misses}/${summary.cache_writes}, compressed ${summary.compressed_cache_hits}/${summary.compressed_cache_misses}/${summary.compressed_cache_writes}`;
+	if (!summary.cache_enabled) return labels.cacheDisabled ?? "cache disabled";
+	return `${labels.cacheOn ?? "cache"} ${summary.cache_hits}/${summary.cache_misses}/${summary.cache_writes}, ${labels.compressedCache ?? "compressed"} ${summary.compressed_cache_hits}/${summary.compressed_cache_misses}/${summary.compressed_cache_writes}`;
 }
 
 export function startupStatusLabel(status: RuntimeStartupStatusLabelData | null): string | null {
