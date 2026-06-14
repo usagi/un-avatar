@@ -649,6 +649,54 @@ mod tests {
 	}
 
 	#[test]
+	fn tray_menu_exposes_core_runtime_actions() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.spout_available = true;
+		status.dynamics_group_count = 4;
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:preview:show"),
+			Some(RendererTrayAction::ActivatePreview)
+		));
+		assert!(matches!(
+			actions.get("renderer:preview:hide"),
+			Some(RendererTrayAction::MinimizePreview)
+		));
+		assert!(matches!(
+			actions.get("renderer:output:window"),
+			Some(RendererTrayAction::SetWindowPreview)
+		));
+		assert!(matches!(
+			actions.get("renderer:output:spout_preview"),
+			Some(RendererTrayAction::SetSpoutPreview)
+		));
+		assert!(matches!(
+			actions.get("renderer:output:spout_only"),
+			Some(RendererTrayAction::SetSpoutOnly)
+		));
+		assert!(matches!(
+			actions.get("renderer:output:spout_720p"),
+			Some(RendererTrayAction::SetSpoutResolution { width: 1280, height: 720 })
+		));
+		assert!(matches!(
+			actions.get("renderer:window:always_on_top"),
+			Some(RendererTrayAction::SetAlwaysOnTop(true))
+		));
+		assert!(matches!(
+			actions.get("renderer:dynamics:on"),
+			Some(RendererTrayAction::SetAllDynamics(true))
+		));
+		assert!(matches!(
+			actions.get("renderer:supervisor:open"),
+			Some(RendererTrayAction::OpenSupervisor)
+		));
+		assert!(matches!(actions.get("renderer:quit"), Some(RendererTrayAction::Quit)));
+	}
+
+	#[test]
 	fn tray_tooltip_identifies_spout_or_window_mode() {
 		let mut opts = AvatarWindowOptions::default();
 		opts.title = "mizuki-split".to_string();
