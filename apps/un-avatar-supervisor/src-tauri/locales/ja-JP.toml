@@ -879,10 +879,10 @@ frame_action = "アクション"
 
 [renderers.summary]
 aria = "実行状態の概要"
-status = "接続状態"
-connected = "接続済み"
+status = "状態"
+connected = "動作中"
 pending = "接続待ち"
-disconnected = "未接続"
+disconnected = "応答なし"
 crashed = "クラッシュ"
 idle = "停止中"
 attention = "要確認"

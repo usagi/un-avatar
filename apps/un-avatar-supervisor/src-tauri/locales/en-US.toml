@@ -871,10 +871,10 @@ frame_action = "Action"
 
 [renderers.summary]
 aria = "Runtime summary"
-status = "Connection"
-connected = "Connected"
+status = "Status"
+connected = "Live"
 pending = "Pending"
-disconnected = "Disconnected"
+disconnected = "No response"
 crashed = "Crashed"
 idle = "Idle"
 attention = "Attention"
