@@ -5,7 +5,7 @@ use std::{
 	fs,
 	io::{BufRead, BufReader, Read, Seek, SeekFrom},
 	net::SocketAddr,
-	path::{Path, PathBuf},
+	path::{Component, Path, PathBuf},
 	process::{Child, ChildStderr, Command, Stdio},
 	sync::{
 		atomic::{AtomicBool, Ordering},
@@ -3589,7 +3589,7 @@ fn gltf_image_bytes_from_metadata_source(
 			let bytes = BASE64_STANDARD.decode(encoded).ok()?;
 			return (bytes.len() as u64 <= MAX_UNAVATAR_PREVIEW_IMAGE_BYTES).then_some(bytes);
 		}
-		let path = gltf_metadata_source_path(source).parent()?.join(uri);
+		let path = safe_gltf_external_uri_path(gltf_metadata_source_path(source), uri)?;
 		if fs::metadata(&path).ok()?.len() > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
 			return None;
 		}
@@ -3598,6 +3598,22 @@ fn gltf_image_bytes_from_metadata_source(
 	}
 	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
 	gltf_buffer_view_bytes_from_source(root, source, buffer_view_index)
+}
+
+fn safe_gltf_external_uri_path(source_path: &Path, uri: &str) -> Option<PathBuf> {
+	let relative = Path::new(uri);
+	if uri.trim().is_empty() || relative.is_absolute() {
+		return None;
+	}
+	if relative.components().any(|component| {
+		matches!(
+			component,
+			Component::Prefix(_) | Component::RootDir | Component::ParentDir
+		)
+	}) {
+		return None;
+	}
+	Some(source_path.parent()?.join(relative))
 }
 
 fn base64_decoded_len_upper_bound(encoded: &str) -> Option<usize> {
@@ -11008,6 +11024,18 @@ mod tests {
 
 		assert!(crate::gltf_image_bytes_from_metadata_source(&image, &serde_json::json!({}), &source).is_none());
 		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn gltf_external_preview_uri_stays_under_source_directory() {
+		let source_path = PathBuf::from("C:/avatars/model/avatar.gltf");
+
+		let safe = crate::safe_gltf_external_uri_path(&source_path, "textures/preview.png").unwrap();
+		assert!(safe.ends_with(Path::new("textures/preview.png")));
+
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "../preview.png").is_none());
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "/preview.png").is_none());
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "C:/preview.png").is_none());
 	}
 
 	#[test]
