@@ -8934,6 +8934,7 @@ name = "xtask"
 version = "2.0.0-beta-2"
 dependencies = [
  "glam",
+ "serde_json",
  "toml 1.1.2+spec-1.1.0",
  "un-avatar-core",
  "un-avatar-io",

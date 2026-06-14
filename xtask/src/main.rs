@@ -26,6 +26,7 @@ const SPOUT2_REPO_URL: &str = "https://github.com/leadedge/Spout2.git";
 const DEFAULT_SPOUT2_REF: &str = "2.007.017";
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
 const UNITY_EXPORTER_PACKAGE: &str = "un-avatar-unity-exporter";
+const UNITY_EXPORTER_PACKAGE_ID: &str = "network.usagi.un-avatar.unity-exporter";
 
 fn repo_root() -> &'static Path {
 	Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1530,6 +1531,100 @@ fn run_unity_exporter_package(repo: &Path, args: impl Iterator<Item = String>) -
 	stage_unity_exporter_package(repo, &dst)
 }
 
+fn run_unity_exporter_vcc(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut version = None;
+	let mut base_url = None;
+	let mut package_url = None;
+	let mut output_dir = None;
+	let mut repo_index = None;
+	let mut iter = args.peekable();
+	while let Some(arg) = iter.next() {
+		match arg.as_str() {
+			"--version" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-vcc: --version には version が必要です");
+					return false;
+				};
+				version = Some(value);
+			}
+			"--base-url" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-vcc: --base-url には URL が必要です");
+					return false;
+				};
+				base_url = Some(value);
+			}
+			"--package-url" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-vcc: --package-url には URL が必要です");
+					return false;
+				};
+				package_url = Some(value);
+			}
+			"--output-dir" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-vcc: --output-dir には path が必要です");
+					return false;
+				};
+				output_dir = Some(PathBuf::from(value));
+			}
+			"--repo-index" => {
+				let Some(value) = iter.next() else {
+					eprintln!("unity-exporter-vcc: --repo-index には path が必要です");
+					return false;
+				};
+				repo_index = Some(PathBuf::from(value));
+			}
+			"help" | "--help" | "-h" => {
+				print_unity_exporter_vcc_usage();
+				return true;
+			}
+			other => {
+				eprintln!("unity-exporter-vcc: 不明な option: {other}");
+				print_unity_exporter_vcc_usage();
+				return false;
+			}
+		}
+	}
+
+	let Some(version) = version.or_else(|| default_package_version(repo)) else {
+		eprintln!("unity-exporter-vcc: Cargo.toml の workspace.package.version を読めませんでした");
+		return false;
+	};
+	let output_dir = output_dir.unwrap_or_else(|| repo.join("target").join("unity").join("vcc"));
+	let repo_index = repo_index.unwrap_or_else(|| repo.join("docs").join("vcc").join("index.json"));
+	let staging_dir = repo.join("target").join("unity").join("vcc-staging").join(UNITY_EXPORTER_PACKAGE);
+	let package_file_name = format!("{UNITY_EXPORTER_PACKAGE_ID}-{version}.zip");
+	let package_url = package_url.unwrap_or_else(|| {
+		let base = base_url.unwrap_or_else(|| format!("https://github.com/usagi/un-avatar/releases/download/{version}"));
+		format!("{}/{}", base.trim_end_matches('/'), package_file_name)
+	});
+
+	if !stage_unity_exporter_package(repo, &staging_dir) {
+		return false;
+	}
+	let Some(manifest) = write_unity_exporter_package_manifest(&staging_dir, &version, Some(&package_url)) else {
+		return false;
+	};
+	let zip_path = output_dir.join(&package_file_name);
+	if !create_package_contents_zip(&staging_dir, &zip_path) {
+		return false;
+	}
+	let Some(zip_sha256) = file_sha256(&zip_path) else {
+		eprintln!("unity-exporter-vcc: sha256 failed: {}", zip_path.display());
+		return false;
+	};
+	if !write_vcc_repo_index(&repo_index, manifest, &version, &zip_sha256) {
+		return false;
+	}
+
+	println!("unity-exporter-vcc: package {}", zip_path.display());
+	println!("unity-exporter-vcc: package_url {package_url}");
+	println!("unity-exporter-vcc: zipSHA256 {zip_sha256}");
+	println!("unity-exporter-vcc: repo_index {}", repo_index.display());
+	true
+}
+
 fn ensure_spout2_source(repo: &Path, git_ref: &str) -> bool {
 	let source = spout2_source_dir(repo);
 	if source.join(".git").is_dir() {
@@ -1930,6 +2025,161 @@ fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) 
 	true
 }
 
+fn create_package_contents_zip(package_root: &Path, zip_path: &Path) -> bool {
+	if let Some(parent) = zip_path.parent() {
+		if let Err(err) = fs::create_dir_all(parent) {
+			eprintln!("unity-exporter-vcc: mkdir {}: {err}", parent.display());
+			return false;
+		}
+	}
+	if zip_path.exists() {
+		if let Err(err) = fs::remove_file(zip_path) {
+			eprintln!("unity-exporter-vcc: remove {}: {err}", zip_path.display());
+			return false;
+		}
+	}
+	let file = match fs::File::create(zip_path) {
+		Ok(file) => file,
+		Err(err) => {
+			eprintln!("unity-exporter-vcc: create {}: {err}", zip_path.display());
+			return false;
+		}
+	};
+	let mut writer = zip::ZipWriter::new(BufWriter::new(file));
+	let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+	let entries = match fs::read_dir(package_root) {
+		Ok(entries) => entries,
+		Err(err) => {
+			eprintln!("unity-exporter-vcc: read {}: {err}", package_root.display());
+			return false;
+		}
+	};
+	for entry in entries.flatten() {
+		if !add_zip_entry(&mut writer, package_root, &entry.path(), options) {
+			return false;
+		}
+	}
+	if let Err(err) = writer.finish() {
+		eprintln!("unity-exporter-vcc: finalize {}: {err}", zip_path.display());
+		return false;
+	}
+	true
+}
+
+fn write_unity_exporter_package_manifest(package_dir: &Path, version: &str, package_url: Option<&str>) -> Option<serde_json::Value> {
+	let path = package_dir.join("package.json");
+	let raw = fs::read_to_string(&path)
+		.map_err(|err| eprintln!("unity-exporter-vcc: read {}: {err}", path.display()))
+		.ok()?;
+	let mut manifest: serde_json::Value = serde_json::from_str(&raw)
+		.map_err(|err| eprintln!("unity-exporter-vcc: parse {}: {err}", path.display()))
+		.ok()?;
+	let object = manifest.as_object_mut()?;
+	object.insert("name".to_string(), serde_json::Value::String(UNITY_EXPORTER_PACKAGE_ID.to_string()));
+	object.insert("version".to_string(), serde_json::Value::String(version.to_string()));
+	object.insert("license".to_string(), serde_json::Value::String("MIT".to_string()));
+	if let Some(package_url) = package_url {
+		object.insert("url".to_string(), serde_json::Value::String(package_url.to_string()));
+	}
+	let author = object.entry("author").or_insert_with(|| serde_json::json!({})).as_object_mut()?;
+	author
+		.entry("name".to_string())
+		.or_insert_with(|| serde_json::Value::String("USAGI.NETWORK".to_string()));
+	author
+		.entry("email".to_string())
+		.or_insert_with(|| serde_json::Value::String("contact@usagi.network".to_string()));
+	author
+		.entry("url".to_string())
+		.or_insert_with(|| serde_json::Value::String("https://github.com/usagi/un-avatar".to_string()));
+	let serialized = serde_json::to_string_pretty(&manifest).ok()? + "\n";
+	fs::write(&path, serialized)
+		.map_err(|err| eprintln!("unity-exporter-vcc: write {}: {err}", path.display()))
+		.ok()?;
+	Some(manifest)
+}
+
+fn write_vcc_repo_index(repo_index: &Path, manifest: serde_json::Value, version: &str, zip_sha256: &str) -> bool {
+	let mut listing = if repo_index.is_file() {
+		match fs::read_to_string(repo_index)
+			.ok()
+			.and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+		{
+			Some(value) => value,
+			None => {
+				eprintln!(
+					"unity-exporter-vcc: existing repo index is not valid JSON: {}",
+					repo_index.display()
+				);
+				return false;
+			}
+		}
+	} else {
+		serde_json::json!({
+			"name": "UN Avatar Packages",
+			"id": "network.usagi.un-avatar",
+			"url": "https://usagi.github.io/un-avatar/vcc/index.json",
+			"author": "contact@usagi.network",
+			"packages": {}
+		})
+	};
+
+	let Some(root) = listing.as_object_mut() else {
+		eprintln!("unity-exporter-vcc: repo index root must be an object: {}", repo_index.display());
+		return false;
+	};
+	root.insert("name".to_string(), serde_json::Value::String("UN Avatar Packages".to_string()));
+	root.insert("id".to_string(), serde_json::Value::String("network.usagi.un-avatar".to_string()));
+	root.insert(
+		"url".to_string(),
+		serde_json::Value::String("https://usagi.github.io/un-avatar/vcc/index.json".to_string()),
+	);
+	root.insert("author".to_string(), serde_json::Value::String("contact@usagi.network".to_string()));
+	let packages = root.entry("packages".to_string()).or_insert_with(|| serde_json::json!({}));
+	let Some(packages) = packages.as_object_mut() else {
+		eprintln!(
+			"unity-exporter-vcc: repo index packages must be an object: {}",
+			repo_index.display()
+		);
+		return false;
+	};
+	let package = packages
+		.entry(UNITY_EXPORTER_PACKAGE_ID.to_string())
+		.or_insert_with(|| serde_json::json!({ "versions": {} }));
+	let Some(package) = package.as_object_mut() else {
+		eprintln!("unity-exporter-vcc: package entry must be an object: {}", repo_index.display());
+		return false;
+	};
+	let versions = package.entry("versions".to_string()).or_insert_with(|| serde_json::json!({}));
+	let Some(versions) = versions.as_object_mut() else {
+		eprintln!("unity-exporter-vcc: package versions must be an object: {}", repo_index.display());
+		return false;
+	};
+	let mut version_manifest = manifest;
+	if let Some(object) = version_manifest.as_object_mut() {
+		object.insert("zipSHA256".to_string(), serde_json::Value::String(zip_sha256.to_string()));
+	}
+	versions.insert(version.to_string(), version_manifest);
+
+	if let Some(parent) = repo_index.parent() {
+		if let Err(err) = fs::create_dir_all(parent) {
+			eprintln!("unity-exporter-vcc: mkdir {}: {err}", parent.display());
+			return false;
+		}
+	}
+	let serialized = match serde_json::to_string_pretty(&listing) {
+		Ok(value) => value + "\n",
+		Err(err) => {
+			eprintln!("unity-exporter-vcc: serialize repo index: {err}");
+			return false;
+		}
+	};
+	if let Err(err) = fs::write(repo_index, serialized) {
+		eprintln!("unity-exporter-vcc: write {}: {err}", repo_index.display());
+		return false;
+	}
+	true
+}
+
 fn run_spout2(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let mut git_ref = env::var("UN_AVATAR_SPOUT2_REF").unwrap_or_else(|_| DEFAULT_SPOUT2_REF.to_string());
 	let mut clean = false;
@@ -2150,6 +2400,17 @@ fn print_unity_exporter_package_usage() {
 	unity/un-avatar-unity-exporter を UPM package layout としてコピーし、native fpng plugin をビルドして同梱する。\n\
 	ビルド済み fpng plugin は開発用 local package にも配置するが、gitignore 対象とする。\n\
 	既定出力先は target/unity/un-avatar-unity-exporter。Unity Editor の compile は実行しない。"
+	);
+}
+
+fn print_unity_exporter_vcc_usage() {
+	eprintln!(
+		"cargo xtask unity-exporter-vcc [--version <version>] [--base-url <url>] [--package-url <url>] [--output-dir <path>] [--repo-index <path>]\n\
+	\n\
+	VCC Package Manager 用に Unity Exporter package zip と repo listing index.json を生成する。\n\
+	既定 version は Cargo.toml の workspace.package.version。\n\
+	既定 base-url は https://github.com/usagi/un-avatar/releases/download/<version> 。git tag / release title に v prefix は付けない。\n\
+	既定出力先は target/unity/vcc、repo listing は docs/vcc/index.json。"
 	);
 }
 
@@ -3205,6 +3466,7 @@ commands:\n\
   spout2       Spout2 を取得・CMake Release ビルドし、配布物へ配置\n\
   unity-fpng   Unity Exporter の native fpng plugin をビルドし、開発用 package へ配置\n\
   unity-exporter-package Unity Editor exporter の UPM package layout を作る\n\
+  unity-exporter-vcc Unity Exporter の VCC Package Manager 用zip/repo listingを作る\n\
   package      Releaseビルドし、target/package/un-avatar に最小配布レイアウトを作る\n\
 	release-package target/package/un-avatar を release-packages/un-avatar-<version>.zip に固める\n\
   ci           fmt --check → check --workspace → test --workspace → smoke → render-smoke\n"
@@ -3236,6 +3498,7 @@ fn main() {
 		"spout2" => run_spout2(repo, args),
 		"unity-fpng" => run_unity_fpng(repo, args),
 		"unity-exporter-package" => run_unity_exporter_package(repo, args),
+		"unity-exporter-vcc" => run_unity_exporter_vcc(repo, args),
 		"package" => run_package(repo, args),
 		"release-package" | "make-release-package" => run_release_package(repo, args),
 		"ci" => {

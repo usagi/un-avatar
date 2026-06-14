@@ -70,6 +70,14 @@ cargo xtask release-package --version 1.0.0
 `release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` を作る。
 `unity-exporter-package` は Unity Editor を起動せず、`unity/un-avatar-unity-exporter` を `target/unity/un-avatar-unity-exporter` へ UPM package layout としてコピーする。
 
+VCC Package Manager 向け Unity Exporter は、GitHub Release 作成後に次を実行する。
+
+```sh
+cargo xtask unity-exporter-vcc --version <version>
+```
+
+`unity-exporter-vcc` は `target/unity/vcc/network.usagi.un-avatar.unity-exporter-<version>.zip` と `docs/vcc/index.json` を生成する。既定の download URL は `https://github.com/usagi/un-avatar/releases/download/<version>/...` で、UN Avatar の git tag / release title と同じく `v` prefix は付けない。生成した zip を同じ GitHub Release asset に添付し、更新された `docs/vcc/index.json` を commit / push すれば、VCC の Package Manager で更新候補として表示される。
+
 ### Windows 配布方針
 
 v2 の Windows 配布正本は portable zip とする。Installer（MSI / NSIS / WiX / cargo-wix 等）は v2 では未対応・対応未定であり、release pipeline の必須成果物にしない。
