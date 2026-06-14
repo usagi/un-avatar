@@ -372,8 +372,8 @@ dynamics_compat_sources = "読み取り元: VRM SpringBone / VRC PhysBone"
 dynamics_enable_all_on_launch = "モデル内OFFを無視して全物理ON"
 contact_parameter_emission = "VRC Contact parameter 出力"
 dynamics_mode = "適用する調整"
-dynamics_mode_hint = "モデルロード時にこの用途へ分類済みの物理グループへ適用する調整です。シーン実行中に名前判定したり、部位ごとに別のソルバーを選び直す設定ではありません。"
-dynamics_mode_authored_verlet = "モデル設定を維持"
+dynamics_mode_hint = "モデルロード時にこの用途として事前解決された UNPhysics グループへ適用する調整です。シーン実行中に名前判定したり、部位ごとに別のソルバーを選び直す設定ではありません。"
+dynamics_mode_authored_verlet = "モデル既定値を使う"
 dynamics_mode_override_verlet = "標準ベース調整（Verlet/PBD）"
 dynamics_mode_override_xpbd = "拡張ベース調整（XPBD）"
 dynamics_simulation_hz = "シミュレーション周波数"
@@ -579,7 +579,7 @@ vmc_root_translation = "Root 移動: 受信した Root translation を scene roo
 root_translation = "Root 移動: 受信した Root translation を scene root に反映します。UNMF/Z と VMC のどちらでも、入力に Root translation が含まれる場合に使います。"
 
 [profiles.hints.physics]
-section = "UNPhysics とボーンベースコライダーを設定します。ソルバーは Renderer 単位で扱い、分類別設定はパラメーター上書きとして事前解決されます。"
+section = "UNPhysics とボーンベースコライダーを設定します。ソルバーは Renderer 単位で扱い、用途別の調整はロード時に解決済みの対象へパラメーター上書きとして適用されます。"
 
 [profiles.hints.output]
 section = "Output: 手元のプレビュー Window と、OBS などが取り込む Spout2 映像を別々に設定します。"
