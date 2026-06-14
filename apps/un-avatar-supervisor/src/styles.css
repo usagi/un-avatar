@@ -757,7 +757,7 @@ small,
 
 .profile-cache-state {
 	flex: 0 0 auto;
-	max-width: 92px;
+	max-width: 132px;
 	overflow: hidden;
 	padding: 2px 6px;
 	border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
