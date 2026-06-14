@@ -5221,7 +5221,6 @@ textarea {
 	align-items: center;
 	gap: 8px;
 	width: min(100%, 330px);
-	min-height: 76px;
 	margin-top: 10px;
 	padding: 8px;
 	border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
@@ -5232,28 +5231,6 @@ textarea {
 .unavatar-icon-crop-panel.enabled {
 	border-color: color-mix(in srgb, var(--accent-cool) 48%, var(--border));
 	background: color-mix(in srgb, var(--accent-cool) 8%, var(--panel-subtle));
-}
-
-.unavatar-icon-crop-toggle {
-	display: inline-flex;
-	align-items: center;
-	justify-content: flex-start;
-	gap: 8px;
-	width: 100%;
-	min-width: 0;
-	min-height: 24px;
-	color: var(--text);
-	font-size: 12px;
-	font-weight: 700;
-	white-space: nowrap;
-	cursor: pointer;
-}
-
-.unavatar-icon-crop-toggle input {
-	width: 14px;
-	height: 14px;
-	min-height: 14px;
-	accent-color: var(--accent-warm);
 }
 
 .unavatar-crop-tools {
