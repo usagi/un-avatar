@@ -13266,6 +13266,41 @@ prewarmed_at = "20260614T000000Z"
 	}
 
 	#[test]
+	fn scene_cache_fingerprint_changes_with_output_mode() {
+		let window_preview: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[output.spout2]
+enabled = false
+
+[window]
+minimized = false
+"#,
+		)
+		.unwrap();
+		let spout_only: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[output.spout2]
+enabled = true
+
+[window]
+minimized = true
+"#,
+		)
+		.unwrap();
+
+		assert_ne!(
+			crate::scene_cache_manifest_fingerprint(&window_preview),
+			crate::scene_cache_manifest_fingerprint(&spout_only)
+		);
+	}
+
+	#[test]
 	fn spring_bone_category_override_setting_updates_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
