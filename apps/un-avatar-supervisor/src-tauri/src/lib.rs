@@ -3565,6 +3565,10 @@ fn read_gltf_metadata_root_and_source(path: &Path) -> Result<(serde_json::Value,
 	}
 
 	file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {}: {e}", path.display()))?;
+	let file_len = file.metadata().map_err(|e| format!("stat {}: {e}", path.display()))?.len();
+	if file_len > MAX_UNAVATAR_METADATA_JSON_BYTES {
+		return Err(format!("glTF JSON is too large in {}: {} bytes", path.display(), file_len));
+	}
 	let mut bytes = Vec::new();
 	file.read_to_end(&mut bytes).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let root = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| format!("glTF JSON: {e}"))?;
@@ -11198,6 +11202,24 @@ mod tests {
 		let _ = fs::remove_file(&path);
 
 		assert!(error.contains("GLB JSON chunk is too large"), "{error}");
+	}
+
+	#[test]
+	fn read_unavatar_metadata_rejects_oversized_json_gltf_before_allocation() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-huge-json-gltf-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		fs::File::create(&path)
+			.unwrap()
+			.set_len(crate::MAX_UNAVATAR_METADATA_JSON_BYTES + 1)
+			.unwrap();
+
+		let error = crate::read_unavatar_metadata(path.display().to_string(), None, None).unwrap_err();
+		let _ = fs::remove_file(&path);
+
+		assert!(error.contains("glTF JSON is too large"), "{error}");
 	}
 
 	#[test]
