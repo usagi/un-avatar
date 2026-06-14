@@ -707,6 +707,10 @@ mod tests {
 			Some(RendererTrayAction::SetAllDynamics(true))
 		));
 		assert!(matches!(
+			actions.get("renderer:camera:reset"),
+			Some(RendererTrayAction::ResetCamera)
+		));
+		assert!(matches!(
 			actions.get("renderer:supervisor:open"),
 			Some(RendererTrayAction::OpenSupervisor)
 		));
@@ -725,6 +729,26 @@ mod tests {
 		let tooltip = tray_tooltip(&opts, &status);
 		assert!(tooltip.contains("mizuki-split"));
 		assert!(tooltip.contains("Spout2"));
+	}
+
+	#[test]
+	fn spout_only_keeps_resolution_as_a_separate_action() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.spout_available = true;
+		status.spout_width = Some(1920);
+		status.spout_height = Some(1080);
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:output:spout_only"),
+			Some(RendererTrayAction::SetSpoutOnly)
+		));
+		assert!(matches!(
+			actions.get("renderer:output:spout_1080p"),
+			Some(RendererTrayAction::SetSpoutResolution { width: 1920, height: 1080 })
+		));
 	}
 
 	#[test]
