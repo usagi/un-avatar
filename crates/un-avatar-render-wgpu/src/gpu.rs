@@ -2197,10 +2197,7 @@ fn build_runtime_physics_for_document(
 	} else {
 		Vec::new()
 	};
-	let bone_colliders = tagged_bone_colliders
-		.iter()
-		.map(|collider| collider.primitive)
-		.collect::<Vec<_>>();
+	let bone_colliders = tagged_bone_colliders.iter().map(|collider| collider.primitive).collect::<Vec<_>>();
 	let stats = collider_stats(&bone_colliders);
 	let dynamics_sim = if dynamics_enabled {
 		if let Some(runtime) = scene_profile_dynamics {
@@ -4252,6 +4249,13 @@ impl GpuState {
 				);
 			}
 			sm.rebuild_material_bind_groups(&self.device);
+			let ensured_draw_resources = sm.ensure_active_draw_gpu_resources(&self.device, &self.queue, runtime.scene);
+			if ensured_draw_resources > 0 && self.debug_log.is_enabled() {
+				self.debug_log.line(
+					"wardrobe",
+					format!("active draw gpu resources ensured count={ensured_draw_resources}"),
+				);
+			}
 		}
 		let t_update0 = Instant::now();
 		self.last_draw_transform_timings = sm.update_draw_transforms(
@@ -5696,7 +5700,12 @@ impl GpuState {
 			if runtime.dynamics.set_group_enabled_by_source_id(source_id, enabled) {
 				changed += 1;
 				if let Some(rest_nodes) = rest_nodes.as_ref() {
-					reset_runtime_dynamics_nodes_to_rest_for_source_id(runtime.scene, runtime.dynamics.as_readonly(), rest_nodes, source_id);
+					reset_runtime_dynamics_nodes_to_rest_for_source_id(
+						runtime.scene,
+						runtime.dynamics.as_readonly(),
+						rest_nodes,
+						source_id,
+					);
 				}
 			}
 		}

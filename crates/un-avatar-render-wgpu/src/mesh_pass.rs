@@ -10447,8 +10447,10 @@ impl SceneMeshes {
 				draw.material_slot_index = material_slot_index;
 				draw.material = material.clone();
 				draw.texture_indices = material_texture_indices(&draw.material);
+				draw.cube_texture_indices = material_cube_texture_indices(&draw.material);
 				draw.shading = material.shading;
 				draw.alpha_mode = material.alpha_mode;
+				draw._compute_fur_cards = None;
 				let material_gpu =
 					mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
@@ -10465,6 +10467,22 @@ impl SceneMeshes {
 			self.rebuild_draw_order();
 		}
 		changed
+	}
+
+	pub(crate) fn ensure_active_draw_gpu_resources(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
+	) -> usize {
+		let active_draw_indices = self.active_draw_indices.clone();
+		let mut ensured = 0;
+		for draw_index in active_draw_indices {
+			if self.ensure_draw_gpu_resources(device, queue, scene, draw_index) {
+				ensured += 1;
+			}
+		}
+		ensured
 	}
 
 	#[inline]

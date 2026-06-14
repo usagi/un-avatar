@@ -58,7 +58,7 @@ use winit::{
 	application::ApplicationHandler,
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-	event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+	event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
 	keyboard::{Key, ModifiersState},
 	window::{CursorIcon, Icon, ResizeDirection, Window, WindowLevel},
 };
@@ -2802,10 +2802,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
 		let spout_only = self.opts.spout.enabled && self.window.as_ref().is_some_and(|window| window.is_minimized().unwrap_or(false));
 		if spout_only {
+			event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(16)));
 			if self.render_frame() {
 				event_loop.exit();
 			}
 		} else if let Some(window) = &self.window {
+			event_loop.set_control_flow(ControlFlow::Wait);
 			window.request_redraw();
 		}
 	}

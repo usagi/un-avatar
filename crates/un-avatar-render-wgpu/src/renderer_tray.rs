@@ -282,11 +282,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 }
 
 fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
-	let entries: Vec<_> = snapshot
-		.menu_action_candidates
-		.iter()
-		.filter(|candidate| candidate.wardrobe_set_ids.is_empty())
-		.collect();
+	let entries: Vec<_> = snapshot.menu_action_candidates.iter().collect();
 	if entries.is_empty() {
 		return;
 	}
@@ -307,10 +303,7 @@ fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTr
 fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
 	let mut entries: Vec<(String, String)> = Vec::new();
 	for candidate in &snapshot.menu_wardrobe_candidates {
-		entries.push((
-			menu_wardrobe_label(candidate),
-			candidate.wardrobe_set_id.clone(),
-		));
+		entries.push((menu_wardrobe_label(candidate), candidate.wardrobe_set_id.clone()));
 	}
 	if entries.is_empty() {
 		for action in &snapshot.wardrobe_actions {
@@ -757,7 +750,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_exposes_non_wardrobe_action_candidates() {
+	fn vrc_menu_exposes_all_vrc_menu_action_candidates() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.menu_action_candidates = vec![
@@ -788,7 +781,10 @@ mod tests {
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:smile"
 		));
-		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:1"),
+			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:field_drape"
+		));
 	}
 
 	#[test]
