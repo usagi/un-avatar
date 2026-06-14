@@ -10717,6 +10717,93 @@ mod tests {
 	}
 
 	#[test]
+	fn read_unavatar_metadata_uses_base_and_selected_wardrobe_previews() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-wardrobe-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Wardrobe Preview UNAvatar" }},
+      "dynamics": [{{}}, {{}}],
+      "contacts": [{{}}],
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "front", "mimeType": "image/png", "bufferView": 0 }}
+            ]
+          }},
+          {{
+            "id": "field_drape",
+            "displayName": "field_drape",
+            "previewImages": [
+              {{ "view": "front", "mimeType": "image/png", "bufferView": 1 }},
+              {{ "view": "back", "mimeType": "image/png", "bufferView": 2 }}
+            ]
+          }}
+        ]
+      }},
+      "modularAvatar": {{ "components": [{{}}, {{}}, {{}}] }}
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len,
+				len * 2,
+				len
+			),
+			&bin,
+		);
+
+		let base_metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let field_metadata = crate::read_unavatar_metadata(path.display().to_string(), None, Some("field_drape".to_string()))
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(base_metadata.wardrobe_set_count, 2);
+		assert_eq!(base_metadata.dynamics_count, 2);
+		assert_eq!(base_metadata.contact_count, 1);
+		assert_eq!(base_metadata.modular_avatar_component_count, 3);
+		assert_eq!(base_metadata.preview_images.len(), 1);
+		assert_eq!(base_metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(field_metadata.preview_sets.len(), 2);
+		assert_eq!(field_metadata.preview_images.len(), 2);
+		assert_eq!(field_metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(field_metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert!(field_metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
 	fn read_unavatar_metadata_reads_only_json_and_preview_buffer_view_ranges() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unavatar-metadata-partial-{}-{}.unavatar",
