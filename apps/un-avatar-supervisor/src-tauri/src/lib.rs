@@ -1247,10 +1247,10 @@ struct AvatarSetting {
 	bone_collider_upper_arms: f32,
 	bone_collider_lower_arms: f32,
 	bone_collider_hands: f32,
-	/// MToon outline 描画を無効化する診断 toggle。`[debug] disable_mtoon_outlines` に対応。
-	/// 一部 VRM モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
+	/// UNToon geometry outline 描画を無効化する診断 toggle。`[debug] disable_mtoon_outlines` に対応。
+	/// 一部 toon material で目周辺に肌色寄りの太い outline が出る現象の切り分け用。
 	debug_disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle。`[debug] disable_rim_lighting` に対応。
+	/// UNToon parametric Rim Lighting 寄与を 0 にする診断 toggle。`[debug] disable_rim_lighting` に対応。
 	debug_disable_rim_lighting: bool,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle。
 	/// `[debug] force_shading_shift_zero` に対応。
@@ -1259,11 +1259,11 @@ struct AvatarSetting {
 	debug_disable_matcap: bool,
 	/// emissive 寄与を 0 にする診断 toggle。`[debug] disable_emissive` に対応。
 	debug_disable_emissive: bool,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断 toggle。`[debug] disable_shade_color` に対応。
+	/// UNToon shade color/texture の代わりに base を使う診断 toggle。`[debug] disable_shade_color` に対応。
 	debug_disable_shade_color: bool,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断 toggle。`[debug] disable_normal_map` に対応。
 	debug_disable_normal_map: bool,
-	/// fs_mtoon を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
+	/// UNToon fragment path を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
 	debug_base_texture_only: bool,
 	/// UN Avatar silhouette outline の扱い。`[effects.avatar.outline] policy` に対応。
 	outline_policy: String,
