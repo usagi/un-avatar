@@ -15,6 +15,7 @@
 	let selectedPreviewIndex = 0;
 	let cropFrame: HTMLDivElement | null = null;
 	let dragStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number } | null = null;
+	let naturalPreviewSize: { dataUrl: string; width: number; height: number } | null = null;
 	$: previewSets = metadata.preview_sets.length
 		? metadata.preview_sets
 		: metadata.preview_images.length
@@ -41,8 +42,8 @@
 		[$_("unavatar_rights.stats.modular_avatar"), metadata.modular_avatar_component_count],
 	];
 	$: cropLayout = previewCropLayout(
-		selectedPreview?.width ?? null,
-		selectedPreview?.height ?? null,
+		selectedPreview?.width ?? (naturalPreviewSize?.dataUrl === selectedPreview?.data_url ? naturalPreviewSize.width : null),
+		selectedPreview?.height ?? (naturalPreviewSize?.dataUrl === selectedPreview?.data_url ? naturalPreviewSize.height : null),
 		Number(profileIconCrop.zoom) || 1,
 		Number(profileIconCrop.offsetX) || 0,
 		Number(profileIconCrop.offsetY) || 0
@@ -122,6 +123,16 @@
 		cropFrame?.releasePointerCapture(event.pointerId);
 		dragStart = null;
 	}
+
+	function updateNaturalPreviewSize(event: Event) {
+		const image = event.currentTarget as HTMLImageElement;
+		if (!selectedPreview || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+		naturalPreviewSize = {
+			dataUrl: selectedPreview.data_url,
+			width: image.naturalWidth,
+			height: image.naturalHeight,
+		};
+	}
 </script>
 
 <div class="vrm-metadata-backdrop" role="presentation">
@@ -143,6 +154,7 @@
 						class="vrm-metadata-thumbnail"
 						src={selectedPreview.data_url}
 						alt=""
+						onload={updateNaturalPreviewSize}
 					/>
 					{#if selectedPreview && profileIconCrop.enabled}
 						<span
