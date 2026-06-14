@@ -2927,20 +2927,6 @@ dd {
 	gap: 6px;
 }
 
-.runtime-button-row .renderer-output-toggle {
-	min-height: 30px;
-	padding: 5px 8px;
-	border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-	border-radius: 7px;
-	background: color-mix(in srgb, var(--panel) 58%, transparent);
-}
-
-.runtime-button-row .renderer-output-toggle span {
-	color: var(--text);
-	font-size: 12px;
-	font-weight: 800;
-}
-
 .runtime-button-row > span:not(.muted-small) {
 	min-width: 0;
 	max-width: 100%;
