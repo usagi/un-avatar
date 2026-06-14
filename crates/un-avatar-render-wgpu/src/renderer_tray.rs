@@ -417,8 +417,18 @@ fn tray_tooltip(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) 
 		"UN Avatar Renderer - {} - pid {} - {}",
 		opts.title,
 		std::process::id(),
-		if snapshot.spout_enabled { "Spout2" } else { "Window" }
+		tray_output_mode_label(snapshot)
 	)
+}
+
+fn tray_output_mode_label(snapshot: &RendererRuntimeSnapshot) -> &'static str {
+	if snapshot.spout_enabled && snapshot.minimized {
+		"Spout2 Only"
+	} else if snapshot.spout_enabled {
+		"Spout2 + Preview"
+	} else {
+		"Window Preview"
+	}
 }
 
 fn tray_icon_id() -> String {
@@ -718,17 +728,21 @@ mod tests {
 	}
 
 	#[test]
-	fn tray_tooltip_identifies_spout_or_window_mode() {
+	fn tray_tooltip_identifies_output_mode() {
 		let mut opts = AvatarWindowOptions::default();
 		opts.title = "mizuki-split".to_string();
 		let mut status = snapshot();
 		status.spout_enabled = false;
-		assert!(tray_tooltip(&opts, &status).contains("Window"));
+		assert!(tray_tooltip(&opts, &status).contains("Window Preview"));
 
 		status.spout_enabled = true;
+		status.minimized = false;
 		let tooltip = tray_tooltip(&opts, &status);
 		assert!(tooltip.contains("mizuki-split"));
-		assert!(tooltip.contains("Spout2"));
+		assert!(tooltip.contains("Spout2 + Preview"));
+
+		status.minimized = true;
+		assert!(tray_tooltip(&opts, &status).contains("Spout2 Only"));
 	}
 
 	#[test]
