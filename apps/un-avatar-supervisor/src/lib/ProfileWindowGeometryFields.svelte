@@ -28,13 +28,13 @@
 	{/each}
 	{#each WINDOW_POSITION_FIELDS as field}
 		<ProfileOptionalNumberInputField
-			label={field.label}
+			label={$_(field.labelKey)}
 			hint={$_(field.hintKey)}
 			value={field.key === "x" ? x : y}
 			min={WINDOW_POSITION_MIN}
 			max={WINDOW_POSITION_MAX}
 			step={1}
-			placeholder="(default)"
+			placeholder={$_("profiles.editor.placeholder_default")}
 			disabled={busy}
 			onChange={(value) => onUpdateSettingValue(field.field, value)}
 		/>

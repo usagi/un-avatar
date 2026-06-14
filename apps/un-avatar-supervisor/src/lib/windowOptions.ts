@@ -20,13 +20,13 @@ export const WINDOW_SIZE_FIELDS = [
 export const WINDOW_POSITION_FIELDS = [
 	{
 		key: "x",
-		label: "X (px)",
+		labelKey: "profiles.editor.x_px",
 		hintKey: "profiles.hints.window.position_x",
 		field: "window.x",
 	},
 	{
 		key: "y",
-		label: "Y (px)",
+		labelKey: "profiles.editor.y_px",
 		hintKey: "profiles.hints.window.position_y",
 		field: "window.y",
 	},
