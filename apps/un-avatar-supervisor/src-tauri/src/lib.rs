@@ -10987,6 +10987,51 @@ mod tests {
 	}
 
 	#[test]
+	fn read_unavatar_metadata_does_not_require_full_glb_bin_payload() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-sparse-bin-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_declared_bin_len_and_prefix(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [{{ "buffer": 0, "byteOffset": 0, "byteLength": {} }}],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Sparse BIN UNAvatar" }},
+      "previewImages": [
+        {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}
+      ]
+    }}
+  }}
+}}"#,
+				crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+				preview_png.len()
+			),
+			crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Sparse BIN UNAvatar"));
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
 	fn read_unavatar_metadata_accepts_object_summary_counts() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unavatar-metadata-object-counts-{}-{}.unavatar",
@@ -12351,6 +12396,25 @@ id = "test"
 		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
 		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
 		glb.extend_from_slice(&bin);
+		fs::write(path, glb).unwrap();
+	}
+
+	fn write_glb_with_declared_bin_len_and_prefix(path: &Path, json: &str, declared_bin_len: u64, bin_prefix: &[u8]) {
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let total_len = 12u64 + 8 + json_bytes.len() as u64 + 8 + declared_bin_len;
+		let mut glb = Vec::with_capacity(12 + 8 + json_bytes.len() + 8 + bin_prefix.len());
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(declared_bin_len as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
+		glb.extend_from_slice(bin_prefix);
 		fs::write(path, glb).unwrap();
 	}
 
