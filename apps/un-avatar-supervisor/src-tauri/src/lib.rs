@@ -3255,12 +3255,16 @@ fn unavatar_wardrobe_preview_sets(
 	let Some(sets) = wardrobe.get("sets").and_then(serde_json::Value::as_array) else {
 		return Vec::new();
 	};
+	let base_set_name = wardrobe
+		.get("baseName")
+		.or_else(|| wardrobe.get("baseLabel"))
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.unwrap_or("Base");
 	sets.iter()
 		.filter_map(|set| {
-			let id = set.get("id").and_then(serde_json::Value::as_str)?.trim();
-			if id.is_empty() {
-				return None;
-			}
+			let id = set.get("id").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("");
 			let previews = unavatar_set_preview_images(set)?;
 			let preview_images = previews
 				.iter()
@@ -3294,7 +3298,7 @@ fn unavatar_wardrobe_preview_sets(
 					.and_then(serde_json::Value::as_str)
 					.map(str::trim)
 					.filter(|name| !name.is_empty())
-					.unwrap_or(id)
+					.unwrap_or(if id.is_empty() { base_set_name } else { id })
 					.to_string(),
 				preview_images,
 			})
@@ -10820,6 +10824,58 @@ mod tests {
 		assert_eq!(field_metadata.preview_images[0].width, Some(1));
 		assert_eq!(field_metadata.preview_images[0].height, Some(1));
 		assert!(field_metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_keeps_empty_base_wardrobe_preview_set() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-empty-base-preview-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 68 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Empty Base Preview UNAvatar" },
+      "wardrobe": {
+        "baseSet": "",
+        "baseName": "Base",
+        "sets": [
+          {
+            "id": "",
+            "previewImages": [
+              { "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#,
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "");
+		assert_eq!(metadata.preview_sets[0].name, "Base");
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
 	}
 
 	#[test]
