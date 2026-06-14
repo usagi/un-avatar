@@ -6,6 +6,26 @@
 	export let status: RuntimeTableStatusData | null;
 
 	$: startupLabel = startupStatusLabel(status);
+	$: frameDetails = [
+		[$_("renderers.metrics.frame_total"), runtimeMetric(status?.frame_cpu_total_ms, " ms")],
+		[$_("renderers.metrics.frame_wait"), runtimeMetric(status?.frame_surface_acquire_ms, " ms")],
+		[$_("renderers.metrics.frame_motion"), runtimeMetric(status?.frame_motion_apply_ms, " ms")],
+		[$_("renderers.metrics.frame_dynamics"), runtimeMetric(status?.frame_dynamics_step_ms, " ms")],
+		[$_("renderers.metrics.frame_draw"), runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")],
+		[$_("renderers.metrics.frame_world"), runtimeMetric(status?.frame_scene_world_ms, " ms")],
+		[$_("renderers.metrics.frame_skin"), runtimeMetric(status?.frame_draw_skin_palette_ms, " ms")],
+		[$_("renderers.metrics.frame_skin_write"), runtimeMetric(status?.frame_draw_skin_palette_write_ms, " ms")],
+		[$_("renderers.metrics.frame_fur_source"), runtimeMetric(status?.frame_draw_fur_source_vertices_ms, " ms")],
+		[$_("renderers.metrics.frame_expression"), runtimeMetric(status?.frame_draw_expression_values_ms, " ms")],
+		[$_("renderers.metrics.frame_morph"), runtimeMetric(status?.frame_draw_morph_weights_ms, " ms")],
+		[$_("renderers.metrics.frame_transform"), runtimeMetric(status?.frame_draw_transform_loop_ms, " ms")],
+		[$_("renderers.metrics.frame_encode"), runtimeMetric(status?.frame_command_encode_ms, " ms")],
+		[$_("renderers.metrics.frame_submit"), runtimeMetric(status?.frame_submit_present_ms, " ms")],
+		[$_("renderers.metrics.frame_spout"), runtimeMetric(status?.frame_spout_cpu_ms, " ms")],
+		[$_("renderers.metrics.frame_contact"), runtimeMetric(status?.frame_contact_eval_ms, " ms")],
+		[$_("renderers.metrics.frame_action"), runtimeMetric(status?.frame_runtime_action_eval_ms, " ms")],
+	];
+	$: frameDetailTitle = frameDetails.map(([label, value]) => `${label} ${value}`).join(" / ");
 </script>
 
 <td class="process-cell-perf">
@@ -25,13 +45,10 @@
 		</div>
 	{/if}
 	<small>{$_("renderers.metrics.cpu")} {runtimeMetric(status?.cpu_ms, " ms")}</small>
-	<small
-		title={`total ${runtimeMetric(status?.frame_cpu_total_ms, " ms")} / wait ${runtimeMetric(status?.frame_surface_acquire_ms, " ms")} / motion ${runtimeMetric(status?.frame_motion_apply_ms, " ms")} / dynamics ${runtimeMetric(status?.frame_dynamics_step_ms, " ms")} / draw ${runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / world ${runtimeMetric(status?.frame_scene_world_ms, " ms")} / skin ${runtimeMetric(status?.frame_draw_skin_palette_ms, " ms")} / skin write ${runtimeMetric(status?.frame_draw_skin_palette_write_ms, " ms")} / fur source ${runtimeMetric(status?.frame_draw_fur_source_vertices_ms, " ms")} / expr ${runtimeMetric(status?.frame_draw_expression_values_ms, " ms")} / morph ${runtimeMetric(status?.frame_draw_morph_weights_ms, " ms")} / loop ${runtimeMetric(status?.frame_draw_transform_loop_ms, " ms")} / encode ${runtimeMetric(status?.frame_command_encode_ms, " ms")} / submit ${runtimeMetric(status?.frame_submit_present_ms, " ms")} / spout ${runtimeMetric(status?.frame_spout_cpu_ms, " ms")} / contact ${runtimeMetric(status?.frame_contact_eval_ms, " ms")} / action ${runtimeMetric(status?.frame_runtime_action_eval_ms, " ms")}`}
-	>
-		frame {runtimeMetric(status?.frame_cpu_total_ms, " ms")} / draw {runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / wait {runtimeMetric(
-			status?.frame_surface_acquire_ms,
-			" ms"
-		)}
+	<small title={frameDetailTitle}>
+		{$_("renderers.metrics.frame_total")} {runtimeMetric(status?.frame_cpu_total_ms, " ms")} / {$_("renderers.metrics.frame_draw")}
+		{runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / {$_("renderers.metrics.frame_wait")}
+		{runtimeMetric(status?.frame_surface_acquire_ms, " ms")}
 	</small>
 	{#if startupLabel}
 		<div class="startup-progress" class:indeterminate={!status?.startup_progress || status.startup_progress[1] <= 0}>
