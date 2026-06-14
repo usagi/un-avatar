@@ -8624,7 +8624,7 @@ fn json_texture_resolution_limit(value: &serde_json::Value, field: &str) -> Resu
 }
 
 fn json_texture_compression_preference(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	let preference = json_string(value, field)?;
+	let preference = json_string(value, field)?.trim().to_ascii_lowercase().replace('-', "_");
 	match preference.as_str() {
 		"source" | "auto" | "high_quality" | "small" | "gpu_native" => Ok(preference),
 		_ => Err(format!("{field} must be one of source, auto, high_quality, small, gpu_native")),
@@ -12870,6 +12870,44 @@ processed_texture_cache = true
 			Some(false)
 		);
 		assert_eq!(render_quality.get("skin_tone_matching").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
+	fn render_quality_advanced_texture_preferences_save_normalized_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"render_quality.texture_compression_advanced.emissive",
+			serde_json::json!(" High-Quality "),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"render_quality.texture_compression_advanced.normal",
+			serde_json::json!("GPU-NATIVE"),
+		)
+		.unwrap();
+
+		let advanced = manifest
+			.get("render_quality")
+			.and_then(toml::Value::as_table)
+			.and_then(|quality| quality.get("texture_compression_advanced"))
+			.and_then(toml::Value::as_table)
+			.expect("advanced texture compression table");
+		assert_eq!(advanced.get("emissive").and_then(toml::Value::as_str), Some("high_quality"));
+		assert_eq!(advanced.get("normal").and_then(toml::Value::as_str), Some("gpu_native"));
 	}
 
 	#[test]
