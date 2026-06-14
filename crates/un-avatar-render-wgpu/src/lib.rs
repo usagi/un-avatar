@@ -220,6 +220,10 @@ enum RendererControlEvent {
 		width: Option<u32>,
 		height: Option<u32>,
 	},
+	SetPreviewWindow {
+		enabled: bool,
+		activate: bool,
+	},
 	SetWindow {
 		decorations: Option<bool>,
 		transparent: Option<bool>,
@@ -1191,6 +1195,7 @@ struct AvatarApp {
 	event_proxy: EventLoopProxy<RendererControlEvent>,
 	window: Option<Arc<Window>>,
 	gpu: Option<GpuState>,
+	preview_window_enabled: bool,
 	startup_progress: Option<StartupProgressState>,
 	startup_pending_document: bool,
 	startup_failed: Option<String>,
@@ -1497,12 +1502,14 @@ impl AvatarApp {
 		};
 		let camera_locked = opts.camera_locked;
 		let frame_bench = opts.bench_frames.map(FrameBenchState::new);
+		let preview_window_enabled = !(opts.spout.enabled && opts.start_minimized);
 		Self {
 			opts,
 			title_base,
 			event_proxy,
 			window: None,
 			gpu: None,
+			preview_window_enabled,
 			startup_progress: None,
 			startup_pending_document: false,
 			startup_failed: None,
@@ -1598,7 +1605,27 @@ impl AvatarApp {
 		}
 		let size = window.inner_size();
 		status.window_inner_size = Some([size.width, size.height]);
-		status.minimized = window.is_minimized().unwrap_or(false);
+		status.minimized = !self.preview_window_enabled || window.is_minimized().unwrap_or(false);
+	}
+
+	fn preview_window_output_enabled(&self) -> bool {
+		self.preview_window_enabled && self.window.as_ref().is_some_and(|window| !window.is_minimized().unwrap_or(false))
+	}
+
+	fn set_preview_window_enabled(&mut self, enabled: bool, activate: bool) {
+		self.preview_window_enabled = enabled;
+		if let Some(window) = &self.window {
+			if enabled {
+				window.set_visible(true);
+				window.set_minimized(false);
+				if activate {
+					window.focus_window();
+				}
+			} else {
+				window.set_visible(false);
+			}
+		}
+		self.update_runtime_window_geometry();
 	}
 
 	#[cfg(windows)]
@@ -1664,7 +1691,10 @@ impl AvatarApp {
 					width: None,
 					height: None,
 				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
+					enabled: true,
+					activate: true,
+				});
 			}
 			RendererTrayAction::SetSpoutPreview => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
@@ -1673,7 +1703,10 @@ impl AvatarApp {
 					width: None,
 					height: None,
 				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
+					enabled: true,
+					activate: true,
+				});
 			}
 			RendererTrayAction::SetSpoutOnly => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
@@ -1682,14 +1715,9 @@ impl AvatarApp {
 					width: None,
 					height: None,
 				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
-					decorations: None,
-					transparent: None,
-					input_passthrough: None,
-					always_on_top: None,
-					minimized: Some(true),
-					width: None,
-					height: None,
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
+					enabled: false,
+					activate: false,
 				});
 			}
 			RendererTrayAction::SetSpoutResolution { width, height } => {
@@ -1836,7 +1864,10 @@ impl AvatarApp {
 			}
 		}
 		if let Some(minimized) = minimized {
-			if let Some(window) = &self.window {
+			if self.opts.spout.enabled {
+				self.set_preview_window_enabled(!minimized, !minimized);
+			} else if let Some(window) = &self.window {
+				self.preview_window_enabled = !minimized;
 				window.set_minimized(minimized);
 				if !minimized {
 					window.set_visible(true);
@@ -1990,7 +2021,7 @@ impl AvatarApp {
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
 			status.window_activation_seq = self.window_activation_seq;
-			status.minimized = self.window.as_ref().is_some_and(|w| w.is_minimized().unwrap_or(false));
+			status.minimized = !self.preview_window_enabled || self.window.as_ref().is_some_and(|w| w.is_minimized().unwrap_or(false));
 			status.camera = gpu.map(|g| g.camera_state_snapshot());
 			let c = self.opts.clear_color;
 			status.clear_color = [c.r, c.g, c.b, c.a];
@@ -2584,6 +2615,7 @@ impl AvatarApp {
 			return false;
 		}
 		self.advance_camera_transition(now);
+		let preview_window_output_enabled = self.preview_window_output_enabled();
 		let Some(gpu) = self.gpu.as_mut() else {
 			return false;
 		};
@@ -2602,7 +2634,13 @@ impl AvatarApp {
 				phase: 9.0,
 			})
 		};
-		let Some(mut timings) = gpu.render_frame(win.as_ref(), self.opts.clear_color, wall_clamped, startup_splash) else {
+		let Some(mut timings) = gpu.render_frame(
+			win.as_ref(),
+			self.opts.clear_color,
+			wall_clamped,
+			startup_splash,
+			preview_window_output_enabled,
+		) else {
 			win.request_redraw();
 			return false;
 		};
@@ -2682,7 +2720,9 @@ impl AvatarApp {
 			}
 		}
 
-		win.request_redraw();
+		if self.preview_window_enabled {
+			win.request_redraw();
+		}
 		false
 	}
 
@@ -2720,10 +2760,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		{
 			attrs = attrs.with_no_redirection_bitmap(true);
 		}
-		if let Some(path) = self.opts.icon_path.as_deref() {
-			if let Some(icon) = load_window_icon(path) {
-				attrs = attrs.with_window_icon(Some(icon));
-			}
+		if let Some(icon) = self
+			.opts
+			.icon_path
+			.as_deref()
+			.and_then(load_window_icon)
+			.or_else(load_default_window_icon)
+		{
+			attrs = attrs.with_window_icon(Some(icon));
 		}
 
 		let win = match event_loop.create_window(attrs) {
@@ -2738,10 +2782,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		if let Some([x, y]) = self.opts.window_position {
 			win.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
 		}
-		if self.opts.start_minimized {
-			win.set_minimized(true);
+		if self.preview_window_enabled {
+			if self.opts.start_minimized {
+				win.set_minimized(true);
+			}
+			win.set_visible(true);
+		} else {
+			win.set_visible(false);
 		}
-		win.set_visible(true);
 
 		let mesh_diagnostics = self.scene_mesh_load_opts();
 		match GpuState::new_shell(
@@ -2785,7 +2833,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 		}
 
-		if !self.opts.start_minimized {
+		if self.preview_window_enabled && !self.opts.start_minimized {
 			win.focus_window();
 		}
 		self.last_wall = Instant::now();
@@ -2800,8 +2848,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 	}
 
 	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-		let spout_only = self.opts.spout.enabled && self.window.as_ref().is_some_and(|window| window.is_minimized().unwrap_or(false));
-		if spout_only {
+		if self.opts.spout.enabled && !self.preview_window_output_enabled() {
 			event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(16)));
 			if self.render_frame() {
 				event_loop.exit();
@@ -3020,6 +3067,10 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					false
 				};
 				self.update_runtime_spout(self.opts.spout.enabled);
+			}
+			RendererControlEvent::SetPreviewWindow { enabled, activate } => {
+				self.set_preview_window_enabled(enabled, activate);
+				self.request_redraw();
 			}
 			RendererControlEvent::SetWindow {
 				decorations,
@@ -5578,6 +5629,21 @@ fn load_window_icon(path: &Path) -> Option<Icon> {
 	let (width, height) = image.dimensions();
 	Icon::from_rgba(image.into_raw(), width, height)
 		.map_err(|e| eprintln!("un-avatar-renderer: icon {}: {e}", path.display()))
+		.ok()
+}
+
+fn load_default_window_icon() -> Option<Icon> {
+	let bytes = include_bytes!("../../../assets/brand/un-avatar-artwork-renderer.png");
+	let image = match image::load_from_memory(bytes) {
+		Ok(image) => image.into_rgba8(),
+		Err(e) => {
+			eprintln!("un-avatar-renderer: bundled icon: {e}");
+			return None;
+		}
+	};
+	let (width, height) = image.dimensions();
+	Icon::from_rgba(image.into_raw(), width, height)
+		.map_err(|e| eprintln!("un-avatar-renderer: bundled icon: {e}"))
 		.ok()
 }
 

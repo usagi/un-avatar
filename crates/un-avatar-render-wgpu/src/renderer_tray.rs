@@ -283,19 +283,44 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 
 fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
 	let entries: Vec<_> = snapshot.menu_action_candidates.iter().collect();
-	if entries.is_empty() {
+	let fallback_entries = if entries.is_empty() {
+		snapshot
+			.runtime_actions
+			.iter()
+			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
+			.collect::<Vec<_>>()
+	} else {
+		Vec::new()
+	};
+	if entries.is_empty() && fallback_entries.is_empty() {
 		return;
 	}
 	let vrc_menu = Submenu::with_id("renderer:vrc_menu", "VRC Menu", true);
-	for (index, candidate) in entries.into_iter().enumerate() {
-		append_menu_item(
-			&vrc_menu,
-			actions,
-			format!("vrc_menu:{index}"),
-			truncate_label(&menu_action_label(candidate), 56),
-			true,
-			RendererTrayAction::ActivateAction(candidate.action_id.clone()),
-		);
+	if entries.is_empty() {
+		for (index, action) in fallback_entries.into_iter().enumerate() {
+			append_menu_item(
+				&vrc_menu,
+				actions,
+				format!("vrc_menu:{index}"),
+				truncate_label(
+					&action.expression_menu_path.as_deref().unwrap_or(&action.label).replace('/', " / "),
+					56,
+				),
+				true,
+				RendererTrayAction::ActivateAction(action.action_id.clone()),
+			);
+		}
+	} else {
+		for (index, candidate) in entries.into_iter().enumerate() {
+			append_menu_item(
+				&vrc_menu,
+				actions,
+				format!("vrc_menu:{index}"),
+				truncate_label(&menu_action_label(candidate), 56),
+				true,
+				RendererTrayAction::ActivateAction(candidate.action_id.clone()),
+			);
+		}
 	}
 	append_submenu(menu, &vrc_menu);
 }
@@ -501,6 +526,20 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 		signature.push_str(&signature_field(&candidate.action_label));
 		signature.push(':');
 		signature.push_str(if candidate.wardrobe_set_ids.is_empty() { "0" } else { "1" });
+	}
+	if snapshot.menu_action_candidates.is_empty() {
+		let fallback_actions = snapshot
+			.runtime_actions
+			.iter()
+			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
+			.collect::<Vec<_>>();
+		signature.push_str(&format!("|fallback:{}", fallback_actions.len()));
+		for action in fallback_actions {
+			signature.push('|');
+			signature.push_str(&signature_field(&action.action_id));
+			signature.push(':');
+			signature.push_str(&signature_field(action.expression_menu_path.as_deref().unwrap_or("")));
+		}
 	}
 	signature
 }
@@ -784,6 +823,25 @@ mod tests {
 		assert!(matches!(
 			actions.get("renderer:vrc_menu:1"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:field_drape"
+		));
+	}
+
+	#[test]
+	fn vrc_menu_falls_back_to_expression_menu_runtime_actions() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "action:hat".to_string(),
+			label: "Hat".to_string(),
+			expression_menu_path: Some("Wardrobe/Hat".to_string()),
+			..Default::default()
+		}];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:hat"
 		));
 	}
 

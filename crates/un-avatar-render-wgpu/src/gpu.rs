@@ -4130,7 +4130,29 @@ impl GpuState {
 		if document_changed {
 			sm.refresh_draw_visibility_from_scene(runtime.scene);
 			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
-			let residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
+			let mut residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
+			let visible_residency_promotions = sm.promote_visible_draw_residency();
+			if !visible_residency_promotions.is_empty() {
+				let promoted = visible_residency_promotions.iter().copied().collect::<BTreeSet<_>>();
+				residency_refresh
+					.mesh_buffer_load_indices
+					.extend(visible_residency_promotions.iter().copied());
+				residency_refresh.mesh_buffer_load_indices.sort_unstable();
+				residency_refresh.mesh_buffer_load_indices.dedup();
+				residency_refresh
+					.mesh_buffer_unload_indices
+					.retain(|index| !promoted.contains(index));
+				if self.debug_log.is_enabled() {
+					self.debug_log.line(
+						"wardrobe",
+						format!(
+							"visible draw residency promoted count={} draws={:?}",
+							visible_residency_promotions.len(),
+							visible_residency_promotions
+						),
+					);
+				}
+			}
 			if residency_refresh.has_scoped_resource_changes() && self.debug_log.is_enabled() {
 				self.debug_log.line(
 					"wardrobe",
@@ -6029,6 +6051,7 @@ impl GpuSceneBuildContext {
 				log_slow_gpu_scene_context_step("initial expression weights", expression_start.elapsed());
 				let residency_start = Instant::now();
 				sm.refresh_asset_group_residency(runtime.scene, runtime_model.active_asset_groups());
+				sm.promote_visible_draw_residency();
 				log_slow_gpu_scene_context_step("initial asset residency refresh", residency_start.elapsed());
 				let transform_start = Instant::now();
 				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
@@ -6486,6 +6509,7 @@ impl GpuState {
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
 		startup_splash: Option<StartupSplashFrame>,
+		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
 		let t_cpu0 = Instant::now();
 		// 前フレーム以降に完了した GPU タイムスタンプの readback を進める。
@@ -6578,33 +6602,40 @@ impl GpuState {
 				false
 			}
 		};
+		if !window_output_enabled && !use_spout {
+			return None;
+		}
 		let t_surface0 = Instant::now();
-		let frame = match self.surface.get_current_texture() {
-			wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
-			wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-				let s = window.inner_size();
-				self.resize(s.width, s.height);
-				if use_spout {
-					None
-				} else {
-					return None;
+		let frame = if window_output_enabled {
+			match self.surface.get_current_texture() {
+				wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => Some(f),
+				wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+					let s = window.inner_size();
+					self.resize(s.width, s.height);
+					if use_spout {
+						None
+					} else {
+						return None;
+					}
+				}
+				wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+					if use_spout {
+						None
+					} else {
+						return None;
+					}
+				}
+				wgpu::CurrentSurfaceTexture::Validation => {
+					eprintln!("un-avatar-renderer: get_current_texture: validation error");
+					if use_spout {
+						None
+					} else {
+						return None;
+					}
 				}
 			}
-			wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-				if use_spout {
-					None
-				} else {
-					return None;
-				}
-			}
-			wgpu::CurrentSurfaceTexture::Validation => {
-				eprintln!("un-avatar-renderer: get_current_texture: validation error");
-				if use_spout {
-					None
-				} else {
-					return None;
-				}
-			}
+		} else {
+			None
 		};
 		let surface_acquire_ms = t_surface0.elapsed().as_secs_f32() * 1000.0;
 		let swap_view = if let Some(frame) = frame.as_ref() {

@@ -10787,6 +10787,20 @@ impl SceneMeshes {
 		changed
 	}
 
+	pub(crate) fn promote_visible_draw_residency(&mut self) -> Vec<usize> {
+		let mut promoted = Vec::new();
+		for (draw_index, draw) in self.draws.iter_mut().enumerate() {
+			if draw.visible && !draw.asset_resident {
+				draw.asset_resident = true;
+				promoted.push(draw_index);
+			}
+		}
+		if !promoted.is_empty() {
+			self.rebuild_draw_order();
+		}
+		promoted
+	}
+
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
 		self.refresh_asset_group_residency_with_changes(scene, active_asset_groups)
 			.active_draw_state_changed_count
