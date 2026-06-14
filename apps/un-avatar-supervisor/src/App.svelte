@@ -1211,7 +1211,7 @@
 				browserPreviewSettings
 			);
 			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, browserPreviewSettings);
-			message = "Browser preview: Tauri commands are disabled";
+			message = $_("app.tauri_commands_disabled");
 			return;
 		}
 		try {
@@ -2308,7 +2308,9 @@
 				}
 			})
 		);
-		await setAppliedMessage(applied, "Updated camera", (count) => `Updated camera on ${count} renderers`);
+		await setAppliedMessage(applied, $_("renderers.messages.updated_camera"), (count) =>
+			$_("renderers.messages.updated_camera_count", { values: { count } })
+		);
 	}
 
 	async function applyRuntimeProfileUpdates(
@@ -2744,7 +2746,9 @@
 				diagonalFovDeg: null,
 				transition: { duration_ms: 320, easing: "ease_out_cubic", mode: "queue" },
 			});
-			message = `Set camera ${kind} for ${renderer.name}`;
+			message = $_("renderers.messages.camera_orbit_set", {
+				values: { kind: $_(`profiles.editor.options.camera_orbit_${kind}`), name: renderer.name },
+			});
 			await refreshRendererRuntimeView();
 		} catch (error) {
 			message = String(error);
@@ -2759,7 +2763,7 @@
 		busy = true;
 		try {
 			await invoke("save_renderer_camera_to_profile", { id: renderer.id });
-			message = `Saved camera to ${renderer.name} profile`;
+			message = $_("renderers.messages.camera_saved_to_profile", { values: { name: renderer.name } });
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -2773,7 +2777,7 @@
 		if (!hasTauriRuntime()) return;
 		try {
 			await invoke("restore_renderer_camera_from_profile", { id: renderer.id });
-			message = `Restored camera from ${renderer.name} profile`;
+			message = $_("renderers.messages.camera_restored_from_profile", { values: { name: renderer.name } });
 			await refreshRendererRuntimeView();
 		} catch (error) {
 			message = String(error);
@@ -2786,7 +2790,7 @@
 		busy = true;
 		try {
 			await invoke("save_renderer_window_to_profile", { id: renderer.id });
-			message = `Saved window x/y/width/height to ${renderer.name} profile`;
+			message = $_("renderers.messages.window_saved_to_profile", { values: { name: renderer.name } });
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -2800,7 +2804,7 @@
 		if (!hasTauriRuntime()) return;
 		try {
 			await invoke("restore_renderer_window_from_profile", { id: renderer.id });
-			message = `Restored window from ${renderer.name} profile`;
+			message = $_("renderers.messages.window_restored_from_profile", { values: { name: renderer.name } });
 			await refreshRendererRuntimeView();
 		} catch (error) {
 			message = String(error);
@@ -2810,13 +2814,13 @@
 	async function stopRenderer(id: number | null): Promise<void> {
 		if (id == null) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: stop requires Tauri";
+			message = $_("renderers.messages.stop_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			await invoke("stop_renderer", { id });
-			message = "Stop requested";
+			message = $_("renderers.messages.stop_requested");
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -2827,13 +2831,13 @@
 
 	async function stopAll(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: stop all requires Tauri";
+			message = $_("renderers.messages.stop_all_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			await invoke("stop_all_renderers");
-			message = "All renderers stopped";
+			message = $_("renderers.messages.all_stopped");
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
