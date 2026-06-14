@@ -773,7 +773,7 @@ fn parse_outline_policy(value: &str) -> Option<AvatarOutlinePolicy> {
 
 fn parse_outline_kind(value: &str) -> Option<AvatarOutlineKind> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -1227,7 +1227,7 @@ tint = -0.15
 
 [effects.avatar.outline]
 policy = "override"
-type = "mtoon"
+type = "silhouette"
 width = 0.004
 color = [0.02, 0.01, 0.03]
 lighting_mix = 0.25

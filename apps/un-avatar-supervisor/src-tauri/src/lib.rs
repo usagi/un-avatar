@@ -5976,7 +5976,7 @@ fn set_renderer_avatar_outline(
 		.transpose()?;
 	if let Some(outline_type) = outline_type.as_deref() {
 		match outline_type {
-			"mtoon" | "ink" | "brush" | "double" => {}
+			"silhouette" | "mtoon" | "ink" | "brush" | "double" => {}
 			_ => return Err(format!("invalid avatar outline type: {outline_type}")),
 		}
 	}
@@ -8738,7 +8738,7 @@ fn normalize_outline_policy(value: &str) -> Option<String> {
 
 fn normalize_outline_type(value: &str) -> Option<String> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some("mtoon".to_string()),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some("silhouette".to_string()),
 		"ink" => Some("ink".to_string()),
 		"brush" | "hake" | "fude" => Some("brush".to_string()),
 		"double" | "double_outline" => Some("double".to_string()),
@@ -9325,7 +9325,7 @@ fn post_effect_settings(post: Option<ManifestPostEffects>) -> PostEffectSettings
 fn avatar_effect_settings(avatar_effects: Option<ManifestAvatarEffects>) -> AvatarEffectSettings {
 	let mut settings = AvatarEffectSettings {
 		outline_policy: "off".to_string(),
-		outline_type: "mtoon".to_string(),
+		outline_type: "silhouette".to_string(),
 		outline_width: None,
 		outline_color: None,
 		outline_lighting_mix: None,
@@ -9456,7 +9456,7 @@ fn json_outline_policy(value: &serde_json::Value, field: &str) -> Result<String,
 
 fn json_outline_type(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let raw = json_string(value, field)?;
-	normalize_outline_type(&raw).ok_or_else(|| format!("{field} must be one of mtoon, ink, brush, double"))
+	normalize_outline_type(&raw).ok_or_else(|| format!("{field} must be one of silhouette, ink, brush, double"))
 }
 
 fn clamp_rgb(rgb: [f32; 3]) -> [f32; 3] {
@@ -13526,6 +13526,33 @@ id = "test"
 			.and_then(|outline| outline.get("policy"))
 			.and_then(toml::Value::as_str);
 		assert_eq!(policy, Some("off"));
+	}
+
+	#[test]
+	fn avatar_outline_legacy_mtoon_type_migrates_to_silhouette() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.outline.type", serde_json::json!("mtoon")).unwrap();
+
+		let outline_type = manifest
+			.get("effects")
+			.and_then(toml::Value::as_table)
+			.and_then(|effects| effects.get("avatar"))
+			.and_then(toml::Value::as_table)
+			.and_then(|avatar| avatar.get("outline"))
+			.and_then(toml::Value::as_table)
+			.and_then(|outline| outline.get("type"))
+			.and_then(toml::Value::as_str);
+		assert_eq!(outline_type, Some("silhouette"));
 	}
 
 	#[test]

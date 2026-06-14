@@ -907,7 +907,7 @@ fn parse_avatar_outline_policy(value: Option<&str>) -> Option<AvatarOutlinePolic
 
 fn parse_avatar_outline_kind(value: Option<&str>) -> Option<AvatarOutlineKind> {
 	match value?.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -5563,9 +5563,10 @@ mod tests {
 	};
 
 	use super::{
-		compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command, resolve_activate_action_from_menu_path,
-		runtime_dynamics_warnings, start_runtime_status_server, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode,
-		CloseHotkey, RendererControlCommand, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command,
+		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, AvatarOutlineKind,
+		AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand,
+		WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -7054,7 +7055,7 @@ mod tests {
 	#[test]
 	fn parses_json_set_avatar_outline_control_command() {
 		let command = parse_renderer_control_command(
-			r#"{"command":"set_avatar_outline","policy":"override","type":"mtoon","width":0.004,"color":[1.0,0.5,0.25],"lighting_mix":0.1,"roundness":0.75}"#,
+			r#"{"command":"set_avatar_outline","policy":"override","type":"silhouette","width":0.004,"color":[1.0,0.5,0.25],"lighting_mix":0.1,"roundness":0.75}"#,
 		)
 		.unwrap();
 		let RendererControlCommand::SetAvatarOutline {
@@ -7069,11 +7070,28 @@ mod tests {
 			panic!("expected set_avatar_outline command");
 		};
 		assert_eq!(policy.as_deref(), Some("override"));
-		assert_eq!(r#type.as_deref(), Some("mtoon"));
+		assert_eq!(r#type.as_deref(), Some("silhouette"));
 		assert_eq!(width, Some(0.004));
 		assert_eq!(color, Some([1.0, 0.5, 0.25]));
 		assert_eq!(lighting_mix, Some(0.1));
 		assert_eq!(roundness, Some(0.75));
+	}
+
+	#[test]
+	fn avatar_outline_control_accepts_legacy_mtoon_alias() {
+		let current = Default::default();
+		let next = avatar_outline_from_control(
+			current,
+			Some("override".to_string()),
+			Some("mtoon".to_string()),
+			Some(0.004),
+			None,
+			None,
+			None,
+		);
+		assert_eq!(next.policy, AvatarOutlinePolicy::Override);
+		assert_eq!(next.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(next.width, Some(0.004));
 	}
 
 	#[test]
