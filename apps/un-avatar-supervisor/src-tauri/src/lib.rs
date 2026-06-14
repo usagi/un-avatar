@@ -7626,16 +7626,6 @@ fn start_menu_un_avatar_dir() -> Result<PathBuf, String> {
 		.join("UN Avatar"))
 }
 
-fn shortcut_icon_path<'a>(setting: &'a AvatarSetting, renderer_exe: &'a Path) -> Option<PathBuf> {
-	resolve_renderer_window_icon_path(setting)
-		.filter(|path| {
-			path.extension()
-				.and_then(|ext| ext.to_str())
-				.is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
-		})
-		.or_else(|| renderer_exe.is_file().then_some(renderer_exe.to_path_buf()))
-}
-
 fn shortcut_icon_path_for_creation(setting: &AvatarSetting, renderer_exe: &Path) -> Option<PathBuf> {
 	if let Some(icon_path) = resolve_renderer_window_icon_path(setting) {
 		if icon_path
@@ -7738,7 +7728,7 @@ fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings:
 		.map(|setting| LauncherTaskProfile {
 			name: setting.name.clone(),
 			manifest_path: PathBuf::from(&setting.manifest_path),
-			icon: shortcut_icon_path(setting, &renderer_exe),
+			icon: shortcut_icon_path_for_creation(setting, &renderer_exe),
 		})
 		.collect::<Vec<_>>();
 	let tasks = build_launcher_task_specs(supervisor_exe, working_dir, &profiles);
