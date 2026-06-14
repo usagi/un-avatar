@@ -11327,6 +11327,64 @@ mod tests {
 	}
 
 	#[test]
+	fn read_unavatar_metadata_skips_broken_preview_items_without_dropping_valid_samples() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-mixed-preview-validity-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Mixed Preview Validity UNAvatar" }},
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "missing", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 99 }},
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }},
+              {{ "view": "unsupported", "width": 1, "height": 1, "mimeType": "image/svg+xml", "bufferView": 0 }}
+            ]
+          }}
+        ]
+      }}
+    }}
+  }}
+}}"#,
+				preview_png.len(),
+				preview_png.len()
+			),
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 1);
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
 	fn read_unavatar_metadata_reads_all_global_sample_screenshots() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unavatar-metadata-global-samples-{}-{}.unavatar",
