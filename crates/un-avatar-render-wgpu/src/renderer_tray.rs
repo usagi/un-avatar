@@ -386,7 +386,7 @@ fn check_label(label: impl AsRef<str>, checked: bool) -> String {
 fn spout_resolution_label(snapshot: &RendererRuntimeSnapshot) -> String {
 	match (snapshot.spout_width, snapshot.spout_height) {
 		(Some(width), Some(height)) => format!("Spout2 output: {width} x {height}"),
-		_ => "Spout2 output: follows preview size".to_string(),
+		_ => "Spout2 output: renderer default".to_string(),
 	}
 }
 
@@ -749,6 +749,18 @@ mod tests {
 			actions.get("renderer:output:spout_1080p"),
 			Some(RendererTrayAction::SetSpoutResolution { width: 1920, height: 1080 })
 		));
+	}
+
+	#[test]
+	fn spout_resolution_label_does_not_imply_preview_sync() {
+		let mut status = snapshot();
+		status.spout_width = None;
+		status.spout_height = None;
+		assert_eq!(spout_resolution_label(&status), "Spout2 output: renderer default");
+
+		status.spout_width = Some(1280);
+		status.spout_height = Some(720);
+		assert_eq!(spout_resolution_label(&status), "Spout2 output: 1280 x 720");
 	}
 
 	#[test]
