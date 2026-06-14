@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { settingSummary } from "./profileLabels";
+	import { _ } from "svelte-i18n";
+	import { localizedSettingSummary } from "./profileStageSummary";
 	import type { ProfileLaunchSetting } from "./profileTypes";
 
 	export let setting: ProfileLaunchSetting;
@@ -12,6 +13,6 @@
 	<img src={iconSrc(setting.icon_path)} alt="" />
 	<span>
 		<strong>{setting.name}</strong>
-		<small>{settingSummary(setting)}</small>
+		<small>{localizedSettingSummary(setting, $_)}</small>
 	</span>
 </button>

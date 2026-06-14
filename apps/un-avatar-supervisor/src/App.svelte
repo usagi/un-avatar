@@ -100,7 +100,8 @@
 		pickInitialSelectedSettingId,
 	} from "./lib/profileSelection";
 	import { DEFAULT_PROFILE_ICON_SRC, profileIconSrc } from "./lib/profileIcons";
-	import { motionLabel, settingSummary, windowLabel } from "./lib/profileLabels";
+	import { motionLabel, windowLabel } from "./lib/profileLabels";
+	import { localizedSettingSummary } from "./lib/profileStageSummary";
 	import { diagonalFovFromLensMm } from "./lib/profileDiagrams";
 	import { countErrorNotifications, countRendererStates } from "./lib/runtimeState";
 	import {
@@ -3022,7 +3023,7 @@
 									values: { count: launchGroupSettings.length },
 								})
 							: launchTargetSetting
-								? settingSummary(launchTargetSetting)
+								? localizedSettingSummary(launchTargetSetting, $_)
 								: $_("renderers.details.none_selected")}
 						statusForRenderer={(rendererId) => runtimeStatuses[rendererId] ?? null}
 						iconSrcForManifest={(manifestPath) => iconSrc(settingForManifestPath(manifestPath)?.icon_path ?? null)}

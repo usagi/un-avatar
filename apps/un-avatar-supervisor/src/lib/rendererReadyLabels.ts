@@ -1,4 +1,4 @@
-import { settingSummary } from "./profileLabels";
+import { localizedSettingSummary } from "./profileStageSummary";
 import type { ProfileLaunchSetting } from "./profileTypes";
 
 type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
@@ -27,7 +27,7 @@ export function rendererReadySubtitle(
 			values: { count: launchGroupCount },
 		});
 	}
-	return launchTargetSetting ? settingSummary(launchTargetSetting) : translate("renderers.details.none_selected");
+	return launchTargetSetting ? localizedSettingSummary(launchTargetSetting, translate) : translate("renderers.details.none_selected");
 }
 
 export const RENDERER_READY_STATS = [

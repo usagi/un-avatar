@@ -3,7 +3,7 @@
 	import { ChevronDown } from "lucide-svelte";
 	import RendererLaunchGroupMenuItem from "./RendererLaunchGroupMenuItem.svelte";
 	import RendererLaunchProfileMenuItem from "./RendererLaunchProfileMenuItem.svelte";
-	import { settingSummary } from "./profileLabels";
+	import { localizedSettingSummary } from "./profileStageSummary";
 	import type { ProfileLaunchSetting } from "./profileTypes";
 
 	export let launchTargetSetting: ProfileLaunchSetting | null;
@@ -20,10 +20,10 @@
 	$: selectedTargetTitle = launchGroupName
 		? $_("renderers.ready.group_title", {
 				values: { group: launchGroupName },
-			})
-		: launchTargetSetting
-			? settingSummary(launchTargetSetting)
-			: $_("renderers.toolbar.no_manifest_selected");
+		})
+	: launchTargetSetting
+		? localizedSettingSummary(launchTargetSetting, $_)
+		: $_("renderers.toolbar.no_manifest_selected");
 </script>
 
 <div class="launch-target">

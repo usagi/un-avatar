@@ -1,4 +1,4 @@
-import { basename } from "./formatting";
+import { aaModeLabel, basename } from "./formatting";
 import {
 	cameraSummaryLabel,
 	lightingSummaryLabel,
@@ -6,6 +6,7 @@ import {
 	outputLabel,
 	type LookSummaryLabelData,
 	type OutputLabelData,
+	type SettingSummaryLabelData,
 	type WindowLabelData,
 	windowLabel,
 } from "./profileLabels";
@@ -46,6 +47,12 @@ export function localizedLookLabel(setting: LookSummaryLabelData, translate: Tra
 	const intensity = colorKey === "neutral" ? "" : ` ${Math.round(setting.color_look_intensity * 100)}%`;
 	const bloom = setting.bloom_enabled ? translate("profiles.summary.bloom_on") : translate("profiles.summary.bloom_off");
 	return `${color}${intensity} / ${bloom}`;
+}
+
+export function localizedSettingSummary(setting: SettingSummaryLabelData, translate: Translate): string {
+	const parts = [motionLabel(setting), localizedOutputLabel(setting, translate), localizedWindowLabel(setting, translate)];
+	if (setting.aa) parts.push(`AA ${aaModeLabel(setting.aa)}`);
+	return parts.join(" · ");
 }
 
 export function profileStageSummaryItems(setting: ProfileStageSummarySetting, translate: Translate): ProfileSummaryItem[] {
