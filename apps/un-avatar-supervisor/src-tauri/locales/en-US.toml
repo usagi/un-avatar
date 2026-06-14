@@ -1086,6 +1086,20 @@ reset_title = "Clear filter and renderer selection (stderr buffers are not clear
 no_lines_filter = "(no lines match the current filter)"
 card_count = "%{shown}/%{total} lines"
 
+[logs.messages]
+clipboard_write_failed = "Clipboard write failed: %{error}"
+saved = "Saved %{name}"
+open_folder_requires_tauri = "Browser preview: open folder requires Tauri"
+notifications_cleared = "Notifications cleared"
+native_notifications_require_tauri = "Browser preview: native notifications require Tauri"
+native_notification_test_sent = "Native notification test sent"
+diagnostics_export_requires_tauri = "Browser preview: diagnostics export requires Tauri"
+diagnostics_exported = "Diagnostics exported to %{name}"
+diagnostics_compression_requires_tauri = "Browser preview: diagnostics compression requires Tauri"
+diagnostics_archive_created = "Diagnostics archive created: %{name}"
+diagnostics_preview_requires_tauri = "Browser preview: diagnostics preview requires Tauri"
+previewing = "Previewing %{name}"
+
 [errors]
 label = "Error"
 generic = "Error: %{message}"

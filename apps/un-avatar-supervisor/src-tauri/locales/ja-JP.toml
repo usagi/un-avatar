@@ -1090,6 +1090,20 @@ reset_title = "フィルターと Renderer 選択を解除します (stderr バ�
 no_lines_filter = "(現在のフィルターに一致する行はありません)"
 card_count = "%{shown}/%{total} lines"
 
+[logs.messages]
+clipboard_write_failed = "クリップボードへの書き込みに失敗しました: %{error}"
+saved = "%{name} を保存しました"
+open_folder_requires_tauri = "ブラウザプレビューではフォルダーを開けません"
+notifications_cleared = "通知を消去しました"
+native_notifications_require_tauri = "ブラウザプレビューではネイティブ通知に対応していません"
+native_notification_test_sent = "ネイティブ通知のテストを送信しました"
+diagnostics_export_requires_tauri = "ブラウザプレビューでは診断エクスポートに対応していません"
+diagnostics_exported = "%{name} に診断をエクスポートしました"
+diagnostics_compression_requires_tauri = "ブラウザプレビューでは診断圧縮に対応していません"
+diagnostics_archive_created = "診断アーカイブを作成しました: %{name}"
+diagnostics_preview_requires_tauri = "ブラウザプレビューでは診断プレビューに対応していません"
+previewing = "%{name} をプレビューしています"
+
 [errors]
 label = "エラー"
 generic = "エラー: %{message}"

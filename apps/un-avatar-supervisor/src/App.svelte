@@ -1035,7 +1035,7 @@
 		try {
 			await navigator.clipboard.writeText(renderer.stderr_tail.join("\n"));
 		} catch (error) {
-			message = `clipboard write failed: ${String(error)}`;
+			message = $_("logs.messages.clipboard_write_failed", { values: { error: String(error) } });
 		}
 	}
 
@@ -1049,7 +1049,7 @@
 				rendererLogsCopyFlash = false;
 			}, 1500);
 		} catch (error) {
-			message = `clipboard write failed: ${String(error)}`;
+			message = $_("logs.messages.clipboard_write_failed", { values: { error: String(error) } });
 		}
 	}
 
@@ -1061,7 +1061,7 @@
 					content: text,
 					filePrefix: "un-avatar-supervisor",
 				});
-				message = `Saved ${basename(path)}`;
+				message = $_("logs.messages.saved", { values: { name: basename(path) } });
 			} catch (error) {
 				message = String(error);
 			}
@@ -1072,7 +1072,7 @@
 
 	async function revealSupervisorLogsDir(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: open folder requires Tauri";
+			message = $_("logs.messages.open_folder_requires_tauri");
 			return;
 		}
 		try {
@@ -1335,7 +1335,7 @@
 		try {
 			await invoke("clear_app_notifications");
 			notifications = [];
-			message = "Notifications cleared";
+			message = $_("logs.messages.notifications_cleared");
 		} catch (error) {
 			message = String(error);
 		}
@@ -1343,14 +1343,14 @@
 
 	async function sendTestNativeNotification(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: native notifications require Tauri";
+			message = $_("logs.messages.native_notifications_require_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			await invoke("send_test_native_notification");
 			nativeNotificationStatus = await invoke<NativeNotificationStatus>("get_native_notification_status");
-			message = "Native notification test sent";
+			message = $_("logs.messages.native_notification_test_sent");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1360,7 +1360,7 @@
 
 	async function exportDiagnostics(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: diagnostics export requires Tauri";
+			message = $_("logs.messages.diagnostics_export_requires_tauri");
 			return;
 		}
 		try {
@@ -1368,7 +1368,7 @@
 			lastDiagnosticsPath = path;
 			lastDiagnosticsArchivePath = null;
 			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = `Diagnostics exported to ${basename(path)}`;
+			message = $_("logs.messages.diagnostics_exported", { values: { name: basename(path) } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -1377,7 +1377,7 @@
 	async function compressLastDiagnostics(): Promise<void> {
 		if (!lastDiagnosticsPath) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: diagnostics compression requires Tauri";
+			message = $_("logs.messages.diagnostics_compression_requires_tauri");
 			return;
 		}
 		try {
@@ -1386,7 +1386,7 @@
 			});
 			lastDiagnosticsArchivePath = path;
 			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = `Diagnostics archive created: ${basename(path)}`;
+			message = $_("logs.messages.diagnostics_archive_created", { values: { name: basename(path) } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -1402,7 +1402,7 @@
 
 	async function compressDiagnosticsEntry(entry: DiagnosticsExportEntry): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: diagnostics compression requires Tauri";
+			message = $_("logs.messages.diagnostics_compression_requires_tauri");
 			return;
 		}
 		try {
@@ -1412,7 +1412,7 @@
 			lastDiagnosticsPath = entry.path;
 			lastDiagnosticsArchivePath = path;
 			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = `Diagnostics archive created: ${basename(path)}`;
+			message = $_("logs.messages.diagnostics_archive_created", { values: { name: basename(path) } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -1420,7 +1420,7 @@
 
 	async function previewDiagnosticsEntry(entry: DiagnosticsExportEntry): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: diagnostics preview requires Tauri";
+			message = $_("logs.messages.diagnostics_preview_requires_tauri");
 			return;
 		}
 		try {
@@ -1428,7 +1428,7 @@
 				path: entry.path,
 			});
 			diagnosticsPreviewTitle = basename(entry.path);
-			message = `Previewing ${basename(entry.path)}`;
+			message = $_("logs.messages.previewing", { values: { name: basename(entry.path) } });
 		} catch (error) {
 			message = String(error);
 		}
