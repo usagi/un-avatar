@@ -160,6 +160,7 @@ active_label = "Active:"
 active_unset = "-"
 
 [profiles.action_groups]
+next_launch = "Next Launch Prep"
 prepare = "Prepare Daily Use"
 prepare_hint = "Warm cache, shortcuts, and launcher setup make this profile easy to start directly next time."
 live_renderer = "Live Renderer"
