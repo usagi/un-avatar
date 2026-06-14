@@ -11934,6 +11934,32 @@ mod tests {
 	}
 
 	#[test]
+	fn supervisor_permission_allows_profile_operation_workflow() {
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		for command in [
+			"prewarm_renderer_scene_cache",
+			"create_renderer_desktop_shortcut",
+			"create_taskbar_launcher_shortcuts",
+			"launch_renderer",
+			"activate_renderer_window",
+			"capture_renderer_screenshot",
+		] {
+			assert!(
+				permissions.contains(&format!("\"{command}\"")),
+				"supervisor permission must allow {command} for profile operation workflow"
+			);
+		}
+	}
+
+	#[test]
 	fn static_profile_section_nav_and_body_order_match() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");
