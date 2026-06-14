@@ -4996,15 +4996,15 @@ fn apply_window_setting_value(
 		}
 		"window.decorations" => {
 			let decorations = json_bool(&value, field)?;
-			set_root_bool(manifest, "decorations", decorations)?;
+			remove_root_key(manifest, "decorations")?;
 			set_nested_bool(manifest, &["window", "decorations"], decorations)
 		}
 		"window.transparent" => {
 			let transparent = json_bool(&value, field)?;
-			set_root_bool(manifest, "transparent", transparent)?;
+			remove_root_key(manifest, "transparent")?;
 			set_nested_bool(manifest, &["window", "transparent"], transparent)?;
 			if !transparent {
-				set_root_bool(manifest, "input_passthrough", false)?;
+				remove_root_key(manifest, "input_passthrough")?;
 				set_nested_bool(manifest, &["window", "input_passthrough"], false)?;
 			}
 			Ok(())
@@ -5014,7 +5014,7 @@ fn apply_window_setting_value(
 			if input_passthrough && !setting.transparent {
 				return Err("Click-through requires Transparent to be enabled".to_string());
 			}
-			set_root_bool(manifest, "input_passthrough", input_passthrough)?;
+			remove_root_key(manifest, "input_passthrough")?;
 			set_nested_bool(manifest, &["window", "input_passthrough"], input_passthrough)
 		}
 		"window.always_on_top" => set_nested_json_bool(manifest, &["window", "always_on_top"], &value, field),
@@ -9523,12 +9523,6 @@ fn set_optional_root_string(manifest: &mut toml::Value, key: &str, value: String
 	}
 }
 
-fn set_root_bool(manifest: &mut toml::Value, key: &str, value: bool) -> Result<(), String> {
-	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
-	table.insert(key.to_string(), toml::Value::Boolean(value));
-	Ok(())
-}
-
 fn set_root_string(manifest: &mut toml::Value, key: &str, value: String) -> Result<(), String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	table.insert(key.to_string(), toml::Value::String(value));
@@ -12305,6 +12299,52 @@ id = "test"
 		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
 		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
 		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
+	fn window_setting_edits_write_v2_window_values_and_remove_legacy_roots() {
+		let seed_setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let transparent_setting = AvatarSetting {
+			transparent: true,
+			..seed_setting
+		};
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+transparent = false
+input_passthrough = false
+decorations = true
+
+[profile]
+id = "test"
+
+[window]
+transparent = false
+input_passthrough = false
+decorations = true
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.transparent", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.input_passthrough", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.decorations", serde_json::json!(false)).unwrap();
+
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("transparent").is_none());
+		assert!(table.get("input_passthrough").is_none());
+		assert!(table.get("decorations").is_none());
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("decorations").and_then(toml::Value::as_bool), Some(false));
+
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.transparent", serde_json::json!(false)).unwrap();
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("input_passthrough").is_none());
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(false));
 	}
 
 	#[test]
