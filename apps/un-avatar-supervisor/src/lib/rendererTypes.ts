@@ -598,7 +598,7 @@ export type RendererOverviewData = MotionLabelData & Pick<RendererInstance, "nam
 
 export type RendererOverviewRuntimeStatus = RuntimeConnectionStatusLabelData &
 	RuntimeStartupStatusLabelData &
-	Pick<RendererRuntimeStatus, "control_capabilities" | "note">;
+	Pick<RendererRuntimeStatus, "note">;
 
 export type RendererOverviewStatus = RendererOverviewRuntimeStatus &
 	RuntimeQualityStatusLabelData &
