@@ -1,4 +1,4 @@
-import { aaModeLabel, formatFixed, formatPercent, textureModeLabel } from "./formatting";
+import { formatFixed } from "./formatting";
 import { lensMmFromDiagonalFov } from "./profileDiagrams";
 
 export type MotionLabelData = {
@@ -79,25 +79,10 @@ export function cameraSummaryLabel(setting: CameraSummaryLabelData): string {
 	return `${formatFixed(lens, 0)}mm / ${formatFixed(radius, 0)}mm`;
 }
 
-export function lookSummaryLabel(setting: LookSummaryLabelData): string {
-	const color =
-		setting.color_look === "neutral" || setting.color_look_intensity <= 0
-			? "Neutral"
-			: `${textureModeLabel(setting.color_look)} ${formatPercent(setting.color_look_intensity)}%`;
-	const bloom = setting.bloom_enabled ? "Bloom" : "No bloom";
-	return `${color} / ${bloom}`;
-}
-
 export function lightingSummaryLabel(setting: LightingSummaryLabelData): string {
 	const env = setting.lighting_environment_enabled ? `Env ${formatFixed(setting.lighting_environment_intensity, 2)}` : "Env off";
 	const dir = setting.lighting_directional_enabled
 		? `Dir ${setting.lighting_directional_follow_camera_yaw ? "cam az" : "world"} ${formatFixed(setting.lighting_directional_intensity, 2)}`
 		: "Dir off";
 	return `${env} / ${dir}`;
-}
-
-export function settingSummary(setting: SettingSummaryLabelData): string {
-	const parts = [motionLabel(setting), outputLabel(setting), windowLabel(setting)];
-	if (setting.aa) parts.push(`AA ${aaModeLabel(setting.aa)}`);
-	return parts.join(" · ");
 }
