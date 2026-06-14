@@ -3311,15 +3311,26 @@ fn unavatar_sample_screenshot_images(
 	source: &GltfMetadataSource,
 ) -> Vec<UnavatarPreviewImage> {
 	let Some(images) = root.get("images").and_then(serde_json::Value::as_array) else {
-		return Vec::new();
+		return unavatar_direct_sample_screenshot_images(unavatar, root, source);
 	};
 	let mut out = Vec::new();
 	let mut seen = BTreeSet::new();
 	for item in unavatar_sample_screenshot_items(unavatar) {
+		if let Some(buffer_view) = item.get("bufferView").and_then(serde_json::Value::as_u64) {
+			let key = format!("bufferView:{buffer_view}");
+			if !seen.insert(key) {
+				continue;
+			}
+			if let Some(image) = unavatar_preview_image_from_buffer_view(item, root, source) {
+				out.push(image);
+			}
+			continue;
+		}
 		let Some(index) = unavatar_preview_image_index_from_object(item) else {
 			continue;
 		};
-		if !seen.insert(index) {
+		let key = format!("image:{index}");
+		if !seen.insert(key) {
 			continue;
 		}
 		let Some(image) = images.get(index as usize) else {
@@ -3347,9 +3358,55 @@ fn unavatar_sample_screenshot_images(
 	out
 }
 
+fn unavatar_direct_sample_screenshot_images(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Vec<UnavatarPreviewImage> {
+	let mut out = Vec::new();
+	let mut seen = BTreeSet::new();
+	for item in unavatar_sample_screenshot_items(unavatar) {
+		let Some(buffer_view) = item.get("bufferView").and_then(serde_json::Value::as_u64) else {
+			continue;
+		};
+		if !seen.insert(buffer_view) {
+			continue;
+		}
+		if let Some(image) = unavatar_preview_image_from_buffer_view(item, root, source) {
+			out.push(image);
+		}
+	}
+	out
+}
+
+fn unavatar_preview_image_from_buffer_view(
+	item: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<UnavatarPreviewImage> {
+	let buffer_view = item.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
+	let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
+	let mime = item
+		.get("mimeType")
+		.and_then(serde_json::Value::as_str)
+		.and_then(supported_image_mime_type)?;
+	Some(UnavatarPreviewImage {
+		view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+		width: item
+			.get("width")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		height: item
+			.get("height")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+	})
+}
+
 fn unavatar_sample_screenshot_items(unavatar: &serde_json::Value) -> Vec<&serde_json::Value> {
 	let mut out = Vec::new();
-	for key in ["sampleScreenshots", "screenshots", "previews"] {
+	for key in ["previewImages", "sampleScreenshots", "screenshots", "previews"] {
 		if let Some(items) = unavatar.get(key).and_then(serde_json::Value::as_array) {
 			out.extend(items);
 		}
@@ -10903,6 +10960,61 @@ mod tests {
 		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("side"));
 		assert_eq!(metadata.preview_images[0].width, Some(800));
 		assert_eq!(metadata.preview_images[1].height, Some(800));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_global_direct_preview_images() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-global-direct-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Direct Samples UNAvatar" }},
+      "previewImages": [
+        {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }},
+        {{ "view": "back", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 1 }}
+      ]
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len
+			),
+			&bin,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_images.len(), 2);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("back"));
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
 		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
 	}
