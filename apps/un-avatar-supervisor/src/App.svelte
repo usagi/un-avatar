@@ -100,7 +100,7 @@
 		pickInitialSelectedSettingId,
 	} from "./lib/profileSelection";
 	import { DEFAULT_PROFILE_ICON_SRC, profileIconSrc } from "./lib/profileIcons";
-	import { motionLabel, windowLabel } from "./lib/profileLabels";
+	import { motionLabel } from "./lib/profileLabels";
 	import { localizedSettingSummary } from "./lib/profileStageSummary";
 	import { diagonalFovFromLensMm } from "./lib/profileDiagrams";
 	import { countErrorNotifications, countRendererStates } from "./lib/runtimeState";

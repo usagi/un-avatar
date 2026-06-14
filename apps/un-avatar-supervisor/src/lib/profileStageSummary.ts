@@ -3,12 +3,10 @@ import {
 	cameraSummaryLabel,
 	lightingSummaryLabel,
 	motionLabel,
-	outputLabel,
 	type LookSummaryLabelData,
 	type OutputLabelData,
 	type SettingSummaryLabelData,
 	type WindowLabelData,
-	windowLabel,
 } from "./profileLabels";
 import type { ProfileSummaryItem } from "./profileSummary";
 import { qualitySummaryLabel, type RuntimeOutputStatusData } from "./runtimeLabels";
@@ -16,11 +14,11 @@ import { qualitySummaryLabel, type RuntimeOutputStatusData } from "./runtimeLabe
 type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
 
 export type ProfileStageSummarySetting = Parameters<typeof motionLabel>[0] &
-	Parameters<typeof outputLabel>[0] &
+	OutputLabelData &
 	Parameters<typeof qualitySummaryLabel>[0] &
 	Parameters<typeof lightingSummaryLabel>[0] &
 	LookSummaryLabelData &
-	Parameters<typeof windowLabel>[0] &
+	WindowLabelData &
 	Parameters<typeof cameraSummaryLabel>[0] & {
 		avatar_path: string | null;
 	};

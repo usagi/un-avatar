@@ -59,20 +59,6 @@ export function motionLabel(setting: MotionLabelData): string {
 	return parts.length > 0 ? parts.join(" + ") : "None";
 }
 
-export function outputLabel(setting: OutputLabelData): string {
-	if (!setting.spout_enabled) return "Window Preview";
-	const mode = setting.minimized ? "Spout2 Only" : "Spout2 + Preview";
-	const size = setting.spout_width && setting.spout_height ? ` / ${setting.spout_width} x ${setting.spout_height}` : "";
-	const name = setting.spout_name ? ` / ${setting.spout_name}` : "";
-	return `${mode}${size}${name}`;
-}
-
-export function windowLabel(setting: WindowLabelData): string {
-	const level = setting.always_on_top ? "Topmost" : "Normal";
-	const passthrough = setting.input_passthrough ? " / Click-through" : "";
-	return `${setting.decorations ? "Framed" : "Borderless"} / ${setting.transparent ? "Transparent" : "Opaque"} / ${level}${passthrough}`;
-}
-
 export function cameraSummaryLabel(setting: CameraSummaryLabelData): string {
 	const lens = lensMmFromDiagonalFov(setting.camera_diagonal_fov_deg ?? 35);
 	const radius = (setting.camera_radius ?? 1.5) * 1000;
