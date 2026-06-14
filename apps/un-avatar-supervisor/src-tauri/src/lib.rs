@@ -3607,7 +3607,7 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 	if !resolved.is_file() {
 		return Err(format!("avatar file not found: {}", resolved.display()));
 	}
-	let root = un_avatar_io_vrm::gltf_root_json_from_path(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
 	let Some(wardrobe) = root
 		.get("extensions")
 		.and_then(|extensions| extensions.get("UN_avatar"))
@@ -12372,10 +12372,6 @@ id = "test"
 		let _ = fs::remove_dir_all(&dir);
 	}
 
-	fn write_glb_with_json_and_bin(path: &Path, json: &str, bin_len: usize) {
-		write_glb_with_json_and_bin_bytes(path, json, &vec![0u8; bin_len]);
-	}
-
 	fn write_glb_with_json_and_bin_bytes(path: &Path, json: &str, bin_bytes: &[u8]) {
 		let mut json_bytes = json.as_bytes().to_vec();
 		while !json_bytes.len().is_multiple_of(4) {
@@ -12424,7 +12420,7 @@ id = "test"
 		let _ = fs::remove_dir_all(&dir);
 		fs::create_dir_all(&dir).unwrap();
 		let avatar_path = dir.join("avatar.unavatar");
-		write_glb_with_json_and_bin(
+		write_glb_with_declared_bin_len_and_prefix(
 			&avatar_path,
 			r#"{
 				"asset": {"version": "2.0"},
@@ -12440,7 +12436,8 @@ id = "test"
 					}
 				}
 			}"#,
-			4 * 1024 * 1024,
+			crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+			&[],
 		);
 
 		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
