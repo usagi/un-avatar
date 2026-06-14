@@ -29,6 +29,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Open Supervisor carries the Renderer profile manifest when available. A cold Supervisor start should select that profile; an already-running Supervisor should receive an event and switch the Profiles view to the same profile without launching another Renderer.
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
 - Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
+- Wardrobe candidates and non-wardrobe VRC menu action candidates are both sourced from normalized runtime status. The tray may group them separately, but it must not invent model-specific entries or require Supervisor to stay resident for basic menu operation.
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 
