@@ -31,7 +31,7 @@
 			? $_("profiles.actions.cache_refresh_needed")
 			: $_("profiles.actions.cache_not_ready");
 	$: sceneCacheButtonLabel = sceneCacheReady
-		? $_("profiles.actions.cache_ready")
+		? $_("profiles.actions.warm_cache_again")
 		: sceneCacheNeedsRefresh
 			? $_("profiles.actions.warm_cache_again")
 			: $_("profiles.actions.warm_cache");
