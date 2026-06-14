@@ -846,6 +846,18 @@ small,
 	padding: 0 10px;
 }
 
+.profile-stage-action-buttons > .profile-cache-cta {
+	border-color: color-mix(in srgb, var(--accent-cool) 54%, var(--border));
+	background: color-mix(in srgb, var(--accent-cool) 16%, var(--surface));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-cool) 14%, transparent) inset;
+	color: var(--text);
+}
+
+.profile-stage-action-buttons > .profile-cache-cta:hover:not(:disabled) {
+	border-color: color-mix(in srgb, var(--accent-cool) 70%, var(--border));
+	background: color-mix(in srgb, var(--accent-cool) 22%, var(--surface));
+}
+
 .profile-pending-action-slot {
 	display: inline-flex;
 	align-items: center;

@@ -76,18 +76,19 @@
 		</div>
 		{#if liveRenderer}
 			<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.live_renderer")}>
-				<button type="button" class="profile-stage-primary-action" onclick={() => onViewRenderer(liveRenderer.id)}
-					><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
-				>
 				<button
 					type="button"
 					class:profile-stage-primary-action={!sceneCacheReady}
+					class:profile-cache-cta={!sceneCacheReady}
 					disabled={busy}
 					data-hint={sceneCacheActionHint}
 					title={sceneCacheActionHint}
 					aria-label={sceneCacheActionLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
 					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
+				>
+				<button type="button" class="profile-stage-primary-action" onclick={() => onViewRenderer(liveRenderer.id)}
+					><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
 				>
 				<button
 					type="button"
@@ -124,21 +125,22 @@
 			<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.launch")}>
 				<button
 					type="button"
-					class="profile-stage-primary-action"
-					disabled={busy}
-					data-hint={$_("profiles.actions.quick_run_hint")}
-					title={$_("profiles.actions.quick_run_hint")}
-					onclick={() => onLaunchProfile(settingId)}><Play size={14} /><span>{$_("profiles.actions.quick_run")}</span></button
-				>
-				<button
-					type="button"
 					class:profile-stage-primary-action={!sceneCacheReady}
+					class:profile-cache-cta={!sceneCacheReady}
 					disabled={busy}
 					data-hint={sceneCacheActionHint}
 					title={sceneCacheActionHint}
 					aria-label={sceneCacheActionLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
 					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
+				>
+				<button
+					type="button"
+					class="profile-stage-primary-action"
+					disabled={busy}
+					data-hint={$_("profiles.actions.quick_run_hint")}
+					title={$_("profiles.actions.quick_run_hint")}
+					onclick={() => onLaunchProfile(settingId)}><Play size={14} /><span>{$_("profiles.actions.quick_run")}</span></button
 				>
 				<button
 					type="button"
