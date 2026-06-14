@@ -3,16 +3,16 @@
 	import type { RendererOutputData, RendererOutputStatus } from "./rendererControlTypes";
 	import type { RendererPaneActions } from "./rendererPaneActions";
 
-	export let renderer: Pick<RendererOutputData, "spout_enabled">;
+	export let renderer: Pick<RendererOutputData, "spout_enabled" | "minimized">;
 	export let runtimeStatus: RendererOutputStatus | null;
 	export let disabled = false;
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 
 	$: spoutDisabled = disabled || (runtimeStatus?.connected === true && !runtimeStatus.spout_available);
-	$: windowPreviewActive = runtimeStatus?.connected ? !runtimeStatus.spout_enabled && !runtimeStatus.minimized : !renderer.spout_enabled;
-	$: spoutPreviewActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && !runtimeStatus.minimized : false;
-	$: spoutOnlyActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && Boolean(runtimeStatus.minimized) : false;
+	$: windowPreviewActive = runtimeStatus?.connected ? !runtimeStatus.spout_enabled && !runtimeStatus.minimized : !renderer.spout_enabled && !renderer.minimized;
+	$: spoutPreviewActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && !runtimeStatus.minimized : renderer.spout_enabled && !renderer.minimized;
+	$: spoutOnlyActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && Boolean(runtimeStatus.minimized) : renderer.spout_enabled && Boolean(renderer.minimized);
 
 	async function setWindowPreview(): Promise<void> {
 		await onSetSpoutOutput(false, null, "window preview");
