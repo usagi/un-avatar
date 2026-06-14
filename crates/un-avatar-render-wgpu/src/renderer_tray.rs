@@ -464,6 +464,8 @@ fn tray_output_mode_label(snapshot: &RendererRuntimeSnapshot) -> &'static str {
 		"Spout2 Only"
 	} else if snapshot.spout_enabled {
 		"Spout2 + Preview"
+	} else if snapshot.minimized {
+		"Window / Minimized"
 	} else {
 		"Window Preview"
 	}
@@ -863,7 +865,11 @@ mod tests {
 		opts.title = "mizuki-split".to_string();
 		let mut status = snapshot();
 		status.spout_enabled = false;
+		status.minimized = false;
 		assert!(tray_tooltip(&opts, &status).contains("Window Preview"));
+
+		status.minimized = true;
+		assert!(tray_tooltip(&opts, &status).contains("Window / Minimized"));
 
 		status.spout_enabled = true;
 		status.minimized = false;
