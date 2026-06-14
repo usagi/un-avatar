@@ -40,7 +40,7 @@
 			><FolderOpen size={14} />{$_("profiles.actions.open_folder")}</button
 		>
 	</div>
-	<div class="runtime-summary-grid renderer-ready-stats" aria-label="Launch target summary">
+	<div class="runtime-summary-grid renderer-ready-stats" aria-label={$_("renderers.ready.stats_aria")}>
 		{#each RENDERER_READY_STATS as stat}
 			<span>
 				<small>{$_(stat.labelKey)}</small>

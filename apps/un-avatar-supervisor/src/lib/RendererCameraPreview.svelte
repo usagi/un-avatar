@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { _ } from "svelte-i18n";
 	import CameraDiagramPreview from "./CameraDiagramPreview.svelte";
 	import { formatFixed } from "./formatting";
 	import { cameraDiagram } from "./profileDiagrams";
@@ -22,8 +23,8 @@
 <CameraDiagramPreview
 	{diagram}
 	className="runtime-camera-diagram"
-	ariaLabel="Runtime camera preview"
-	targetYLabel={`Target Y ${formatFixed(camera.target[1])} m`}
-	radiusLabel={`Radius ${diagram.radiusLabel}`}
+	ariaLabel={$_("profiles.editor.runtime_camera_preview_aria")}
+	targetYLabel={`${$_("renderers.controls.camera_target")} Y ${formatFixed(camera.target[1])} m`}
+	radiusLabel={`${$_("renderers.controls.camera_radius")} ${diagram.radiusLabel}`}
 	fovLabel={`FOV ${diagram.fovLabel}`}
 />

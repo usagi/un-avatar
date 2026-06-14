@@ -29,7 +29,7 @@
 	$: summaryItems = profileStageSummaryItems(setting, $_);
 </script>
 
-<section class="profile-stage" aria-label="Selected profile summary">
+<section class="profile-stage" aria-label={$_("profiles.selected_summary")}>
 	<ProfileStageIdentity {iconUrl} {liveRendererCount} />
 	<div class="profile-stage-main">
 		<div class="stage-title-row">
