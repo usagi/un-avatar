@@ -23,12 +23,12 @@
 	}
 
 	const presets = [
-		{ value: "neutral", label: "Neutral", intensity: 0 },
-		{ value: "warm", label: "Warm", intensity: 0.45 },
-		{ value: "cool", label: "Cool", intensity: 0.45 },
-		{ value: "film", label: "Film", intensity: 0.5 },
-		{ value: "soft", label: "Soft", intensity: 0.4 },
-		{ value: "pop", label: "Pop", intensity: 0.45 },
+		{ value: "neutral", labelKey: "profiles.editor.color_look_neutral", intensity: 0 },
+		{ value: "warm", labelKey: "profiles.editor.color_look_warm", intensity: 0.45 },
+		{ value: "cool", labelKey: "profiles.editor.color_look_cool", intensity: 0.45 },
+		{ value: "film", labelKey: "profiles.editor.color_look_film", intensity: 0.5 },
+		{ value: "soft", labelKey: "profiles.editor.color_look_soft", intensity: 0.4 },
+		{ value: "pop", labelKey: "profiles.editor.color_look_pop", intensity: 0.45 },
 	] as const;
 </script>
 
@@ -41,7 +41,7 @@
 			aria-pressed={setting.color_look === preset.value}
 			onclick={() => applyColorPreset(preset.value, preset.intensity)}
 		>
-			{preset.label}
+			{$_(preset.labelKey)}
 		</button>
 	{/each}
 </div>

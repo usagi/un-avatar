@@ -165,12 +165,12 @@ export const COLOR_BASIC_RANGE_FIELDS = [
 ] as const;
 
 export const COLOR_LOOK_OPTIONS = [
-	["neutral", "Neutral"],
-	["warm", "Warm"],
-	["cool", "Cool"],
-	["film", "Film"],
-	["soft", "Soft"],
-	["pop", "Pop"],
+	["neutral", "profiles.editor.color_look_neutral"],
+	["warm", "profiles.editor.color_look_warm"],
+	["cool", "profiles.editor.color_look_cool"],
+	["film", "profiles.editor.color_look_film"],
+	["soft", "profiles.editor.color_look_soft"],
+	["pop", "profiles.editor.color_look_pop"],
 ] as const;
 
 export const BLOOM_QUALITY_OPTIONS = [
