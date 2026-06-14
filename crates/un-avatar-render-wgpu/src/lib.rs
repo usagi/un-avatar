@@ -97,6 +97,8 @@ const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
 const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 #[cfg(windows)]
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
+const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -1886,8 +1888,9 @@ impl AvatarApp {
 			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
 			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
-			let refresh_runtime_metadata = runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(30);
-			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(30) {
+			let refresh_runtime_metadata =
+				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
+			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
 				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
 			}
 			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);

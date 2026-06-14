@@ -610,6 +610,8 @@ struct DiagnoseDynamicsSummary {
 	source_posing_enabled_count: usize,
 	source_interaction_parameter_count: usize,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
+	colliders: Vec<DiagnoseDynamicsColliderSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contacts: Vec<DiagnoseDynamicsContactSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	contact_parameter_declarations: Vec<DiagnoseContactParameterDeclarationSummary>,
@@ -623,6 +625,23 @@ struct DiagnoseDynamicsSummary {
 	interaction_hooks: Vec<DiagnoseDynamicsInteractionHookSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
+}
+
+#[derive(Serialize)]
+struct DiagnoseDynamicsColliderSummary {
+	index: usize,
+	source_kind: UnaDynamicsSourceKind,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	source_id: String,
+	node: usize,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	node_path: Option<String>,
+	shape: un_avatar_core::UnaDynamicsColliderShape,
+	radius: f32,
+	height: f32,
+	position: [f32; 3],
+	rotation: [f32; 4],
+	inside_bounds: bool,
 }
 
 #[derive(Default)]
@@ -2288,6 +2307,32 @@ fn dynamics_interaction_hook_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamic
 				suffix_parameters,
 				metadata_only: true,
 			})
+		})
+		.collect()
+}
+
+fn dynamics_collider_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsColliderSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	runtime
+		.dynamics
+		.colliders()
+		.enumerate()
+		.map(|(index, collider)| DiagnoseDynamicsColliderSummary {
+			index,
+			source_kind: collider.source_kind,
+			source_id: collider.source_id.clone(),
+			node: collider.node,
+			node_path: node_paths_by_index.get(collider.node).cloned().flatten(),
+			shape: collider.shape.clone(),
+			radius: collider.radius,
+			height: collider.height,
+			position: collider.position,
+			rotation: collider.rotation,
+			inside_bounds: collider.inside_bounds,
 		})
 		.collect()
 }
@@ -4514,6 +4559,7 @@ fn build_diagnose_report(
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
+	let dynamics_colliders = dynamics_collider_summaries(&doc);
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
 	let dynamics_contact_parameter_declarations = dynamics_contact_parameter_declaration_summaries(&doc);
 	let dynamics_contact_probes = dynamics_contact_probe_summaries(&doc);
@@ -4699,6 +4745,7 @@ fn build_diagnose_report(
 		source_grabbing_enabled_count: dynamics_source_features.grabbing_enabled_count,
 		source_posing_enabled_count: dynamics_source_features.posing_enabled_count,
 		source_interaction_parameter_count: dynamics_source_features.interaction_parameter_count,
+		colliders: dynamics_colliders,
 		contacts: dynamics_contacts,
 		contact_parameter_declarations: dynamics_contact_parameter_declarations,
 		contact_probes: dynamics_contact_probes,
@@ -5644,6 +5691,26 @@ fn run_diagnose(
 		report.dynamics.source_grabbing_enabled_count,
 		report.dynamics.source_posing_enabled_count,
 		report.dynamics.source_interaction_parameter_count
+	);
+	for collider in report.dynamics.colliders.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+		println!(
+			"  dynamics_collider[{}]: source={:?} id={:?} node={:?} shape={:?} radius={} height={} position={:?} rotation={:?} inside_bounds={}",
+			collider.index,
+			collider.source_kind,
+			collider.source_id,
+			collider.node_path.as_deref().unwrap_or("#"),
+			collider.shape,
+			collider.radius,
+			collider.height,
+			collider.position,
+			collider.rotation,
+			collider.inside_bounds
+		);
+	}
+	print_omitted_text_items(
+		"dynamics_collider",
+		report.dynamics.colliders.len(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
 	);
 	for group in report.dynamics.groups.iter().take(DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT) {
 		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {

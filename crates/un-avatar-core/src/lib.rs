@@ -1414,6 +1414,8 @@ pub enum UnaDynamicsColliderShape {
 pub struct UnaDynamicsCollider {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub source_id: String,
 	pub node: usize,
 	#[serde(default)]
 	pub shape: UnaDynamicsColliderShape,

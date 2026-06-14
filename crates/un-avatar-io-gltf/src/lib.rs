@@ -2163,6 +2163,7 @@ fn modular_avatar_global_colliders(
 		}
 		colliders.push(UnaDynamicsCollider {
 			source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+			source_id: String::new(),
 			node,
 			shape: UnaDynamicsColliderShape::Capsule,
 			radius,
@@ -2247,6 +2248,7 @@ fn unity_quat_to_unavatar_runtime(value: [f32; 4]) -> [f32; 4] {
 fn unavatar_dynamics_colliders(
 	value: &Value,
 	source_kind: UnaDynamicsSourceKind,
+	source_id: &str,
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
@@ -2260,7 +2262,7 @@ fn unavatar_dynamics_colliders(
 	let Some(colliders) = colliders else {
 		return Vec::new();
 	};
-	unavatar_dynamics_collider_array(colliders, source_kind, node_ids, registry_paths, paths, normalized_paths)
+	unavatar_dynamics_collider_array(colliders, source_kind, source_id, node_ids, registry_paths, paths, normalized_paths)
 }
 
 fn unavatar_dynamics_global_colliders(
@@ -2276,6 +2278,7 @@ fn unavatar_dynamics_global_colliders(
 	unavatar_dynamics_collider_array(
 		colliders,
 		UnaDynamicsSourceKind::Unknown,
+		"",
 		node_ids,
 		registry_paths,
 		paths,
@@ -2286,6 +2289,7 @@ fn unavatar_dynamics_global_colliders(
 fn unavatar_dynamics_collider_array(
 	colliders: &[Value],
 	source_kind: UnaDynamicsSourceKind,
+	source_id: &str,
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
@@ -2310,6 +2314,7 @@ fn unavatar_dynamics_collider_array(
 			}
 			Some(UnaDynamicsCollider {
 				source_kind,
+				source_id: source_id.to_string(),
 				node,
 				shape: unavatar_dynamics_collider_shape(collider),
 				radius,
@@ -2796,6 +2801,7 @@ fn unavatar_dynamics_settings(
 		colliders.extend(unavatar_dynamics_colliders(
 			item,
 			source_kind,
+			&source_id,
 			&node_ids,
 			&registry_paths,
 			&paths,

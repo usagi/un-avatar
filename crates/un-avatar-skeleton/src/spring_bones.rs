@@ -37,7 +37,9 @@ use un_avatar_core::{
 	UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings,
 };
 
-use crate::bone_colliders::{push_out_of_world_colliders, resolve_world_colliders, BoneColliderPrimitive, WorldBoneColliderPrimitive};
+use crate::bone_colliders::{
+	push_out_of_world_colliders, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive,
+};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -345,7 +347,9 @@ pub struct SpringBoneSimulator {
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
 	bone_colliders: Vec<BoneColliderPrimitive>,
+	bone_collider_source_ids: Vec<String>,
 	world_colliders: Vec<WorldBoneColliderPrimitive>,
+	group_world_colliders: Vec<WorldBoneColliderPrimitive>,
 	physics: SpringBonePhysicsConfig,
 }
 
@@ -371,7 +375,9 @@ impl Default for SpringBoneSimulator {
 			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
+			bone_collider_source_ids: Vec::new(),
 			world_colliders: Vec::new(),
+			group_world_colliders: Vec::new(),
 			physics: SpringBonePhysicsConfig::default().normalized(),
 		}
 	}
@@ -558,6 +564,22 @@ impl SpringBoneSimulator {
 		bone_colliders: Vec<BoneColliderPrimitive>,
 		physics: SpringBonePhysicsConfig,
 	) -> Option<Self> {
+		let colliders = bone_colliders
+			.into_iter()
+			.map(|primitive| RuntimeBoneColliderPrimitive {
+				primitive,
+				source_id: String::new(),
+			})
+			.collect();
+		Self::new_with_runtime_dynamics_and_collider_sources(scene, dynamics, colliders, physics)
+	}
+
+	pub fn new_with_runtime_dynamics_and_collider_sources(
+		scene: &UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		bone_colliders: Vec<RuntimeBoneColliderPrimitive>,
+		physics: SpringBonePhysicsConfig,
+	) -> Option<Self> {
 		let groups = dynamics.dynamics_groups().collect::<Vec<_>>();
 		if groups.is_empty() {
 			return None;
@@ -678,6 +700,10 @@ impl SpringBoneSimulator {
 		if runtimes.iter().all(|r| r.is_none()) {
 			None
 		} else {
+			let (bone_colliders, bone_collider_source_ids): (Vec<_>, Vec<_>) = bone_colliders
+				.into_iter()
+				.map(|collider| (collider.primitive, collider.source_id))
+				.unzip();
 			Some(Self {
 				runtimes,
 				active_runtime_indices,
@@ -686,7 +712,9 @@ impl SpringBoneSimulator {
 				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
+				bone_collider_source_ids,
 				world_colliders: Vec::new(),
+				group_world_colliders: Vec::new(),
 				physics,
 			})
 		}
@@ -751,13 +779,19 @@ impl SpringBoneSimulator {
 				if !g.effective_enabled {
 					continue;
 				}
+				let group_world_colliders = select_group_world_colliders(
+					&self.world_colliders,
+					&self.bone_collider_source_ids,
+					&g.source_id,
+					&mut self.group_world_colliders,
+				);
 				for _ in 0..substeps {
 					step_group_solver::<false>(
 						scene,
 						g,
 						rt,
 						&mut self.world_scratch,
-						&self.world_colliders,
+						group_world_colliders,
 						sub_dt,
 						profile.as_deref_mut(),
 					);
@@ -770,6 +804,12 @@ impl SpringBoneSimulator {
 				if !g.effective_enabled {
 					continue;
 				}
+				let group_world_colliders = select_group_world_colliders(
+					&self.world_colliders,
+					&self.bone_collider_source_ids,
+					&g.source_id,
+					&mut self.group_world_colliders,
+				);
 				for _ in 0..substeps {
 					rt.reset_xpbd_lambdas();
 					step_group_solver::<true>(
@@ -777,7 +817,7 @@ impl SpringBoneSimulator {
 						g,
 						rt,
 						&mut self.world_scratch,
-						&self.world_colliders,
+						group_world_colliders,
 						sub_dt,
 						profile.as_deref_mut(),
 					);
@@ -1099,6 +1139,26 @@ fn constrain_tail_colliders(
 	}
 }
 
+fn select_group_world_colliders<'a>(
+	world_colliders: &'a [WorldBoneColliderPrimitive],
+	source_ids: &[String],
+	group_source_id: &str,
+	scratch: &'a mut Vec<WorldBoneColliderPrimitive>,
+) -> &'a [WorldBoneColliderPrimitive] {
+	if source_ids.iter().all(String::is_empty) {
+		return world_colliders;
+	}
+	scratch.clear();
+	scratch.reserve(world_colliders.len());
+	for (index, collider) in world_colliders.iter().copied().enumerate() {
+		let source_id = source_ids.get(index).map(String::as_str).unwrap_or("");
+		if source_id.is_empty() || (!group_source_id.is_empty() && source_id == group_source_id) {
+			scratch.push(collider);
+		}
+	}
+	scratch.as_slice()
+}
+
 fn solve_xpbd_rest_constraint(curr_tail: Vec3, target_tail: Vec3, compliance: f32, dt: f32, lambda: &mut f32) -> Vec3 {
 	if dt <= 0.0 {
 		*lambda = 0.0;
@@ -1136,6 +1196,37 @@ mod tests {
 			probe_anchor_node: None,
 			local_bounds: None,
 		}
+	}
+
+	#[test]
+	fn source_tagged_colliders_are_filtered_per_dynamics_group() {
+		let colliders = vec![
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::ZERO,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::X,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::Y,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+		];
+		let source_ids = vec![
+			String::new(),
+			"physbone:hair".to_string(),
+			"physbone:skirt".to_string(),
+		];
+		let mut scratch = Vec::new();
+		let selected = select_group_world_colliders(&colliders, &source_ids, "physbone:hair", &mut scratch);
+		assert_eq!(selected.len(), 2);
+		assert_eq!(selected[0], colliders[0]);
+		assert_eq!(selected[1], colliders[1]);
 	}
 
 	/// 重力で末端 tail が水平方向に流れることを確認する基本テスト。

@@ -20,8 +20,8 @@ use un_avatar_core::{
 	UnaRuntimeDynamicsCounts, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
-	build_dynamics_bone_colliders, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPrimitive,
-	BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator, DynamicsStepProfile,
+	build_dynamics_bone_colliders_with_sources, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig,
+	BoneColliderPrimitive, BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator, DynamicsStepProfile,
 };
 use winit::window::Window;
 
@@ -2192,19 +2192,23 @@ fn build_runtime_physics_for_document(
 ) -> RuntimePhysicsBuild {
 	let runtime_model = document.runtime_model();
 	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
-	let bone_colliders = if let Some(runtime) = scene_profile_dynamics {
-		build_dynamics_bone_colliders(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
+	let tagged_bone_colliders = if let Some(runtime) = scene_profile_dynamics {
+		build_dynamics_bone_colliders_with_sources(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
 	} else {
 		Vec::new()
 	};
+	let bone_colliders = tagged_bone_colliders
+		.iter()
+		.map(|collider| collider.primitive)
+		.collect::<Vec<_>>();
 	let stats = collider_stats(&bone_colliders);
 	let dynamics_sim = if dynamics_enabled {
 		if let Some(runtime) = scene_profile_dynamics {
 			if runtime.dynamics.has_groups() {
-				DynamicsSimulator::new_with_runtime_dynamics(
+				DynamicsSimulator::new_with_runtime_dynamics_and_collider_sources(
 					runtime.scene,
 					runtime.dynamics,
-					bone_colliders.clone(),
+					tagged_bone_colliders,
 					spring_bone_physics.clone(),
 				)
 			} else {

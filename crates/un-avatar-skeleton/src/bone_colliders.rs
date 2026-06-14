@@ -95,6 +95,12 @@ pub enum BoneColliderPrimitive {
 	},
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeBoneColliderPrimitive {
+	pub primitive: BoneColliderPrimitive,
+	pub source_id: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum WorldBoneColliderPrimitive {
 	Sphere {
@@ -189,7 +195,25 @@ pub fn build_dynamics_bone_colliders(
 	config: BoneColliderConfig,
 	dynamics: UnaRuntimeDynamics<'_>,
 ) -> Vec<BoneColliderPrimitive> {
-	let mut out = build_bone_colliders(scene, profile, config);
+	build_dynamics_bone_colliders_with_sources(scene, profile, config, dynamics)
+		.into_iter()
+		.map(|collider| collider.primitive)
+		.collect()
+}
+
+pub fn build_dynamics_bone_colliders_with_sources(
+	scene: &UnaSceneSnapshot,
+	profile: Option<&HumanoidProfile>,
+	config: BoneColliderConfig,
+	dynamics: UnaRuntimeDynamics<'_>,
+) -> Vec<RuntimeBoneColliderPrimitive> {
+	let mut out = build_bone_colliders(scene, profile, config)
+		.into_iter()
+		.map(|primitive| RuntimeBoneColliderPrimitive {
+			primitive,
+			source_id: String::new(),
+		})
+		.collect::<Vec<_>>();
 	for collider in dynamics.colliders() {
 		if collider.node >= scene.nodes.len() {
 			continue;
@@ -199,8 +223,8 @@ pub fn build_dynamics_bone_colliders(
 			continue;
 		}
 		let center = collider.position;
-		match collider.shape {
-			UnaDynamicsColliderShape::Sphere => out.push(BoneColliderPrimitive::LocalSphere {
+		let primitive = match collider.shape {
+			UnaDynamicsColliderShape::Sphere => Some(BoneColliderPrimitive::LocalSphere {
 				node: collider.node,
 				center,
 				radius,
@@ -215,16 +239,22 @@ pub fn build_dynamics_bone_colliders(
 				) * Vec3::Y;
 				let axis = axis.try_normalize().unwrap_or(Vec3::Y).to_array();
 				let half_length = (collider.height.max(0.0) * 0.5 - radius).max(0.0);
-				out.push(BoneColliderPrimitive::LocalCapsule {
+				Some(BoneColliderPrimitive::LocalCapsule {
 					node: collider.node,
 					center,
 					axis,
 					half_length,
 					radius,
 					inside_bounds: collider.inside_bounds,
-				});
+				})
 			}
-			UnaDynamicsColliderShape::Unknown => {}
+			UnaDynamicsColliderShape::Unknown => None,
+		};
+		if let Some(primitive) = primitive {
+			out.push(RuntimeBoneColliderPrimitive {
+				primitive,
+				source_id: collider.source_id.clone(),
+			});
 		}
 	}
 	out
@@ -596,6 +626,7 @@ mod tests {
 			groups: Vec::new(),
 			colliders: vec![UnaDynamicsCollider {
 				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "physbone:hair".to_string(),
 				node: 0,
 				shape: UnaDynamicsColliderShape::Sphere,
 				radius: 0.1,
@@ -613,6 +644,16 @@ mod tests {
 			},
 			settings.runtime_dynamics(),
 		);
+		let tagged = build_dynamics_bone_colliders_with_sources(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		assert_eq!(tagged[0].source_id, "physbone:hair");
 		assert_eq!(
 			colliders,
 			vec![BoneColliderPrimitive::LocalSphere {

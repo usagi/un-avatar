@@ -9,8 +9,9 @@ mod humanoid_retarget;
 mod spring_bones;
 
 pub use bone_colliders::{
-	build_bone_colliders, build_dynamics_bone_colliders, build_runtime_bone_colliders, collider_stats, local_capsule_world,
-	local_sphere_world, BoneColliderConfig, BoneColliderPartRadiiMm, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats,
+	build_bone_colliders, build_dynamics_bone_colliders, build_dynamics_bone_colliders_with_sources, build_runtime_bone_colliders,
+	collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig, BoneColliderPartRadiiMm, BoneColliderPrimitive,
+	BoneColliderSource, BoneColliderStats, RuntimeBoneColliderPrimitive,
 };
 pub use humanoid_retarget::{
 	apply_humanoid_pose_to_scene, apply_humanoid_pose_to_scene_with_rest, apply_node_constraints_to_scene,
