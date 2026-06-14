@@ -4,7 +4,7 @@
 	export let rendererLogsLayout: "per-renderer" | "unified";
 </script>
 
-<div class="segmented-control logs-layout-switch" aria-label="Renderer logs layout">
+<div class="segmented-control logs-layout-switch" aria-label={$_("logs.toolbar.layout_aria")}>
 	<button class:active={rendererLogsLayout === "per-renderer"} onclick={() => (rendererLogsLayout = "per-renderer")}>
 		{$_("logs.toolbar.per_renderer")}
 	</button>

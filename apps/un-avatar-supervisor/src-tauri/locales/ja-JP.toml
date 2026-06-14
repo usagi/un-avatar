@@ -36,6 +36,9 @@ cancel = "キャンセル"
 close = "閉じる"
 dismiss = "閉じる"
 
+[settings]
+aria = "設定"
+
 [settings.theme]
 label = "テーマ"
 
@@ -51,6 +54,7 @@ quick_run_jump = "Profiles から Quick Launch 後に Renderers タブへ自動�
 auto_launch_selected_on_startup = "起動時に選択中のプロファイル/グループを自動起動"
 developer_controls = "開発者向けコントロールを表示"
 renderer_close_label = "Renderer 終了キー"
+renderer_close_placeholder = "Escape"
 notifications_label = "通知"
 notifications_test = "Test"
 permission_unknown = "unknown"
@@ -1046,6 +1050,7 @@ card_copy = "コピー"
 card_copy_title = "この Renderer の stderr バッファをクリップボードへコピー"
 
 [logs.toolbar]
+layout_aria = "Renderer ログ表示"
 per_renderer = "Per renderer"
 unified = "Unified"
 renderer = "Renderer"

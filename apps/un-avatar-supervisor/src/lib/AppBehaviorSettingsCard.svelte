@@ -28,7 +28,7 @@
 			<input
 				type="text"
 				value={appSettings.renderer_close_hotkey}
-				placeholder="Escape"
+				placeholder={$_("settings.app_behavior.renderer_close_placeholder")}
 				autocomplete="off"
 				spellcheck="false"
 				onchange={(event) =>

@@ -25,7 +25,7 @@
 
 <section
 	class="view app-settings-view"
-	aria-label="Settings"
+	aria-label={$_("settings.aria")}
 	onpointerover={onSettingsHintEvent}
 	onfocusin={onSettingsHintEvent}
 	onpointerleave={onClearSettingsHint}

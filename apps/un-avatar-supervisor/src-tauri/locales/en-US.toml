@@ -28,6 +28,9 @@ cancel = "Cancel"
 close = "Close"
 dismiss = "Dismiss"
 
+[settings]
+aria = "Settings"
+
 [settings.theme]
 label = "Theme"
 
@@ -43,6 +46,7 @@ quick_run_jump = "Switch to Renderers tab after Quick Launch"
 auto_launch_selected_on_startup = "Auto-launch selected profile/group on startup"
 developer_controls = "Show developer controls"
 renderer_close_label = "Renderer close"
+renderer_close_placeholder = "Escape"
 notifications_label = "Notifications"
 notifications_test = "Test"
 permission_unknown = "unknown"
@@ -1042,6 +1046,7 @@ card_copy = "Copy"
 card_copy_title = "Copy this renderer's stderr buffer to clipboard"
 
 [logs.toolbar]
+layout_aria = "Renderer logs layout"
 per_renderer = "Per renderer"
 unified = "Unified"
 renderer = "Renderer"
