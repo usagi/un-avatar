@@ -61,7 +61,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 - Summary counts must accept both direct arrays and explicit count fields. A valid `.unavatar` that stores `dynamics.groupCount`, `contacts.contactCount`, `wardrobe.setCount`, or equivalent object summaries must not regress to `0` just because the full arrays are omitted from the review dialog metadata path.
 - `wardrobe.sets[].previewImages[]` are the preferred source for wardrobe-specific sample views. If a package only has root-level `previewImages`, `sampleScreenshots`, `screenshots`, or `previews`, the dialog should still show all available sample views instead of falling back to a fake placeholder or a single image.
 - Preview image `width` / `height` metadata should be preserved when available so profile-icon crop masks can match the saved square crop instead of guessing from the dialog frame.
-- Metadata reads must not pull the whole GLB BIN payload. The current contract is a bounded JSON chunk plus referenced preview bufferView ranges only; wardrobe set discovery also uses the same JSON-chunk path.
+- Metadata reads must not pull the whole GLB BIN payload. The current contract is a bounded JSON chunk plus referenced preview bufferView ranges only; data URI and external preview image reads are also size-capped before decode / full read. Wardrobe set discovery uses the same JSON-chunk path.
 - Future large-wardrobe optimization: keep the set list available immediately, but lazy-load preview images for the selected set on demand. This avoids reading every sample image just to open the rights dialog while preserving wardrobe switching in the UI.
 
 ## v2 UI Rules
