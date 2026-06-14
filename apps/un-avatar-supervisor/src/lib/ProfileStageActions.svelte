@@ -35,6 +35,7 @@
 		: sceneCacheNeedsRefresh
 			? $_("profiles.actions.warm_cache_again")
 			: $_("profiles.actions.warm_cache");
+	$: actionGroupTitle = liveRenderer ? $_("profiles.action_groups.live_renderer") : $_("profiles.action_groups.prepare");
 	$: sceneCacheActionHint = sceneCacheReady
 		? $_("profiles.actions.cache_ready_hint", { values: { at: sceneCachePrewarmedAt ?? "-" } })
 		: sceneCacheNeedsRefresh
@@ -64,7 +65,7 @@
 	<div class="profile-stage-action-group">
 		<div class="profile-stage-action-copy">
 			<div class="profile-stage-action-heading">
-				<strong>{$_("profiles.action_groups.prepare")}</strong>
+				<strong>{actionGroupTitle}</strong>
 				<span
 					class="profile-cache-state"
 					class:profile-cache-state-ready={sceneCacheReady}
@@ -125,7 +126,7 @@
 				>
 			</div>
 		{:else}
-			<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.launch")}>
+			<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.prepare")}>
 				<button
 					type="button"
 					class:profile-stage-primary-action={!sceneCacheReady}
