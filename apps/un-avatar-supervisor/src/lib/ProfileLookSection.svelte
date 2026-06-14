@@ -15,6 +15,7 @@
 	export let colorDisplayMode: ColorDisplayMode;
 	export let onColorModeChange: ColorModeChangeHandler;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
+	export let onUpdateSettingValues: (updates: readonly [field: string, value: ProfileSettingValue][]) => void | Promise<void>;
 	export let onApplyLookRecommendation: (look: LookRecommendation) => void | Promise<void>;
 	export let onActivate: () => void;
 </script>
@@ -31,6 +32,6 @@
 	</div>
 	<ProfileLookOutlinePanel {setting} {busy} {colorDisplayMode} {onColorModeChange} {onUpdateSettingValue} />
 	<ProfileLookShadowsPanel {setting} {busy} {onUpdateSettingValue} />
-	<ProfileLookColorPanel {setting} {busy} {onUpdateSettingValue} />
+	<ProfileLookColorPanel {setting} {busy} {onUpdateSettingValue} {onUpdateSettingValues} />
 	<ProfileLookBloomPanel {setting} {busy} {onUpdateSettingValue} />
 </section>

@@ -10,6 +10,7 @@
 	export let setting: ProfileColorGradingSetting;
 	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
+	export let onUpdateSettingValues: (updates: readonly [field: string, value: ProfileSettingValue][]) => void | Promise<void>;
 </script>
 
 <details class="effect-panel">
@@ -24,7 +25,7 @@
 	</div>
 	<div class="subgroup effect-subgroup color-grading-subgroup color-look-subgroup">
 		<div class="profile-group-heading">{$_("profiles.editor.look_color_look")}</div>
-		<ProfileLookColorPresetFields {setting} {busy} {onUpdateSettingValue} />
+		<ProfileLookColorPresetFields {setting} {busy} {onUpdateSettingValue} {onUpdateSettingValues} />
 	</div>
 	<div class="subgroup effect-subgroup color-grading-subgroup color-white-balance-subgroup">
 		<div class="profile-group-heading">{$_("profiles.editor.look_white_balance")}</div>

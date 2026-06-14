@@ -7,10 +7,19 @@
 	export let setting: Pick<ProfileColorGradingSetting, "color_look" | "color_look_intensity">;
 	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
+	export let onUpdateSettingValues: (updates: readonly [field: string, value: ProfileSettingValue][]) => void | Promise<void> = async (
+		updates
+	) => {
+		for (const [field, value] of updates) {
+			await onUpdateSettingValue(field, value);
+		}
+	};
 
 	async function applyColorPreset(value: string, intensity: number): Promise<void> {
-		await onUpdateSettingValue("environment.color.look", value);
-		await onUpdateSettingValue("environment.color.intensity", intensity);
+		await onUpdateSettingValues([
+			["environment.color.look", value],
+			["environment.color.intensity", intensity],
+		]);
 	}
 
 	const presets = [

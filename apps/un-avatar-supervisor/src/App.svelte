@@ -3251,6 +3251,7 @@
 									{colorDisplayMode}
 									onColorModeChange={setColorDisplayMode}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onUpdateSettingValues={(updates) => applyProfileUpdates(updates)}
 									onApplyLookRecommendation={(look) => applyLookRecommendation(look)}
 									onActivate={() => (activeProfileSection = "look")}
 								/>
