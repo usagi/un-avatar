@@ -1,19 +1,47 @@
 import { basename } from "./formatting";
-import { cameraSummaryLabel, lightingSummaryLabel, lookSummaryLabel, motionLabel, outputLabel, windowLabel } from "./profileLabels";
+import { cameraSummaryLabel, lightingSummaryLabel, motionLabel, outputLabel, windowLabel } from "./profileLabels";
 import type { ProfileSummaryItem } from "./profileSummary";
 import { qualitySummaryLabel } from "./runtimeLabels";
 
-type Translate = (key: string) => string;
+type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
 
 export type ProfileStageSummarySetting = Parameters<typeof motionLabel>[0] &
 	Parameters<typeof outputLabel>[0] &
 	Parameters<typeof qualitySummaryLabel>[0] &
 	Parameters<typeof lightingSummaryLabel>[0] &
-	Parameters<typeof lookSummaryLabel>[0] &
+	{
+		color_look: string;
+		color_look_intensity: number;
+		bloom_enabled: boolean;
+	} &
 	Parameters<typeof windowLabel>[0] &
 	Parameters<typeof cameraSummaryLabel>[0] & {
 		avatar_path: string | null;
 	};
+
+function stageOutputLabel(setting: ProfileStageSummarySetting, translate: Translate): string {
+	if (!setting.spout_enabled) return translate("profiles.summary.output_window_preview");
+	const mode = setting.minimized ? translate("profiles.summary.output_spout_only") : translate("profiles.summary.output_spout_preview");
+	const size = setting.spout_width && setting.spout_height ? ` / ${setting.spout_width} x ${setting.spout_height}` : "";
+	const name = setting.spout_name ? ` / ${setting.spout_name}` : "";
+	return `${mode}${size}${name}`;
+}
+
+function stageWindowLabel(setting: ProfileStageSummarySetting, translate: Translate): string {
+	const frame = setting.decorations ? translate("profiles.summary.window_framed") : translate("profiles.summary.window_borderless");
+	const alpha = setting.transparent ? translate("profiles.summary.window_transparent") : translate("profiles.summary.window_opaque");
+	const level = setting.always_on_top ? translate("profiles.summary.window_topmost") : translate("profiles.summary.window_normal");
+	const passthrough = setting.input_passthrough ? ` / ${translate("profiles.summary.window_click_through")}` : "";
+	return `${frame} / ${alpha} / ${level}${passthrough}`;
+}
+
+function stageLookLabel(setting: ProfileStageSummarySetting, translate: Translate): string {
+	const colorKey = setting.color_look === "neutral" || setting.color_look_intensity <= 0 ? "neutral" : setting.color_look;
+	const color = translate(`profiles.editor.color_look_${colorKey}`);
+	const intensity = colorKey === "neutral" ? "" : ` ${Math.round(setting.color_look_intensity * 100)}%`;
+	const bloom = setting.bloom_enabled ? translate("profiles.summary.bloom_on") : translate("profiles.summary.bloom_off");
+	return `${color}${intensity} / ${bloom}`;
+}
 
 export function profileStageSummaryItems(setting: ProfileStageSummarySetting, translate: Translate): ProfileSummaryItem[] {
 	return [
@@ -30,7 +58,7 @@ export function profileStageSummaryItems(setting: ProfileStageSummarySetting, tr
 		{
 			section: "output",
 			label: translate("profiles.sections.output"),
-			value: outputLabel(setting),
+			value: stageOutputLabel(setting, translate),
 		},
 		{
 			section: "quality",
@@ -45,12 +73,12 @@ export function profileStageSummaryItems(setting: ProfileStageSummarySetting, tr
 		{
 			section: "look",
 			label: translate("profiles.sections.look"),
-			value: lookSummaryLabel(setting),
+			value: stageLookLabel(setting, translate),
 		},
 		{
 			section: "window",
 			label: translate("profiles.sections.window"),
-			value: windowLabel(setting),
+			value: stageWindowLabel(setting, translate),
 		},
 		{
 			section: "camera",

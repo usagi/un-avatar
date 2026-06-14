@@ -560,6 +560,20 @@ desktop_shortcut_created = "Created desktop shortcut: %{path}"
 taskbar_launcher_requires_tauri = "Browser preview: taskbar launcher setup requires Tauri"
 taskbar_launcher_created = "Updated the UN Avatar launcher and Jump List profile tasks. Pin UN Avatar from this folder, then right-click the taskbar icon to launch a profile: %{path}"
 
+[profiles.summary]
+output_window_preview = "Window Preview"
+output_spout_only = "Spout2 only"
+output_spout_preview = "Spout2 + Preview"
+window_framed = "Framed"
+window_borderless = "Borderless"
+window_transparent = "Transparent"
+window_opaque = "Opaque"
+window_topmost = "Topmost"
+window_normal = "Normal"
+window_click_through = "Click-through"
+bloom_on = "Bloom"
+bloom_off = "No bloom"
+
 [profiles.sections]
 identity = "Profile Settings"
 avatar = "Avatar"

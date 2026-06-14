@@ -568,6 +568,20 @@ desktop_shortcut_created = "デスクトップショートカットを作成し�
 taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバー launcher 設定に対応していません"
 taskbar_launcher_created = "UN Avatar launcher と Jump List のプロファイル起動タスクを更新しました。このフォルダーから UN Avatar をピン留めし、タスクバーアイコンの右クリックでプロファイルを起動できます: %{path}"
 
+[profiles.summary]
+output_window_preview = "Window Preview"
+output_spout_only = "Spout2 のみ"
+output_spout_preview = "Spout2 + Preview"
+window_framed = "枠あり"
+window_borderless = "枠なし"
+window_transparent = "透過"
+window_opaque = "不透明"
+window_topmost = "最前面"
+window_normal = "通常"
+window_click_through = "クリック透過"
+bloom_on = "Bloom"
+bloom_off = "No bloom"
+
 [profiles.sections]
 identity = "プロファイル設定"
 avatar = "アバター"
