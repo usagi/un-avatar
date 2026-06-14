@@ -2414,6 +2414,14 @@ fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
+	build_draw_order_for_scope(draws, opts, false)
+}
+
+fn build_potential_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
+	build_draw_order_for_scope(draws, opts, true)
+}
+
+fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, include_inactive: bool) -> SceneMeshDrawState {
 	let mut state = SceneMeshDrawState {
 		outline_draw_indices: Vec::with_capacity(draws.len()),
 		fur_draw_indices: Vec::with_capacity(draws.len()),
@@ -2440,12 +2448,14 @@ fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDr
 	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
 	for (draw_index, draw) in draws.iter().enumerate() {
-		if !draw.active() {
+		if !include_inactive && !draw.active() {
 			continue;
 		}
-		state.active_draw_indices.push(draw_index);
-		if !draw.skin_palette_static_identity {
-			state.active_skin_palette_indices.push(draw.skin_palette_index);
+		if draw.active() {
+			state.active_draw_indices.push(draw_index);
+			if !draw.skin_palette_static_identity {
+				state.active_skin_palette_indices.push(draw.skin_palette_index);
+			}
 		}
 		let requirements = material_runtime_requirements(&draw.material, draw.shading, opts);
 		state.runtime_requirements.include(requirements);
@@ -9757,11 +9767,16 @@ impl SceneMeshes {
 		mesh_prepare_summary.log(mesh_prepare_start.elapsed());
 
 		let draw_state = build_draw_order(&draws, &opts);
+		let pipeline_draw_state = build_potential_draw_order(&draws, &opts);
 		let mut required_pipeline_kinds = BTreeSet::new();
-		for batch in draw_state.opaque_batches.iter().chain(draw_state.blended_batches.iter()) {
+		for batch in pipeline_draw_state
+			.opaque_batches
+			.iter()
+			.chain(pipeline_draw_state.blended_batches.iter())
+		{
 			required_pipeline_kinds.insert(batch.pipeline);
 		}
-		for &draw_index in &draw_state.transparent_backpass_draw_indices {
+		for &draw_index in &pipeline_draw_state.transparent_backpass_draw_indices {
 			let zwrite = draws
 				.get(draw_index)
 				.and_then(|draw| draw.material.liltoon_like_runtime())
@@ -9772,19 +9787,19 @@ impl SceneMeshes {
 				DrawPipelineKind::TransparentToonBackpassNoZWrite
 			});
 		}
-		let needs_outline_pipeline = !draw_state.outline_draw_indices.is_empty()
+		let needs_outline_pipeline = !pipeline_draw_state.outline_draw_indices.is_empty()
 			&& !opts.force_simple_basecolor
 			&& !opts.debug_bind_pose
 			&& !opts.debug_primitive_colors;
-		let needs_fur_pipelines = !draw_state.fur_draw_indices.is_empty();
-		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &draw_state, &opts);
+		let needs_fur_pipelines = !pipeline_draw_state.fur_draw_indices.is_empty();
+		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &pipeline_draw_state, &opts);
 		let mut outline_shader_features = UntoonShaderFeatures::default();
-		for &draw_index in &draw_state.outline_draw_indices {
+		for &draw_index in &pipeline_draw_state.outline_draw_indices {
 			if let Some(draw) = draws.get(draw_index) {
 				outline_shader_features.include(draw_untoon_shader_features(draw, &opts));
 			}
 		}
-		let mut fur_shader_features = draw_state.runtime_requirements.toon_shader_features;
+		let mut fur_shader_features = pipeline_draw_state.runtime_requirements.toon_shader_features;
 		fur_shader_features.fur = needs_fur_pipelines;
 		let pipeline_count = required_pipeline_kinds
 			.len()
