@@ -4142,26 +4142,11 @@ dd {
 	min-width: 0;
 }
 
-.physics-compat-badges {
-	display: flex;
-	flex-wrap: wrap;
-	align-content: center;
-	align-items: center;
-	gap: 6px;
-	min-width: 0;
-	padding-left: 50px;
-}
-
-.physics-compat-badges span {
-	min-width: 0;
-	padding: 1px 6px;
-	border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-	border-radius: 999px;
+.physics-source-note {
 	color: var(--muted);
 	font-size: 10.5px;
-	font-weight: 700;
 	line-height: 1.25;
-	white-space: nowrap;
+	padding-left: 50px;
 }
 
 .profile-wide-field {
