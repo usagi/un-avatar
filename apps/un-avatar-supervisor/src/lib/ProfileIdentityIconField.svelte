@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { FolderOpen } from "lucide-svelte";
+	import { FolderOpen, Image } from "lucide-svelte";
 	import type { IdentitySetting, ProfileSettingValue } from "./profileTypes";
 	import { looksLikeUnavatarPath } from "./unavatarMetadata";
 
@@ -31,6 +31,6 @@
 		disabled={busy || !avatarPath}
 		onclick={() => onApplyAvatarThumbnail()}
 		title={isUnavatar ? $_("profiles.editor.choose_unavatar_sample_icon_hint") : $_("profiles.editor.load_avatar_thumbnail_icon_hint")}
-		>{isUnavatar ? $_("profiles.editor.choose_unavatar_sample_icon") : $_("profiles.editor.load_avatar_thumbnail_icon")}</button
+		><Image size={15} />{isUnavatar ? $_("profiles.editor.choose_unavatar_sample_icon") : $_("profiles.editor.load_avatar_thumbnail_icon")}</button
 	>
 </div>
