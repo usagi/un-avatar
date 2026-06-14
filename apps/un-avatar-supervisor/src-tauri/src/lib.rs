@@ -3583,12 +3583,27 @@ fn gltf_image_bytes_from_metadata_source(
 ) -> Option<Vec<u8>> {
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
-			return BASE64_STANDARD.decode(encoded).ok();
+			if base64_decoded_len_upper_bound(encoded)? > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES as usize {
+				return None;
+			}
+			let bytes = BASE64_STANDARD.decode(encoded).ok()?;
+			return (bytes.len() as u64 <= MAX_UNAVATAR_PREVIEW_IMAGE_BYTES).then_some(bytes);
 		}
-		return fs::read(gltf_metadata_source_path(source).parent()?.join(uri)).ok();
+		let path = gltf_metadata_source_path(source).parent()?.join(uri);
+		if fs::metadata(&path).ok()?.len() > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
+			return None;
+		}
+		let bytes = fs::read(path).ok()?;
+		return (bytes.len() as u64 <= MAX_UNAVATAR_PREVIEW_IMAGE_BYTES).then_some(bytes);
 	}
 	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
 	gltf_buffer_view_bytes_from_source(root, source, buffer_view_index)
+}
+
+fn base64_decoded_len_upper_bound(encoded: &str) -> Option<usize> {
+	let full_chunks = encoded.len() / 4;
+	let remainder = encoded.len() % 4;
+	full_chunks.checked_mul(3)?.checked_add(remainder.min(3))
 }
 
 fn gltf_metadata_source_path(source: &GltfMetadataSource) -> &Path {
@@ -10954,6 +10969,45 @@ mod tests {
 		assert_eq!(encoded, "AAAA");
 		assert!(data_image_base64_parts("data:image/svg+xml;base64,AAAA").is_none());
 		assert!(data_image_base64_parts("data:image/png,AAAA").is_none());
+	}
+
+	#[test]
+	fn gltf_image_metadata_skips_oversized_data_uri_before_decode() {
+		let encoded_len = ((crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES as usize + 1) * 4).div_ceil(3);
+		let image = serde_json::json!({
+			"uri": format!("data:image/png;base64,{}", "A".repeat(encoded_len))
+		});
+		let source = crate::GltfMetadataSource::Json {
+			path: std::env::temp_dir().join("un-avatar-oversized-data-uri.gltf"),
+			bytes: Vec::new(),
+		};
+
+		assert!(crate::gltf_image_bytes_from_metadata_source(&image, &serde_json::json!({}), &source).is_none());
+	}
+
+	#[test]
+	fn gltf_image_metadata_skips_oversized_external_preview_file() {
+		let dir = std::env::temp_dir().join(format!(
+			"un-avatar-oversized-external-preview-{}-{}",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let gltf_path = dir.join("avatar.gltf");
+		let preview_path = dir.join("preview.png");
+		fs::File::create(&preview_path)
+			.unwrap()
+			.set_len(crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES + 1)
+			.unwrap();
+		let image = serde_json::json!({ "uri": "preview.png" });
+		let source = crate::GltfMetadataSource::Json {
+			path: gltf_path,
+			bytes: Vec::new(),
+		};
+
+		assert!(crate::gltf_image_bytes_from_metadata_source(&image, &serde_json::json!({}), &source).is_none());
+		let _ = fs::remove_dir_all(&dir);
 	}
 
 	#[test]
