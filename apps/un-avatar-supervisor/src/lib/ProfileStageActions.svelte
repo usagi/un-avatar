@@ -30,6 +30,11 @@
 		: sceneCacheNeedsRefresh
 			? $_("profiles.actions.cache_refresh_needed")
 			: $_("profiles.actions.cache_not_ready");
+	$: sceneCacheButtonLabel = sceneCacheReady
+		? $_("profiles.actions.cache_ready")
+		: sceneCacheNeedsRefresh
+			? $_("profiles.actions.warm_cache_again")
+			: $_("profiles.actions.warm_cache");
 	$: sceneCacheActionHint = sceneCacheReady
 		? $_("profiles.actions.cache_ready_hint", { values: { at: sceneCachePrewarmedAt ?? "-" } })
 		: sceneCacheNeedsRefresh
@@ -37,7 +42,6 @@
 		: liveRenderer
 			? $_("profiles.actions.warm_cache_live_hint")
 			: $_("profiles.actions.warm_cache_hint");
-	$: workflowHint = `${sceneCacheActionLabel} - ${sceneCacheActionHint}`;
 </script>
 
 <div class="profile-stage-actions">
@@ -59,8 +63,16 @@
 	</div>
 	<div class="profile-stage-action-group">
 		<div class="profile-stage-action-copy">
-			<strong>{$_("profiles.action_groups.prepare")}</strong>
-			<span>{workflowHint}</span>
+			<div class="profile-stage-action-heading">
+				<strong>{$_("profiles.action_groups.prepare")}</strong>
+				<span
+					class="profile-cache-state"
+					class:profile-cache-state-ready={sceneCacheReady}
+					class:profile-cache-state-refresh={sceneCacheNeedsRefresh}
+					class:profile-cache-state-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}>{sceneCacheActionLabel}</span
+				>
+			</div>
+			<p>{sceneCacheActionHint}</p>
 		</div>
 		{#if liveRenderer}
 			<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.live_renderer")}>
@@ -75,7 +87,7 @@
 					title={sceneCacheActionHint}
 					aria-label={sceneCacheActionLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
-					><DatabaseZap size={14} /><span>{sceneCacheActionLabel}</span></button
+					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
 				>
 				<button
 					type="button"
@@ -126,7 +138,7 @@
 					title={sceneCacheActionHint}
 					aria-label={sceneCacheActionLabel}
 					onclick={() => onPrewarmSceneCache(settingId)}
-					><DatabaseZap size={14} /><span>{sceneCacheActionLabel}</span></button
+					><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
 				>
 				<button
 					type="button"

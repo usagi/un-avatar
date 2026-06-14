@@ -700,7 +700,15 @@ small,
 	text-align: right;
 }
 
-.profile-stage-action-copy strong {
+.profile-stage-action-heading {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	min-width: 0;
+}
+
+.profile-stage-action-heading strong {
 	overflow: hidden;
 	color: var(--text);
 	font-size: 12px;
@@ -710,10 +718,41 @@ small,
 	white-space: nowrap;
 }
 
-.profile-stage-action-copy span {
+.profile-cache-state {
+	flex: 0 0 auto;
+	max-width: 92px;
+	overflow: hidden;
+	padding: 2px 6px;
+	border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+	border-radius: 999px;
+	color: var(--muted);
+	font-size: 10px;
+	font-weight: 750;
+	line-height: 1;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.profile-cache-state-ready {
+	border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+	color: color-mix(in srgb, var(--success) 72%, var(--text));
+}
+
+.profile-cache-state-refresh {
+	border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+	color: color-mix(in srgb, var(--warning) 76%, var(--text));
+}
+
+.profile-cache-state-missing {
+	border-color: color-mix(in srgb, var(--accent-cool) 36%, var(--border));
+	color: color-mix(in srgb, var(--accent-cool) 68%, var(--text));
+}
+
+.profile-stage-action-copy p {
 	display: -webkit-box;
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 2;
+	margin: 0;
 	overflow: hidden;
 	color: var(--muted);
 	font-size: 10.5px;
