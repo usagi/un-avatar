@@ -11,7 +11,7 @@
 			<th>{$_("renderers.controls.window_position")}</th>
 			<td
 				>{#if runtimeStatus?.window_position}{runtimeStatus.window_position[0]},
-					{runtimeStatus.window_position[1]} (px outer){:else}<span class="muted-small"
+					{runtimeStatus.window_position[1]} ({$_("renderers.controls.px_outer")}){:else}<span class="muted-small"
 						>{$_("renderers.controls.unreported")}</span
 					>{/if}</td
 			>
@@ -21,7 +21,7 @@
 			<td
 				>{#if runtimeStatus?.window_inner_size}{runtimeStatus.window_inner_size[0]}
 					×
-					{runtimeStatus.window_inner_size[1]} (px inner){:else}<span class="muted-small"
+					{runtimeStatus.window_inner_size[1]} ({$_("renderers.controls.px_inner")}){:else}<span class="muted-small"
 						>{$_("renderers.controls.unreported")}</span
 					>{/if}</td
 			>
