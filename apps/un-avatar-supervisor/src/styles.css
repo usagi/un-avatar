@@ -1138,7 +1138,7 @@ small,
 	gap: 12px;
 	min-height: 0;
 	min-width: 0;
-	/* 隕ｪ .view (flex column) 蜀・〒谿九ｊ縺ｮ鬮倥＆繧偵☆縺ｹ縺ｦ菴ｿ縺・√ユ繝ｼ繝悶Ν/隧ｳ邏ｰ繝壹う繝ｳ繧堤判髱｢荳九∪縺ｧ莨ｸ縺ｰ縺・*/
+	/* Fill the remaining .view height so the table and detail panes scroll within the screen. */
 	flex: 1 1 auto;
 }
 
@@ -1178,7 +1178,7 @@ table {
 	font-size: 13px;
 }
 
-/* 繝励Ο繧ｻ繧ｹ荳隕ｧ: 蝗ｺ螳壹Ξ繧､繧｢繧ｦ繝・+ 遲牙ｹ・焚蟄励〒縲∫ｨｼ蜒堺ｸｭ縺ｮ蛟､螟牙喧縺ｫ繧医ｋ蛻怜ｹ・・證ｴ繧後ｒ謚代∴繧・*/
+/* Keep renderer process rows stable while live telemetry changes. */
 .table-panel table.process-table {
 	table-layout: fixed;
 	font-variant-numeric: tabular-nums lining-nums;
@@ -1608,8 +1608,7 @@ td small {
 .setting-list,
 .app-settings-view,
 .logs-view {
-	/* `.view` (flex column, overflow:hidden) 縺ｮ蟄舌・ min-height:0 + overflow-y:auto 繧呈戟縺溘↑縺・→
-    繧ｳ繝ｳ繝・Φ繝・′繧ｦ繧｣繝ｳ繝峨え荳矩Κ縺ｧ隕句・繧後※繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ縺ｧ縺阪↑縺・４ettings/Logs 繧ｿ繝悶・荳矩Κ隕句・繧悟ｯｾ遲悶・*/
+	/* Children of .view need min-height:0 plus their own scrolling to avoid clipped lower content. */
 	min-height: 0;
 	overflow-y: auto;
 }
