@@ -2125,7 +2125,7 @@
 			id: renderer.id,
 			...rendererWindowPayload(setting),
 		});
-		message = "Updated renderer window";
+		message = $_("renderers.messages.updated_window");
 		await refreshRendererRuntimeViewAfterApply();
 		if (shouldQueueTransparentRestart) {
 			queueTransparentEnableRestart(renderer);
@@ -2139,7 +2139,9 @@
 	): Promise<void> {
 		if (!fieldSetIncludes(fields, "window.background_color")) return;
 		const applied = await applyRendererCommand(renderersToApply, "set_renderer_clear_color", () => rendererClearColorPayload(setting));
-		await setAppliedMessage(applied, "Updated background color", (count) => `Updated background color on ${count} renderers`);
+		await setAppliedMessage(applied, $_("renderers.messages.updated_background_color"), (count) =>
+			$_("renderers.messages.updated_background_color_count", { values: { count } })
+		);
 	}
 
 	async function applyRuntimeMotionUpdate(
@@ -2156,14 +2158,18 @@
 		}
 		if (fieldSetIncludesAny(fields, motionLookAtFields)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_look_at", () => rendererLookAtPayload(setting));
-			await setAppliedMessage(applied, "Updated LookAt", (count) => `Updated LookAt on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_look_at"), (count) =>
+				$_("renderers.messages.updated_look_at_count", { values: { count } })
+			);
 			return;
 		}
 		if (fieldSetIncludesAny(fields, motionReceiverFields)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_motion_receivers", () =>
 				rendererMotionReceiversPayload(setting)
 			);
-			await setAppliedMessage(applied, "Updated motion receivers", (count) => `Updated motion receivers on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_motion_receivers"), (count) =>
+				$_("renderers.messages.updated_motion_receivers_count", { values: { count } })
+			);
 		}
 	}
 
@@ -2174,7 +2180,9 @@
 	): Promise<void> {
 		if (fieldSetIncludes(fields, DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_all_dynamics_launch_setting", () => ({ setting }));
-			await setAppliedMessage(applied, "Updated dynamics override", (count) => `Updated dynamics override on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_dynamics_override"), (count) =>
+				$_("renderers.messages.updated_dynamics_override_count", { values: { count } })
+			);
 			return;
 		}
 		if (
@@ -2183,14 +2191,18 @@
 			fieldSetStartsWith(fields, DYNAMICS_BONE_COLLIDER_FIELD_PREFIX)
 		) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_dynamics", () => ({ setting }));
-			await setAppliedMessage(applied, "Updated motion physics", (count) => `Updated motion physics on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_physics"), (count) =>
+				$_("renderers.messages.updated_physics_count", { values: { count } })
+			);
 			return;
 		}
 		if (fieldSetIncludes(fields, "debug.show_bone_colliders")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_show_bone_colliders", () => ({
 				enabled: setting.show_bone_colliders,
 			}));
-			await setAppliedMessage(applied, "Updated collider display", (count) => `Updated collider display on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_collider_display"), (count) =>
+				$_("renderers.messages.updated_collider_display_count", { values: { count } })
+			);
 		}
 	}
 
@@ -2203,14 +2215,18 @@
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_avatar_outline", () =>
 				rendererAvatarOutlinePayload(setting)
 			);
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_avatar_effects"), (count) =>
+				$_("renderers.messages.updated_avatar_effects_count", { values: { count } })
+			);
 			return;
 		}
 		if (fieldSetStartsWith(fields, "effects.avatar.contact_shadow.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_contact_shadow", () =>
 				rendererContactShadowPayload(setting)
 			);
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_avatar_effects"), (count) =>
+				$_("renderers.messages.updated_avatar_effects_count", { values: { count } })
+			);
 		}
 	}
 
@@ -2221,12 +2237,16 @@
 	): Promise<void> {
 		if (fieldSetStartsWith(fields, "effects.post.ssao.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_ssao", () => rendererSsaoPayload(setting));
-			await setAppliedMessage(applied, "Updated avatar effects", (count) => `Updated avatar effects on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_avatar_effects"), (count) =>
+				$_("renderers.messages.updated_avatar_effects_count", { values: { count } })
+			);
 			return;
 		}
 		if (fieldSetStartsWith(fields, "effects.post.bloom.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_bloom", () => rendererBloomPayload(setting));
-			await setAppliedMessage(applied, "Updated bloom", (count) => `Updated bloom on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_bloom"), (count) =>
+				$_("renderers.messages.updated_bloom_count", { values: { count } })
+			);
 		}
 	}
 
@@ -2239,12 +2259,16 @@
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_environment_color", () =>
 				rendererEnvironmentColorPayload(setting)
 			);
-			await setAppliedMessage(applied, "Updated color adjustment", (count) => `Updated color adjustment on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_color_adjustment"), (count) =>
+				$_("renderers.messages.updated_color_adjustment_count", { values: { count } })
+			);
 			return;
 		}
 		if (fieldSetStartsWith(fields, "environment.lighting.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_lighting", () => rendererLightingPayload(setting));
-			await setAppliedMessage(applied, "Updated lighting", (count) => `Updated lighting on ${count} renderers`);
+			await setAppliedMessage(applied, $_("renderers.messages.updated_lighting"), (count) =>
+				$_("renderers.messages.updated_lighting_count", { values: { count } })
+			);
 		}
 	}
 
