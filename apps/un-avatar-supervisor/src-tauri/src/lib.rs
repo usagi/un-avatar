@@ -67,6 +67,12 @@ const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifes
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
 const UN_AVATAR_RENDERER_APP_ID: &str = "DrUsagi.UNAvatar.Renderer";
+const LEGACY_UN_AVATAR_LAUNCHER_APP_IDS: &[&str] = &[
+	"network.usagi.un-avatar",
+	"DrUsagi.UNAvatar",
+	"DrUsagi.UNAvatar.Supervisor",
+	"UN Avatar",
+];
 
 #[derive(Default)]
 struct SupervisorState {
@@ -2014,6 +2020,17 @@ pub fn run() {
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
 	ensure_user_profiles_seeded();
 	let mut initial_settings = load_app_settings();
+	if prune_pinned_taskbar_profile_ids(&mut initial_settings).unwrap_or_else(|error| {
+		eprintln!("un-avatar-supervisor: failed to prune taskbar profile pins: {error}");
+		false
+	}) {
+		if let Err(error) = write_app_settings(&initial_settings) {
+			eprintln!("un-avatar-supervisor: failed to save pruned taskbar profile pins: {error}");
+		}
+	}
+	if let Err(error) = update_taskbar_launcher_profile_tasks(&initial_settings) {
+		eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
+	}
 	if let Some(manifest_path) = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
 		None
@@ -2684,6 +2701,7 @@ fn get_app_settings(settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<Ap
 	let mut settings = settings.lock().map_err(|_| "app settings state poisoned".to_string())?;
 	if prune_pinned_taskbar_profile_ids(&mut settings)? {
 		write_app_settings(&settings)?;
+		update_taskbar_launcher_profile_tasks(&settings)?;
 	}
 	Ok(settings.clone())
 }
@@ -5511,10 +5529,6 @@ fn clear_taskbar_profile_pins(state: State<'_, Mutex<AppRuntimeSettings>>) -> Re
 
 fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Result<String, String> {
 	let supervisor_exe = supervisor_executable_path()?;
-	let renderer_exe = renderer_executable_path();
-	if !renderer_exe.is_file() {
-		return Err(format!("renderer executable not found: {}", renderer_exe.display()));
-	}
 	let start_menu_dir = start_menu_un_avatar_dir()?;
 	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
 	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
@@ -8134,13 +8148,12 @@ fn set_process_app_user_model_id() -> Result<(), String> {
 
 #[cfg(windows)]
 fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings: &[AvatarSetting]) -> Result<(), String> {
-	let renderer_exe = renderer_executable_path();
 	let profiles = settings
 		.iter()
 		.map(|setting| LauncherTaskProfile {
 			name: setting.name.clone(),
 			manifest_path: PathBuf::from(&setting.manifest_path),
-			icon: shortcut_icon_path_for_creation(setting, &renderer_exe),
+			icon: shortcut_icon_path_for_creation(setting, supervisor_exe),
 		})
 		.collect::<Vec<_>>();
 	let tasks = build_launcher_task_specs(supervisor_exe, working_dir, &profiles);
@@ -8154,7 +8167,7 @@ fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings:
 			icon: task.icon,
 		})
 		.collect::<Vec<_>>();
-	windows_integration::update_jump_list(UN_AVATAR_LAUNCHER_APP_ID, &tasks)
+	windows_integration::replace_jump_list(UN_AVATAR_LAUNCHER_APP_ID, LEGACY_UN_AVATAR_LAUNCHER_APP_IDS, &tasks)
 }
 
 #[cfg(not(windows))]
@@ -10432,9 +10445,13 @@ mod windows_integration {
 		Ok(())
 	}
 
-	pub(crate) fn update_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
+	pub(crate) fn replace_jump_list(app_id: &str, legacy_app_ids: &[&str], tasks: &[JumpListTask]) -> Result<(), String> {
 		ensure_com_initialized()?;
 		unsafe {
+			for legacy_app_id in legacy_app_ids {
+				delete_jump_list(legacy_app_id)?;
+			}
+			delete_jump_list(app_id)?;
 			let list: ICustomDestinationList =
 				CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
 			let app_id_wide = WideString::new(app_id);
@@ -10458,6 +10475,13 @@ mod windows_integration {
 			list.AddUserTasks(&array).map_err(format_windows_error)?;
 			list.CommitList().map_err(format_windows_error)?;
 		}
+		Ok(())
+	}
+
+	unsafe fn delete_jump_list(app_id: &str) -> Result<(), String> {
+		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let app_id = WideString::new(app_id);
+		let _ = list.DeleteList(app_id.as_pcwstr());
 		Ok(())
 	}
 
