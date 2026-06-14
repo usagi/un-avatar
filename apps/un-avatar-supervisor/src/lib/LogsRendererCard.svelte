@@ -2,6 +2,7 @@
 	import { _ } from "svelte-i18n";
 	import { Copy } from "lucide-svelte";
 	import { defaultRendererLogExpanded, filteredLinesForRendererData, rendererLineSeverity, type RendererLogData } from "./rendererLogs";
+	import { rendererStateLabel } from "./runtimeState";
 
 	export let renderer: RendererLogData;
 	export let logsTextFilter: string;
@@ -18,7 +19,7 @@
 		<button class="logs-card-toggle" aria-expanded={expanded} onclick={() => onToggleRendererLogExpanded(renderer)}>
 			{expanded ? "▼" : "▶"}
 			<strong>#{renderer.id} {renderer.name}</strong>
-			<span class={`state state-${renderer.state}`}>{renderer.state}</span>
+			<span class={`state state-${renderer.state}`}>{rendererStateLabel(renderer.state, $_)}</span>
 			<span class="logs-card-count">
 				{$_("logs.body.card_count", {
 					values: {

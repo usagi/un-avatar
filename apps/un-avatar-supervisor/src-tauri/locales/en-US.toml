@@ -763,6 +763,14 @@ profile = "Profile"
 path = "Path"
 pid = "PID"
 
+[renderers.state]
+starting = "Starting"
+running = "Running"
+stopping = "Stopping"
+exited = "Exited"
+crashed = "Crashed"
+degraded = "Degraded"
+
 [renderers.columns]
 state = "State"
 profile = "Profile"

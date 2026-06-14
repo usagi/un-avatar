@@ -2,7 +2,7 @@
 	import { _ } from "svelte-i18n";
 	import type { RendererTableView } from "./rendererTypes";
 	import { rendererHealthKind, rendererHealthLabel, type RuntimeTableStatusData } from "./runtimeLabels";
-	import { rendererStateClass } from "./runtimeState";
+	import { rendererStateClass, rendererStateLabel } from "./runtimeState";
 
 	export let renderer: RendererTableView;
 	export let status: RuntimeTableStatusData | null;
@@ -21,7 +21,7 @@
 			onOpenRendererLog(renderer.id);
 		}}
 	>
-		<span class={rendererStateClass(renderer.state)}>{renderer.state}</span>
+		<span class={rendererStateClass(renderer.state)}>{rendererStateLabel(renderer.state, $_)}</span>
 	</button>
 	<span class="process-health-line">
 		<span class={`process-health-dot health-${health}`}></span>

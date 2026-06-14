@@ -7,6 +7,12 @@ export function rendererStateClass(state: string): string {
 	return `state state-${state.toLowerCase()}`;
 }
 
+export function rendererStateLabel(state: string, translate: (key: string) => string): string {
+	const normalized = state.toLowerCase();
+	const known = ["starting", "running", "stopping", "exited", "crashed", "degraded"];
+	return known.includes(normalized) ? translate(`renderers.state.${normalized}`) : state;
+}
+
 export function countRendererStates<T extends { state: string }>(items: readonly T[]): RendererStateCounts {
 	let running = 0;
 	let issues = 0;

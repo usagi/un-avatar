@@ -102,7 +102,11 @@
 	import { DEFAULT_PROFILE_ICON_SRC, profileIconSrc } from "./lib/profileIcons";
 	import { localizedSettingSummary } from "./lib/profileStageSummary";
 	import { diagonalFovFromLensMm } from "./lib/profileDiagrams";
-	import { countErrorNotifications, countRendererStates } from "./lib/runtimeState";
+	import {
+		countErrorNotifications,
+		countRendererStates,
+		rendererStateLabel as localizedRendererStateLabel,
+	} from "./lib/runtimeState";
 	import {
 		defaultRendererLogExpanded,
 		filteredRendererLogLines as filterRendererLogLines,
@@ -1108,8 +1112,7 @@
 	}
 
 	function rendererStateLabel(state: RendererState): string {
-		if (state === "Running") return $_("profiles.live.running");
-		return state;
+		return localizedRendererStateLabel(state, $_);
 	}
 
 	function selectedRendererById(id: number | null): RendererInstance | null {

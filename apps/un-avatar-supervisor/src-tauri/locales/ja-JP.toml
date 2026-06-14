@@ -771,6 +771,14 @@ profile = "プロファイル"
 path = "パス"
 pid = "PID"
 
+[renderers.state]
+starting = "起動中"
+running = "実行中"
+stopping = "停止中"
+exited = "終了"
+crashed = "クラッシュ"
+degraded = "低下"
+
 [renderers.columns]
 state = "状態"
 profile = "プロファイル"
