@@ -1890,18 +1890,7 @@
 		try {
 			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
-				const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
-					settingId: savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
-					imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
-					crop: {
-						zoom: Number(unavatarProfileIconCrop.zoom) || 1,
-						offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
-						offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
-					},
-				});
-				replaceAvatarSetting(setting);
-				bumpProfileIconRevision(setting.icon_path);
-				queueRendererRestart(modal.rendererToRestart, "icon_path");
+				await saveUnavatarProfileIconCrop(savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId, modal.rendererToRestart);
 			}
 			message = $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
@@ -1994,24 +1983,33 @@
 		}
 	}
 
+	async function saveUnavatarProfileIconCrop(
+		settingId: string | null | undefined,
+		rendererToRestart: RendererInstance | null
+	): Promise<AvatarSetting | null> {
+		if (!settingId || !unavatarProfileIconCrop.imageDataUrl) return null;
+		const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
+			settingId,
+			imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
+			crop: {
+				zoom: Number(unavatarProfileIconCrop.zoom) || 1,
+				offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
+				offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
+			},
+		});
+		replaceAvatarSetting(setting);
+		bumpProfileIconRevision(setting.icon_path);
+		queueRendererRestart(rendererToRestart, "icon_path");
+		return setting;
+	}
+
 	async function saveUnavatarProfileIconFromModal(): Promise<void> {
 		const modal = unavatarMetadataModal;
 		if (!modal || !unavatarProfileIconCrop.enabled || !unavatarProfileIconCrop.imageDataUrl) return;
 		busy = true;
 		try {
-			const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
-				settingId: modal.settingId,
-				imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
-				crop: {
-					zoom: Number(unavatarProfileIconCrop.zoom) || 1,
-					offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
-					offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
-				},
-			});
+			await saveUnavatarProfileIconCrop(modal.settingId, modal.rendererToRestart);
 			unavatarMetadataModal = null;
-			replaceAvatarSetting(setting);
-			bumpProfileIconRevision(setting.icon_path);
-			queueRendererRestart(modal.rendererToRestart, "icon_path");
 			message = $_("profiles.messages.updated_unavatar_sample_icon");
 		} catch (error) {
 			message = String(error);
