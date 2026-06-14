@@ -51,7 +51,8 @@ const MAX_RENDERER_LOG_LINES: usize = 120;
 const MAX_STOPPED_RENDERER_HISTORY: usize = 20;
 const MAX_DIAGNOSTICS_PREVIEW_BYTES: u64 = 1024 * 1024;
 const MAX_UNAVATAR_METADATA_JSON_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_METADATA_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = MAX_METADATA_IMAGE_BYTES;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -3583,21 +3584,29 @@ fn gltf_image_bytes_from_metadata_source(
 ) -> Option<Vec<u8>> {
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
-			if base64_decoded_len_upper_bound(encoded)? > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES as usize {
-				return None;
-			}
-			let bytes = BASE64_STANDARD.decode(encoded).ok()?;
-			return (bytes.len() as u64 <= MAX_UNAVATAR_PREVIEW_IMAGE_BYTES).then_some(bytes);
+			return decode_limited_metadata_image_base64(encoded);
 		}
-		let path = safe_gltf_external_uri_path(gltf_metadata_source_path(source), uri)?;
-		if fs::metadata(&path).ok()?.len() > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
-			return None;
-		}
-		let bytes = fs::read(path).ok()?;
-		return (bytes.len() as u64 <= MAX_UNAVATAR_PREVIEW_IMAGE_BYTES).then_some(bytes);
+		return read_limited_gltf_external_image(gltf_metadata_source_path(source), uri);
 	}
 	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
 	gltf_buffer_view_bytes_from_source(root, source, buffer_view_index)
+}
+
+fn decode_limited_metadata_image_base64(encoded: &str) -> Option<Vec<u8>> {
+	if base64_decoded_len_upper_bound(encoded)? > MAX_METADATA_IMAGE_BYTES as usize {
+		return None;
+	}
+	let bytes = BASE64_STANDARD.decode(encoded).ok()?;
+	(bytes.len() as u64 <= MAX_METADATA_IMAGE_BYTES).then_some(bytes)
+}
+
+fn read_limited_gltf_external_image(source_path: &Path, uri: &str) -> Option<Vec<u8>> {
+	let path = safe_gltf_external_uri_path(source_path, uri)?;
+	if fs::metadata(&path).ok()?.len() > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
+	let bytes = fs::read(path).ok()?;
+	(bytes.len() as u64 <= MAX_METADATA_IMAGE_BYTES).then_some(bytes)
 }
 
 fn safe_gltf_external_uri_path(source_path: &Path, uri: &str) -> Option<PathBuf> {
@@ -3774,10 +3783,10 @@ fn vrm_metadata_thumbnail_image(
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if uri.starts_with("data:image/") {
 			let (mime, encoded) = data_image_base64_parts(uri)?;
-			let bytes = BASE64_STANDARD.decode(encoded).ok()?;
+			let bytes = decode_limited_metadata_image_base64(encoded)?;
 			return Some((mime, bytes));
 		}
-		let bytes = fs::read(path.parent()?.join(uri)).ok()?;
+		let bytes = read_limited_gltf_external_image(path, uri)?;
 		let mime = image_mime_type(image, uri)?;
 		return Some((mime, bytes));
 	}
@@ -3785,6 +3794,9 @@ fn vrm_metadata_thumbnail_image(
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
 	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
 	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())? as usize;
+	if length as u64 > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
 	let glb = gltf::Glb::from_slice(source_bytes).ok()?;
 	let bin = glb.bin?;
 	let end = offset.checked_add(length)?;
@@ -4192,14 +4204,17 @@ fn accessor_count(accessors: Option<&Vec<serde_json::Value>>, index: &serde_json
 fn gltf_image_bytes(image: &serde_json::Value, root: &serde_json::Value, source_bytes: &[u8], path: &Path) -> Option<Vec<u8>> {
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
-			return BASE64_STANDARD.decode(encoded).ok();
+			return decode_limited_metadata_image_base64(encoded);
 		}
-		return fs::read(path.parent()?.join(uri)).ok();
+		return read_limited_gltf_external_image(path, uri);
 	}
 	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
 	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
 	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())? as usize;
+	if length as u64 > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
 	let glb = gltf::Glb::from_slice(source_bytes).ok()?;
 	let bin = glb.bin?;
 	let end = offset.checked_add(length)?;
@@ -11036,6 +11051,19 @@ mod tests {
 		assert!(crate::safe_gltf_external_uri_path(&source_path, "../preview.png").is_none());
 		assert!(crate::safe_gltf_external_uri_path(&source_path, "/preview.png").is_none());
 		assert!(crate::safe_gltf_external_uri_path(&source_path, "C:/preview.png").is_none());
+	}
+
+	#[test]
+	fn gltf_image_bytes_rejects_external_traversal_and_oversized_data_uri() {
+		let source_path = PathBuf::from("C:/avatars/model/avatar.gltf");
+		let traversal = serde_json::json!({ "uri": "../preview.png" });
+		assert!(crate::gltf_image_bytes(&traversal, &serde_json::json!({}), &[], &source_path).is_none());
+
+		let encoded_len = ((crate::MAX_METADATA_IMAGE_BYTES as usize + 1) * 4).div_ceil(3);
+		let oversized = serde_json::json!({
+			"uri": format!("data:image/png;base64,{}", "A".repeat(encoded_len))
+		});
+		assert!(crate::gltf_image_bytes(&oversized, &serde_json::json!({}), &[], &source_path).is_none());
 	}
 
 	#[test]
