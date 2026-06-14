@@ -9642,10 +9642,10 @@ fn apply_spring_bone_category_override_value(
 	let rest = field
 		.strip_prefix("physics.dynamics.solver.overrides.")
 		.or_else(|| field.strip_prefix("physics.spring_bone.overrides."))
-		.ok_or_else(|| format!("invalid Dynamics override field: {field}"))?;
+		.ok_or_else(|| format!("invalid UNPhysics override field: {field}"))?;
 	let (category, key) = rest
 		.split_once('.')
-		.ok_or_else(|| format!("invalid Dynamics override field: {field}"))?;
+		.ok_or_else(|| format!("invalid UNPhysics override field: {field}"))?;
 	let category = normalize_spring_bone_category_id(category);
 	let authored = spring_bone_authored_params_for_setting(setting, &category);
 	if key == "mode" {
@@ -9667,7 +9667,7 @@ fn apply_spring_bone_category_override_value(
 	if key == "preset" {
 		let preset = json_string(&value, field)?;
 		if spring_bone_category_override_solver(manifest, &category).as_deref() != Some("xpbd") {
-			return Err(format!("{field} can be applied only when Dynamics mode is Override: XPBD"));
+			return Err(format!("{field} can be applied only when UNPhysics mode is Override: XPBD"));
 		}
 		set_spring_bone_category_recommended_preset(manifest, &category, &preset)?;
 		return Ok(());
@@ -9684,7 +9684,7 @@ fn apply_spring_bone_category_override_value(
 		"stiffness_hz" => ("stiffness_hz", ranged_float_toml_value(&value, field, 0.0..=60.0, "[0, 60]")?),
 		"xpbd_compliance" => ("xpbd_compliance", ranged_float_toml_value(&value, field, 0.0..=10.0, "[0, 10]")?),
 		"constraint_iterations" => ("constraint_iterations", ranged_u32_toml_value(&value, field, 1..=32, "[1, 32]")?),
-		_ => return Err(format!("unknown Dynamics override field: {field}")),
+		_ => return Err(format!("unknown UNPhysics override field: {field}")),
 	};
 	set_spring_bone_category_override_value(manifest, &category, toml_key, toml_value)
 }
@@ -9765,7 +9765,7 @@ fn set_spring_bone_category_mode(
 
 fn set_spring_bone_category_recommended_preset(manifest: &mut toml::Value, category: &str, preset: &str) -> Result<(), String> {
 	let preset = spring_bone_recommended_preset(category, preset)
-		.ok_or_else(|| format!("unknown Dynamics recommended preset: {category}.{preset}"))?;
+		.ok_or_else(|| format!("unknown UNPhysics recommended preset: {category}.{preset}"))?;
 	replace_spring_bone_category_override(
 		manifest,
 		category,
