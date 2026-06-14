@@ -1580,6 +1580,11 @@ td small {
 	--section-accent: #95d5b2;
 }
 
+.profile-section-nav button[data-section="physics"],
+.editor-section[data-profile-section="physics"] {
+	--section-accent: #8de7f2;
+}
+
 .profile-section-nav button[data-section="output"],
 .editor-section[data-profile-section="output"] {
 	--section-accent: #ffd166;
