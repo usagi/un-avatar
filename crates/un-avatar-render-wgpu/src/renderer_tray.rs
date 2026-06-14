@@ -13,7 +13,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{gpu, AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnapshot};
 
-const TRAY_ICON_ID: &str = "un-avatar-renderer-tray";
+const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
 
 #[derive(Clone, Debug)]
 pub(crate) enum RendererTrayAction {
@@ -42,7 +42,7 @@ impl RendererTray {
 	pub(crate) fn new(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> Result<Self, String> {
 		let (menu, actions) = build_menu(opts, snapshot);
 		let icon = TrayIconBuilder::new()
-			.with_id(TRAY_ICON_ID)
+			.with_id(tray_icon_id())
 			.with_tooltip(tray_tooltip(opts, snapshot))
 			.with_icon(load_tray_icon(opts.icon_path.as_deref()).unwrap_or_else(default_tray_icon))
 			.with_menu(Box::new(menu))
@@ -417,6 +417,10 @@ fn tray_tooltip(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) 
 	)
 }
 
+fn tray_icon_id() -> String {
+	format!("{TRAY_ICON_ID_PREFIX}-{}", std::process::id())
+}
+
 fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
 		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
@@ -656,5 +660,12 @@ mod tests {
 		let tooltip = tray_tooltip(&opts, &status);
 		assert!(tooltip.contains("mizuki-split"));
 		assert!(tooltip.contains("Spout2"));
+	}
+
+	#[test]
+	fn tray_icon_id_is_renderer_process_scoped() {
+		let id = tray_icon_id();
+		assert!(id.starts_with(TRAY_ICON_ID_PREFIX));
+		assert!(id.ends_with(&std::process::id().to_string()));
 	}
 }
