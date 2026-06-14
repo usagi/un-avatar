@@ -10908,6 +10908,48 @@ mod tests {
 	}
 
 	#[test]
+	fn profile_icon_crop_encoder_reaches_landscape_edges() {
+		let mut source = image::RgbaImage::new(320, 180);
+		for (x, _, pixel) in source.enumerate_pixels_mut() {
+			*pixel = if x < 160 {
+				image::Rgba([240, 32, 24, 255])
+			} else {
+				image::Rgba([24, 48, 240, 255])
+			};
+		}
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let left = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: -1.0,
+				offset_y: 0.0,
+			},
+		)
+		.unwrap();
+		let right = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 1.0,
+				offset_y: 0.0,
+			},
+		)
+		.unwrap();
+		let left = image::load_from_memory(&left).unwrap().to_rgba8();
+		let right = image::load_from_memory(&right).unwrap().to_rgba8();
+		let left_red: u64 = left.pixels().map(|pixel| pixel[0] as u64).sum();
+		let left_blue: u64 = left.pixels().map(|pixel| pixel[2] as u64).sum();
+		let right_red: u64 = right.pixels().map(|pixel| pixel[0] as u64).sum();
+		let right_blue: u64 = right.pixels().map(|pixel| pixel[2] as u64).sum();
+		assert!(left_red > left_blue, "left crop should favor the red side");
+		assert!(right_blue > right_red, "right crop should favor the blue side");
+	}
+
+	#[test]
 	fn profile_icon_thumbnail_cache_encodes_resized_webp() {
 		let source = image::RgbaImage::from_pixel(512, 384, image::Rgba([255, 128, 96, 220]));
 		let mut png = Vec::new();
