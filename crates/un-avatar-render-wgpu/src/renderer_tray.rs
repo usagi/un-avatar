@@ -58,12 +58,12 @@ impl RendererTray {
 
 	pub(crate) fn refresh(&mut self, opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) {
 		let key = menu_key(snapshot);
+		let _ = self.icon.set_tooltip(Some(tray_tooltip(opts, snapshot)));
 		if key == self.last_menu_key {
 			return;
 		}
 		let (menu, actions) = build_menu(opts, snapshot);
 		self.icon.set_menu(Some(Box::new(menu)));
-		let _ = self.icon.set_tooltip(Some(tray_tooltip(opts, snapshot)));
 		self.actions = actions;
 		self.last_menu_key = key;
 	}
