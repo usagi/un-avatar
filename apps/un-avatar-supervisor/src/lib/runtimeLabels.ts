@@ -1,5 +1,5 @@
 import { aaModeLabel, formatBytes, runtimeMetric, textureModeLabel } from "./formatting";
-import { outputLabel, type OutputLabelData } from "./profileLabels";
+import type { OutputLabelData } from "./profileLabels";
 import type { TextureCompressionAdvanced } from "./profileTypes";
 
 export type RuntimeTextureSummaryLabelData = {
@@ -224,27 +224,6 @@ export function rendererHealthLabel(
 		return labels.attention ?? "Attention";
 	}
 	return labels.connected;
-}
-
-export function runtimeOutputLabel(renderer: OutputLabelData, status: RuntimeOutputStatusData | null | undefined): string {
-	if (!status?.connected) return outputLabel(renderer);
-	if (renderer.spout_enabled && !status.spout_available) return "Spout2 unavailable";
-	if (!status.spout_enabled) return "Window";
-	const name = status.spout_name ? ` / ${status.spout_name}` : "";
-	const size =
-		status.spout_sender_width && status.spout_sender_height ? ` / ${status.spout_sender_width} x ${status.spout_sender_height}` : "";
-	return `Spout2${name}${size}`;
-}
-
-export function spoutHealthLabel(status: RuntimeSpoutStatusLabelData | null, pendingLabel: string): string {
-	if (!status?.connected) return pendingLabel;
-	if (!status.spout_enabled) return "Disabled";
-	if (!status.spout_available) return "Backend unavailable";
-	if (status.spout_frames_attempted === 0) return "Waiting for first frame";
-	const failed = status.spout_frame_failures;
-	const total = status.spout_frames_attempted;
-	const state = status.spout_last_send_ok === false ? "Failing" : "Sending";
-	return `${state}: ${status.spout_frames_sent}/${total} frames, ${failed} failed`;
 }
 
 export function localizedSpoutHealthLabel(status: RuntimeSpoutStatusLabelData | null, labels: RuntimeStatusLabels): string {
