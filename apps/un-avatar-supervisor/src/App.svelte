@@ -470,6 +470,14 @@
 				})
 			: []
 	);
+
+	$effect(() => {
+		if (rendererPaneTab !== "expressions" || !selectedRuntimeStatus) return;
+		if (selectedRuntimeStatus.expression_presets.length === 0) {
+			rendererPaneTab = "overview";
+		}
+	});
+
 	function hintFromEventTarget(event: Event): string | undefined {
 		const target = event.target instanceof HTMLElement ? event.target : null;
 		return target?.closest<HTMLElement>("[data-hint]")?.dataset.hint;
