@@ -720,6 +720,10 @@ small,
 	justify-content: flex-start;
 }
 
+.profile-stage-title-row .profile-stage-action-buttons button {
+	flex: 0 0 auto;
+}
+
 .profile-pending-action-slot + .profile-stage-action-group {
 	padding-left: 0;
 	border-left: 0;
@@ -827,6 +831,13 @@ small,
 	max-width: 32px;
 	flex: 0 0 32px;
 	padding: 0;
+}
+
+.profile-stage-title-row .profile-stage-action-buttons > button:not(.profile-stage-primary-action):has(span) {
+	width: auto;
+	max-width: 150px;
+	flex: 0 0 auto;
+	padding: 0 10px;
 }
 
 .profile-stage-action-buttons > .profile-stage-primary-action {
