@@ -189,15 +189,18 @@
 				</div>
 			{/if}
 			{#if selectedPreview}
-				<div class="unavatar-icon-crop-panel">
+				<div class="unavatar-icon-crop-panel" class:enabled={profileIconCrop.enabled}>
 					<label class="unavatar-icon-crop-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
 						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
-						<span>{$_("unavatar_rights.profile_icon")}</span>
+						<span>{$_("unavatar_rights.use_preview_as_profile_icon")}</span>
 					</label>
-					<div class="unavatar-crop-zoom-actions" aria-label={$_("unavatar_rights.icon_zoom")}>
-						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_out")} onclick={() => adjustZoom(-0.15)}>&minus;</button>
-						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}>{$_("unavatar_rights.icon_reset")}</button>
-						<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_in")} onclick={() => adjustZoom(0.15)}>+</button>
+					<div class="unavatar-crop-tools">
+						<span>{$_("unavatar_rights.icon_frame")}</span>
+						<div class="unavatar-crop-zoom-actions" aria-label={$_("unavatar_rights.icon_zoom")}>
+							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_out")} onclick={() => adjustZoom(-0.15)}>&minus;</button>
+							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}>{$_("unavatar_rights.icon_reset")}</button>
+							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_in")} onclick={() => adjustZoom(0.15)}>+</button>
+						</div>
 					</div>
 				</div>
 			{/if}
