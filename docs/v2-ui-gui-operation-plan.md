@@ -74,6 +74,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 - Physics group adjustments are template-backed overrides over model-load resolved groups. v2 may ship the built-in Hair / Ears / Tail / Cloth / Accessory / Other templates, but the target UI model is an arbitrary override list with editable partial-match keywords and parameters. Template add actions such as standard base, animal ears/tail, cloth, and body/skin can seed that list without making model-specific hacks.
 - Material authored values stay authored. Supervisor profile UI should not provide broad v1-style controls that push one Outline / Rim / MatCap / Specular / AO value into every material.
 - Screen / viewer effects may be profile controls: Silhouette Outline, Bloom, SSAO, contact shadow, color grading, background, capture / output policy.
+- Runtime status labels should describe user-visible operation. Prefer `Live` / `No response` style wording over transport-centric `connected` / `disconnected` in Supervisor UI and diagnostics previews.
 - Runtime UI should show only operations that can work now, or clearly mark unavailable backend support. Do not advertise headless output until the renderer architecture supports it.
 
 ## Implementation Order
