@@ -3290,26 +3290,7 @@ fn unavatar_wardrobe_preview_sets(
 			let previews = unavatar_set_preview_images(set)?;
 			let preview_images = previews
 				.iter()
-				.filter_map(|preview| {
-					let buffer_view = preview.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
-					let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
-					let mime = preview
-						.get("mimeType")
-						.and_then(serde_json::Value::as_str)
-						.and_then(supported_image_mime_type)?;
-					Some(UnavatarPreviewImage {
-						view: preview.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
-						width: preview
-							.get("width")
-							.and_then(serde_json::Value::as_u64)
-							.and_then(|value| u32::try_from(value).ok()),
-						height: preview
-							.get("height")
-							.and_then(serde_json::Value::as_u64)
-							.and_then(|value| u32::try_from(value).ok()),
-						data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
-					})
-				})
+				.filter_map(|preview| unavatar_preview_image_from_item(preview, root, source))
 				.collect::<Vec<_>>();
 			(!preview_images.is_empty()).then(|| UnavatarPreviewSet {
 				id: id.to_string(),
@@ -3418,6 +3399,37 @@ fn unavatar_preview_image_from_buffer_view(
 		.get("mimeType")
 		.and_then(serde_json::Value::as_str)
 		.and_then(supported_image_mime_type)?;
+	Some(UnavatarPreviewImage {
+		view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+		width: item
+			.get("width")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		height: item
+			.get("height")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+	})
+}
+
+fn unavatar_preview_image_from_item(
+	item: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<UnavatarPreviewImage> {
+	if item.get("bufferView").is_some() {
+		return unavatar_preview_image_from_buffer_view(item, root, source);
+	}
+	let images = root.get("images").and_then(serde_json::Value::as_array)?;
+	let index = unavatar_preview_image_index_from_object(item)? as usize;
+	let image = images.get(index)?;
+	let bytes = gltf_image_bytes_from_metadata_source(image, root, source)?;
+	let mime = item
+		.get("mimeType")
+		.and_then(serde_json::Value::as_str)
+		.and_then(supported_image_mime_type)
+		.or_else(|| image_mime_type(image, ""))?;
 	Some(UnavatarPreviewImage {
 		view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
 		width: item
@@ -11023,6 +11035,76 @@ mod tests {
 		assert_eq!(field_metadata.preview_images[0].width, Some(1));
 		assert_eq!(field_metadata.preview_images[0].height, Some(1));
 		assert!(field_metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_wardrobe_preview_image_indices() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-wardrobe-image-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "images": [
+    {{ "mimeType": "image/png", "bufferView": 0 }},
+    {{ "mimeType": "image/png", "bufferView": 1 }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Wardrobe Image Preview UNAvatar" }},
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "front", "width": 1, "height": 1, "image": 0 }},
+              {{ "view": "back", "width": 1, "height": 1, "imageIndex": 1 }}
+            ]
+          }}
+        ]
+      }}
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len
+			),
+			&bin,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 2);
+		assert_eq!(metadata.preview_images.len(), 2);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
 	}
 
 	#[test]
