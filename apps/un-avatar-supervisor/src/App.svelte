@@ -3,8 +3,6 @@
 	import { listen } from "@tauri-apps/api/event";
 	import { _ } from "svelte-i18n";
 	import { setUiLocale } from "@usagi.network/un-i18n-svelte";
-	import AppSettingsView from "./lib/AppSettingsView.svelte";
-	import LogsView from "./lib/LogsView.svelte";
 	import ProfileAvatarSection from "./lib/ProfileAvatarSection.svelte";
 	import ProfileCameraSection from "./lib/ProfileCameraSection.svelte";
 	import ProfileIdentitySection from "./lib/ProfileIdentitySection.svelte";
@@ -38,8 +36,6 @@
 	import RendererReadyStage from "./lib/RendererReadyStage.svelte";
 	import RendererStage from "./lib/RendererStage.svelte";
 	import RenderersToolbar from "./lib/RenderersToolbar.svelte";
-	import UnavatarRightsModal from "./lib/UnavatarRightsModal.svelte";
-	import VrmMetadataModal from "./lib/VrmMetadataModal.svelte";
 	import type {
 		RendererCameraSnapshot,
 		RendererInstance,
@@ -55,20 +51,8 @@
 		type UnavatarProfileIconCrop,
 	} from "./lib/unavatarMetadata";
 	import { loadAppSettings, saveAppSettings, type AppSettings, type ThemeMode } from "./lib/appSettings";
-	import type { AppNotification, DiagnosticsExportEntry, NativeNotificationStatus } from "./lib/appTypes";
+	import type { AppNotification, NativeNotificationStatus } from "./lib/appTypes";
 	import { cameraOrbitPresetAngles, type CameraOrbitPreset } from "./lib/cameraPresets";
-	import {
-		countTextMatches,
-		diagnosticsBundleFindings,
-		diagnosticsBundleFromText,
-		diagnosticsBundleSummary,
-		diagnosticsComparisonDetails,
-		diagnosticsComparisonSummary,
-		diagnosticsEntrySearchText,
-		diagnosticsEntryTime,
-		diagnosticsRendererComparisonDetails,
-		diagnosticsRendererInsights,
-	} from "./lib/diagnostics";
 	import {
 		aaModeLabel,
 		basename,
@@ -235,7 +219,6 @@
 	let rendererActivationSeq = new Map<number, number>();
 	let notifications = $state<AppNotification[]>([]);
 	let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
-	let diagnosticsExports = $state<DiagnosticsExportEntry[]>([]);
 	let avatarSettings = $state<AvatarSetting[]>([]);
 	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
@@ -286,13 +269,6 @@
 		offsetX: 0,
 		offsetY: 0,
 	});
-	let lastDiagnosticsPath = $state<string | null>(null);
-	let lastDiagnosticsArchivePath = $state<string | null>(null);
-	let diagnosticsPreviewTitle = $state<string | null>(null);
-	let diagnosticsPreviewText = $state<string | null>(null);
-	let diagnosticsSearch = $state("");
-	let diagnosticsComparePaths = $state<string[]>([]);
-	let diagnosticsCompareTexts = $state<Record<string, string>>({});
 	let osTheme = $state<"light" | "dark">(detectOsTheme());
 	let appSettings = $state<AppSettings>(loadAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey));
 	let colorDisplayMode = $state<ColorDisplayMode>(loadColorDisplayMode(COLOR_DISPLAY_MODE_KEY));
@@ -403,80 +379,6 @@
 	const runningCount = $derived(rendererStatusCounts.running);
 	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
-	const diagnosticsSearchQuery = $derived(diagnosticsSearch.trim().toLowerCase());
-	const filteredDiagnosticsExports = $derived(
-		diagnosticsSearchQuery
-			? diagnosticsExports.filter((entry) => diagnosticsEntrySearchText(entry).includes(diagnosticsSearchQuery))
-			: diagnosticsExports
-	);
-	const diagnosticsExportByPath = $derived(
-		(() => {
-			const byPath = new Map<string, DiagnosticsExportEntry>();
-			for (const entry of diagnosticsExports) {
-				byPath.set(entry.path, entry);
-			}
-			return byPath;
-		})()
-	);
-	const diagnosticsPreviewMatchCount = $derived(
-		diagnosticsPreviewText && diagnosticsSearchQuery ? countTextMatches(diagnosticsPreviewText, diagnosticsSearchQuery) : null
-	);
-	const diagnosticsPreviewBundle = $derived(diagnosticsPreviewText ? diagnosticsBundleFromText(diagnosticsPreviewText) : null);
-	const diagnosticsPreviewSummary = $derived(
-		diagnosticsPreviewBundle
-			? diagnosticsBundleSummary(diagnosticsPreviewBundle)
-			: diagnosticsPreviewText
-				? [{ label: "Summary", value: "Invalid diagnostics JSON" }]
-				: []
-	);
-	const diagnosticsPreviewFindings = $derived(diagnosticsPreviewBundle ? diagnosticsBundleFindings(diagnosticsPreviewBundle) : []);
-	const diagnosticsPreviewRenderers = $derived(
-		diagnosticsPreviewBundle
-			? diagnosticsRendererInsights(diagnosticsPreviewBundle, {
-					pending: $_("renderers.summary.pending"),
-					connected: $_("renderers.summary.connected"),
-					disconnected: $_("renderers.summary.disconnected"),
-				})
-			: []
-	);
-	const diagnosticsCompareEntries = $derived(
-		(() => {
-			const entries: DiagnosticsExportEntry[] = [];
-			for (const path of diagnosticsComparePaths) {
-				const entry = diagnosticsExportByPath.get(path);
-				if (entry) entries.push(entry);
-			}
-			return entries;
-		})()
-	);
-	const diagnosticsCompareBundles = $derived(
-		(() => {
-			const bundles: Record<string, unknown>[] = [];
-			for (const entry of diagnosticsCompareEntries) {
-				const bundle = diagnosticsBundleFromText(diagnosticsCompareTexts[entry.path] ?? "");
-				if (bundle) bundles.push(bundle);
-			}
-			return bundles;
-		})()
-	);
-	const diagnosticsCompareSummary = $derived(
-		diagnosticsCompareEntries.length === 2
-			? diagnosticsComparisonSummary(diagnosticsCompareEntries[0], diagnosticsCompareEntries[1])
-			: null
-	);
-	const diagnosticsCompareDetails = $derived(
-		diagnosticsCompareEntries.length === 2 && diagnosticsCompareBundles.length === 2
-			? diagnosticsComparisonDetails(diagnosticsCompareBundles[0], diagnosticsCompareBundles[1])
-			: []
-	);
-	const diagnosticsCompareRendererDetails = $derived(
-		diagnosticsCompareEntries.length === 2 && diagnosticsCompareBundles.length === 2
-			? diagnosticsRendererComparisonDetails(diagnosticsCompareBundles[0], diagnosticsCompareBundles[1], {
-					pending: $_("renderers.summary.pending"),
-				})
-			: []
-	);
-
 	$effect(() => {
 		if (rendererPaneTab !== "expressions" || !selectedRuntimeStatus) return;
 		if (selectedRuntimeStatus.expression_presets.length === 0) {
@@ -1105,31 +1007,6 @@
 		return formatClockTimeFromUnixSecs(notification.created_at_secs);
 	}
 
-	async function toggleDiagnosticsCompare(entry: DiagnosticsExportEntry): Promise<void> {
-		if (diagnosticsComparePaths.includes(entry.path)) {
-			diagnosticsComparePaths = diagnosticsComparePaths.filter((path) => path !== entry.path);
-			return;
-		}
-		if (hasTauriRuntime() && !diagnosticsCompareTexts[entry.path]) {
-			try {
-				diagnosticsCompareTexts = {
-					...diagnosticsCompareTexts,
-					[entry.path]: await invoke<string>("read_diagnostics_export", {
-						path: entry.path,
-					}),
-				};
-			} catch (error) {
-				message = String(error);
-				return;
-			}
-		}
-		diagnosticsComparePaths = [...diagnosticsComparePaths.slice(-1), entry.path];
-	}
-
-	function isDiagnosticsCompared(entry: DiagnosticsExportEntry): boolean {
-		return diagnosticsComparePaths.includes(entry.path);
-	}
-
 	function rendererStateLabel(state: RendererState): string {
 		return localizedRendererStateLabel(state, $_);
 	}
@@ -1225,9 +1102,6 @@
 			runtimeStatuses = {};
 			notifications = [];
 			nativeNotificationStatus = null;
-			diagnosticsExports = [];
-			diagnosticsPreviewTitle = null;
-			diagnosticsPreviewText = null;
 			avatarSettings = browserPreviewSettings;
 			selectedSettingId = pickInitialSelectedSettingId(
 				selectedSettingId,
@@ -1379,82 +1253,6 @@
 			message = String(error);
 		} finally {
 			busy = false;
-		}
-	}
-
-	async function exportDiagnostics(): Promise<void> {
-		if (!hasTauriRuntime()) {
-			message = $_("logs.messages.diagnostics_export_requires_tauri");
-			return;
-		}
-		try {
-			const path = await invoke<string>("export_diagnostics");
-			lastDiagnosticsPath = path;
-			lastDiagnosticsArchivePath = null;
-			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = $_("logs.messages.diagnostics_exported", { values: { name: basename(path) } });
-		} catch (error) {
-			message = String(error);
-		}
-	}
-
-	async function compressLastDiagnostics(): Promise<void> {
-		if (!lastDiagnosticsPath) return;
-		if (!hasTauriRuntime()) {
-			message = $_("logs.messages.diagnostics_compression_requires_tauri");
-			return;
-		}
-		try {
-			const path = await invoke<string>("compress_diagnostics", {
-				path: lastDiagnosticsPath,
-			});
-			lastDiagnosticsArchivePath = path;
-			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = $_("logs.messages.diagnostics_archive_created", { values: { name: basename(path) } });
-		} catch (error) {
-			message = String(error);
-		}
-	}
-
-	async function revealLastDiagnostics(): Promise<void> {
-		await revealPath(lastDiagnosticsPath);
-	}
-
-	async function revealLastDiagnosticsArchive(): Promise<void> {
-		await revealPath(lastDiagnosticsArchivePath);
-	}
-
-	async function compressDiagnosticsEntry(entry: DiagnosticsExportEntry): Promise<void> {
-		if (!hasTauriRuntime()) {
-			message = $_("logs.messages.diagnostics_compression_requires_tauri");
-			return;
-		}
-		try {
-			const path = await invoke<string>("compress_diagnostics", {
-				path: entry.path,
-			});
-			lastDiagnosticsPath = entry.path;
-			lastDiagnosticsArchivePath = path;
-			diagnosticsExports = await invoke<DiagnosticsExportEntry[]>("list_diagnostics_exports");
-			message = $_("logs.messages.diagnostics_archive_created", { values: { name: basename(path) } });
-		} catch (error) {
-			message = String(error);
-		}
-	}
-
-	async function previewDiagnosticsEntry(entry: DiagnosticsExportEntry): Promise<void> {
-		if (!hasTauriRuntime()) {
-			message = $_("logs.messages.diagnostics_preview_requires_tauri");
-			return;
-		}
-		try {
-			diagnosticsPreviewText = await invoke<string>("read_diagnostics_export", {
-				path: entry.path,
-			});
-			diagnosticsPreviewTitle = basename(entry.path);
-			message = $_("logs.messages.previewing", { values: { name: basename(entry.path) } });
-		} catch (error) {
-			message = String(error);
 		}
 	}
 
@@ -3438,64 +3236,76 @@
 				</div>
 			</section>
 		{:else if activeTab === "logs"}
-			<LogsView
-				{renderers}
-				bind:rendererLogsLayout
-				bind:logsRendererFilter
-				bind:logsTextFilter
-				bind:logsAutoscroll
-				{rendererLogsCopyFlash}
-				{rendererLogsExpanded}
-				onCopyAllRendererLogs={() => void copyAllRendererLogs()}
-				onSaveAllRendererLogs={() => void saveAllRendererLogs()}
-				onRevealSupervisorLogsDir={() => void revealSupervisorLogsDir()}
-				onCopyRendererLog={(renderer) => {
-					const fullRenderer = rendererById.get(renderer.id);
-					if (fullRenderer) void copyRendererLog(fullRenderer);
-				}}
-				onToggleRendererLogExpanded={(renderer) => {
-					const fullRenderer = rendererById.get(renderer.id);
-					if (fullRenderer) toggleRendererLogExpanded(fullRenderer);
-				}}
-				onLogsViewRef={(element) => (logsViewRef = element)}
-			/>
+			{#await import("./lib/LogsView.svelte") then module}
+				{@const LogsView = module.default}
+				<LogsView
+					{renderers}
+					bind:rendererLogsLayout
+					bind:logsRendererFilter
+					bind:logsTextFilter
+					bind:logsAutoscroll
+					{rendererLogsCopyFlash}
+					{rendererLogsExpanded}
+					onCopyAllRendererLogs={() => void copyAllRendererLogs()}
+					onSaveAllRendererLogs={() => void saveAllRendererLogs()}
+					onRevealSupervisorLogsDir={() => void revealSupervisorLogsDir()}
+					onCopyRendererLog={(renderer) => {
+						const fullRenderer = rendererById.get(renderer.id);
+						if (fullRenderer) void copyRendererLog(fullRenderer);
+					}}
+					onToggleRendererLogExpanded={(renderer) => {
+						const fullRenderer = rendererById.get(renderer.id);
+						if (fullRenderer) toggleRendererLogExpanded(fullRenderer);
+					}}
+					onLogsViewRef={(element) => (logsViewRef = element)}
+				/>
+			{/await}
 		{:else}
-			<AppSettingsView
-				{appSettings}
-				{availableLocales}
-				{appVersion}
-				{nativeNotificationStatus}
-				{busy}
-				{settingsHint}
-				{defaultSettingsHint}
-				onSettingsHintEvent={updateSettingsHintFromEvent}
-				onClearSettingsHint={clearSettingsHint}
-				onSetThemeMode={setThemeMode}
-				onSetAppSetting={(key, value) => setAppSetting(key, value)}
-				onSetLocale={setLocaleSetting}
-				onSendTestNativeNotification={() => sendTestNativeNotification()}
-				onClearTaskbarProfilePins={() => clearTaskbarProfilePins()}
-				onOpenExternalLink={(url) => openExternalLink(url)}
-			/>
+			{#await import("./lib/AppSettingsView.svelte") then module}
+				{@const AppSettingsView = module.default}
+				<AppSettingsView
+					{appSettings}
+					{availableLocales}
+					{appVersion}
+					{nativeNotificationStatus}
+					{busy}
+					{settingsHint}
+					{defaultSettingsHint}
+					onSettingsHintEvent={updateSettingsHintFromEvent}
+					onClearSettingsHint={clearSettingsHint}
+					onSetThemeMode={setThemeMode}
+					onSetAppSetting={(key, value) => setAppSetting(key, value)}
+					onSetLocale={setLocaleSetting}
+					onSendTestNativeNotification={() => sendTestNativeNotification()}
+					onClearTaskbarProfilePins={() => clearTaskbarProfilePins()}
+					onOpenExternalLink={(url) => openExternalLink(url)}
+				/>
+			{/await}
 		{/if}
 	</div>
 	{#if vrmMetadataModal}
-		<VrmMetadataModal
-			modal={vrmMetadataModal}
-			{busy}
-			bind:useThumbnailForProfileIconOnAccept
-			onClose={closeVrmMetadataModal}
-			onAcceptAndUse={acceptVrmMetadataAndUse}
-		/>
+		{#await import("./lib/VrmMetadataModal.svelte") then module}
+			{@const VrmMetadataModal = module.default}
+			<VrmMetadataModal
+				modal={vrmMetadataModal}
+				{busy}
+				bind:useThumbnailForProfileIconOnAccept
+				onClose={closeVrmMetadataModal}
+				onAcceptAndUse={acceptVrmMetadataAndUse}
+			/>
+		{/await}
 	{/if}
 	{#if unavatarMetadataModal}
-		<UnavatarRightsModal
-			modal={unavatarMetadataModal}
-			{busy}
-			bind:profileIconCrop={unavatarProfileIconCrop}
-			onClose={closeUnavatarMetadataModal}
-			onAcceptAndUse={acceptUnavatarMetadataAndUse}
-			onSaveProfileIcon={saveUnavatarProfileIconFromModal}
-		/>
+		{#await import("./lib/UnavatarRightsModal.svelte") then module}
+			{@const UnavatarRightsModal = module.default}
+			<UnavatarRightsModal
+				modal={unavatarMetadataModal}
+				{busy}
+				bind:profileIconCrop={unavatarProfileIconCrop}
+				onClose={closeUnavatarMetadataModal}
+				onAcceptAndUse={acceptUnavatarMetadataAndUse}
+				onSaveProfileIcon={saveUnavatarProfileIconFromModal}
+			/>
+		{/await}
 	{/if}
 </main>

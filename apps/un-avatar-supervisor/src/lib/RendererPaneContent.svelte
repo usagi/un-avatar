@@ -1,7 +1,4 @@
 <script lang="ts">
-	import RendererControlsPane from "./RendererControlsPane.svelte";
-	import RendererDiagnosticsPane from "./RendererDiagnosticsPane.svelte";
-	import RendererExpressionsPane from "./RendererExpressionsPane.svelte";
 	import RendererOverviewPane from "./RendererOverviewPane.svelte";
 	import type { ExpressionOverrides } from "./rendererExpressions";
 	import type { RendererPaneActions } from "./rendererPaneActions";
@@ -37,36 +34,45 @@
 {#if rendererPaneTab === "overview"}
 	<RendererOverviewPane {renderer} {runtimeStatus} />
 {:else if rendererPaneTab === "controls"}
-	<RendererControlsPane
-		{renderer}
-		{runtimeStatus}
-		{busy}
-		{colorDisplayMode}
-		{onSetSpoutOutput}
-		{onSetWindow}
-		{onSaveWindow}
-		{onRestoreWindow}
-		{onSetShowAxes}
-		{onSetShowBoneColliders}
-		{onSetCameraLock}
-		{onSetCameraOrbitPreset}
-		{onSaveCamera}
-		{onRestoreCamera}
-		{onSetClearColor}
-		{onColorModeChange}
-		{onActivateWardrobeMenuCandidate}
-	/>
+	{#await import("./RendererControlsPane.svelte") then module}
+		{@const RendererControlsPane = module.default}
+		<RendererControlsPane
+			{renderer}
+			{runtimeStatus}
+			{busy}
+			{colorDisplayMode}
+			{onSetSpoutOutput}
+			{onSetWindow}
+			{onSaveWindow}
+			{onRestoreWindow}
+			{onSetShowAxes}
+			{onSetShowBoneColliders}
+			{onSetCameraLock}
+			{onSetCameraOrbitPreset}
+			{onSaveCamera}
+			{onRestoreCamera}
+			{onSetClearColor}
+			{onColorModeChange}
+			{onActivateWardrobeMenuCandidate}
+		/>
+	{/await}
 {:else if rendererPaneTab === "expressions"}
-	<RendererExpressionsPane
-		rendererId={renderer.id}
-		rendererPid={renderer.pid}
-		{busy}
-		expressionPresets={runtimeStatus?.expression_presets ?? []}
-		{expressionOverrides}
-		bind:expressionFilter
-		{onClearExpressionOverrides}
-		{onSetExpressionOverride}
-	/>
+	{#await import("./RendererExpressionsPane.svelte") then module}
+		{@const RendererExpressionsPane = module.default}
+		<RendererExpressionsPane
+			rendererId={renderer.id}
+			rendererPid={renderer.pid}
+			{busy}
+			expressionPresets={runtimeStatus?.expression_presets ?? []}
+			{expressionOverrides}
+			bind:expressionFilter
+			{onClearExpressionOverrides}
+			{onSetExpressionOverride}
+		/>
+	{/await}
 {:else if rendererPaneTab === "diagnostics"}
-	<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} {onSetAllDynamicsEnabled} />
+	{#await import("./RendererDiagnosticsPane.svelte") then module}
+		{@const RendererDiagnosticsPane = module.default}
+		<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} {onSetAllDynamicsEnabled} />
+	{/await}
 {/if}
