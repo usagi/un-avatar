@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import type { UnavatarMetadataDialogState, UnavatarProfileIconCrop } from "./unavatarMetadata";
+	import type { UnavatarMetadataDialogState, UnavatarPreviewSet, UnavatarProfileIconCrop } from "./unavatarMetadata";
 
 	export let modal: UnavatarMetadataDialogState;
 	export let busy = false;
@@ -21,7 +21,8 @@
 		: metadata.preview_images.length
 			? [{ id: "", name: $_("unavatar_rights.default_preview_set"), preview_images: metadata.preview_images }]
 			: [];
-	$: if (!previewSets.some((set) => set.id === selectedSetId)) selectedSetId = previewSets[0]?.id ?? "";
+	$: selectedMetadataSetId = matchingPreviewSetId(previewSets, metadata.preview_images);
+	$: if (!previewSets.some((set) => set.id === selectedSetId)) selectedSetId = selectedMetadataSetId ?? previewSets[0]?.id ?? "";
 	$: selectedSet = previewSets.find((set) => set.id === selectedSetId) ?? previewSets[0] ?? null;
 	$: selectedPreviews = selectedSet?.preview_images ?? [];
 	$: if (selectedPreviewIndex >= selectedPreviews.length) selectedPreviewIndex = 0;
@@ -54,6 +55,17 @@
 
 	function clamp(value: number, min: number, max: number) {
 		return Math.min(max, Math.max(min, value));
+	}
+
+	function matchingPreviewSetId(sets: UnavatarPreviewSet[], previews: UnavatarPreviewSet["preview_images"]): string | null {
+		if (!previews.length) return null;
+		return (
+			sets.find(
+				(set) =>
+					set.preview_images.length === previews.length &&
+					set.preview_images.every((preview, index) => preview.data_url === previews[index]?.data_url)
+			)?.id ?? null
+		);
 	}
 
 	function previewCropLayout(width: number | null, height: number | null, zoomValue: number, offsetX: number, offsetY: number) {
