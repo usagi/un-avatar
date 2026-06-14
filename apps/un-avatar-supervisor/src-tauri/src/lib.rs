@@ -3180,22 +3180,12 @@ fn read_unavatar_metadata(
 	let provenance = unavatar.get("provenance").unwrap_or(&serde_json::Value::Null);
 	let wardrobe_set_count = unavatar
 		.get("wardrobe")
-		.and_then(|wardrobe| wardrobe.get("sets"))
-		.and_then(serde_json::Value::as_array)
-		.map(|sets| sets.len() as u32)
+		.map(|wardrobe| unavatar_metadata_count(wardrobe, &["sets"], &["setCount", "wardrobeSetCount"]))
 		.unwrap_or_default();
 	let modular_avatar_component_count = unavatar
 		.get("modularAvatar")
-		.and_then(|ma| ma.get("componentCount"))
-		.and_then(serde_json::Value::as_u64)
-		.unwrap_or_else(|| {
-			unavatar
-				.get("modularAvatar")
-				.and_then(|ma| ma.get("components"))
-				.and_then(serde_json::Value::as_array)
-				.map(|components| components.len() as u64)
-				.unwrap_or_default()
-		}) as u32;
+		.map(|ma| unavatar_metadata_count(ma, &["components"], &["componentCount"]))
+		.unwrap_or_default();
 	let file_name = resolved
 		.file_name()
 		.and_then(|name| name.to_str())
@@ -3215,13 +3205,11 @@ fn read_unavatar_metadata(
 		wardrobe_set_count,
 		dynamics_count: unavatar
 			.get("dynamics")
-			.and_then(serde_json::Value::as_array)
-			.map(|v| v.len() as u32)
+			.map(|dynamics| unavatar_metadata_count(dynamics, &["groups"], &["groupCount", "dynamicsGroupCount"]))
 			.unwrap_or_default(),
 		contact_count: unavatar
 			.get("contacts")
-			.and_then(serde_json::Value::as_array)
-			.map(|v| v.len() as u32)
+			.map(|contacts| unavatar_metadata_count(contacts, &["contacts", "samples"], &["contactCount"]))
 			.unwrap_or_default(),
 		modular_avatar_component_count,
 		redistribution_allowed: provenance.get("redistributionAllowed").and_then(serde_json::Value::as_bool),
@@ -3242,6 +3230,31 @@ fn unavatar_preview_images(
 		out = unavatar_sample_screenshot_images(unavatar, root, source);
 	}
 	out
+}
+
+fn unavatar_metadata_count(value: &serde_json::Value, array_keys: &[&str], count_keys: &[&str]) -> u32 {
+	if let Some(len) = value.as_array().and_then(|items| u32::try_from(items.len()).ok()) {
+		return len;
+	}
+	for key in count_keys {
+		if let Some(count) = value
+			.get(*key)
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|count| u32::try_from(count).ok())
+		{
+			return count;
+		}
+	}
+	for key in array_keys {
+		if let Some(len) = value
+			.get(*key)
+			.and_then(serde_json::Value::as_array)
+			.and_then(|items| u32::try_from(items.len()).ok())
+		{
+			return len;
+		}
+	}
+	0
 }
 
 fn unavatar_selected_preview_images(
@@ -10944,6 +10957,51 @@ mod tests {
 		assert_eq!(metadata.preview_sets[0].id, "field");
 		assert_eq!(metadata.preview_sets[0].preview_images.len(), 1);
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_accepts_object_summary_counts() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-object-counts-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 0 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Object Count UNAvatar" },
+      "wardrobe": {
+        "setCount": 4
+      },
+      "dynamics": {
+        "groupCount": 131
+      },
+      "contacts": {
+        "contactCount": 7
+      },
+      "modularAvatar": {
+        "components": [{}, {}, {}]
+      }
+    }
+  }
+}"#,
+			&[],
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 4);
+		assert_eq!(metadata.dynamics_count, 131);
+		assert_eq!(metadata.contact_count, 7);
+		assert_eq!(metadata.modular_avatar_component_count, 3);
 	}
 
 	#[test]
