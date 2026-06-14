@@ -737,7 +737,7 @@ impl Default for AvatarWindowOptions {
 
 #[cfg(test)]
 mod tests {
-	use super::TextureCompressionMode;
+	use super::{ColorGradingLook, TextureCompressionMode};
 
 	#[test]
 	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {
@@ -765,5 +765,24 @@ mod tests {
 			serde_json::from_str::<TextureCompressionMode>(r#""advanced""#).unwrap(),
 			TextureCompressionMode::Balanced
 		);
+	}
+
+	#[test]
+	fn color_grading_look_names_match_shader_ids() {
+		let cases = [
+			("neutral", ColorGradingLook::Neutral, 0.0),
+			("warm", ColorGradingLook::Warm, 1.0),
+			("cool", ColorGradingLook::Cool, 2.0),
+			("film", ColorGradingLook::Film, 3.0),
+			("soft", ColorGradingLook::Soft, 4.0),
+			("pop", ColorGradingLook::Pop, 5.0),
+		];
+		for (name, look, shader_id) in cases {
+			assert_eq!(name.parse::<ColorGradingLook>().unwrap(), look);
+			assert_eq!(look.as_str(), name);
+			assert_eq!(look.shader_id(), shader_id);
+		}
+		assert_eq!("cinematic".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Film);
+		assert_eq!("vivid".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Pop);
 	}
 }
