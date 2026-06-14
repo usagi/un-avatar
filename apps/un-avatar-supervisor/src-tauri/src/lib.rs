@@ -50,6 +50,7 @@ fn app_title_with_version() -> String {
 const MAX_RENDERER_LOG_LINES: usize = 120;
 const MAX_STOPPED_RENDERER_HISTORY: usize = 20;
 const MAX_DIAGNOSTICS_PREVIEW_BYTES: u64 = 1024 * 1024;
+const MAX_UNAVATAR_METADATA_JSON_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 #[cfg(windows)]
@@ -3510,7 +3511,15 @@ fn read_gltf_metadata_root_and_source(path: &Path) -> Result<(serde_json::Value,
 				.map_err(|e| format!("tell {} GLB chunk: {e}", path.display()))?;
 			match chunk_type {
 				0x4E4F534A => {
-					let mut bytes = vec![0u8; length as usize];
+					if length > MAX_UNAVATAR_METADATA_JSON_BYTES {
+						return Err(format!(
+							"GLB JSON chunk is too large in {}: {} bytes",
+							path.display(),
+							length
+						));
+					}
+					let length = usize::try_from(length).map_err(|_| format!("GLB JSON chunk is too large in {}", path.display()))?;
+					let mut bytes = vec![0u8; length];
 					file.read_exact(&mut bytes)
 						.map_err(|e| format!("read {} GLB JSON chunk: {e}", path.display()))?;
 					json = Some(bytes);
@@ -11032,6 +11041,21 @@ mod tests {
 	}
 
 	#[test]
+	fn read_unavatar_metadata_rejects_oversized_glb_json_chunk_before_allocation() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-huge-json-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		write_glb_with_declared_json_len(&path, crate::MAX_UNAVATAR_METADATA_JSON_BYTES + 1);
+
+		let error = crate::read_unavatar_metadata(path.display().to_string(), None, None).unwrap_err();
+		let _ = fs::remove_file(&path);
+
+		assert!(error.contains("GLB JSON chunk is too large"), "{error}");
+	}
+
+	#[test]
 	fn read_unavatar_metadata_accepts_object_summary_counts() {
 		let path = std::env::temp_dir().join(format!(
 			"un-avatar-unavatar-metadata-object-counts-{}-{}.unavatar",
@@ -12411,6 +12435,17 @@ id = "test"
 		glb.extend_from_slice(&(declared_bin_len as u32).to_le_bytes());
 		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
 		glb.extend_from_slice(bin_prefix);
+		fs::write(path, glb).unwrap();
+	}
+
+	fn write_glb_with_declared_json_len(path: &Path, declared_json_len: u64) {
+		let total_len = 12u64 + 8 + declared_json_len;
+		let mut glb = Vec::with_capacity(20);
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(declared_json_len as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
 		fs::write(path, glb).unwrap();
 	}
 
