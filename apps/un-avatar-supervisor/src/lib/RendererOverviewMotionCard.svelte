@@ -16,13 +16,21 @@
 	</div>
 	{#if runtimeStatus?.unmotion_zenoh_enabled}
 		<dl class="renderer-card-kv">
-			<dt>UNMF/Z</dt>
+			<dt>{$_("renderers.details.motion_unmfz")}</dt>
 			<dd>
-				recv {runtimeStatus.unmotion_zenoh_received_frames}
-				({runtimeMetric(runtimeStatus.unmotion_zenoh_received_fps)}
-				fps) / apply {runtimeStatus.motion_applied_frames}
-				({runtimeMetric(runtimeStatus.motion_applied_fps)}
-				fps)
+				{$_("renderers.details.motion_received", {
+					values: {
+						frames: runtimeStatus.unmotion_zenoh_received_frames,
+						fps: runtimeMetric(runtimeStatus.unmotion_zenoh_received_fps),
+					},
+				})}
+				/
+				{$_("renderers.details.motion_applied", {
+					values: {
+						frames: runtimeStatus.motion_applied_frames,
+						fps: runtimeMetric(runtimeStatus.motion_applied_fps),
+					},
+				})}
 			</dd>
 		</dl>
 	{/if}
