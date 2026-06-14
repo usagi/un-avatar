@@ -521,6 +521,8 @@ pub struct AvatarWindowOptions {
 	pub window_position: Option<[i32; 2]>,
 	/// 表示するモデル（glTF `.gltf` / `.glb` または VRM `.vrm` / VRM 入り `.glb`）。シーンがあればメッシュモード。
 	pub gltf_path: Option<PathBuf>,
+	/// この Renderer を起動した profile manifest。Supervisor / tray handoff 用。
+	pub manifest_path: Option<PathBuf>,
 	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
 	pub wardrobe_set: Option<String>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
@@ -674,6 +676,7 @@ impl Default for AvatarWindowOptions {
 				a: 1.0,
 			},
 			gltf_path: None,
+			manifest_path: None,
 			wardrobe_set: None,
 			icon_path: None,
 			show_fps_in_title: true,

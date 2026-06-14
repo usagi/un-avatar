@@ -14,6 +14,7 @@ use winit::event_loop::EventLoopProxy;
 use crate::{gpu, AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnapshot};
 
 const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
+const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 
 #[derive(Clone, Debug)]
 pub(crate) enum RendererTrayAction {
@@ -94,9 +95,12 @@ pub(crate) fn install_event_handlers(proxy: EventLoopProxy<RendererControlEvent>
 	}));
 }
 
-pub(crate) fn open_supervisor() -> Result<(), String> {
+pub(crate) fn open_supervisor(manifest_path: Option<&Path>) -> Result<(), String> {
 	let exe = resolve_supervisor_exe().ok_or_else(|| "un-avatar-supervisor executable was not found".to_string())?;
 	let mut command = Command::new(&exe);
+	if let Some(manifest_path) = manifest_path {
+		command.arg(SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG).arg(manifest_path);
+	}
 	if let Some(parent) = exe.parent() {
 		command.current_dir(parent);
 	}

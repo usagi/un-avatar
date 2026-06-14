@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+	import { listen } from "@tauri-apps/api/event";
 	import { _ } from "svelte-i18n";
 	import { setUiLocale } from "@usagi.network/un-i18n-svelte";
 	import AppSettingsView from "./lib/AppSettingsView.svelte";
@@ -2873,6 +2874,35 @@
 		return () => {
 			cancelled = true;
 			window.clearInterval(timer);
+		};
+	});
+
+	$effect(() => {
+		if (!hasTauriRuntime()) return;
+		let cancelled = false;
+		let unlisten: (() => void) | null = null;
+		void listen<string>("profile-open-requested", async (event) => {
+			const profileId = String(event.payload ?? "").trim();
+			if (!profileId) return;
+			await refreshAll();
+			if (!avatarSettings.some((setting) => setting.id === profileId)) return;
+			selectedSettingId = profileId;
+			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, avatarSettings);
+			activeTab = "settings";
+		})
+			.then((handler) => {
+				if (cancelled) {
+					handler();
+				} else {
+					unlisten = handler;
+				}
+			})
+			.catch((error) => {
+				message = String(error);
+			});
+		return () => {
+			cancelled = true;
+			unlisten?.();
 		};
 	});
 

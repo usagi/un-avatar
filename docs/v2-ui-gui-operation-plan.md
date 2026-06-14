@@ -26,6 +26,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Output operations are local to that Renderer: Window Preview, Spout2 + Preview, Spout2 Only, and explicit Spout2 resolution presets.
 - Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
 - UNPhysics, wardrobe, VRC menu actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
+- Open Supervisor carries the Renderer profile manifest when available. A cold Supervisor start should select that profile; an already-running Supervisor should receive an event and switch the Profiles view to the same profile without launching another Renderer.
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
 - Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
 

@@ -1747,7 +1747,7 @@ impl AvatarApp {
 				});
 			}
 			RendererTrayAction::OpenSupervisor => {
-				if let Err(error) = renderer_tray::open_supervisor() {
+				if let Err(error) = renderer_tray::open_supervisor(self.opts.manifest_path.as_deref()) {
 					eprintln!("un-avatar-renderer: {error}");
 				}
 			}
@@ -5125,6 +5125,7 @@ pub fn run_cli() -> Result<(), RunError> {
 				return Err(RunError::EventLoop(e));
 			}
 		}
+		opts.manifest_path = Some(path.to_path_buf());
 		opts
 	} else {
 		AvatarWindowOptions::default()
@@ -5143,6 +5144,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		show_fps_in_title: !cli.no_fps_title,
 		bench_frames: cli.bench_frames,
 		gltf_path: cli.gltf,
+		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
 		icon_path: cli.icon,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
@@ -5372,6 +5374,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.gltf_path.is_some() {
 		opts.gltf_path = cli.gltf_path;
+	}
+	if cli.manifest_path.is_some() {
+		opts.manifest_path = cli.manifest_path;
 	}
 	if cli.wardrobe_set.is_some() {
 		opts.wardrobe_set = cli.wardrobe_set;

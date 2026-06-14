@@ -22,7 +22,7 @@ use tauri::{
 	menu::{Menu, MenuItem, Submenu},
 	plugin::PermissionState,
 	tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-	Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+	Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 
@@ -62,6 +62,7 @@ static SPRING_BONE_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<SpringBoneAuthoredParam
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
+const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
 const UN_AVATAR_RENDERER_APP_ID: &str = "DrUsagi.UNAvatar.Renderer";
 
@@ -2000,6 +2001,14 @@ pub fn run() {
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
 	ensure_user_profiles_seeded();
 	let mut initial_settings = load_app_settings();
+	if let Some(manifest_path) = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
+		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
+		None
+	}) {
+		if let Ok(setting) = read_avatar_setting(&manifest_path, ProfileStorage::User) {
+			initial_settings.last_selected_setting_id = Some(setting.id);
+		}
+	}
 	// AppRuntimeSettings.locale が未設定 / 未サポートなら OS → ja-JP の順で解決し、
 	// rust-i18n のグローバル locale を反映する (tray menu / native notification 用)。
 	// 解決済の値は initial_settings 内に書き戻し、Mutex 化されたあともクライアントに
@@ -2012,7 +2021,7 @@ pub fn run() {
 	crate::i18n::apply_locale(&initial_settings.locale);
 	tauri::Builder::default()
 		.plugin(tauri_plugin_single_instance::init(
-			|app, args, _cwd| match startup_proxy_manifest_arg(args).and_then(|manifest_path| {
+			|app, args, _cwd| match startup_proxy_manifest_arg(args.clone()).and_then(|manifest_path| {
 				if let Some(manifest_path) = manifest_path {
 					launch_renderer_manifest_in_existing_app(app, &manifest_path).map(|_| true)
 				} else {
@@ -2020,7 +2029,12 @@ pub fn run() {
 				}
 			}) {
 				Ok(true) => {}
-				Ok(false) => show_main_window(app),
+				Ok(false) => {
+					if let Some(manifest_path) = startup_open_profile_manifest_arg(args).ok().flatten() {
+						let _ = request_open_profile_manifest_in_existing_app(app, &manifest_path);
+					}
+					show_main_window(app);
+				}
 				Err(error) => {
 					eprintln!("un-avatar-supervisor: single-instance proxy command failed: {error}");
 					show_main_window(app);
@@ -7707,20 +7721,46 @@ fn launch_renderer_manifest_in_existing_app(app: &tauri::AppHandle, manifest_pat
 	Ok(renderer)
 }
 
+fn request_open_profile_manifest_in_existing_app(app: &tauri::AppHandle, manifest_path: &Path) -> Result<(), String> {
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	if let Some(state) = app.try_state::<Mutex<AppRuntimeSettings>>() {
+		let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+		state.last_selected_setting_id = Some(setting.id.clone());
+	}
+	app.emit("profile-open-requested", setting.id)
+		.map_err(|error| format!("emit profile-open-requested: {error}"))
+}
+
 fn startup_proxy_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	startup_path_arg(args, SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG)
+}
+
+fn startup_open_profile_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	startup_path_arg(args, SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG)
+}
+
+fn startup_path_arg<I, S>(args: I, flag: &str) -> Result<Option<PathBuf>, String>
 where
 	I: IntoIterator<Item = S>,
 	S: AsRef<OsStr>,
 {
 	let mut args = args.into_iter();
 	while let Some(arg) = args.next() {
-		if arg.as_ref() != OsStr::new(SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG) {
+		if arg.as_ref() != OsStr::new(flag) {
 			continue;
 		}
 		let manifest_path = args
 			.next()
 			.map(|path| PathBuf::from(path.as_ref()))
-			.ok_or_else(|| format!("{SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG} requires a manifest path"))?;
+			.ok_or_else(|| format!("{flag} requires a manifest path"))?;
 		return Ok(Some(manifest_path));
 	}
 	Ok(None)
@@ -10270,9 +10310,9 @@ mod tests {
 		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
 		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id,
-		validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage,
-		RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
+		unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest,
+		ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -10563,6 +10603,19 @@ mod tests {
 		let error = startup_proxy_manifest_arg(["--launch-renderer-manifest"]).unwrap_err();
 
 		assert!(error.contains("--launch-renderer-manifest requires a manifest path"));
+	}
+
+	#[test]
+	fn startup_open_profile_manifest_arg_accepts_renderer_tray_argv_shape() {
+		let args = [
+			r"C:\UN Avatar\un-avatar-supervisor.exe",
+			"--open-profile-manifest",
+			r"C:\Users\the\Profiles\mizuki-split.toml",
+		];
+
+		let manifest = startup_open_profile_manifest_arg(args).unwrap().unwrap();
+
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\mizuki-split.toml"));
 	}
 
 	#[test]
