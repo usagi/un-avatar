@@ -5910,6 +5910,8 @@ mod tests {
 			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
 				menu_component_index: 2,
 				menu_key: "component:2".to_string(),
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
 				parameter_name: "Outfit".to_string(),
 				parameter_value: 1.0,
@@ -6673,6 +6675,13 @@ mod tests {
 		assert_eq!(
 			menu_action_candidates[0].get("parameter_name").and_then(|value| value.as_str()),
 			Some("Outfit")
+		);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("menu_path")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>()),
+			Some(vec!["Wardrobe"])
 		);
 		assert_eq!(
 			menu_action_candidates[0]

@@ -273,6 +273,23 @@ export type RendererRuntimeMenuWardrobeCandidateStatus = {
 	inverted: boolean;
 };
 
+export type RendererRuntimeMenuActionCandidateStatus = {
+	menu_component_index?: number;
+	menu_key?: string;
+	menu_path?: string[];
+	menu_path_truncated?: boolean;
+	menu_label?: string;
+	parameter_name: string;
+	parameter_value: number;
+	action_id: string;
+	action_label: string;
+	match_kind: string;
+	inverted: boolean;
+	effect_count: number;
+	effect_kinds?: Record<string, number>;
+	wardrobe_set_ids?: string[];
+};
+
 export type RendererRuntimeParameterDefinition = {
 	name: string;
 	owner_keys?: string[];
@@ -502,6 +519,7 @@ export type RendererRuntimeStatus = {
 	runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
 	runtime_parameter_definitions: RendererRuntimeParameterDefinition[];
 	runtime_parameter_conflicts: RendererRuntimeParameterConflict[];
+	menu_action_candidates: RendererRuntimeMenuActionCandidateStatus[];
 	menu_wardrobe_candidates: RendererRuntimeMenuWardrobeCandidateStatus[];
 	contact_parameter_declarations: RendererRuntimeContactParameterDeclarationStatus[];
 	contact_parameter_emission_enabled: boolean;
@@ -576,6 +594,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "runtime_action_restore_apply_plan"
 	| "runtime_parameter_definitions"
 	| "runtime_parameter_conflicts"
+	| "menu_action_candidates"
 	| "menu_wardrobe_candidates"
 	| "wardrobe_asset_upload"
 	| "dynamics_groups"

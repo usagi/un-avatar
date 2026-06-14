@@ -345,6 +345,9 @@ fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayA
 }
 
 fn menu_action_label(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> String {
+	if !candidate.menu_path.is_empty() {
+		return candidate.menu_path.join(" / ");
+	}
 	match (candidate.menu_label.as_deref(), candidate.action_label.as_str()) {
 		(Some(menu_label), action_label) if !action_label.is_empty() && menu_label != action_label => {
 			format!("{menu_label} / {action_label}")
@@ -497,6 +500,10 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 		signature.push_str(&signature_field(&candidate.action_id));
 		signature.push(':');
 		signature.push_str(&signature_field(&candidate.menu_key));
+		signature.push(':');
+		signature.push_str(&signature_field(&candidate.menu_path.join("/")));
+		signature.push(':');
+		signature.push_str(if candidate.menu_path_truncated { "1" } else { "0" });
 		signature.push(':');
 		signature.push_str(&signature_field(candidate.menu_label.as_deref().unwrap_or("")));
 		signature.push(':');
@@ -780,6 +787,22 @@ mod tests {
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:smile"
 		));
 		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+	}
+
+	#[test]
+	fn vrc_menu_label_prefers_resolved_menu_path() {
+		let candidate = gpu::RuntimeMenuActionCandidateStatus {
+			action_id: "action:smile".to_string(),
+			action_label: "Smile Action".to_string(),
+			menu_key: "expressions/smile".to_string(),
+			menu_path: vec!["Expressions".to_string(), "Smile".to_string()],
+			menu_label: Some("Smile Menu".to_string()),
+			parameter_name: "Smile".to_string(),
+			parameter_value: 1.0,
+			..Default::default()
+		};
+
+		assert_eq!(menu_action_label(&candidate), "Expressions / Smile");
 	}
 
 	#[test]

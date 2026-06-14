@@ -177,6 +177,10 @@ pub(crate) struct RuntimeActionDynamicsEnabledEffectStatus {
 pub(crate) struct RuntimeMenuActionCandidateStatus {
 	pub(crate) menu_component_index: usize,
 	pub(crate) menu_key: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) menu_path: Vec<String>,
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub(crate) menu_path_truncated: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) menu_label: Option<String>,
 	pub(crate) parameter_name: String,
@@ -979,6 +983,13 @@ fn menu_action_candidates_from_runtime(
 	if menu_components.is_empty() {
 		return Some(Vec::new());
 	}
+	let menu_graph_candidates = modular_avatar_menu_graph_candidates(&menu_components);
+	let menu_graph_nodes = modular_avatar_menu_graph_nodes(&menu_graph_candidates);
+	let menu_path_by_key = menu_graph_nodes
+		.iter()
+		.enumerate()
+		.map(|(index, node)| (node.menu_key.as_str(), menu_graph_node_path(&menu_graph_nodes, index)))
+		.collect::<BTreeMap<_, _>>();
 	let mut candidates = Vec::new();
 	for menu in &menu_components {
 		let (Some(parameter_name), Some(parameter_value)) = (&menu.parameter_name, menu.value) else {
@@ -1022,6 +1033,11 @@ fn menu_action_candidates_from_runtime(
 			candidates.push(RuntimeMenuActionCandidateStatus {
 				menu_component_index: menu.component_index,
 				menu_key: menu.menu_key.clone(),
+				menu_path: menu_path_by_key
+					.get(menu.menu_key.as_str())
+					.map(|path| path.labels.clone())
+					.unwrap_or_default(),
+				menu_path_truncated: menu_path_by_key.get(menu.menu_key.as_str()).is_some_and(|path| path.truncated),
 				menu_label: menu.label.clone(),
 				parameter_name: parameter_name.clone(),
 				parameter_value,
@@ -1077,9 +1093,18 @@ fn menu_wardrobe_candidates_from_runtime(
 		let menu_path = menu_path_by_key
 			.get(action_candidate.menu_key.as_str())
 			.cloned()
-			.unwrap_or_else(|| RuntimeMenuGraphNodePath {
-				labels: action_candidate.menu_label.iter().cloned().collect(),
-				truncated: false,
+			.unwrap_or_else(|| {
+				if !action_candidate.menu_path.is_empty() {
+					RuntimeMenuGraphNodePath {
+						labels: action_candidate.menu_path.clone(),
+						truncated: action_candidate.menu_path_truncated,
+					}
+				} else {
+					RuntimeMenuGraphNodePath {
+						labels: action_candidate.menu_label.iter().cloned().collect(),
+						truncated: false,
+					}
+				}
 			});
 		for wardrobe_set_id in &action_candidate.wardrobe_set_ids {
 			candidates.push(RuntimeMenuWardrobeCandidateStatus {
