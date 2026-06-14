@@ -27,6 +27,7 @@ pub(crate) enum RendererTrayAction {
 	SetInputPassthrough(bool),
 	SetAllDynamics(bool),
 	SetWardrobe(String),
+	SetParameter { name: String, value: f32 },
 	ActivateAction(String),
 	OpenSupervisor,
 	ResetCamera,
@@ -298,31 +299,51 @@ fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTr
 	let vrc_menu = Submenu::with_id("renderer:vrc_menu", "VRC Menu", true);
 	if entries.is_empty() {
 		for (index, action) in fallback_entries.into_iter().enumerate() {
+			let active = action.current_condition_state.as_deref() == Some("active");
+			let label = action.expression_menu_path.as_deref().unwrap_or(&action.label).replace('/', " / ");
+			let action = if let (Some(name), Some(value)) = (&action.parameter_name, action.parameter_value) {
+				RendererTrayAction::SetParameter {
+					name: name.clone(),
+					value: if active { 0.0 } else { value },
+				}
+			} else {
+				RendererTrayAction::ActivateAction(action.action_id.clone())
+			};
 			append_menu_item(
 				&vrc_menu,
 				actions,
 				format!("vrc_menu:{index}"),
-				truncate_label(
-					&action.expression_menu_path.as_deref().unwrap_or(&action.label).replace('/', " / "),
-					56,
-				),
+				check_label(truncate_label(&label, 56), active),
 				true,
-				RendererTrayAction::ActivateAction(action.action_id.clone()),
+				action,
 			);
 		}
 	} else {
 		for (index, candidate) in entries.into_iter().enumerate() {
+			let active = runtime_action_active(snapshot, &candidate.action_id);
 			append_menu_item(
 				&vrc_menu,
 				actions,
 				format!("vrc_menu:{index}"),
-				truncate_label(&menu_action_label(candidate), 56),
+				check_label(truncate_label(&menu_action_label(candidate), 56), active),
 				true,
-				RendererTrayAction::ActivateAction(candidate.action_id.clone()),
+				RendererTrayAction::SetParameter {
+					name: candidate.parameter_name.clone(),
+					value: if active { 0.0 } else { candidate.parameter_value },
+				},
 			);
 		}
 	}
 	append_submenu(menu, &vrc_menu);
+}
+
+fn runtime_action_active(snapshot: &RendererRuntimeSnapshot, action_id: &str) -> bool {
+	snapshot
+		.runtime_actions
+		.iter()
+		.find(|action| action.action_id == action_id)
+		.and_then(|action| action.current_condition_state.as_deref())
+		== Some("active")
 }
 
 fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
@@ -526,6 +547,12 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 		signature.push_str(&signature_field(&candidate.action_label));
 		signature.push(':');
 		signature.push_str(if candidate.wardrobe_set_ids.is_empty() { "0" } else { "1" });
+		signature.push(':');
+		signature.push_str(if runtime_action_active(snapshot, &candidate.action_id) {
+			"active"
+		} else {
+			"inactive"
+		});
 	}
 	if snapshot.menu_action_candidates.is_empty() {
 		let fallback_actions = snapshot
@@ -539,6 +566,14 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 			signature.push_str(&signature_field(&action.action_id));
 			signature.push(':');
 			signature.push_str(&signature_field(action.expression_menu_path.as_deref().unwrap_or("")));
+			signature.push(':');
+			signature.push_str(&signature_field(action.parameter_name.as_deref().unwrap_or("")));
+			signature.push(':');
+			signature.push_str(&signature_field(
+				&action.parameter_value.map(|value| value.to_string()).unwrap_or_default(),
+			));
+			signature.push(':');
+			signature.push_str(&signature_field(action.current_condition_state.as_deref().unwrap_or("")));
 		}
 	}
 	signature
@@ -818,11 +853,11 @@ mod tests {
 
 		assert!(matches!(
 			actions.get("renderer:vrc_menu:0"),
-			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:smile"
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Smile" && (*value - 1.0).abs() < f32::EPSILON
 		));
 		assert!(matches!(
 			actions.get("renderer:vrc_menu:1"),
-			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:field_drape"
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Wardrobe" && (*value - 2.0).abs() < f32::EPSILON
 		));
 	}
 
@@ -842,6 +877,34 @@ mod tests {
 		assert!(matches!(
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:hat"
+		));
+	}
+
+	#[test]
+	fn vrc_menu_parameter_action_toggles_runtime_parameter() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "action:hat_off".to_string(),
+			label: "Hat OFF".to_string(),
+			expression_menu_path: Some("Wardrobe/Hat OFF".to_string()),
+			parameter_name: Some("HatOff".to_string()),
+			parameter_value: Some(1.0),
+			current_condition_state: Some("inactive".to_string()),
+			..Default::default()
+		}];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "HatOff" && (*value - 1.0).abs() < f32::EPSILON
+		));
+
+		status.runtime_actions[0].current_condition_state = Some("active".to_string());
+		let (_menu, actions) = build_menu(&opts, &status);
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "HatOff" && value.abs() < f32::EPSILON
 		));
 	}
 

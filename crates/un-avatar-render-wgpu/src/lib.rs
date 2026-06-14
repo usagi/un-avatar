@@ -1760,6 +1760,12 @@ impl AvatarApp {
 				let result = Arc::new(Mutex::new(None));
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetWardrobe { set_id, result });
 			}
+			RendererTrayAction::SetParameter { name, value } => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self
+					.event_proxy
+					.send_event(RendererControlEvent::SetParameter { name, value, result });
+			}
 			RendererTrayAction::ActivateAction(action_id) => {
 				let result = Arc::new(Mutex::new(None));
 				let _ = self.event_proxy.send_event(RendererControlEvent::ActivateAction {
