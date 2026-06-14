@@ -585,6 +585,7 @@ window_normal = "通常"
 window_click_through = "クリック透過"
 bloom_on = "Bloom"
 bloom_off = "No bloom"
+motion_none = "なし"
 
 [profiles.sections]
 identity = "プロファイル設定"

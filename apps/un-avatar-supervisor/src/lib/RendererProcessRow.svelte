@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import { basename } from "./formatting";
-	import { motionLabel } from "./profileLabels";
-	import { localizedRuntimeOutputLabel } from "./profileStageSummary";
+	import { localizedMotionLabel, localizedRuntimeOutputLabel } from "./profileStageSummary";
 	import RendererProcessMetricsCell from "./RendererProcessMetricsCell.svelte";
 	import RendererProcessStatusCell from "./RendererProcessStatusCell.svelte";
 	import type { RendererTableView } from "./rendererTypes";
@@ -31,7 +30,7 @@
 	</td>
 	<RendererProcessMetricsCell {status} />
 	<td class="process-cell-io">
-		<strong>{motionLabel(renderer)}</strong>
+		<strong>{localizedMotionLabel(renderer, $_)}</strong>
 		<small>{localizedRuntimeOutputLabel(renderer, status, $_)}</small>
 	</td>
 </tr>

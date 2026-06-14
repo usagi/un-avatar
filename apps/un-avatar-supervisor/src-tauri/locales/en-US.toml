@@ -577,6 +577,7 @@ window_normal = "Normal"
 window_click_through = "Click-through"
 bloom_on = "Bloom"
 bloom_off = "No bloom"
+motion_none = "None"
 
 [profiles.sections]
 identity = "Profile Settings"

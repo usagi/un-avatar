@@ -4,6 +4,7 @@ import {
 	lightingSummaryLabel,
 	motionLabel,
 	type LookSummaryLabelData,
+	type MotionLabelData,
 	type OutputLabelData,
 	type SettingSummaryLabelData,
 	type WindowLabelData,
@@ -45,6 +46,11 @@ export function localizedRuntimeOutputLabel(
 	return `Spout2${name}${size}`;
 }
 
+export function localizedMotionLabel(setting: MotionLabelData, translate: Translate): string {
+	const label = motionLabel(setting);
+	return label === "None" ? translate("profiles.summary.motion_none") : label;
+}
+
 export function localizedWindowLabel(setting: WindowLabelData, translate: Translate): string {
 	const frame = setting.decorations ? translate("profiles.summary.window_framed") : translate("profiles.summary.window_borderless");
 	const alpha = setting.transparent ? translate("profiles.summary.window_transparent") : translate("profiles.summary.window_opaque");
@@ -62,7 +68,7 @@ export function localizedLookLabel(setting: LookSummaryLabelData, translate: Tra
 }
 
 export function localizedSettingSummary(setting: SettingSummaryLabelData, translate: Translate): string {
-	const parts = [motionLabel(setting), localizedOutputLabel(setting, translate), localizedWindowLabel(setting, translate)];
+	const parts = [localizedMotionLabel(setting, translate), localizedOutputLabel(setting, translate), localizedWindowLabel(setting, translate)];
 	if (setting.aa) parts.push(`AA ${aaModeLabel(setting.aa)}`);
 	return parts.join(" · ");
 }
@@ -77,7 +83,7 @@ export function profileStageSummaryItems(setting: ProfileStageSummarySetting, tr
 		{
 			section: "motion",
 			label: translate("profiles.sections.motion"),
-			value: motionLabel(setting),
+			value: localizedMotionLabel(setting, translate),
 		},
 		{
 			section: "output",

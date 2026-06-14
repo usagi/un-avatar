@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import { runtimeMetric } from "./formatting";
-	import { motionLabel, type MotionLabelData } from "./profileLabels";
+	import type { MotionLabelData } from "./profileLabels";
+	import { localizedMotionLabel } from "./profileStageSummary";
 	import type { RendererOverviewMotionStatus } from "./rendererTypes";
 
 	export let renderer: MotionLabelData;
@@ -11,7 +12,7 @@
 <section class="renderer-info-card">
 	<div class="renderer-info-card-heading">
 		<h3>{$_("renderers.details.motion_card")}</h3>
-		<span>{motionLabel(renderer)}</span>
+		<span>{localizedMotionLabel(renderer, $_)}</span>
 	</div>
 	{#if runtimeStatus?.unmotion_zenoh_enabled}
 		<dl class="renderer-card-kv">

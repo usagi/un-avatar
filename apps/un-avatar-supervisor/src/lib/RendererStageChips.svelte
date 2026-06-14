@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { motionLabel } from "./profileLabels";
-	import { localizedRuntimeOutputLabel, localizedWindowLabel } from "./profileStageSummary";
+	import { localizedMotionLabel, localizedRuntimeOutputLabel, localizedWindowLabel } from "./profileStageSummary";
 	import {
 		rendererHealthKind,
 		rendererHealthLabel,
@@ -29,7 +28,7 @@
 			attention: $_("renderers.summary.attention"),
 		})}</span
 	>
-	<span>{motionLabel(renderer)}</span>
+	<span>{localizedMotionLabel(renderer, $_)}</span>
 	<span>{localizedRuntimeOutputLabel(renderer, runtimeStatus, $_)}</span>
 	<span>{localizedWindowLabel(renderer, $_)}</span>
 	<span>{runtimeResolution(runtimeStatus)}</span>
