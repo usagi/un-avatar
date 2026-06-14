@@ -473,3 +473,73 @@ fn default_tray_icon() -> TrayIconImage {
 	}
 	TrayIconImage::from_rgba(rgba, size, size).expect("generated tray icon dimensions are valid")
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::initial_runtime_snapshot;
+
+	fn snapshot() -> RendererRuntimeSnapshot {
+		initial_runtime_snapshot(&AvatarWindowOptions::default())
+	}
+
+	#[test]
+	fn menu_key_tracks_runtime_operation_state() {
+		let mut before = snapshot();
+		before.scene_state = "ready".to_string();
+		before.spout_available = true;
+		before.spout_enabled = false;
+		before.minimized = false;
+		before.dynamics_group_count = 3;
+		before.dynamics_enabled_group_count = 1;
+		before.active_wardrobe_set = Some("base".to_string());
+
+		let mut after = before.clone();
+		after.spout_enabled = true;
+		after.minimized = true;
+		after.spout_width = Some(1920);
+		after.spout_height = Some(1080);
+		after.dynamics_enabled_group_count = 3;
+		after.active_wardrobe_set = Some("field_drape".to_string());
+
+		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn wardrobe_label_prefers_menu_path_then_label_then_set_id() {
+		let from_path = gpu::RuntimeMenuWardrobeCandidateStatus {
+			menu_path: vec!["Clothes".to_string(), "Field Drape".to_string()],
+			menu_label: Some("Ignored label".to_string()),
+			wardrobe_set_id: "field_drape".to_string(),
+			..Default::default()
+		};
+		assert_eq!(menu_wardrobe_label(&from_path), "Clothes / Field Drape");
+
+		let from_label = gpu::RuntimeMenuWardrobeCandidateStatus {
+			menu_label: Some("Noble 13".to_string()),
+			wardrobe_set_id: "noble13".to_string(),
+			..Default::default()
+		};
+		assert_eq!(menu_wardrobe_label(&from_label), "Noble 13");
+
+		let from_set_id = gpu::RuntimeMenuWardrobeCandidateStatus {
+			wardrobe_set_id: "base".to_string(),
+			..Default::default()
+		};
+		assert_eq!(menu_wardrobe_label(&from_set_id), "base");
+	}
+
+	#[test]
+	fn tray_tooltip_identifies_spout_or_window_mode() {
+		let mut opts = AvatarWindowOptions::default();
+		opts.title = "mizuki-split".to_string();
+		let mut status = snapshot();
+		status.spout_enabled = false;
+		assert!(tray_tooltip(&opts, &status).contains("Window"));
+
+		status.spout_enabled = true;
+		let tooltip = tray_tooltip(&opts, &status);
+		assert!(tooltip.contains("mizuki-split"));
+		assert!(tooltip.contains("Spout2"));
+	}
+}
