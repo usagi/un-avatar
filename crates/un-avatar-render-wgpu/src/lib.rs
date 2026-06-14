@@ -2800,11 +2800,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 	}
 
 	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-		let spout_only = self
-			.window
-			.as_ref()
-			.is_some_and(|window| window.is_minimized().unwrap_or(false))
-			&& self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active());
+		let spout_only = self.opts.spout.enabled && self.window.as_ref().is_some_and(|window| window.is_minimized().unwrap_or(false));
 		if spout_only {
 			if self.render_frame() {
 				event_loop.exit();
@@ -3014,14 +3010,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					self.opts.spout.height = height;
 				}
 				self.opts.spout.enabled = enabled;
-				let active = if let Some(gpu) = self.gpu.as_mut() {
+				let _active = if let Some(gpu) = self.gpu.as_mut() {
 					let active = gpu.set_spout_output(enabled, self.opts.spout.clone());
 					self.request_redraw();
 					active
 				} else {
 					false
 				};
-				self.update_runtime_spout(active);
+				self.update_runtime_spout(self.opts.spout.enabled);
 			}
 			RendererControlEvent::SetWindow {
 				decorations,
@@ -3541,7 +3537,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							log_slow_renderer_step("startup status runtime activation", step_start.elapsed());
 						}
 						let step_start = Instant::now();
-						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
+						self.update_runtime_spout(self.opts.spout.enabled);
 						log_slow_renderer_step("startup status spout", step_start.elapsed());
 						log_slow_renderer_step("startup runtime status update", status_update_start.elapsed());
 						let title_start = Instant::now();

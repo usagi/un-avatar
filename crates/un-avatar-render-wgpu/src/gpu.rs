@@ -4131,6 +4131,7 @@ impl GpuState {
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
 		self.last_draw_expression_select_ms = t_expr0.elapsed().as_secs_f32() * 1000.0;
 		if document_changed {
+			sm.refresh_draw_visibility_from_scene(runtime.scene);
 			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
 			let residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
 			if residency_refresh.has_scoped_resource_changes() && self.debug_log.is_enabled() {
@@ -5193,17 +5194,6 @@ impl GpuState {
 		#[cfg(not(windows))]
 		{
 			let _ = (enabled, spout_opts);
-			false
-		}
-	}
-
-	pub fn spout_active(&self) -> bool {
-		#[cfg(windows)]
-		{
-			self.spout.is_some()
-		}
-		#[cfg(not(windows))]
-		{
 			false
 		}
 	}
