@@ -27,6 +27,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
 - UNPhysics, wardrobe, VRC menu actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
+- Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 
