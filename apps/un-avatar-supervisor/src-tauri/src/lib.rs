@@ -65,13 +65,7 @@ static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
-const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
-const LEGACY_UN_AVATAR_LAUNCHER_APP_IDS: &[&str] = &[
-	"network.usagi.un-avatar",
-	"DrUsagi.UNAvatar",
-	"DrUsagi.UNAvatar.Supervisor",
-	"UN Avatar",
-];
+const UN_AVATAR_LAUNCHER_APP_ID: &str = "UsagiNetwork.UNAvatar.Launcher";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -5550,10 +5544,11 @@ fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Resul
 		.map(String::as_str)
 		.collect::<BTreeSet<_>>();
 	let pinned_settings = visible_settings
-		.into_iter()
+		.iter()
 		.filter(|setting| pinned_ids.contains(setting.id.as_str()))
+		.cloned()
 		.collect::<Vec<_>>();
-	update_windows_jump_list(&supervisor_exe, &supervisor_working_dir, &pinned_settings)?;
+	update_windows_jump_lists(&supervisor_exe, &supervisor_working_dir, &visible_settings, &pinned_settings)?;
 	Ok(start_menu_dir.display().to_string())
 }
 
@@ -5570,6 +5565,15 @@ fn remove_legacy_profile_launcher_shortcuts(start_menu_dir: &Path) {
 			let _ = fs::remove_file(path);
 		}
 	}
+}
+
+fn renderer_profile_app_user_model_ids(settings: &[AvatarSetting]) -> Vec<String> {
+	let mut seen = BTreeSet::new();
+	settings
+		.into_iter()
+		.map(|setting| renderer_profile_app_user_model_id(&setting.id))
+		.filter(|app_id| seen.insert(app_id.clone()))
+		.collect()
 }
 
 #[tauri::command]
@@ -8155,7 +8159,7 @@ fn renderer_profile_app_user_model_id(profile_id: &str) -> String {
 	}
 	let slug = slug.trim_matches(['.', '-']).to_string();
 	let slug = if slug.is_empty() { unique_profile_id(profile_id) } else { slug };
-	let prefix = "DrUsagi.UNAvatar.Renderer.Profile.";
+	let prefix = "UsagiNetwork.UNAvatar.Renderer.Profile.";
 	let max_slug_len = 128usize.saturating_sub(prefix.len());
 	let slug = if slug.len() > max_slug_len {
 		slug.chars().take(max_slug_len).collect::<String>()
@@ -8201,8 +8205,13 @@ fn set_process_app_user_model_id() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings: &[AvatarSetting]) -> Result<(), String> {
-	let profiles = settings
+fn update_windows_jump_lists(
+	supervisor_exe: &Path,
+	working_dir: &Path,
+	visible_settings: &[AvatarSetting],
+	pinned_settings: &[AvatarSetting],
+) -> Result<(), String> {
+	let profiles = pinned_settings
 		.iter()
 		.map(|setting| LauncherTaskProfile {
 			name: setting.name.clone(),
@@ -8221,11 +8230,25 @@ fn update_windows_jump_list(supervisor_exe: &Path, working_dir: &Path, settings:
 			icon: task.icon,
 		})
 		.collect::<Vec<_>>();
-	windows_integration::replace_jump_list(UN_AVATAR_LAUNCHER_APP_ID, LEGACY_UN_AVATAR_LAUNCHER_APP_IDS, &tasks)
+	let renderer_app_ids = renderer_profile_app_user_model_ids(visible_settings);
+	let active_app_ids = std::iter::once(UN_AVATAR_LAUNCHER_APP_ID.to_string())
+		.chain(renderer_app_ids.iter().cloned())
+		.collect::<Vec<_>>();
+	windows_integration::replace_jump_lists(
+		UN_AVATAR_LAUNCHER_APP_ID,
+		&renderer_app_ids,
+		&active_app_ids,
+		&tasks,
+	)
 }
 
 #[cfg(not(windows))]
-fn update_windows_jump_list(_supervisor_exe: &Path, _working_dir: &Path, _settings: &[AvatarSetting]) -> Result<(), String> {
+fn update_windows_jump_lists(
+	_supervisor_exe: &Path,
+	_working_dir: &Path,
+	_visible_settings: &[AvatarSetting],
+	_pinned_settings: &[AvatarSetting],
+) -> Result<(), String> {
 	Ok(())
 }
 
@@ -10499,36 +10522,48 @@ mod windows_integration {
 		Ok(())
 	}
 
-	pub(crate) fn replace_jump_list(app_id: &str, legacy_app_ids: &[&str], tasks: &[JumpListTask]) -> Result<(), String> {
+	pub(crate) fn replace_jump_lists(
+		launcher_app_id: &str,
+		renderer_app_ids: &[String],
+		active_app_ids: &[String],
+		tasks: &[JumpListTask],
+	) -> Result<(), String> {
 		ensure_com_initialized()?;
 		unsafe {
-			for legacy_app_id in legacy_app_ids {
-				delete_jump_list(legacy_app_id)?;
+			delete_jump_list(launcher_app_id)?;
+			for app_id in renderer_app_ids {
+				delete_jump_list(app_id)?;
 			}
-			delete_jump_list(app_id)?;
-			let list: ICustomDestinationList =
-				CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
-			let app_id_wide = WideString::new(app_id);
-			list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
-			let mut min_slots = 0;
-			let _removed: IObjectArray = list.BeginList(&mut min_slots).map_err(format_windows_error)?;
-			let collection: IObjectCollection =
-				CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
-			for task in tasks {
-				let link = create_shell_link(
-					&task.target,
-					&task.arguments,
-					&task.working_dir,
-					task.icon.as_deref(),
-					Some(app_id),
-					Some(&task.title),
-				)?;
-				collection.AddObject(&link).map_err(format_windows_error)?;
+			for app_id in active_app_ids {
+				write_jump_list(app_id, tasks)?;
 			}
-			let array: IObjectArray = collection.cast().map_err(format_windows_error)?;
-			list.AddUserTasks(&array).map_err(format_windows_error)?;
-			list.CommitList().map_err(format_windows_error)?;
 		}
+		Ok(())
+	}
+
+	unsafe fn write_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
+		let list: ICustomDestinationList =
+			CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let app_id_wide = WideString::new(app_id);
+		list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
+		let mut min_slots = 0;
+		let _removed: IObjectArray = list.BeginList(&mut min_slots).map_err(format_windows_error)?;
+		let collection: IObjectCollection =
+			CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		for task in tasks {
+			let link = create_shell_link(
+				&task.target,
+				&task.arguments,
+				&task.working_dir,
+				task.icon.as_deref(),
+				Some(app_id),
+				Some(&task.title),
+			)?;
+			collection.AddObject(&link).map_err(format_windows_error)?;
+		}
+		let array: IObjectArray = collection.cast().map_err(format_windows_error)?;
+		list.AddUserTasks(&array).map_err(format_windows_error)?;
+		list.CommitList().map_err(format_windows_error)?;
 		Ok(())
 	}
 
@@ -10909,11 +10944,11 @@ mod tests {
 	fn renderer_profile_app_user_model_id_is_profile_scoped() {
 		assert_eq!(
 			crate::renderer_profile_app_user_model_id("mizuki-copy"),
-			"DrUsagi.UNAvatar.Renderer.Profile.mizuki-copy"
+			"UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy"
 		);
 		assert_eq!(
 			crate::renderer_profile_app_user_model_id("Model 1_Copy"),
-			"DrUsagi.UNAvatar.Renderer.Profile.model-1-copy"
+			"UsagiNetwork.UNAvatar.Renderer.Profile.model-1-copy"
 		);
 	}
 

@@ -4862,7 +4862,7 @@ fn resolve_activate_action_from_menu_path(
 pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
 	if let Err(error) =
-		windows_identity::set_renderer_app_user_model_id(opts.app_user_model_id.as_deref().unwrap_or("DrUsagi.UNAvatar.Renderer"))
+		windows_identity::set_renderer_app_user_model_id(opts.app_user_model_id.as_deref().unwrap_or("UsagiNetwork.UNAvatar.Renderer"))
 	{
 		eprintln!("un-avatar-renderer: set AppUserModelID failed: {error}");
 	}

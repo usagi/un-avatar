@@ -581,13 +581,13 @@ fn renderer_profile_app_user_model_id(profile_key: &str) -> Option<String> {
 	if slug.is_empty() {
 		return None;
 	}
-	let max_slug_len = 128usize.saturating_sub("DrUsagi.UNAvatar.Renderer.Profile.".len());
+	let max_slug_len = 128usize.saturating_sub("UsagiNetwork.UNAvatar.Renderer.Profile.".len());
 	let slug = if slug.len() > max_slug_len {
 		slug.chars().take(max_slug_len).collect::<String>()
 	} else {
 		slug
 	};
-	Some(format!("DrUsagi.UNAvatar.Renderer.Profile.{slug}"))
+	Some(format!("UsagiNetwork.UNAvatar.Renderer.Profile.{slug}"))
 }
 
 impl EnvironmentManifest {
@@ -1375,7 +1375,7 @@ constraint_iterations = 6
 		);
 		assert_eq!(
 			opts.app_user_model_id.as_deref(),
-			Some("DrUsagi.UNAvatar.Renderer.Profile.mizuki-copy")
+			Some("UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy")
 		);
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
