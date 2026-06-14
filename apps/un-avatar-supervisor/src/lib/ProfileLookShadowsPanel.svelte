@@ -15,7 +15,7 @@
 		<span>{$_("profiles.editor.look_shadows")}</span>
 		<small>{$_("profiles.editor.look_shadows_summary")}</small>
 		<span class="effect-panel-status"
-			>shadow {setting.contact_shadow_enabled ? $_("profiles.editor.look_status_on") : $_("profiles.editor.look_status_off")} · SSAO {setting.ssao_enabled
+			>{$_("profiles.editor.look_contact_shadow")} {setting.contact_shadow_enabled ? $_("profiles.editor.look_status_on") : $_("profiles.editor.look_status_off")} · SSAO {setting.ssao_enabled
 				? $_("profiles.editor.look_status_on")
 				: $_("profiles.editor.look_status_off")}</span
 		>
