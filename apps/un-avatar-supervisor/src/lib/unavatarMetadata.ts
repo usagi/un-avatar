@@ -18,6 +18,8 @@ export type UnavatarMetadataInfo = {
 
 export type UnavatarPreviewImage = {
 	view: string | null;
+	width: number | null;
+	height: number | null;
 	data_url: string;
 };
 

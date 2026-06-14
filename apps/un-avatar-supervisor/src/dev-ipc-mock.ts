@@ -352,6 +352,8 @@ export function installDevIpcMock(): void {
 					preview_images: [
 						{
 							view: "front",
+							width: 1024,
+							height: 1024,
 							data_url:
 								"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
 						},
@@ -363,6 +365,8 @@ export function installDevIpcMock(): void {
 							preview_images: [
 								{
 									view: "front",
+									width: 1024,
+									height: 1024,
 									data_url:
 										"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
 								},

@@ -40,12 +40,36 @@
 		[$_("unavatar_rights.stats.contacts"), metadata.contact_count],
 		[$_("unavatar_rights.stats.modular_avatar"), metadata.modular_avatar_component_count],
 	];
-	$: maskSize = `${clamp(100 / (Number(profileIconCrop.zoom) || 1), 25, 100)}%`;
-	$: maskLeft = `${50 + (Number(profileIconCrop.offsetX) || 0) * 50}%`;
-	$: maskTop = `${50 + (Number(profileIconCrop.offsetY) || 0) * 50}%`;
+	$: cropLayout = previewCropLayout(
+		selectedPreview?.width ?? null,
+		selectedPreview?.height ?? null,
+		Number(profileIconCrop.zoom) || 1,
+		Number(profileIconCrop.offsetX) || 0,
+		Number(profileIconCrop.offsetY) || 0
+	);
 
 	function clamp(value: number, min: number, max: number) {
 		return Math.min(max, Math.max(min, value));
+	}
+
+	function previewCropLayout(width: number | null, height: number | null, zoomValue: number, offsetX: number, offsetY: number) {
+		const safeWidth = width && width > 0 ? width : 1;
+		const safeHeight = height && height > 0 ? height : 1;
+		const aspect = safeWidth / safeHeight;
+		const imageWidth = aspect >= 1 ? 100 : 100 * aspect;
+		const imageHeight = aspect >= 1 ? 100 / aspect : 100;
+		const imageLeft = (100 - imageWidth) * 0.5;
+		const imageTop = (100 - imageHeight) * 0.5;
+		const side = Math.min(imageWidth, imageHeight) / clamp(zoomValue, 1, 4);
+		const travelX = Math.max(0, imageWidth - side);
+		const travelY = Math.max(0, imageHeight - side);
+		return {
+			side,
+			left: imageLeft + imageWidth * 0.5 + clamp(offsetX, -1, 1) * travelX * 0.5,
+			top: imageTop + imageHeight * 0.5 + clamp(offsetY, -1, 1) * travelY * 0.5,
+			travelX,
+			travelY,
+		};
 	}
 
 	function setCropEnabled(enabled: boolean) {
@@ -84,10 +108,12 @@
 	function moveCropDrag(event: PointerEvent) {
 		if (!dragStart || dragStart.pointerId !== event.pointerId || !cropFrame) return;
 		const rect = cropFrame.getBoundingClientRect();
+		const travelX = Math.max(1, rect.width * (cropLayout.travelX / 100) * 0.5);
+		const travelY = Math.max(1, rect.height * (cropLayout.travelY / 100) * 0.5);
 		profileIconCrop = {
 			...profileIconCrop,
-			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / Math.max(1, rect.width * 0.5), -1, 1),
-			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / Math.max(1, rect.height * 0.5), -1, 1),
+			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / travelX, -1, 1),
+			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / travelY, -1, 1),
 		};
 	}
 
@@ -121,7 +147,7 @@
 					{#if selectedPreview && profileIconCrop.enabled}
 						<span
 							class="unavatar-icon-mask"
-							style={`width: ${maskSize}; left: ${maskLeft}; top: ${maskTop};`}
+							style={`width: ${cropLayout.side}%; left: ${cropLayout.left}%; top: ${cropLayout.top}%;`}
 						></span>
 						<span class="unavatar-crop-hint">{$_("unavatar_rights.icon_drag_hint")}</span>
 					{/if}

@@ -5038,6 +5038,7 @@ textarea {
 
 .unavatar-crop-frame {
 	position: relative;
+	aspect-ratio: 1;
 	overflow: hidden;
 	touch-action: none;
 	cursor: default;

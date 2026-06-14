@@ -496,6 +496,8 @@ struct UnavatarMetadataInfo {
 #[derive(Clone, Debug, Serialize)]
 struct UnavatarPreviewImage {
 	view: Option<String>,
+	width: Option<u32>,
+	height: Option<u32>,
 	data_url: String,
 }
 
@@ -3209,7 +3211,12 @@ fn unavatar_preview_images(
 	let mut out = unavatar_selected_preview_images(unavatar, preview_sets, wardrobe_set);
 	if out.is_empty() {
 		if let Some(data_url) = unavatar_sample_screenshot_data_url(unavatar, root, source) {
-			out.push(UnavatarPreviewImage { view: None, data_url });
+			out.push(UnavatarPreviewImage {
+				view: None,
+				width: None,
+				height: None,
+				data_url,
+			});
 		}
 	}
 	out
@@ -3267,6 +3274,14 @@ fn unavatar_wardrobe_preview_sets(
 						.and_then(supported_image_mime_type)?;
 					Some(UnavatarPreviewImage {
 						view: preview.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+						width: preview
+							.get("width")
+							.and_then(serde_json::Value::as_u64)
+							.and_then(|value| u32::try_from(value).ok()),
+						height: preview
+							.get("height")
+							.and_then(serde_json::Value::as_u64)
+							.and_then(|value| u32::try_from(value).ok()),
 						data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
 					})
 				})
@@ -10755,15 +10770,15 @@ mod tests {
             "id": "base",
             "displayName": "Base",
             "previewImages": [
-              {{ "view": "front", "mimeType": "image/png", "bufferView": 0 }}
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}
             ]
           }},
           {{
             "id": "field_drape",
             "displayName": "field_drape",
             "previewImages": [
-              {{ "view": "front", "mimeType": "image/png", "bufferView": 1 }},
-              {{ "view": "back", "mimeType": "image/png", "bufferView": 2 }}
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 1 }},
+              {{ "view": "back", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 2 }}
             ]
           }}
         ]
@@ -10796,10 +10811,14 @@ mod tests {
 		assert_eq!(base_metadata.modular_avatar_component_count, 3);
 		assert_eq!(base_metadata.preview_images.len(), 1);
 		assert_eq!(base_metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(base_metadata.preview_images[0].width, Some(1));
+		assert_eq!(base_metadata.preview_images[0].height, Some(1));
 		assert_eq!(field_metadata.preview_sets.len(), 2);
 		assert_eq!(field_metadata.preview_images.len(), 2);
 		assert_eq!(field_metadata.preview_images[0].view.as_deref(), Some("front"));
 		assert_eq!(field_metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert_eq!(field_metadata.preview_images[0].width, Some(1));
+		assert_eq!(field_metadata.preview_images[0].height, Some(1));
 		assert!(field_metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
 	}
 
