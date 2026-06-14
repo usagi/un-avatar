@@ -11,12 +11,9 @@
 	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 
 	const sampleLimit = 4;
-	const dynamicsGroupLimit = 24;
 
 	$: rendererRunning = renderer.pid != null;
 	$: dynamicsGroups = runtimeStatus?.dynamics_groups ?? [];
-	$: visibleDynamicsGroups = dynamicsGroups.slice(0, dynamicsGroupLimit);
-	$: hiddenDynamicsGroupCount = Math.max(0, dynamicsGroups.length - visibleDynamicsGroups.length);
 	$: canSetDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_dynamics_enabled") ?? false;
 	$: canSetAllDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_all_dynamics_enabled") ?? false;
 
@@ -193,20 +190,7 @@
 				<dd class="stderr-block">{runtimeStatus.dynamics_warnings.slice(0, sampleLimit).join("\n")}</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
-				<dt>
-					{$_("renderers.details.diag_dynamics_groups")}
-					{#if hiddenDynamicsGroupCount}
-						<small>
-							{$_("renderers.details.diag_dynamics_groups_limited", {
-								values: {
-									count: visibleDynamicsGroups.length,
-									total: dynamicsGroups.length,
-									hidden: hiddenDynamicsGroupCount,
-								},
-							})}
-						</small>
-					{/if}
-				</dt>
+				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
 				<dd class="diagnostics-action-list compact">
 					<div class="diagnostics-action-row">
 						<code>{$_("renderers.details.dynamics_all_runtime_overrides")}</code>
@@ -231,7 +215,7 @@
 					</div>
 				</dd>
 				<dd class="diagnostics-action-list">
-					{#each visibleDynamicsGroups as group}
+					{#each dynamicsGroups as group}
 						<div class="diagnostics-action-row">
 							<code>{groupLabel(group)}</code>
 							<button
