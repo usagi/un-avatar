@@ -11386,6 +11386,48 @@ mod tests {
 	}
 
 	#[test]
+	fn profile_icon_crop_encoder_reaches_portrait_edges() {
+		let mut source = image::RgbaImage::new(180, 320);
+		for (_, y, pixel) in source.enumerate_pixels_mut() {
+			*pixel = if y < 160 {
+				image::Rgba([32, 220, 80, 255])
+			} else {
+				image::Rgba([220, 48, 210, 255])
+			};
+		}
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let top = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 0.0,
+				offset_y: -1.0,
+			},
+		)
+		.unwrap();
+		let bottom = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 0.0,
+				offset_y: 1.0,
+			},
+		)
+		.unwrap();
+		let top = image::load_from_memory(&top).unwrap().to_rgba8();
+		let bottom = image::load_from_memory(&bottom).unwrap().to_rgba8();
+		let top_green: u64 = top.pixels().map(|pixel| pixel[1] as u64).sum();
+		let top_blue: u64 = top.pixels().map(|pixel| pixel[2] as u64).sum();
+		let bottom_green: u64 = bottom.pixels().map(|pixel| pixel[1] as u64).sum();
+		let bottom_blue: u64 = bottom.pixels().map(|pixel| pixel[2] as u64).sum();
+		assert!(top_green > top_blue, "top crop should favor the green side");
+		assert!(bottom_blue > bottom_green, "bottom crop should favor the magenta side");
+	}
+
+	#[test]
 	fn profile_icon_thumbnail_cache_encodes_resized_webp() {
 		let source = image::RgbaImage::from_pixel(512, 384, image::Rgba([255, 128, 96, 220]));
 		let mut png = Vec::new();
