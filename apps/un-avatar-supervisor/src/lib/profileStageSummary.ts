@@ -51,6 +51,10 @@ export function localizedMotionLabel(setting: MotionLabelData, translate: Transl
 	return label === "None" ? translate("profiles.summary.motion_none") : label;
 }
 
+export function localizedAaModeLabel(aa: string | null | undefined, translate: Translate): string {
+	return aa === "off" ? translate("profiles.editor.options.aa_off") : aaModeLabel(aa);
+}
+
 export function localizedWindowLabel(setting: WindowLabelData, translate: Translate): string {
 	const frame = setting.decorations ? translate("profiles.summary.window_framed") : translate("profiles.summary.window_borderless");
 	const alpha = setting.transparent ? translate("profiles.summary.window_transparent") : translate("profiles.summary.window_opaque");
@@ -73,7 +77,7 @@ export function localizedQualitySummaryLabel(setting: ProfileQualityLabelData, t
 	const compression = setting.texture_compression;
 	const advanced = localizedTextureCompressionAdvancedSummary(setting.texture_compression_advanced, translate);
 	const cache = setting.processed_texture_cache ? translate("profiles.summary.cache_on") : translate("profiles.summary.cache_off");
-	return `AA: ${aaModeLabel(setting.aa)} / Tex: ${textureLimit} / ${compression}${advanced} / ${cache}`;
+	return `AA: ${localizedAaModeLabel(setting.aa, translate)} / Tex: ${textureLimit} / ${compression}${advanced} / ${cache}`;
 }
 
 function localizedTextureCompressionAdvancedSummary(
@@ -104,7 +108,7 @@ export function localizedLightingSummaryLabel(setting: LightingSummaryLabelData,
 
 export function localizedSettingSummary(setting: SettingSummaryLabelData, translate: Translate): string {
 	const parts = [localizedMotionLabel(setting, translate), localizedOutputLabel(setting, translate), localizedWindowLabel(setting, translate)];
-	if (setting.aa) parts.push(`AA ${aaModeLabel(setting.aa)}`);
+	if (setting.aa) parts.push(`AA ${localizedAaModeLabel(setting.aa, translate)}`);
 	return parts.join(" · ");
 }
 

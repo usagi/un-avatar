@@ -5,7 +5,7 @@ export const BCN_CPU_THREAD_OPTIONS = [1, 2, 4, 8, 16, 32, 64] as const;
 export const BCN_CPU_THREAD_SELECT_OPTIONS = BCN_CPU_THREAD_OPTIONS.map((count) => [String(count), String(count)] as const);
 
 export const AA_MODE_OPTIONS = [
-	["off", "Off"],
+	["off", "profiles.editor.options.aa_off"],
 	["fxaa", "profiles.editor.options.aa_fxaa"],
 	["smaa", "profiles.editor.options.aa_smaa"],
 	["msaa", "profiles.editor.options.aa_msaa"],
