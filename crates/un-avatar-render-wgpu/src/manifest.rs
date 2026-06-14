@@ -365,10 +365,10 @@ pub(crate) struct DebugManifest {
 	pub show_axes: Option<bool>,
 	/// ボーンベースコライダー debug 表示の初期値（既定 false）。
 	pub show_bone_colliders: Option<bool>,
-	/// MToon outline 描画を完全に無効化する診断 toggle（既定 false）。
+	/// UNToon geometry outline 描画を完全に無効化する診断 toggle（既定 false）。
 	/// 一部の VRM モデルで目周辺に肌色寄りの outline が太く出る現象の切り分け用。
 	pub disable_mtoon_outlines: Option<bool>,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle（既定 false）。
+	/// UNToon rim lighting 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_rim_lighting: Option<bool>,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle（既定 false）。
 	pub force_shading_shift_zero: Option<bool>,
@@ -376,7 +376,7 @@ pub(crate) struct DebugManifest {
 	pub disable_matcap: Option<bool>,
 	/// emissive (`emissive_factor × emissive_tex`) 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_emissive: Option<bool>,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断 toggle（既定 false）。
+	/// UNToon `shade_color × shade_tex` の代わりに base を使う診断 toggle（既定 false）。
 	pub disable_shade_color: Option<bool>,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断 toggle（既定 false）。
 	pub disable_normal_map: Option<bool>,

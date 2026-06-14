@@ -5062,12 +5062,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		start_minimized: bool,
 		#[arg(
 			long,
-			help = "診断用: MToon outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
+			help = "診断用: UNToon geometry outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
 		)]
 		disable_mtoon_outlines: bool,
 		#[arg(
 			long,
-			help = "診断用: 全メッシュを不透明 LitLambert + baseColorTexture のみで描画（MToon/アルファ表現をシェーダ側で無視）"
+			help = "診断用: 全メッシュを不透明 LitLambert + baseColorTexture のみで描画（UNToon/アルファ表現をシェーダ側で無視）"
 		)]
 		simple_basecolor_only: bool,
 		#[arg(long, help = "ロード時にマテリアル名・alphaMode・スキン joint 本数などを stderr に出す")]
@@ -5088,17 +5088,17 @@ pub fn run_cli() -> Result<(), RunError> {
 			help = "ジョイント行列を inv(meshWorld)*joint*IBM ではなく joint*IBM のみに（旧実装・エクスポータ差の確認）"
 		)]
 		debug_skin_legacy_no_inv_mesh: bool,
-		#[arg(long, help = "診断用: MToon parametric Rim Lighting 寄与を 0 に固定")]
+		#[arg(long, help = "診断用: UNToon rim lighting 寄与を 0 に固定")]
 		debug_disable_rim_lighting: bool,
 		#[arg(long, help = "診断用: shading_shift_factor と shadingShiftTexture の寄与を 0 に固定")]
 		debug_force_shading_shift_zero: bool,
-		#[arg(long, help = "診断用: MToon matcap (sphere add) 寄与を 0 に固定")]
+		#[arg(long, help = "診断用: UNToon matcap / sphere add 寄与を 0 に固定")]
 		debug_disable_matcap: bool,
 		#[arg(long, help = "診断用: emissive (emissive_factor × emissive_tex) 寄与を 0 に固定")]
 		debug_disable_emissive: bool,
 		#[arg(
 			long,
-			help = "診断用: MToon shade_term を base 色で置換（shade_color × shade_tex を base に差し替え）"
+			help = "診断用: UNToon shade term を base 色で置換（shade_color × shade_tex を base に差し替え）"
 		)]
 		debug_disable_shade_color: bool,
 		#[arg(long, help = "診断用: normalTexture を使わず頂点法線のみで shading / rim を計算")]
