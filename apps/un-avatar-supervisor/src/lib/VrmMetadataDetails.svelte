@@ -7,10 +7,9 @@
 	import VrmMetadataTechList from "./VrmMetadataTechList.svelte";
 
 	export let metadata: VrmMetadataInfo;
-	export let pendingPath: string | null;
 </script>
 
-<VrmMetadataHeader {metadata} {pendingPath} />
+<VrmMetadataHeader {metadata} />
 <div class="vrm-metadata-scroll">
 	<VrmMetadataInfoGrid {metadata} />
 	<VrmMetadataTechList items={metadata.technical_stats} />

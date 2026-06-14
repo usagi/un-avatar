@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
+	import { Move, RotateCcw, ZoomIn } from "lucide-svelte";
 	import type { UnavatarMetadataDialogState, UnavatarPreviewSet, UnavatarProfileIconCrop } from "./unavatarMetadata";
 
 	export let modal: UnavatarMetadataDialogState;
@@ -93,10 +94,10 @@
 		profileIconCrop = { ...profileIconCrop, enabled };
 	}
 
-	function adjustZoom(delta: number) {
+	function setZoom(value: string | number) {
 		profileIconCrop = {
 			...profileIconCrop,
-			zoom: clamp(Number(profileIconCrop.zoom) + delta, 1, 4),
+			zoom: clamp(Number(value) || 1, 1, 4),
 		};
 	}
 
@@ -177,7 +178,6 @@
 							class="unavatar-icon-mask"
 							style={`width: ${cropLayout.side}%; left: ${cropLayout.left}%; top: ${cropLayout.top}%;`}
 						></span>
-						<span class="unavatar-crop-hint">{$_("unavatar_rights.icon_drag_hint")}</span>
 					{/if}
 				</div>
 			{:else}
@@ -196,11 +196,26 @@
 						<span>{$_("unavatar_rights.use_preview_as_profile_icon")}</span>
 					</label>
 					<div class="unavatar-crop-tools">
-						<span>{$_("unavatar_rights.icon_frame")}</span>
-						<div class="unavatar-crop-zoom-actions" aria-label={$_("unavatar_rights.icon_zoom")}>
-							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_out")} onclick={() => adjustZoom(-0.15)}>&minus;</button>
-							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}>{$_("unavatar_rights.icon_reset")}</button>
-							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_zoom_in")} onclick={() => adjustZoom(0.15)}>+</button>
+						<div class="unavatar-crop-tool-row">
+							<span><ZoomIn size={15} />{$_("unavatar_rights.icon_zoom")}</span>
+							<input
+								type="range"
+								min="1"
+								max="4"
+								step="0.01"
+								value={profileIconCrop.zoom}
+								disabled={!profileIconCrop.enabled}
+								aria-label={$_("unavatar_rights.icon_zoom")}
+								oninput={(event) => setZoom(event.currentTarget.value)}
+							/>
+							<output>{Number(profileIconCrop.zoom).toFixed(2)}x</output>
+						</div>
+						<div class="unavatar-crop-tool-row compact">
+							<span><Move size={15} />{$_("unavatar_rights.icon_position")}</span>
+							<span class="unavatar-crop-instruction">{$_("unavatar_rights.icon_drag_hint")}</span>
+							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}
+								><RotateCcw size={14} />{$_("unavatar_rights.icon_reset")}</button
+							>
 						</div>
 					</div>
 				</div>

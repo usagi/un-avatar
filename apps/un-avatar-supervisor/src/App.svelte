@@ -1844,9 +1844,10 @@
 				message = $_("unavatar_rights.messages.no_metadata");
 				return;
 			}
+			const firstPreview = firstUnavatarPreviewDataUrl(metadata);
 			unavatarProfileIconCrop = {
-				enabled: false,
-				imageDataUrl: firstUnavatarPreviewDataUrl(metadata),
+				enabled: Boolean(firstPreview),
+				imageDataUrl: firstPreview,
 				zoom: 1,
 				offsetX: 0,
 				offsetY: 0,
@@ -2001,7 +2002,7 @@
 				return;
 			}
 			unavatarProfileIconCrop = {
-				enabled: false,
+				enabled: true,
 				imageDataUrl: firstPreview,
 				zoom: 1,
 				offsetX: 0,
