@@ -14,7 +14,7 @@
 	export let onOpenRendererLog: (rendererId: number) => void;
 </script>
 
-<section class="panel table-panel" aria-label="Renderer processes">
+<section class="panel table-panel" aria-label={$_("renderers.process.table_aria")}>
 	<table class="process-table renderer-process-table">
 		<colgroup>
 			<col class="process-col-state" />

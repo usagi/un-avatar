@@ -795,6 +795,7 @@ none_visible = "No visible renderer"
 [renderers.ready]
 title = "Launch Target"
 kicker = "Launch target"
+stage_aria = "Launch profile summary"
 stats_aria = "Launch target summary"
 state = "Ready"
 group_title = "Group: %{group}"
@@ -813,6 +814,7 @@ ram = "RAM"
 uptime = "Uptime"
 
 [renderers.summary]
+aria = "Runtime summary"
 status = "Connection"
 connected = "Connected"
 pending = "Pending"
@@ -865,6 +867,7 @@ io = "Motion / Output"
 actions = "Actions"
 
 [renderers.process]
+table_aria = "Renderer processes"
 open_log_hint = "Show logs for this process"
 
 [renderers.messages]
@@ -892,6 +895,7 @@ spout_output_disabled = "Disabled Spout output for %{name} (%{label})"
 
 [renderers.details]
 title = "Selected Renderer"
+stage_aria = "Selected renderer summary"
 overview = "Overview"
 controls = "Controls"
 expressions = "Expressions"

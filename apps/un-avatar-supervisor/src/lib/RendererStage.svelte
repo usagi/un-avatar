@@ -23,7 +23,7 @@
 	$: health = rendererHealthKind(renderer, runtimeStatus);
 </script>
 
-<section class={`renderer-stage renderer-stage-health-${health}`} aria-label="Selected renderer summary">
+<section class={`renderer-stage renderer-stage-health-${health}`} aria-label={$_("renderers.details.stage_aria")}>
 	<div class="renderer-stage-identity">
 		<div class="stage-avatar">
 			<img src={iconUrl} alt="" />

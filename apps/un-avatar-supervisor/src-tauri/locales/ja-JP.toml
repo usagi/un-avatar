@@ -803,6 +803,7 @@ none_visible = "表示対象の Renderer はありません"
 [renderers.ready]
 title = "起動対象"
 kicker = "起動対象"
+stage_aria = "起動対象の概要"
 stats_aria = "起動対象の概要"
 state = "待機"
 group_title = "グループ: %{group}"
@@ -821,6 +822,7 @@ ram = "RAM"
 uptime = "稼働時間"
 
 [renderers.summary]
+aria = "実行状態の概要"
 status = "接続状態"
 connected = "接続済み"
 pending = "接続待ち"
@@ -873,6 +875,7 @@ io = "Motion / Output"
 actions = "操作"
 
 [renderers.process]
+table_aria = "Renderer プロセス一覧"
 open_log_hint = "このプロセスのログを表示"
 
 [renderers.messages]
@@ -900,6 +903,7 @@ spout_output_disabled = "%{name} の Spout2 出力を無効化しました (%{la
 
 [renderers.details]
 title = "選択中の Renderer"
+stage_aria = "選択中 Renderer の概要"
 overview = "概要"
 controls = "操作"
 expressions = "表情"

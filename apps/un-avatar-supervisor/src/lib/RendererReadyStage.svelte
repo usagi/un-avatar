@@ -15,7 +15,7 @@
 	export let profileGroupCount = 0;
 </script>
 
-<section class="renderer-stage renderer-stage-ready" aria-label="Launch profile summary">
+<section class="renderer-stage renderer-stage-ready" aria-label={$_("renderers.ready.stage_aria")}>
 	<div class="renderer-stage-identity">
 		<div class="stage-avatar">
 			<img src={iconUrl} alt="" />

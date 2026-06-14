@@ -8,7 +8,7 @@
 	export let runtimeStatus: RuntimeSummaryStatusData | null;
 </script>
 
-<div class="runtime-summary-grid" aria-label="Runtime summary">
+<div class="runtime-summary-grid" aria-label={$_("renderers.summary.aria")}>
 	<span>
 		<small>{$_("renderers.summary.surface")}</small>
 		<strong>{runtimeResolution(runtimeStatus)}</strong>
