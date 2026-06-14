@@ -1436,14 +1436,14 @@
 	async function launchSetting(id: string | null, allowGroupTarget = true): Promise<void> {
 		if (!id && (!allowGroupTarget || !launchGroupName)) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: launch requires Tauri";
+			message = $_("profiles.messages.launch_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			if (allowGroupTarget && launchGroupName) {
 				if (launchGroupSettings.length === 0) {
-					throw new Error(`No profiles in group: ${launchGroupName}`);
+					throw new Error($_("profiles.messages.empty_launch_group", { values: { group: launchGroupName } }));
 				}
 				let lastInstance: RendererInstance | null = null;
 				for (const setting of launchGroupSettings) {
@@ -1452,7 +1452,7 @@
 					});
 				}
 				if (lastInstance) selectedRendererId = lastInstance.id;
-				message = `Opened ${launchGroupSettings.length} renderers`;
+				message = $_("profiles.messages.opened_renderers", { values: { count: launchGroupSettings.length } });
 				await refreshAll();
 				if (appSettings.jump_to_renderers_on_quick_run) {
 					activeTab = "renderers";
@@ -1464,7 +1464,7 @@
 				settingId: id,
 			});
 			selectedRendererId = instance.id;
-			message = `Opened ${instance.name}`;
+			message = $_("profiles.messages.opened_renderer", { values: { name: instance.name } });
 			await refreshAll();
 			if (appSettings.jump_to_renderers_on_quick_run) {
 				activeTab = "renderers";
@@ -1541,7 +1541,7 @@
 	async function duplicateSetting(id: string | null): Promise<void> {
 		if (!id) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: duplicate requires Tauri";
+			message = $_("profiles.messages.duplicate_requires_tauri");
 			return;
 		}
 		busy = true;
@@ -1549,7 +1549,7 @@
 			const setting = await invoke<AvatarSetting>("duplicate_avatar_setting", {
 				settingId: id,
 			});
-			message = `Duplicated ${setting.name}`;
+			message = $_("profiles.messages.duplicated", { values: { name: setting.name } });
 			await refreshAll();
 			selectedSettingId = setting.id;
 			activeTab = "settings";
@@ -1562,13 +1562,13 @@
 
 	async function newSetting(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: new setting requires Tauri";
+			message = $_("profiles.messages.new_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			const setting = await invoke<AvatarSetting>("new_avatar_setting");
-			message = `Created ${setting.name}`;
+			message = $_("profiles.messages.created", { values: { name: setting.name } });
 			await refreshAll();
 			selectedSettingId = setting.id;
 			activeTab = "settings";
@@ -1582,7 +1582,7 @@
 	async function deleteSetting(id: string | null): Promise<void> {
 		if (!id) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: delete requires Tauri";
+			message = $_("profiles.messages.delete_requires_tauri");
 			return;
 		}
 		const setting = avatarSettingBySelectedId(id);
@@ -1590,7 +1590,7 @@
 		busy = true;
 		try {
 			await invoke("delete_avatar_setting", { settingId: id });
-			message = `Deleted ${setting.name}`;
+			message = $_("profiles.messages.deleted", { values: { name: setting.name } });
 			selectedSettingId = null;
 			await refreshAll();
 		} catch (error) {
@@ -1631,12 +1631,12 @@
 	async function revealPath(path: string | null): Promise<void> {
 		if (!path) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: reveal requires Tauri";
+			message = $_("profiles.messages.reveal_requires_tauri");
 			return;
 		}
 		try {
 			await invoke("reveal_path", { path });
-			message = `Revealed ${basename(path)}`;
+			message = $_("profiles.messages.revealed", { values: { name: basename(path) } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -1644,12 +1644,12 @@
 
 	async function revealProfilesDir(): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: open folder requires Tauri";
+			message = $_("profiles.messages.open_folder_requires_tauri");
 			return;
 		}
 		try {
 			await invoke("reveal_profiles_dir");
-			message = "Opened profiles folder";
+			message = $_("profiles.messages.opened_profiles_folder");
 		} catch (error) {
 			message = String(error);
 		}
@@ -2394,12 +2394,12 @@
 	async function activateRenderer(renderer: RendererInstance | null): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: activate requires Tauri";
+			message = $_("renderers.messages.activate_requires_tauri");
 			return;
 		}
 		try {
 			await invoke("activate_renderer_window", { id: renderer.id });
-			message = `Activated ${renderer.name}`;
+			message = $_("renderers.messages.activated", { values: { name: renderer.name } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -2408,7 +2408,7 @@
 	async function restartRenderer(renderer: RendererInstance | null): Promise<void> {
 		if (!renderer?.manifest_path) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: restart requires Tauri";
+			message = $_("renderers.messages.restart_requires_tauri");
 			return;
 		}
 		busy = true;
@@ -2418,7 +2418,7 @@
 				settingId: renderer.manifest_path,
 			});
 			selectedRendererId = instance.id;
-			message = `Restarted ${instance.name}`;
+			message = $_("renderers.messages.restarted", { values: { name: instance.name } });
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -2430,13 +2430,13 @@
 	async function resetRendererCamera(renderer: RendererInstance | null): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: reset view requires Tauri";
+			message = $_("renderers.messages.reset_view_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			await invoke("reset_renderer_camera", { id: renderer.id });
-			message = `Reset view for ${renderer.name}`;
+			message = $_("renderers.messages.reset_view", { values: { name: renderer.name } });
 			await refreshRendererRuntimeView();
 		} catch (error) {
 			message = String(error);
@@ -2448,7 +2448,7 @@
 	async function captureRendererScreenshot(renderer: RendererInstance | null): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: screenshot requires Tauri";
+			message = $_("renderers.messages.screenshot_requires_tauri");
 			return;
 		}
 		busy = true;
@@ -2459,7 +2459,7 @@
 				path: null,
 			});
 			screenshotNoticePath = path;
-			message = "Screenshot saved";
+			message = $_("renderers.messages.screenshot_saved");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -2471,12 +2471,12 @@
 		const folder = dirname(screenshotNoticePath);
 		if (!folder) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: open folder requires Tauri";
+			message = $_("renderers.messages.open_folder_requires_tauri");
 			return;
 		}
 		try {
 			await invoke("reveal_path", { path: folder });
-			message = "Opened screenshots folder";
+			message = $_("renderers.messages.opened_screenshots_folder");
 		} catch (error) {
 			message = String(error);
 		}
@@ -2514,7 +2514,7 @@
 			await invoke("clear_renderer_expression_overrides", {
 				id: renderer.id,
 			});
-			message = `Expression overrides cleared for ${renderer.name}`;
+			message = $_("renderers.messages.cleared_expression_overrides", { values: { name: renderer.name } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -2531,7 +2531,7 @@
 				id: renderer.id,
 				actionId,
 			});
-			message = `Activated wardrobe ${wardrobeSetId} for ${renderer.name}`;
+			message = $_("renderers.messages.activated_wardrobe", { values: { name: renderer.name, wardrobe: wardrobeSetId } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -2544,13 +2544,13 @@
 	): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: runtime color control requires Tauri";
+			message = $_("renderers.messages.runtime_color_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
 			await invoke("set_renderer_clear_color", { id: renderer.id, ...color });
-			message = `Set ${renderer.name} background to ${label}`;
+			message = $_("renderers.messages.background_set", { values: { name: renderer.name, label } });
 			await refreshRendererRuntimeView();
 		} catch (error) {
 			message = String(error);
@@ -2612,7 +2612,7 @@
 		if (!renderer) return;
 		const enablingTransparentOnOpaqueRenderer = patch.transparent === true && !renderer.transparent;
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: runtime window control requires Tauri";
+			message = $_("renderers.messages.runtime_window_requires_tauri");
 			return;
 		}
 		busy = true;
@@ -2627,7 +2627,7 @@
 				width: patch.width ?? null,
 				height: patch.height ?? null,
 			});
-			message = `Set ${renderer.name} window to ${label}`;
+			message = $_("renderers.messages.window_set", { values: { name: renderer.name, label } });
 			await refreshRendererRuntimeView();
 			if (enablingTransparentOnOpaqueRenderer) {
 				queueTransparentEnableRestart(renderer);
