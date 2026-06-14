@@ -46,6 +46,14 @@ pub(crate) struct RendererManifest {
 	pub effects: Option<EffectsManifest>,
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
+	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct ProfileManifest {
+	pub id: Option<String>,
+	pub display_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -412,6 +420,9 @@ impl RendererManifest {
 	}
 
 	pub(crate) fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(profile) = self.profile {
+			profile.apply_to(opts);
+		}
 		if let Some(title) = self.title {
 			opts.title = title;
 		}
@@ -527,6 +538,56 @@ impl RendererManifest {
 			window.apply_to(opts);
 		}
 	}
+}
+
+impl ProfileManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		let profile_key = self.id.or(self.display_name);
+		if let Some(profile_key) = profile_key {
+			if let Some(app_id) = renderer_profile_app_user_model_id(&profile_key) {
+				opts.app_user_model_id = Some(app_id);
+			}
+		}
+	}
+}
+
+fn renderer_profile_app_user_model_id(profile_key: &str) -> Option<String> {
+	let mut slug = String::new();
+	let mut last_dash = false;
+	for ch in profile_key.trim().chars() {
+		let replacement = if ch.is_ascii_alphanumeric() {
+			Some(ch.to_ascii_lowercase())
+		} else if matches!(ch, '.' | '-') {
+			Some(ch)
+		} else if matches!(ch, '_' | ' ' | '\t' | '\n' | '\r') {
+			Some('-')
+		} else {
+			None
+		};
+		let Some(ch) = replacement else {
+			continue;
+		};
+		if ch == '-' {
+			if last_dash {
+				continue;
+			}
+			last_dash = true;
+		} else {
+			last_dash = false;
+		}
+		slug.push(ch);
+	}
+	let slug = slug.trim_matches(['.', '-']).to_string();
+	if slug.is_empty() {
+		return None;
+	}
+	let max_slug_len = 128usize.saturating_sub("DrUsagi.UNAvatar.Renderer.Profile.".len());
+	let slug = if slug.len() > max_slug_len {
+		slug.chars().take(max_slug_len).collect::<String>()
+	} else {
+		slug
+	};
+	Some(format!("DrUsagi.UNAvatar.Renderer.Profile.{slug}"))
 }
 
 impl EnvironmentManifest {
@@ -1162,6 +1223,9 @@ transparent = true
 input_passthrough = true
 clear_color = [0.0, 0.0, 0.0, 0.0]
 
+[profile]
+id = "mizuki-copy"
+
 [render_quality]
 aa = "fxaa"
 texture_resolution_limit = "4k"
@@ -1308,6 +1372,10 @@ constraint_iterations = 6
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
+		);
+		assert_eq!(
+			opts.app_user_model_id.as_deref(),
+			Some("DrUsagi.UNAvatar.Renderer.Profile.mizuki-copy")
 		);
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);

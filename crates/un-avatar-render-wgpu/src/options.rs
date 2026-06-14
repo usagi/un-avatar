@@ -527,6 +527,9 @@ pub struct AvatarWindowOptions {
 	pub wardrobe_set: Option<String>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
 	pub icon_path: Option<PathBuf>,
+	/// Windows taskbar grouping identity. Manifest profiles set this per profile so Windows does not
+	/// reuse one profile's cached taskbar icon for every renderer process.
+	pub app_user_model_id: Option<String>,
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
@@ -680,6 +683,7 @@ impl Default for AvatarWindowOptions {
 			manifest_path: None,
 			wardrobe_set: None,
 			icon_path: None,
+			app_user_model_id: None,
 			show_fps_in_title: true,
 			bench_frames: None,
 			vmc_address: None,

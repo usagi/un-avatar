@@ -4861,7 +4861,9 @@ fn resolve_activate_action_from_menu_path(
 /// イベントループをブロックしてウィンドウを表示する。
 pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
-	if let Err(error) = windows_identity::set_renderer_app_user_model_id() {
+	if let Err(error) =
+		windows_identity::set_renderer_app_user_model_id(opts.app_user_model_id.as_deref().unwrap_or("DrUsagi.UNAvatar.Renderer"))
+	{
 		eprintln!("un-avatar-renderer: set AppUserModelID failed: {error}");
 	}
 	let event_loop = EventLoop::<RendererControlEvent>::with_user_event()
@@ -4951,6 +4953,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		wardrobe_set: Option<String>,
 		#[arg(long, value_name = "PATH", help = "ウィンドウ・タスクバー用アイコン画像（PNG/JPEG等）")]
 		icon: Option<PathBuf>,
+		#[arg(long, hide = true)]
+		app_user_model_id: Option<String>,
 		#[arg(long, value_name = "IP:PORT", help = "VMC Marionette: UDP 待受アドレス（例: 0.0.0.0:39539）")]
 		vmc_address: Option<SocketAddr>,
 		#[arg(long, value_name = "PORT", hide = true)]
@@ -5165,6 +5169,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
 		icon_path: cli.icon,
+		app_user_model_id: None,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
 			enabled: cli.unmotion_zenoh_enabled,
@@ -5401,6 +5406,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.icon_path.is_some() {
 		opts.icon_path = cli.icon_path;
+	}
+	if cli.app_user_model_id.is_some() {
+		opts.app_user_model_id = cli.app_user_model_id;
 	}
 	if cli.clear_color != default.clear_color {
 		opts.clear_color = cli.clear_color;

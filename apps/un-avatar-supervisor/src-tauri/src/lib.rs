@@ -66,7 +66,6 @@ static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLo
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 const UN_AVATAR_LAUNCHER_APP_ID: &str = "DrUsagi.UNAvatar.Launcher";
-const UN_AVATAR_RENDERER_APP_ID: &str = "DrUsagi.UNAvatar.Renderer";
 const LEGACY_UN_AVATAR_LAUNCHER_APP_IDS: &[&str] = &[
 	"network.usagi.un-avatar",
 	"DrUsagi.UNAvatar",
@@ -5398,6 +5397,7 @@ fn launch_renderer_in_state(
 		&runtime_bus_key,
 		&app_settings.renderer_close_hotkey,
 		resolve_renderer_window_icon_path(&setting).as_deref(),
+		Some(&renderer_profile_app_user_model_id(&setting.id)),
 	)?;
 	configure_hidden_child(&mut command);
 	let mut child = command
@@ -5473,13 +5473,14 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 	let shortcut_path = desktop_dir.join(format!("{}.lnk", sanitize_shortcut_file_stem(&setting.name)));
 	let working_dir = renderer_shortcut_working_dir(&renderer_exe);
 	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
+	let app_id = renderer_profile_app_user_model_id(&setting.id);
 	create_windows_shortcut(
 		&shortcut_path,
 		&renderer_exe,
 		&format!("--manifest {}", quote_windows_arg(&manifest_path)),
 		&working_dir,
 		icon_path.as_deref(),
-		Some(UN_AVATAR_RENDERER_APP_ID),
+		Some(&app_id),
 	)?;
 	Ok(shortcut_path.display().to_string())
 }
@@ -7865,7 +7866,13 @@ fn resolve_avatar_setting_direct(setting_id: &str) -> Result<AvatarSetting, Stri
 	Err(format!("avatar setting not found: {setting_id}"))
 }
 
-fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &str, icon_path: Option<&Path>) -> Result<Command, String> {
+fn renderer_command(
+	manifest_path: &Path,
+	runtime_bus_key: &str,
+	close_hotkey: &str,
+	icon_path: Option<&Path>,
+	app_user_model_id: Option<&str>,
+) -> Result<Command, String> {
 	let repo = repo_root();
 	let exe = renderer_executable_path();
 	if exe.is_file() {
@@ -7879,6 +7886,9 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 			.arg(close_hotkey);
 		if let Some(icon_path) = icon_path {
 			command.arg("--icon").arg(icon_path);
+		}
+		if let Some(app_user_model_id) = app_user_model_id {
+			command.arg("--app-user-model-id").arg(app_user_model_id);
 		}
 		prepend_spout2_runtime_path(&mut command);
 		return Ok(command);
@@ -7895,6 +7905,9 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 		.arg(close_hotkey);
 	if let Some(icon_path) = icon_path {
 		command.arg("--icon").arg(icon_path);
+	}
+	if let Some(app_user_model_id) = app_user_model_id {
+		command.arg("--app-user-model-id").arg(app_user_model_id);
 	}
 	prepend_spout2_runtime_path(&mut command);
 	Ok(command)
@@ -8018,6 +8031,9 @@ fn spawn_standalone_renderer_manifest(manifest_path: &Path) -> Result<(), String
 		if let Some(icon_path) = resolve_renderer_window_icon_path(&setting) {
 			command.arg("--icon").arg(icon_path);
 		}
+		command
+			.arg("--app-user-model-id")
+			.arg(renderer_profile_app_user_model_id(&setting.id));
 	}
 	if let Some(parent) = exe.parent() {
 		command.current_dir(parent);
@@ -8109,6 +8125,44 @@ fn sanitize_shortcut_file_stem(name: &str) -> String {
 fn quote_windows_arg(path: &Path) -> String {
 	let raw = path.display().to_string();
 	format!("\"{}\"", raw.replace('"', "\\\""))
+}
+
+fn renderer_profile_app_user_model_id(profile_id: &str) -> String {
+	let mut slug = String::new();
+	let mut last_dash = false;
+	for ch in profile_id.trim().chars() {
+		let replacement = if ch.is_ascii_alphanumeric() {
+			Some(ch.to_ascii_lowercase())
+		} else if matches!(ch, '.' | '-') {
+			Some(ch)
+		} else if matches!(ch, '_' | ' ' | '\t' | '\n' | '\r') {
+			Some('-')
+		} else {
+			None
+		};
+		let Some(ch) = replacement else {
+			continue;
+		};
+		if ch == '-' {
+			if last_dash {
+				continue;
+			}
+			last_dash = true;
+		} else {
+			last_dash = false;
+		}
+		slug.push(ch);
+	}
+	let slug = slug.trim_matches(['.', '-']).to_string();
+	let slug = if slug.is_empty() { unique_profile_id(profile_id) } else { slug };
+	let prefix = "DrUsagi.UNAvatar.Renderer.Profile.";
+	let max_slug_len = 128usize.saturating_sub(prefix.len());
+	let slug = if slug.len() > max_slug_len {
+		slug.chars().take(max_slug_len).collect::<String>()
+	} else {
+		slug
+	};
+	format!("{prefix}{slug}")
 }
 
 #[cfg(windows)]
@@ -10848,6 +10902,18 @@ mod tests {
 		assert_eq!(
 			tasks[1].arguments,
 			r#"--launch-renderer-manifest "C:\Users\the\Profiles\usagi.toml""#
+		);
+	}
+
+	#[test]
+	fn renderer_profile_app_user_model_id_is_profile_scoped() {
+		assert_eq!(
+			crate::renderer_profile_app_user_model_id("mizuki-copy"),
+			"DrUsagi.UNAvatar.Renderer.Profile.mizuki-copy"
+		);
+		assert_eq!(
+			crate::renderer_profile_app_user_model_id("Model 1_Copy"),
+			"DrUsagi.UNAvatar.Renderer.Profile.model-1-copy"
 		);
 	}
 
