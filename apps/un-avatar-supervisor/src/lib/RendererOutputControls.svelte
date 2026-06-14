@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import RendererOutputActionButtons from "./RendererOutputActionButtons.svelte";
-	import { runtimeOutputLabel, type RuntimeOutputStatusData } from "./runtimeLabels";
+	import { localizedRuntimeOutputLabel } from "./profileStageSummary";
+	import type { RuntimeOutputStatusData } from "./runtimeLabels";
 	import type { RendererOutputData } from "./rendererControlTypes";
 	import type { RendererPaneActions } from "./rendererPaneActions";
 
@@ -17,7 +18,7 @@
 <section class="renderer-control-card renderer-control-output">
 	<div class="renderer-control-card-heading">
 		<h3>{$_("renderers.controls.output")}</h3>
-		<span>{runtimeOutputLabel(renderer, runtimeStatus)}</span>
+		<span>{localizedRuntimeOutputLabel(renderer, runtimeStatus, $_)}</span>
 	</div>
 	<RendererOutputActionButtons {renderer} {runtimeStatus} disabled={busy || !rendererRunning} {onSetSpoutOutput} {onSetWindow} />
 </section>

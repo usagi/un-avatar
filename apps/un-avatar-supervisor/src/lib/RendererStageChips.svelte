@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { motionLabel, windowLabel } from "./profileLabels";
+	import { motionLabel } from "./profileLabels";
+	import { localizedRuntimeOutputLabel, localizedWindowLabel } from "./profileStageSummary";
 	import {
 		rendererHealthKind,
 		rendererHealthLabel,
 		runtimeAaLabel,
-		runtimeOutputLabel,
 		runtimeResolution,
 		type RuntimeStageStatusData,
 	} from "./runtimeLabels";
@@ -25,8 +25,8 @@
 		})}</span
 	>
 	<span>{motionLabel(renderer)}</span>
-	<span>{runtimeOutputLabel(renderer, runtimeStatus)}</span>
-	<span>{windowLabel(renderer)}</span>
+	<span>{localizedRuntimeOutputLabel(renderer, runtimeStatus, $_)}</span>
+	<span>{localizedWindowLabel(renderer, $_)}</span>
 	<span>{runtimeResolution(runtimeStatus)}</span>
 	<span>{runtimeAaLabel(runtimeStatus)}</span>
 </div>

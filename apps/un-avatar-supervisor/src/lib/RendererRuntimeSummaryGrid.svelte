@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { runtimeOutputLabel, runtimeResolution, spoutHealthLabel, type RuntimeSummaryStatusData } from "./runtimeLabels";
+	import { localizedRuntimeOutputLabel } from "./profileStageSummary";
+	import { runtimeResolution, spoutHealthLabel, type RuntimeSummaryStatusData } from "./runtimeLabels";
 	import type { RendererOutputView } from "./rendererTypes";
 
 	export let renderer: RendererOutputView;
@@ -14,7 +15,7 @@
 	</span>
 	<span>
 		<small>{$_("renderers.summary.output")}</small>
-		<strong>{runtimeOutputLabel(renderer, runtimeStatus)}</strong>
+		<strong>{localizedRuntimeOutputLabel(renderer, runtimeStatus, $_)}</strong>
 	</span>
 	<span>
 		<small>{$_("renderers.summary.spout")}</small>

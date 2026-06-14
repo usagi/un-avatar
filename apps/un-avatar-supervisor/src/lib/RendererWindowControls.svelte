@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { windowLabel } from "./profileLabels";
+	import { localizedWindowLabel } from "./profileStageSummary";
 	import RendererWindowActionButtons from "./RendererWindowActionButtons.svelte";
 	import RendererWindowProfileButtons from "./RendererWindowProfileButtons.svelte";
 	import RendererWindowStateTable from "./RendererWindowStateTable.svelte";
@@ -20,7 +20,7 @@
 <section class="renderer-control-card renderer-control-window">
 	<div class="renderer-control-card-heading">
 		<h3>{$_("renderers.controls.window")}</h3>
-		<span>{windowLabel(renderer)}</span>
+		<span>{localizedWindowLabel(renderer, $_)}</span>
 	</div>
 	<RendererWindowActionButtons {renderer} {runtimeStatus} disabled={busy || !rendererRunning} {onSetWindow} />
 	<RendererWindowStateTable {runtimeStatus} />

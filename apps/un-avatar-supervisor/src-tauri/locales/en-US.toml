@@ -563,7 +563,9 @@ taskbar_launcher_requires_tauri = "Browser preview: taskbar launcher setup requi
 taskbar_launcher_created = "Updated the UN Avatar launcher and Jump List profile tasks. Pin UN Avatar from this folder, then right-click the taskbar icon to launch a profile: %{path}"
 
 [profiles.summary]
+output_window = "Window"
 output_window_preview = "Window Preview"
+output_spout_unavailable = "Spout2 unavailable"
 output_spout_only = "Spout2 only"
 output_spout_preview = "Spout2 + Preview"
 window_framed = "Framed"

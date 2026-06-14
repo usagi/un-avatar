@@ -2,10 +2,11 @@
 	import { _ } from "svelte-i18n";
 	import { basename } from "./formatting";
 	import { motionLabel } from "./profileLabels";
+	import { localizedRuntimeOutputLabel } from "./profileStageSummary";
 	import RendererProcessMetricsCell from "./RendererProcessMetricsCell.svelte";
 	import RendererProcessStatusCell from "./RendererProcessStatusCell.svelte";
 	import type { RendererTableView } from "./rendererTypes";
-	import { rendererHealthKind, runtimeOutputLabel, type RuntimeTableStatusData } from "./runtimeLabels";
+	import { rendererHealthKind, type RuntimeTableStatusData } from "./runtimeLabels";
 
 	export let renderer: RendererTableView;
 	export let selectedRendererId: number | null;
@@ -31,6 +32,6 @@
 	<RendererProcessMetricsCell {status} />
 	<td class="process-cell-io">
 		<strong>{motionLabel(renderer)}</strong>
-		<small>{runtimeOutputLabel(renderer, status)}</small>
+		<small>{localizedRuntimeOutputLabel(renderer, status, $_)}</small>
 	</td>
 </tr>

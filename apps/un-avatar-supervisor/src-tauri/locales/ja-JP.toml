@@ -571,7 +571,9 @@ taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバ
 taskbar_launcher_created = "UN Avatar launcher と Jump List のプロファイル起動タスクを更新しました。このフォルダーから UN Avatar をピン留めし、タスクバーアイコンの右クリックでプロファイルを起動できます: %{path}"
 
 [profiles.summary]
+output_window = "Window"
 output_window_preview = "Window Preview"
+output_spout_unavailable = "Spout2 利用不可"
 output_spout_only = "Spout2 のみ"
 output_spout_preview = "Spout2 + Preview"
 window_framed = "枠あり"

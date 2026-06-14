@@ -11,7 +11,7 @@ import {
 	windowLabel,
 } from "./profileLabels";
 import type { ProfileSummaryItem } from "./profileSummary";
-import { qualitySummaryLabel } from "./runtimeLabels";
+import { qualitySummaryLabel, type RuntimeOutputStatusData } from "./runtimeLabels";
 
 type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
 
@@ -31,6 +31,20 @@ export function localizedOutputLabel(setting: OutputLabelData, translate: Transl
 	const size = setting.spout_width && setting.spout_height ? ` / ${setting.spout_width} x ${setting.spout_height}` : "";
 	const name = setting.spout_name ? ` / ${setting.spout_name}` : "";
 	return `${mode}${size}${name}`;
+}
+
+export function localizedRuntimeOutputLabel(
+	renderer: OutputLabelData,
+	status: RuntimeOutputStatusData | null | undefined,
+	translate: Translate
+): string {
+	if (!status?.connected) return localizedOutputLabel(renderer, translate);
+	if (renderer.spout_enabled && !status.spout_available) return translate("profiles.summary.output_spout_unavailable");
+	if (!status.spout_enabled) return translate("profiles.summary.output_window");
+	const name = status.spout_name ? ` / ${status.spout_name}` : "";
+	const size =
+		status.spout_sender_width && status.spout_sender_height ? ` / ${status.spout_sender_width} x ${status.spout_sender_height}` : "";
+	return `Spout2${name}${size}`;
 }
 
 export function localizedWindowLabel(setting: WindowLabelData, translate: Translate): string {
