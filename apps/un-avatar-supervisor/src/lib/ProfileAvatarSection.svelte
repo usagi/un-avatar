@@ -54,7 +54,7 @@
 		>
 	{:else if isUnavatar}
 		<div class="profile-inline-note profile-inline-note-warning">
-			Wardrobe unavailable{wardrobeOptions?.error ? `: ${wardrobeOptions.error}` : ""}
+			{$_("profiles.editor.wardrobe_unavailable")}{wardrobeOptions?.error ? `: ${wardrobeOptions.error}` : ""}
 		</div>
 	{/if}
 </section>
