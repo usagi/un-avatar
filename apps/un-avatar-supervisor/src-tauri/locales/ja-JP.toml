@@ -15,8 +15,12 @@ name = "UN Avatar"
 subtitle = "Supervisor Console"
 stop_all = "全て停止"
 version_unknown = "(unknown)"
+status_aria = "Renderer 状態概要"
+running_count = "%{count} 実行中"
+issue_count = "%{count} 問題"
 
 [sidebar]
+aria = "主要ナビゲーション"
 renderers = "Renderers"
 profiles = "Profiles"
 logs = "Logs"
@@ -26,6 +30,8 @@ settings = "Settings"
 system = "System"
 light = "Light"
 dark = "Dark"
+defaulting_to_os = "OS テーマ (%{os}) に従います"
+override_saved = "テーマ固定設定を保存済み"
 
 [language]
 label = "言語"
@@ -107,6 +113,7 @@ console_window_height = "Height (inner): ウィンドウ内側の高さです。
 about = "このアプリについて: アプリ名、バージョン、リポジトリ、ライセンスを表示します。"
 
 [profiles]
+aria = "Profiles"
 empty_workspace = "ワークスペース内にプロファイルがありません。"
 active_badge = "選択中"
 field_name = "名前"

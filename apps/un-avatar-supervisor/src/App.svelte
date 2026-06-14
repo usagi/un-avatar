@@ -2896,9 +2896,11 @@
 				<p>{$_("app.subtitle")}</p>
 			</div>
 		</div>
-		<div class="status-strip" aria-label="Renderer status summary">
-			<span><Activity size={14} />{runningCount} running</span>
-			<span class:warn={issueCount > 0}><AlertTriangle size={14} />{issueCount} issues</span>
+		<div class="status-strip" aria-label={$_("app.status_aria")}>
+			<span><Activity size={14} />{$_("app.running_count", { values: { count: runningCount } })}</span>
+			<span class:warn={issueCount > 0}
+				><AlertTriangle size={14} />{$_("app.issue_count", { values: { count: issueCount } })}</span
+			>
 			<span>{message}</span>
 			{#if screenshotNoticePath}
 				<button class="screenshot-notice" title={screenshotNoticePath} onclick={() => void revealScreenshotFolder()}>
@@ -2919,15 +2921,16 @@
 			<ThemeModeSwitch
 				className="theme-switch"
 				mode={appSettings.theme_mode}
-				title={appSettings.theme_mode === "system" ? `Defaulting to OS ${osTheme}` : "Theme override is saved"}
-				ariaLabel="Theme"
+				title={appSettings.theme_mode === "system"
+					? $_("theme.defaulting_to_os", { values: { os: osTheme } })
+					: $_("theme.override_saved")}
 				onChange={setThemeMode}
 			/>
 		</div>
 	</header>
 
 	<div class="workspace">
-		<aside class="side-rail" aria-label="Primary navigation">
+		<aside class="side-rail" aria-label={$_("sidebar.aria")}>
 			<button class:active={activeTab === "renderers"} onclick={() => (activeTab = "renderers")}
 				><Monitor size={17} />{$_("sidebar.renderers")}</button
 			>
@@ -3132,7 +3135,7 @@
 		{:else if activeTab === "settings"}
 			<section
 				class="view settings-view"
-				aria-label="Profiles"
+				aria-label={$_("profiles.aria")}
 				onpointerover={updateProfileHintFromEvent}
 				onfocusin={updateProfileHintFromEvent}
 				onpointerleave={clearProfileHint}

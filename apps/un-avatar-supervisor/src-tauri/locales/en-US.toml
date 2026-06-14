@@ -7,8 +7,12 @@ name = "UN Avatar"
 subtitle = "Supervisor Console"
 stop_all = "Stop All"
 version_unknown = "(unknown)"
+status_aria = "Renderer status summary"
+running_count = "%{count} running"
+issue_count = "%{count} issues"
 
 [sidebar]
+aria = "Primary navigation"
 renderers = "Renderers"
 profiles = "Profiles"
 logs = "Logs"
@@ -18,6 +22,8 @@ settings = "Settings"
 system = "System"
 light = "Light"
 dark = "Dark"
+defaulting_to_os = "Defaulting to OS %{os}"
+override_saved = "Theme override is saved"
 
 [language]
 label = "Language"
@@ -99,6 +105,7 @@ console_window_height = "Height (inner): inner window height. Out-of-range value
 about = "About: app name, version, repository, and license."
 
 [profiles]
+aria = "Profiles"
 empty_workspace = "No profiles found in workspace."
 active_badge = "ACTIVE"
 field_name = "Name"
