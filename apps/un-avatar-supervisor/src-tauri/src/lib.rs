@@ -3489,7 +3489,7 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 			error: None,
 		});
 	};
-	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).unwrap_or("base");
+	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).unwrap_or("");
 	let base_label = wardrobe
 		.get("baseLabel")
 		.or_else(|| wardrobe.get("baseName"))
@@ -11797,6 +11797,40 @@ id = "test"
 		assert_eq!(options.sets.len(), 1);
 		assert_eq!(options.sets[0].id, "field_drape");
 		assert_eq!(options.sets[0].name, "Field Drape");
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_does_not_invent_base_set_fallback() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-no-base-fallback-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		fs::write(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"sets": [
+								{"id": "base", "displayName": "Base Set"},
+								{"id": "noble13", "displayName": "Noble 13"}
+							]
+						}
+					}
+				}
+			}"#,
+		)
+		.unwrap();
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.sets.len(), 2);
+		assert_eq!(options.sets[0].id, "base");
+		assert_eq!(options.sets[0].name, "Base Set");
+		assert_eq!(options.sets[1].id, "noble13");
 		let _ = fs::remove_dir_all(&dir);
 	}
 
