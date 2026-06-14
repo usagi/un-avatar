@@ -686,7 +686,7 @@ small,
 }
 
 .profile-stage-title-row .profile-stage-action-group {
-	grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+	grid-template-columns: minmax(320px, 1fr) auto;
 	justify-content: stretch;
 	width: 100%;
 	padding-top: 8px;
@@ -708,7 +708,7 @@ small,
 	border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-.profile-stage-title-row .profile-stage-action-copy {
+.profile-stage-title-row .profile-cache-callout {
 	text-align: left;
 }
 
@@ -729,12 +729,30 @@ small,
 	border-left: 0;
 }
 
-.profile-stage-action-copy {
+.profile-cache-callout {
 	display: grid;
-	gap: 2px;
+	gap: 4px;
 	min-width: 0;
-	padding-top: 1px;
+	padding: 8px 10px;
+	border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--surface) 88%, transparent);
 	text-align: right;
+}
+
+.profile-cache-callout-ready {
+	border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+	background: color-mix(in srgb, var(--success) 7%, var(--surface));
+}
+
+.profile-cache-callout-refresh {
+	border-color: color-mix(in srgb, var(--warning) 34%, var(--border));
+	background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+
+.profile-cache-callout-missing {
+	border-color: color-mix(in srgb, var(--accent-cool) 34%, var(--border));
+	background: color-mix(in srgb, var(--accent-cool) 8%, var(--surface));
 }
 
 .profile-stage-action-heading {
@@ -743,6 +761,11 @@ small,
 	justify-content: flex-end;
 	gap: 6px;
 	min-width: 0;
+}
+
+.profile-stage-action-heading svg {
+	flex: 0 0 auto;
+	color: var(--accent-cool);
 }
 
 .profile-stage-action-heading strong {
@@ -785,7 +808,7 @@ small,
 	color: color-mix(in srgb, var(--accent-cool) 68%, var(--text));
 }
 
-.profile-stage-action-copy p {
+.profile-cache-callout p {
 	display: -webkit-box;
 	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 2;
@@ -803,6 +826,7 @@ small,
 	justify-content: flex-end;
 	gap: 6px;
 	min-width: 0;
+	max-width: 100%;
 }
 
 .profile-stage-actions button,
@@ -5333,7 +5357,7 @@ textarea {
 		border-left: 0;
 	}
 
-	.profile-stage-action-copy {
+	.profile-cache-callout {
 		text-align: left;
 	}
 

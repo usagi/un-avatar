@@ -63,8 +63,14 @@
 		{/if}
 	</div>
 	<div class="profile-stage-action-group">
-		<div class="profile-stage-action-copy">
+		<div
+			class="profile-cache-callout"
+			class:profile-cache-callout-ready={sceneCacheReady}
+			class:profile-cache-callout-refresh={sceneCacheNeedsRefresh}
+			class:profile-cache-callout-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}
+		>
 			<div class="profile-stage-action-heading">
+				<DatabaseZap size={15} aria-hidden="true" />
 				<strong>{actionGroupTitle}</strong>
 				<span
 					class="profile-cache-state"

@@ -48,6 +48,7 @@ Shortcut and launcher UX is a bridge from prepared profiles to daily operation.
 The profile stage presents shortcut, launcher, cache warmup, launch, and live renderer actions as one v2 workflow.
 
 - `Prepare Daily Use` groups cache warmup, desktop shortcut creation, and taskbar launcher setup. It answers "how do I make this profile pleasant to use next time?"
+- Cache readiness is a visible profile-stage state card, not only a tooltip or secondary button label. Users must be able to tell whether a profile is prepared, stale, or missing warmup before deciding between launch, shortcut, and launcher actions.
 - `Check Now` launches the selected profile from Supervisor so the user can verify appearance, physics, output, and motion before turning it into daily operation.
 - `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
 - These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
