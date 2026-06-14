@@ -903,6 +903,10 @@
 		});
 	}
 
+	function firstUnavatarPreviewDataUrl(metadata: UnavatarMetadataInfo): string | null {
+		return metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null;
+	}
+
 	function rendererRuntimeStatus(renderer: RendererInstance): RendererRuntimeStatus | null {
 		return runtimeStatuses[renderer.id] ?? null;
 	}
@@ -1121,6 +1125,11 @@
 
 	function avatarSettingBySelectedId(id: string | null): AvatarSetting | null {
 		return id == null ? null : (avatarSettingById.get(id) ?? null);
+	}
+
+	function avatarSettingByIdOrManifestPath(idOrPath: string | null | undefined): AvatarSetting | null {
+		if (!idOrPath) return null;
+		return avatarSettingById.get(idOrPath) ?? avatarSettings.find((setting) => sameNormalizedPath(setting.manifest_path, idOrPath)) ?? null;
 	}
 
 	function isLiveRenderer(renderer: RendererInstance): boolean {
@@ -1816,7 +1825,7 @@
 			}
 			unavatarProfileIconCrop = {
 				enabled: false,
-				imageDataUrl: metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null,
+				imageDataUrl: firstUnavatarPreviewDataUrl(metadata),
 				zoom: 1,
 				offsetX: 0,
 				offsetY: 0,
@@ -1959,8 +1968,9 @@
 		}
 		busy = true;
 		try {
-			const metadata = await readUnavatarMetadataForPath(avatarPath, selectedSetting);
-			const firstPreview = metadata?.preview_images[0]?.data_url ?? metadata?.preview_sets[0]?.preview_images[0]?.data_url ?? null;
+			const targetSetting = avatarSettingByIdOrManifestPath(settingId) ?? selectedSetting;
+			const metadata = await readUnavatarMetadataForPath(avatarPath, targetSetting);
+			const firstPreview = metadata ? firstUnavatarPreviewDataUrl(metadata) : null;
 			if (!metadata || !firstPreview) {
 				message = $_("profiles.messages.no_unavatar_preview_icon");
 				return;
@@ -2054,7 +2064,7 @@
 				}
 				unavatarProfileIconCrop = {
 					enabled: false,
-					imageDataUrl: metadata.preview_images[0]?.data_url ?? metadata.preview_sets[0]?.preview_images[0]?.data_url ?? null,
+					imageDataUrl: firstUnavatarPreviewDataUrl(metadata),
 					zoom: 1,
 					offsetX: 0,
 					offsetY: 0,
