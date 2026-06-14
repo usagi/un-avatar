@@ -2012,7 +2012,7 @@
 			replaceAvatarSetting(setting);
 			bumpProfileIconRevision(setting.icon_path);
 			queueRendererRestart(modal.rendererToRestart, "icon_path");
-			message = $_("profiles.messages.updated_thumbnail_icon");
+			message = $_("profiles.messages.updated_unavatar_sample_icon");
 		} catch (error) {
 			message = String(error);
 		} finally {

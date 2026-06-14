@@ -556,6 +556,7 @@ avatar_path_required_for_thumbnail = "アバターファイルが設定されて
 thumbnail_requires_tauri = "ブラウザプレビューではサムネイルのキャッシュ保存に対応していません"
 choose_unavatar_sample_icon = ".unavatar のサンプル画像からアイコンを選択してください"
 no_unavatar_preview_icon = ".unavatar にプロファイルアイコンへ使えるサンプル画像がありません"
+updated_unavatar_sample_icon = ".unavatar のサンプル画像をプロファイルアイコンに設定しました"
 desktop_shortcut_requires_tauri = "ブラウザプレビューではデスクトップショートカット作成に対応していません"
 desktop_shortcut_created = "デスクトップショートカットを作成しました: %{path}"
 taskbar_launcher_requires_tauri = "ブラウザプレビューではタスクバー launcher 設定に対応していません"
