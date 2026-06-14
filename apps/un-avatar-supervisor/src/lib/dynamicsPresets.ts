@@ -26,9 +26,9 @@ export function dynamicsOverrideFieldPrefix(category: string): string {
 }
 
 export const DYNAMICS_MODE_OPTIONS = [
-	["authored", "profiles.editor.dynamics_mode_authored_verlet"],
-	["override_verlet", "profiles.editor.dynamics_mode_override_verlet"],
-	["override_xpbd", "profiles.editor.dynamics_mode_override_xpbd"],
+	["authored", "profiles.editor.dynamics_mode_model_default"],
+	["override_verlet", "profiles.editor.dynamics_mode_standard"],
+	["override_xpbd", "profiles.editor.dynamics_mode_extended"],
 ] as const;
 
 export const DYNAMICS_DAMPING_FIELD = {
