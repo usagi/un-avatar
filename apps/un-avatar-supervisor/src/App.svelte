@@ -1923,10 +1923,14 @@
 		busy = true;
 		try {
 			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
+			let savedProfileIcon = false;
 			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
 				await saveUnavatarProfileIconCrop(savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId, modal.rendererToRestart);
+				savedProfileIcon = true;
 			}
-			message = $_("vrm_metadata.messages.updated_after_confirmation");
+			message = savedProfileIcon
+				? $_("profiles.messages.updated_unavatar_sample_icon")
+				: $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
 			message = String(error);
 		} finally {
