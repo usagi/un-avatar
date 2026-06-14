@@ -30,6 +30,7 @@
 	$: selectedPreviewLabel =
 		selectedPreview?.view?.trim() ||
 		$_("unavatar_rights.preview_image_title", { values: { index: selectedPreviewIndex + 1 } });
+	$: canEditProfileIcon = Boolean(modal.pendingPath || modal.iconSelectionOnly);
 	$: if (profileIconCrop.imageDataUrl !== (selectedPreview?.data_url ?? null)) {
 		profileIconCrop = {
 			...profileIconCrop,
@@ -109,7 +110,7 @@
 	}
 
 	function beginCropDrag(event: PointerEvent) {
-		if (!profileIconCrop.enabled || !selectedPreview || !cropFrame) return;
+		if (!canEditProfileIcon || !profileIconCrop.enabled || !selectedPreview || !cropFrame) return;
 		dragStart = {
 			pointerId: event.pointerId,
 			x: event.clientX,
@@ -156,10 +157,10 @@
 			{#if selectedPreview}
 				<div
 					class="vrm-metadata-preview-frame unavatar-crop-frame"
-					class:disabled={!profileIconCrop.enabled}
+					class:disabled={!canEditProfileIcon || !profileIconCrop.enabled}
 					bind:this={cropFrame}
-					role="application"
-					aria-label={$_("unavatar_rights.icon_drag_hint")}
+					role={canEditProfileIcon ? "application" : "img"}
+					aria-label={canEditProfileIcon ? $_("unavatar_rights.icon_drag_hint") : selectedPreviewLabel}
 					onpointerdown={beginCropDrag}
 					onpointermove={moveCropDrag}
 					onpointerup={endCropDrag}
@@ -171,7 +172,7 @@
 						alt=""
 						onload={updateNaturalPreviewSize}
 					/>
-					{#if selectedPreview && profileIconCrop.enabled}
+					{#if selectedPreview && canEditProfileIcon && profileIconCrop.enabled}
 						<span
 							class="unavatar-icon-mask"
 							style={`width: ${cropLayout.side}%; left: ${cropLayout.left}%; top: ${cropLayout.top}%;`}
@@ -188,7 +189,7 @@
 					<span>{selectedSet?.name || $_("unavatar_rights.default_preview_set")}</span>
 				</div>
 			{/if}
-			{#if selectedPreview}
+			{#if selectedPreview && canEditProfileIcon}
 				<div class="unavatar-icon-crop-panel" class:enabled={profileIconCrop.enabled}>
 					<label class="unavatar-icon-crop-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
 						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
@@ -267,6 +268,13 @@
 				</section>
 			</div>
 			<footer class="vrm-metadata-actions">
+				<span class="metadata-action-mode">
+					{modal.pendingPath
+						? $_("unavatar_rights.eyebrow")
+						: modal.iconSelectionOnly
+							? $_("unavatar_rights.profile_icon")
+							: $_("unavatar_rights.title")}
+				</span>
 				<button class="secondary" onclick={() => onClose()}>{modal.pendingPath ? $_("common.cancel") : $_("common.close")}</button>
 				{#if modal.pendingPath}
 					<button class="primary" disabled={busy} onclick={() => onAcceptAndUse()}>{$_("unavatar_rights.accept_and_use")}</button>

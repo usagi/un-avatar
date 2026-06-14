@@ -5042,29 +5042,22 @@ textarea {
 
 .vrm-metadata-actions {
 	display: flex;
+	align-items: center;
 	justify-content: flex-end;
 	gap: 10px;
 	padding: 14px 24px 20px;
 	border-top: 1px solid var(--border);
 }
 
-.vrm-thumbnail-icon-toggle {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
+.metadata-action-mode {
+	min-width: 0;
 	margin-right: auto;
-	padding: 6px 10px;
-	border: 1px solid color-mix(in srgb, var(--accent-cool) 42%, var(--border));
-	border-radius: 7px;
-	background: color-mix(in srgb, var(--accent-cool) 8%, transparent);
-	color: var(--text);
+	overflow: hidden;
+	color: var(--muted);
 	font-size: 12px;
-}
-
-.vrm-thumbnail-icon-toggle input {
-	width: 15px;
-	height: 15px;
-	min-height: 15px;
+	font-weight: 800;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .unavatar-rights-warning {
@@ -5237,6 +5230,11 @@ textarea {
 .unavatar-icon-crop-panel.enabled {
 	border-color: color-mix(in srgb, var(--accent-cool) 48%, var(--border));
 	background: color-mix(in srgb, var(--accent-cool) 8%, var(--panel-subtle));
+}
+
+.vrm-profile-icon-panel {
+	min-height: 42px;
+	margin-top: 0;
 }
 
 .unavatar-icon-crop-toggle {

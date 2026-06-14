@@ -14,14 +14,16 @@
 
 <div class="vrm-metadata-backdrop" role="presentation">
 	<div class="vrm-metadata-dialog" role="dialog" aria-modal="true" aria-label={$_("vrm_metadata.title")}>
-		<VrmMetadataPortrait metadata={modal.metadata} />
+		<VrmMetadataPortrait
+			metadata={modal.metadata}
+			pendingPath={modal.pendingPath}
+			bind:useThumbnailForProfileIconOnAccept
+		/>
 		<div class="vrm-metadata-body">
 			<VrmMetadataDetails metadata={modal.metadata} pendingPath={modal.pendingPath} />
 			<VrmMetadataActions
 				pendingPath={modal.pendingPath}
-				hasThumbnail={Boolean(modal.metadata.thumbnail_data_url)}
 				{busy}
-				bind:useThumbnailForProfileIconOnAccept
 				{onClose}
 				{onAcceptAndUse}
 			/>
