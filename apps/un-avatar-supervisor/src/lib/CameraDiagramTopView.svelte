@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { _ } from "svelte-i18n";
 	import type { CameraDiagram } from "./profileDiagrams";
 
 	export let diagram: CameraDiagram;
@@ -6,7 +7,7 @@
 </script>
 
 <svg viewBox="0 0 220 136" role="img">
-	<title>Top view: X and Z axes</title>
+	<title>{$_("profiles.editor.diagram_top_view_title")}</title>
 	{#each diagram.gridOffsets as offset}
 		<line
 			x1={diagram.originX + offset * diagram.topScale}
@@ -41,7 +42,7 @@
 	<circle cx={diagram.targetX} cy={diagram.targetY} r="8" class="camera-target-dot" />
 	<circle cx={diagram.cameraX} cy={diagram.cameraY} r="7" class="camera-dot" />
 	{#if showPointLabels}
-		<text x={diagram.targetX + 10} y={diagram.targetY - 10} class="camera-point-label">Target</text>
-		<text x={diagram.cameraX + 9} y={diagram.cameraY - 9} class="camera-point-label">Camera</text>
+		<text x={diagram.targetX + 10} y={diagram.targetY - 10} class="camera-point-label">{$_("profiles.editor.diagram_target")}</text>
+		<text x={diagram.cameraX + 9} y={diagram.cameraY - 9} class="camera-point-label">{$_("profiles.editor.diagram_camera")}</text>
 	{/if}
 </svg>

@@ -15,8 +15,8 @@
 </script>
 
 <CameraPresetRow
-	title="Target"
-	ariaLabel="Camera target presets"
+	title={$_("profiles.editor.camera_target_position")}
+	ariaLabel={$_("profiles.editor.camera_target_presets")}
 	className="target-preset-row"
 	{busy}
 	options={targetPresetOptions}

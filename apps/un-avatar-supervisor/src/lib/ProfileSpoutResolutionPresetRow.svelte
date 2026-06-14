@@ -6,7 +6,7 @@
 	export let onApplySpoutResolutionPreset: (preset: SpoutResolutionPreset) => void | Promise<void>;
 </script>
 
-<div class="recommendation-row" aria-label="Spout2 resolution presets">
+<div class="recommendation-row" aria-label={$_("profiles.editor.spout_resolution_presets")}>
 	<span>{$_("profiles.editor.recommendation")}</span>
 	<button
 		type="button"

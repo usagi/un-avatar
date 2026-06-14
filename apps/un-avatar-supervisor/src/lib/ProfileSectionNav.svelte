@@ -7,7 +7,7 @@
 	export let onSelect: (sectionId: ProfileSectionNavItem["id"]) => void;
 </script>
 
-<nav class="profile-section-nav" aria-label="Profile setting sections">
+<nav class="profile-section-nav" aria-label={$_("profiles.editor.profile_section_nav")}>
 	{#each items as item}
 		<button
 			type="button"

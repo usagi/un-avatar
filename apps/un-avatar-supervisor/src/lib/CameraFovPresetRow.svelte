@@ -6,7 +6,7 @@
 	export let onApplyLensPreset: (focalLengthMm: CameraLensPreset) => void | Promise<void>;
 </script>
 
-<div class="recommendation-row" aria-label="Camera FOV presets">
+<div class="recommendation-row" aria-label={$_("profiles.editor.camera_fov_presets")}>
 	<span>{$_("profiles.editor.recommendation")}</span>
 	<button type="button" disabled={busy} data-hint={$_("profiles.hints.camera.fov_10")} onclick={() => onApplyLensPreset(10)}
 		>{$_("profiles.editor.options.fov_ultra_wide_10")}</button

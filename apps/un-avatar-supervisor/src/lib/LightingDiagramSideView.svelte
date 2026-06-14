@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { _ } from "svelte-i18n";
 	import type { LightingDiagram } from "./profileDiagrams";
 
 	export let diagram: LightingDiagram;
 </script>
 
 <svg viewBox="0 0 220 136" role="img">
-	<title>Side view from X+: Z and Y axes</title>
+	<title>{$_("profiles.editor.diagram_side_view_title")}</title>
 	<defs>
 		<marker id="lighting-arrow-side" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
 			<path d="M0,0 L6,3 L0,6 Z" class="lighting-arrow-head" />
