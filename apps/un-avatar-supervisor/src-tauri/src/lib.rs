@@ -12651,6 +12651,41 @@ texture_compression = "{legacy_mode}"
 	}
 
 	#[test]
+	fn render_quality_texture_compression_alias_edits_save_v2_name() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[render_quality]
+texture_compression = "source"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		for legacy_mode in ["auto", "advanced"] {
+			apply_avatar_setting_value(
+				&mut manifest,
+				&setting,
+				"render_quality.texture_compression",
+				serde_json::json!(legacy_mode),
+			)
+			.unwrap();
+			assert_eq!(
+				manifest
+					.get("render_quality")
+					.and_then(toml::Value::as_table)
+					.and_then(|quality| quality.get("texture_compression"))
+					.and_then(toml::Value::as_str),
+				Some("balanced")
+			);
+		}
+	}
+
+	#[test]
 	fn render_quality_setting_updates_write_expected_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
