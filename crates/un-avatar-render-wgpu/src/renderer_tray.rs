@@ -437,27 +437,37 @@ fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 
 fn wardrobe_menu_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 	if !snapshot.menu_wardrobe_candidates.is_empty() {
-		let first = snapshot.menu_wardrobe_candidates.first();
-		let last = snapshot.menu_wardrobe_candidates.last();
-		return format!(
-			"menu:{}:{}:{}:{}:{}",
-			snapshot.menu_wardrobe_candidates.len(),
-			first.map_or("", |candidate| candidate.action_id.as_str()),
-			first.map_or("", |candidate| candidate.wardrobe_set_id.as_str()),
-			last.map_or("", |candidate| candidate.action_id.as_str()),
-			last.map_or("", |candidate| candidate.wardrobe_set_id.as_str())
-		);
+		let mut signature = format!("menu:{}", snapshot.menu_wardrobe_candidates.len());
+		for candidate in &snapshot.menu_wardrobe_candidates {
+			signature.push('|');
+			signature.push_str(&signature_field(&candidate.action_id));
+			signature.push(':');
+			signature.push_str(&signature_field(&candidate.wardrobe_set_id));
+			signature.push(':');
+			signature.push_str(&signature_field(candidate.menu_label.as_deref().unwrap_or("")));
+			signature.push(':');
+			signature.push_str(if candidate.menu_path_truncated { "1" } else { "0" });
+			signature.push(':');
+			signature.push_str(&signature_field(&candidate.menu_path.join("/")));
+		}
+		return signature;
 	}
-	let first = snapshot.wardrobe_actions.first();
-	let last = snapshot.wardrobe_actions.last();
-	format!(
-		"actions:{}:{}:{}:{}:{}",
-		snapshot.wardrobe_actions.len(),
-		first.map_or("", |action| action.action_id.as_str()),
-		first.map_or("", |action| action.set_id.as_str()),
-		last.map_or("", |action| action.action_id.as_str()),
-		last.map_or("", |action| action.set_id.as_str())
-	)
+	let mut signature = format!("actions:{}", snapshot.wardrobe_actions.len());
+	for action in &snapshot.wardrobe_actions {
+		signature.push('|');
+		signature.push_str(&signature_field(&action.action_id));
+		signature.push(':');
+		signature.push_str(&signature_field(&action.set_id));
+		signature.push(':');
+		signature.push_str(&signature_field(&action.label));
+		signature.push(':');
+		signature.push_str(&signature_field(action.expression_menu_path.as_deref().unwrap_or("")));
+	}
+	signature
+}
+
+fn signature_field(value: &str) -> String {
+	format!("{}#{}", value.len(), value)
 }
 
 fn load_tray_icon(path: Option<&Path>) -> Option<TrayIconImage> {
@@ -539,6 +549,54 @@ mod tests {
 		}];
 
 		assert_ne!(menu_key(&actions_only), menu_key(&menu_candidates));
+	}
+
+	#[test]
+	fn menu_key_tracks_all_wardrobe_candidate_labels() {
+		let mut before = snapshot();
+		before.menu_wardrobe_candidates = vec![
+			gpu::RuntimeMenuWardrobeCandidateStatus {
+				action_id: "menu:base".to_string(),
+				wardrobe_set_id: "".to_string(),
+				menu_path: vec!["Wardrobe".to_string(), "Base".to_string()],
+				..Default::default()
+			},
+			gpu::RuntimeMenuWardrobeCandidateStatus {
+				action_id: "menu:field_drape".to_string(),
+				wardrobe_set_id: "field_drape".to_string(),
+				menu_path: vec!["Wardrobe".to_string(), "Field Drape".to_string()],
+				..Default::default()
+			},
+		];
+
+		let mut after = before.clone();
+		after.menu_wardrobe_candidates[1].menu_path = vec!["Wardrobe".to_string(), "Field drape".to_string()];
+
+		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_tracks_all_fallback_wardrobe_action_labels() {
+		let mut before = snapshot();
+		before.wardrobe_actions = vec![
+			gpu::RuntimeWardrobeActionStatus {
+				action_id: "action:base".to_string(),
+				label: "Base".to_string(),
+				set_id: "".to_string(),
+				..Default::default()
+			},
+			gpu::RuntimeWardrobeActionStatus {
+				action_id: "action:noble13".to_string(),
+				label: "Noble 13".to_string(),
+				set_id: "noble13".to_string(),
+				..Default::default()
+			},
+		];
+
+		let mut after = before.clone();
+		after.wardrobe_actions[1].label = "Noble13".to_string();
+
+		assert_ne!(menu_key(&before), menu_key(&after));
 	}
 
 	#[test]
