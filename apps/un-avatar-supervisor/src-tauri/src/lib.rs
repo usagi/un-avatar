@@ -3293,13 +3293,8 @@ fn unavatar_wardrobe_preview_sets(
 	let Some(sets) = wardrobe.get("sets").and_then(serde_json::Value::as_array) else {
 		return Vec::new();
 	};
-	let base_set_name = wardrobe
-		.get("baseName")
-		.or_else(|| wardrobe.get("baseLabel"))
-		.and_then(serde_json::Value::as_str)
-		.map(str::trim)
-		.filter(|name| !name.is_empty())
-		.unwrap_or("Base");
+	let base_set_id = wardrobe.get("baseSet").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("");
+	let base_set_name = unavatar_wardrobe_base_label(wardrobe);
 	sets.iter()
 		.filter_map(|set| {
 			let id = set.get("id").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("");
@@ -3310,18 +3305,37 @@ fn unavatar_wardrobe_preview_sets(
 				.collect::<Vec<_>>();
 			(!preview_images.is_empty()).then(|| UnavatarPreviewSet {
 				id: id.to_string(),
-				name: set
-					.get("name")
-					.or_else(|| set.get("displayName"))
-					.and_then(serde_json::Value::as_str)
-					.map(str::trim)
-					.filter(|name| !name.is_empty())
-					.unwrap_or(if id.is_empty() { base_set_name } else { id })
-					.to_string(),
+				name: unavatar_wardrobe_set_label(set, id, base_set_id, &base_set_name),
 				preview_images,
 			})
 		})
 		.collect()
+}
+
+fn unavatar_wardrobe_base_label(wardrobe: &serde_json::Value) -> String {
+	wardrobe
+		.get("baseName")
+		.or_else(|| wardrobe.get("baseLabel"))
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.unwrap_or("Base")
+		.to_string()
+}
+
+fn unavatar_wardrobe_set_label(set: &serde_json::Value, id: &str, base_set_id: &str, base_label: &str) -> String {
+	set.get("name")
+		.or_else(|| set.get("displayName"))
+		.or_else(|| set.get("label"))
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.unwrap_or(if id.is_empty() || (!base_set_id.is_empty() && id == base_set_id) {
+			base_label
+		} else {
+			id
+		})
+		.to_string()
 }
 
 fn unavatar_set_preview_images(set: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
@@ -3634,7 +3648,6 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 		.get("extensions")
 		.and_then(|extensions| extensions.get("UN_avatar"))
 		.and_then(|unavatar| unavatar.get("wardrobe"))
-		.and_then(|wardrobe| wardrobe.as_object())
 	else {
 		return Ok(UnavatarWardrobeOptions {
 			available: false,
@@ -3643,13 +3656,8 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 			error: None,
 		});
 	};
-	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).unwrap_or("");
-	let base_label = wardrobe
-		.get("baseLabel")
-		.or_else(|| wardrobe.get("baseName"))
-		.and_then(|value| value.as_str())
-		.unwrap_or("Base")
-		.to_string();
+	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).map(str::trim).unwrap_or("");
+	let base_label = unavatar_wardrobe_base_label(wardrobe);
 	let sets = wardrobe
 		.get("sets")
 		.and_then(|value| value.as_array())
@@ -3660,16 +3668,9 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 			if id.is_empty() || id == base_set_id {
 				return None;
 			}
-			let name = set
-				.get("name")
-				.or_else(|| set.get("displayName"))
-				.and_then(|value| value.as_str())
-				.map(str::trim)
-				.filter(|name| !name.is_empty())
-				.unwrap_or(id);
 			Some(UnavatarWardrobeSetOption {
 				id: id.to_string(),
-				name: name.to_string(),
+				name: unavatar_wardrobe_set_label(set, id, base_set_id, &base_label),
 			})
 		})
 		.collect::<Vec<_>>();
@@ -11584,6 +11585,57 @@ mod tests {
 		assert_eq!(metadata.preview_images.len(), 1);
 		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
 		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_labels_named_base_set_with_base_label() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-named-base-label-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		fs::write(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "images": [
+    {
+      "mimeType": "image/png",
+      "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    }
+  ],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Named Base Preview UNAvatar" },
+      "wardrobe": {
+        "baseSet": "base",
+        "baseName": "Base Costume",
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "image": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#,
+		)
+		.unwrap();
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "base");
+		assert_eq!(metadata.preview_sets[0].name, "Base Costume");
+		assert_eq!(metadata.preview_images.len(), 1);
 	}
 
 	#[test]
