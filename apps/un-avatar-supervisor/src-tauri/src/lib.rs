@@ -2715,11 +2715,6 @@ fn sync_app_settings(
 	state: State<'_, Mutex<AppRuntimeSettings>>,
 ) -> Result<(), String> {
 	normalize_app_settings(&mut settings);
-	let _reserved_for_future_runtime_hooks = (
-		settings.start_minimized_to_tray,
-		settings.crash_notifications,
-		settings.theme_mode.as_str(),
-	);
 	let (old_system_tray_enabled, old_locale) = {
 		let state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
 		(state.system_tray_enabled, state.locale.clone())
