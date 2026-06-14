@@ -20,6 +20,7 @@
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
 		const state = group.effective_enabled ? "on" : "off";
+		const sourceState = group.authored_enabled ? "on" : "off";
 		const override = group.runtime_enabled_override == null ? "" : `, override=${group.runtime_enabled_override}`;
 		const parameter = group.interaction_parameter ? `, param=${group.interaction_parameter}` : "";
 		const writeback = group.writeback_mode ? `, writeback=${group.writeback_mode}` : "";
@@ -29,7 +30,7 @@
 				: `, translationCandidates=${group.translation_writeback_candidate_count}`;
 		const translationTargets =
 			group.translation_writeback_target_count == null ? "" : `, translationTargets=${group.translation_writeback_target_count}`;
-		return `${path} (${group.source_kind}, ${state}, authored=${group.authored_enabled}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${translationTargets}${parameter})`;
+		return `${path} (${group.source_kind}, ${state}, source=${sourceState}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${translationTargets}${parameter})`;
 	}
 
 	function interactionHookLabel(hook: RendererRuntimeDiagnosticsData["dynamics_interaction_hooks"][number]): string {
