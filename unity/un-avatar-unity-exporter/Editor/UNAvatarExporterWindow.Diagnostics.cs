@@ -691,7 +691,7 @@ namespace UNAvatar.UnityExporter
                 validation.SkinnedMeshRendererCount = CountSkinnedMeshRenderers(renderers);
                 validation.MaterialCount = CountDistinctMaterials(renderers);
                 validation.VariantCount = VariantExtractor.Extract(avatarRoot, exportMode).Count;
-                validation.WardrobeSetCount = capturedWardrobeSets.Count;
+                validation.WardrobeSetCount = IsCurrentToBaseOnlyExportMode() ? 0 : capturedWardrobeSets.Count;
                 validation.HumanoidBoneCount = HumanoidExtractor.Extract(avatarRoot).Count;
             }
 

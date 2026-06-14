@@ -21,7 +21,7 @@ namespace UNAvatar.UnityExporter
 
         [SerializeField] private GameObject avatarRoot;
         [SerializeField] private string exportPath = "";
-        [SerializeField] private UNAvatarExportMode exportMode = UNAvatarExportMode.WardrobeBaked;
+        [SerializeField] private UNAvatarExportMode exportMode = UNAvatarExportMode.Wardrobe;
         [SerializeField] private bool forceIncludeInactiveObjects = true;
         [SerializeField] private bool hasBaseSnapshot = false;
         [SerializeField] private string wardrobeSetName = "New Outfit";
@@ -45,6 +45,7 @@ namespace UNAvatar.UnityExporter
         private void OnEnable()
         {
             developerMode = IsDeveloperModeEnabled;
+            MigrateExportMode();
         }
 
         [MenuItem("Tools/U.N. Avatar/Export .unavatar")]
@@ -92,8 +93,18 @@ namespace UNAvatar.UnityExporter
 
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("Export Settings", EditorStyles.boldLabel);
-            exportMode = (UNAvatarExportMode)EditorGUILayout.EnumPopup("Export Mode", exportMode);
+            MigrateExportMode();
+            exportMode = DrawExportModePopup(exportMode);
+            if (IsCurrentToBaseOnlyExportMode())
+            {
+                EditorGUILayout.HelpBox("Current to Base Only writes the current scene state as Base and ignores captured wardrobe sets for this export. Saved wardrobe settings are kept.", MessageType.Info);
+            }
             forceIncludeInactiveObjects = true;
+
+            if (GUILayout.Button("Restore from .unavatar", GUILayout.Height(22)))
+            {
+                ImportCapturedSetsFromUnavatar();
+            }
 
             DrawWardrobeCaptureGui();
 
@@ -101,7 +112,7 @@ namespace UNAvatar.UnityExporter
             EditorGUILayout.LabelField("4. Export", EditorStyles.boldLabel);
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("Validate", GUILayout.Height(28)))
+                if (developerMode && GUILayout.Button("Validate", GUILayout.Height(28)))
                 {
                     lastSummary = ValidateSelection().ToDisplayText();
                 }
@@ -144,6 +155,26 @@ namespace UNAvatar.UnityExporter
                 }
             }
             EditorGUILayout.EndScrollView();
+        }
+
+        private bool IsCurrentToBaseOnlyExportMode()
+        {
+            return exportMode == UNAvatarExportMode.CurrentToBaseOnly;
+        }
+
+        private static UNAvatarExportMode DrawExportModePopup(UNAvatarExportMode current)
+        {
+            var selected = current == UNAvatarExportMode.CurrentToBaseOnly ? 1 : 0;
+            selected = EditorGUILayout.Popup("Export Mode", selected, new[] { "Wardrobe", "Current to Base Only" });
+            return selected == 1 ? UNAvatarExportMode.CurrentToBaseOnly : UNAvatarExportMode.Wardrobe;
+        }
+
+        private void MigrateExportMode()
+        {
+            if ((int)exportMode == 2)
+            {
+                exportMode = UNAvatarExportMode.Wardrobe;
+            }
         }
     }
 }

@@ -72,12 +72,6 @@ namespace UNAvatar.UnityExporter
             return avatarRoot != null ? SanitizeFileName(avatarRoot.name) : "avatar";
         }
 
-        private string ResolveDraftFileName()
-        {
-            var name = ResolveInitialExportName(exportPath);
-            return string.IsNullOrWhiteSpace(name) ? "avatar-wardrobe-capture" : name + ".wardrobe-capture";
-        }
-
         private static string SanitizeFileName(string value)
         {
             var invalid = Path.GetInvalidFileNameChars();

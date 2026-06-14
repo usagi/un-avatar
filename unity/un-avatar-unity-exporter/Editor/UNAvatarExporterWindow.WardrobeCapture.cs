@@ -164,57 +164,9 @@ namespace UNAvatar.UnityExporter
             return cloned;
         }
 
-        private void SaveCaptureDraft()
-        {
-            var path = EditorUtility.SaveFilePanel("Save wardrobe capture draft", ResolveInitialExportDirectory(exportPath), ResolveDraftFileName(), "json");
-            if (string.IsNullOrEmpty(path))
-            {
-                return;
-            }
-
-            var draft = new WardrobeCaptureSessionDraft
-            {
-                avatarRootName = avatarRoot != null ? avatarRoot.name : "",
-                setName = wardrobeSetName,
-                hasBaseSnapshot = hasBaseSnapshot,
-                baseSnapshot = baseSnapshot,
-                basePreviewImages = basePreviewImages,
-                sets = capturedWardrobeSets
-            };
-            File.WriteAllText(path, JsonUtility.ToJson(draft, true), new UTF8Encoding(false));
-            lastSummary = "Saved wardrobe capture draft\n" + path;
-            AssetDatabase.Refresh();
-        }
-
-        private void LoadCaptureDraft()
-        {
-            var path = EditorUtility.OpenFilePanel("Load wardrobe capture draft", ResolveInitialExportDirectory(exportPath), "json");
-            if (string.IsNullOrEmpty(path))
-            {
-                return;
-            }
-
-            var draft = JsonUtility.FromJson<WardrobeCaptureSessionDraft>(File.ReadAllText(path, Encoding.UTF8));
-            if (draft == null)
-            {
-                lastSummary = "Failed to load wardrobe capture draft.";
-                return;
-            }
-
-            wardrobeSetName = string.IsNullOrWhiteSpace(draft.setName) ? wardrobeSetName : draft.setName;
-            hasBaseSnapshot = draft.hasBaseSnapshot;
-            baseSnapshot = draft.baseSnapshot ?? new WardrobeSnapshotDraft();
-            basePreviewImages = draft.basePreviewImages ?? new List<WardrobePreviewImageDraft>();
-            hasImportedBaseOperations = false;
-            importedBaseOperations.Clear();
-            capturedWardrobeSets = draft.sets ?? new List<WardrobeSetDraft>();
-            selectedWardrobeSetIndex = hasBaseSnapshot ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
-            lastSummary = $"Loaded wardrobe capture draft: {capturedWardrobeSets.Count} sets.";
-        }
-
         private void ImportCapturedSetsFromUnavatar()
         {
-            var path = EditorUtility.OpenFilePanel("Import wardrobe sets from .unavatar", ResolveInitialExportDirectory(exportPath), "unavatar");
+            var path = EditorUtility.OpenFilePanel("Restore wardrobe settings from .unavatar", ResolveInitialExportDirectory(exportPath), "unavatar");
             if (string.IsNullOrEmpty(path))
             {
                 return;

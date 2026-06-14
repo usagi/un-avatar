@@ -55,7 +55,7 @@ namespace UNAvatar.UnityExporter
                 ["unityExporter"] = new Dictionary<string, object>
                 {
                     ["buildMarker"] = ExporterBuildMarker,
-                    ["bakeModularAvatar"] = exportMode != UNAvatarExportMode.WardrobeSplit,
+                    ["bakeModularAvatar"] = false,
                     ["modularAvatarInstalled"] = ModularAvatarBridge.IsAvailable,
                     ["modularAvatarBakeAttempted"] = bakeAttempted,
                     ["modularAvatarBakeSucceeded"] = bakeSucceeded,
@@ -117,7 +117,7 @@ namespace UNAvatar.UnityExporter
                 ["humanoidBoneCount"] = humanoid.Count,
                 ["variantCount"] = variants.Count,
                 ["variants"] = VariantSummariesToJson(variants),
-                ["wardrobeSetCount"] = capturedWardrobeSets.Count,
+                ["wardrobeSetCount"] = exportWardrobeSets != null ? exportWardrobeSets.Count : capturedWardrobeSets.Count,
                 ["wardrobe"] = BuildWardrobeReportSummary(variants, exportBaseSnapshot, exportWardrobeSets, avatarRoot),
                 ["wardrobeAssetOwnershipDiagnostics"] = BuildWardrobeAssetOwnershipDiagnostics(rendererAssets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
@@ -888,7 +888,7 @@ namespace UNAvatar.UnityExporter
                 {
                     id = "base",
                     displayName = "Base",
-                    source = hasExportBaseSnapshot ? "unity_baked_capture_base" : hasBaseSnapshot ? "unity_capture_base" : hasImportedBaseOperations ? "imported_unavatar_base" : "implicit_current_state",
+                    source = hasExportBaseSnapshot ? "unity_current_capture_base" : hasBaseSnapshot ? "unity_capture_base" : hasImportedBaseOperations ? "imported_unavatar_base" : "implicit_current_state",
                     assetGroups = new List<string> { "" },
                     operations = baseOperations,
                     previewImages = basePreviewImages ?? new List<WardrobePreviewImageDraft>()

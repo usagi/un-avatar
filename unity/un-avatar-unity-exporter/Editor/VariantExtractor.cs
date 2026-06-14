@@ -52,7 +52,7 @@ namespace UNAvatar.UnityExporter
 
             variants.Add(MakeCurrentStateVariant(root));
 
-            if (mode == UNAvatarExportMode.CurrentOnly)
+            if (mode == UNAvatarExportMode.CurrentToBaseOnly)
             {
                 return variants;
             }

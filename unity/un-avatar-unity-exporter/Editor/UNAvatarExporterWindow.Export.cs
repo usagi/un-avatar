@@ -41,34 +41,9 @@ namespace UNAvatar.UnityExporter
 
                 var sourceVariants = VariantExtractor.Extract(avatarRoot, exportMode);
                 var humanoid = HumanoidExtractor.Extract(avatarRoot);
-                var splitWardrobeMode = exportMode == UNAvatarExportMode.WardrobeSplit;
-                var bakedWardrobeMode = exportMode == UNAvatarExportMode.WardrobeBaked;
-
-                if (forceIncludeInactiveObjects && bakedWardrobeMode)
-                {
-                    SetActiveRecursive(clone.transform, true);
-                }
-                if (bakedWardrobeMode)
-                {
-                    ApplyWardrobeOperationsToRoot(clone, CurrentBaseOperations());
-                }
-
-                var bakeAttempted = ModularAvatarBridge.IsAvailable && !splitWardrobeMode;
+                var currentToBaseOnlyMode = IsCurrentToBaseOnlyExportMode();
+                var bakeAttempted = false;
                 var bakeSucceeded = false;
-                if (bakeAttempted)
-                {
-                    EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Baking Modular Avatar clone", 0.25f);
-                    bakeSucceeded = ModularAvatarBridge.TryBake(clone, out var bakeError);
-                    if (!bakeSucceeded)
-                    {
-                        Debug.LogWarning("[U.N. Avatar] Modular Avatar bake failed: " + bakeError);
-                    }
-                }
-                // Per-set Modular Avatar baking is too risky for the preview exporter: some VRC avatar
-                // projects can crash Unity during repeated bake/active-state mutation. Keep the exported
-                // model baked, but store wardrobe sets as authored capture diffs until the bake path is hardened.
-                List<WardrobeSetDraft> bakedWardrobeSets = null;
-                var bakedBaseSnapshot = bakedWardrobeSets != null ? WardrobeSnapshotCapture.Capture(clone) : null;
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Exporting GLB", 0.55f);
                 var glbName = SanitizeFileName(avatarRoot.name);
@@ -78,11 +53,12 @@ namespace UNAvatar.UnityExporter
 
                 EditorUtility.DisplayProgressBar("U.N. Avatar Export", "Patching UN_avatar extension", 0.8f);
                 RegenerateWardrobePreviewImagesForExport();
-                // Wardrobe sets are currently stored as authored capture diffs, not per-set baked diffs.
-                // Keep Base authored as well; post-bake snapshots can be altered by Modular Avatar and are
-                // only safe as the wardrobe baseline once per-set baked snapshots are enabled again.
-                var wardrobeBaseSnapshot = bakedWardrobeSets != null ? bakedBaseSnapshot : null;
-                var exportWardrobeSets = bakedWardrobeSets ?? WardrobeSetsForExport();
+                var wardrobeBaseSnapshot = currentToBaseOnlyMode
+                    ? WardrobeSnapshotCapture.Capture(clone)
+                    : null;
+                var exportWardrobeSets = currentToBaseOnlyMode
+                    ? new List<WardrobeSetDraft>()
+                    : WardrobeSetsForExport();
                 var exportPreviewImages = PreviewImagesForExport(exportWardrobeSets);
                 var dynamicsPayload = BuildDynamicsPayload(clone);
                 var contactsPayload = BuildContactsPayload(clone);

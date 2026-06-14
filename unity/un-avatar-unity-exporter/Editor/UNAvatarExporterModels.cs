@@ -13,12 +13,9 @@ namespace UNAvatar.UnityExporter
 {
     internal enum UNAvatarExportMode
     {
-        [InspectorName("Current Only")]
-        CurrentOnly = 1,
-        [InspectorName("Wardrobe (Baked)")]
-        WardrobeBaked = 0,
-        [InspectorName("Wardrobe (Split)")]
-        WardrobeSplit = 2
+        Wardrobe = 0,
+        [InspectorName("Current to Base Only")]
+        CurrentToBaseOnly = 1
     }
 
     [Serializable]
@@ -398,19 +395,6 @@ namespace UNAvatar.UnityExporter
         public string path;
         public string name;
         public float weight;
-    }
-
-    [Serializable]
-    internal sealed class WardrobeCaptureSessionDraft
-    {
-        public string schema = "network.usagi.un-avatar.unity-exporter.wardrobe-capture";
-        public string schemaVersion = "0.1-preview";
-        public string avatarRootName;
-        public string setName;
-        public bool hasBaseSnapshot;
-        public WardrobeSnapshotDraft baseSnapshot = new WardrobeSnapshotDraft();
-        public List<WardrobePreviewImageDraft> basePreviewImages = new List<WardrobePreviewImageDraft>();
-        public List<WardrobeSetDraft> sets = new List<WardrobeSetDraft>();
     }
 
     internal sealed class TextureDiagnostic

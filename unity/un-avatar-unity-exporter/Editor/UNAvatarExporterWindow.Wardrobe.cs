@@ -41,71 +41,55 @@ namespace UNAvatar.UnityExporter
 
             EditorGUILayout.Space(8);
             EditorGUILayout.LabelField("2. Wardrobe Sets", EditorStyles.boldLabel);
-            wardrobeSetName = EditorGUILayout.TextField("Set Name", wardrobeSetName);
-            using (new EditorGUI.DisabledScope(!hasBaseSnapshot))
+            using (new EditorGUI.DisabledScope(IsCurrentToBaseOnlyExportMode()))
             {
-                if (GUILayout.Button("Capture Current As New Set", GUILayout.Height(24)))
+                wardrobeSetName = EditorGUILayout.TextField("Set Name", wardrobeSetName);
+                using (new EditorGUI.DisabledScope(!hasBaseSnapshot))
                 {
-                    CaptureWardrobeSet();
-                }
-            }
-            EditorGUILayout.LabelField("Captured Sets", capturedWardrobeSets.Count.ToString(CultureInfo.InvariantCulture));
-
-            for (var i = 0; i < capturedWardrobeSets.Count; i++)
-            {
-                var set = capturedWardrobeSets[i];
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    var selected = selectedWardrobeSetIndex == i;
-                    if (GUILayout.Button(selected ? set.displayName + " ✓" : set.displayName))
+                    if (GUILayout.Button("Capture Current As New Set", GUILayout.Height(24)))
                     {
-                        selectedWardrobeSetIndex = i;
-                        wardrobeSetName = set.displayName;
-                        ApplySelectedWardrobeSetToScene();
+                        CaptureWardrobeSet();
                     }
-                    GUILayout.Label(set.operations.Count + " ops", GUILayout.Width(64));
-                    using (new EditorGUI.DisabledScope(!hasBaseSnapshot))
+                }
+                EditorGUILayout.LabelField("Captured Sets", capturedWardrobeSets.Count.ToString(CultureInfo.InvariantCulture));
+
+                for (var i = 0; i < capturedWardrobeSets.Count; i++)
+                {
+                    var set = capturedWardrobeSets[i];
+                    using (new EditorGUILayout.HorizontalScope())
                     {
-                        if (GUILayout.Button("Update", GUILayout.Width(88)))
+                        var selected = selectedWardrobeSetIndex == i;
+                        if (GUILayout.Button(selected ? set.displayName + " ✓" : set.displayName))
                         {
-                            if (selectedWardrobeSetIndex != i)
-                            {
-                                wardrobeSetName = set.displayName;
-                            }
                             selectedWardrobeSetIndex = i;
-                            wardrobeSetName = string.IsNullOrWhiteSpace(wardrobeSetName) ? set.displayName : wardrobeSetName;
-                            UpdateSelectedWardrobeSetFromScene();
+                            wardrobeSetName = set.displayName;
+                            ApplySelectedWardrobeSetToScene();
+                        }
+                        GUILayout.Label(set.operations.Count + " ops", GUILayout.Width(64));
+                        using (new EditorGUI.DisabledScope(!hasBaseSnapshot))
+                        {
+                            if (GUILayout.Button("Update", GUILayout.Width(88)))
+                            {
+                                if (selectedWardrobeSetIndex != i)
+                                {
+                                    wardrobeSetName = set.displayName;
+                                }
+                                selectedWardrobeSetIndex = i;
+                                wardrobeSetName = string.IsNullOrWhiteSpace(wardrobeSetName) ? set.displayName : wardrobeSetName;
+                                UpdateSelectedWardrobeSetFromScene();
+                            }
+                        }
+                        if (GUILayout.Button("Duplicate", GUILayout.Width(88)))
+                        {
+                            DuplicateWardrobeSet(i);
+                        }
+                        if (GUILayout.Button("Remove", GUILayout.Width(88)))
+                        {
+                            capturedWardrobeSets.RemoveAt(i);
+                            selectedWardrobeSetIndex = Mathf.Clamp(selectedWardrobeSetIndex, -1, capturedWardrobeSets.Count - 1);
+                            GUIUtility.ExitGUI();
                         }
                     }
-                    if (GUILayout.Button("Duplicate", GUILayout.Width(88)))
-                    {
-                        DuplicateWardrobeSet(i);
-                    }
-                    if (GUILayout.Button("Remove", GUILayout.Width(88)))
-                    {
-                        capturedWardrobeSets.RemoveAt(i);
-                        selectedWardrobeSetIndex = Mathf.Clamp(selectedWardrobeSetIndex, -1, capturedWardrobeSets.Count - 1);
-                        GUIUtility.ExitGUI();
-                    }
-                }
-            }
-
-            EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("3. WIP Operations", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("Save / load draft state. Useful, not required.");
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Save Draft", GUILayout.Height(22)))
-                {
-                    SaveCaptureDraft();
-                }
-                if (GUILayout.Button("Load Draft", GUILayout.Height(22)))
-                {
-                    LoadCaptureDraft();
-                }
-                if (GUILayout.Button("Import From .unavatar", GUILayout.Height(22)))
-                {
-                    ImportCapturedSetsFromUnavatar();
                 }
             }
         }

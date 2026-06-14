@@ -75,6 +75,13 @@ namespace UNAvatar.UnityExporter
                 PrepareWardrobePreviewRenderers(previewClone);
 
                 var previewBounds = CalculateWardrobePreviewBoundsForExport(previewClone);
+                if (IsCurrentToBaseOnlyExportMode())
+                {
+                    basePreviewImages = WardrobePreviewCapture.Capture(previewClone, previewBounds, CurrentPreviewCaptureOptions());
+                    AssignPreviewStateDigest(basePreviewImages, "base", previewClone);
+                    return;
+                }
+
                 basePreviewImages = CapturePreviewImagesForState(previewClone, "base", null, previewBounds);
                 for (var i = 0; i < capturedWardrobeSets.Count; i++)
                 {

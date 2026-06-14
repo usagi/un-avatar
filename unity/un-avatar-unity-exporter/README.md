@@ -14,15 +14,15 @@ The exporter includes a built-in minimal GLB writer. UnityGLTF is not required o
 1. Add this package as a local package from `unity/un-avatar-unity-exporter`.
 2. Open `Tools > U.N. Avatar > Export .unavatar`.
 3. Select the avatar root.
-4. Set the avatar to the base appearance and click `Capture Current As Base`.
-5. Change the scene to an outfit appearance, enter a set name, then click `Capture Current As New Set`.
-6. Repeat or duplicate captured sets for additional outfits.
-7. Select a set row to apply it and copy its name into `Set Name`.
-8. Adjust the scene, edit `Set Name` if needed, then use the row `Update` button to overwrite that set.
-9. Use `Save Draft` to preserve the capture session as JSON.
+4. Choose `Wardrobe` for a full wardrobe-capable `.unavatar`, or `Current to Base Only` to write the current scene state as Base while keeping captured wardrobe settings untouched.
+5. For `Wardrobe`, set the avatar to the base appearance and click `Capture Current As Base`.
+6. Change the scene to an outfit appearance, enter a set name, then click `Capture Current As New Set`.
+7. Repeat or duplicate captured sets for additional outfits.
+8. Select a set row to apply it and copy its name into `Set Name`.
+9. Adjust the scene, edit `Set Name` if needed, then use the row `Update` button to overwrite that set.
 10. Use `Base` or select a set row to restore a captured state in the Unity scene.
-11. Use `Import From .unavatar` to restore Base operations and captured wardrobe sets from an existing `.unavatar`.
-12. Run `Validate`, then `Export`.
+11. Use `Restore from .unavatar` to restore Base operations and captured wardrobe sets from an existing `.unavatar`.
+12. Click `Export`. Validation runs automatically; the standalone `Validate` button is available only in Developer mode.
 
 ## Developer Mode
 
@@ -48,6 +48,6 @@ The exporter writes:
 
 ## Prototype Scope
 
-The first implementation exports a built-in-writer GLB and patches the root glTF JSON with a `UN_avatar` extension. Modular Avatar is not reimplemented. If Modular Avatar is present, the exporter automatically clones the selected avatar and calls the Modular Avatar / NDMF bake entrypoint on the clone before GLB export.
+The exporter writes a built-in-writer GLB and patches the root glTF JSON with a `UN_avatar` extension. Modular Avatar is not baked into the mesh at export time; supported component data is carried as metadata for the runtime resolver.
 
-`All Wardrobe Sets In One .unavatar` is the target mode. v0.1 includes `Capture Base` / `Capture Wardrobe Set` diff capture for GameObject active state, Unity Scene Visibility, renderer enabled state, and SkinnedMeshRenderer blendshape weights. Simple candidates from Modular Avatar Object Toggle and Modular Avatar Menu Item metadata are kept as fallback hints. Full FX Animator evaluation is intentionally out of scope for this prototype.
+`Wardrobe` is the v2 target mode. It stores all captured wardrobe sets in one `.unavatar` using authored capture diffs. `Current to Base Only` is a lightweight mode that writes the current scene state as Base and ignores captured wardrobe sets for that export. Full FX Animator evaluation is intentionally out of scope for this prototype.

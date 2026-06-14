@@ -101,38 +101,6 @@ namespace UNAvatar.UnityExporter
 
         public static bool IsAvailable => FindType(ProcessorTypeName) != null;
 
-        public static bool TryBake(GameObject root, out string error)
-        {
-            error = "";
-            var type = FindType(ProcessorTypeName);
-            if (type == null)
-            {
-                error = "Modular Avatar AvatarProcessor was not found.";
-                return false;
-            }
-            var method = type.GetMethod("ProcessAvatar", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(GameObject) }, null);
-            if (method == null)
-            {
-                error = "Modular Avatar ProcessAvatar(GameObject) was not found.";
-                return false;
-            }
-            try
-            {
-                method.Invoke(null, new object[] { root });
-                return true;
-            }
-            catch (TargetInvocationException ex)
-            {
-                error = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
-                return false;
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-                return false;
-            }
-        }
-
         private static Type FindType(string fullName)
         {
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
