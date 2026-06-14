@@ -699,6 +699,10 @@ dynamics = "UNPhysics"
 contacts = "Contacts"
 modular_avatar = "Modular Avatar"
 
+[unavatar_rights.messages]
+avatar_selection_canceled = ".unavatar の読み込みをキャンセルしました"
+no_metadata = "選択中のアバターに .unavatar メタデータはありません"
+
 [tray]
 open = "UN Avatar を開く"
 stop_all = "全 Renderer を停止"

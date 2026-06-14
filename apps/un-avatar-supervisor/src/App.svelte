@@ -1808,7 +1808,7 @@
 		if (looksLikeUnavatarPath(path)) {
 			const metadata = await readUnavatarMetadataForPath(path, targetSetting);
 			if (!metadata) {
-				message = "Selected avatar has no UNAvatar metadata";
+				message = $_("unavatar_rights.messages.no_metadata");
 				return;
 			}
 			unavatarProfileIconCrop = {
@@ -2031,7 +2031,7 @@
 		const wasPending = Boolean(unavatarMetadataModal?.pendingPath);
 		unavatarMetadataModal = null;
 		if (wasPending) {
-			message = $_("vrm_metadata.messages.avatar_selection_canceled");
+			message = $_("unavatar_rights.messages.avatar_selection_canceled");
 		}
 	}
 
@@ -2046,7 +2046,7 @@
 			if (looksLikeUnavatarPath(selectedSetting.avatar_path)) {
 				const metadata = await readUnavatarMetadataForPath(selectedSetting.avatar_path, selectedSetting);
 				if (!metadata) {
-					message = "Selected avatar has no UNAvatar metadata";
+					message = $_("unavatar_rights.messages.no_metadata");
 					return;
 				}
 				unavatarProfileIconCrop = {
