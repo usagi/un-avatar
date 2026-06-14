@@ -26,6 +26,9 @@
 	$: selectedPreviews = selectedSet?.preview_images ?? [];
 	$: if (selectedPreviewIndex >= selectedPreviews.length) selectedPreviewIndex = 0;
 	$: selectedPreview = selectedPreviews[selectedPreviewIndex] ?? null;
+	$: selectedPreviewLabel =
+		selectedPreview?.view?.trim() ||
+		$_("unavatar_rights.preview_image_title", { values: { index: selectedPreviewIndex + 1 } });
 	$: if (profileIconCrop.imageDataUrl !== (selectedPreview?.data_url ?? null)) {
 		profileIconCrop = {
 			...profileIconCrop,
@@ -168,6 +171,12 @@
 				<div class="vrm-metadata-sigil">UN</div>
 			{/if}
 			{#if selectedPreview}
+				<div class="unavatar-selected-preview-caption">
+					<strong>{selectedPreviewLabel}</strong>
+					<span>{selectedSet?.name || $_("unavatar_rights.default_preview_set")}</span>
+				</div>
+			{/if}
+			{#if selectedPreview}
 				<div class="unavatar-icon-crop-panel">
 					<label class="unavatar-icon-crop-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
 						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
@@ -202,6 +211,7 @@
 							onclick={() => (selectedPreviewIndex = index)}
 						>
 							<img src={preview.data_url} alt="" />
+							<span>{preview.view ?? index + 1}</span>
 						</button>
 					{/each}
 				</div>

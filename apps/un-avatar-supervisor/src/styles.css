@@ -686,7 +686,7 @@ small,
 }
 
 .profile-stage-title-row .profile-stage-action-group {
-	grid-template-columns: minmax(168px, 260px) minmax(0, 1fr);
+	grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
 	justify-content: stretch;
 	width: 100%;
 	padding-top: 8px;
@@ -5087,6 +5087,7 @@ textarea {
 }
 
 .unavatar-preview-strip button {
+	position: relative;
 	aspect-ratio: 1;
 	min-width: 0;
 	min-height: 0;
@@ -5107,6 +5108,25 @@ textarea {
 	height: 100%;
 	object-fit: contain;
 	border-radius: 4px;
+}
+
+.unavatar-preview-strip button span {
+	position: absolute;
+	right: 4px;
+	bottom: 4px;
+	max-width: calc(100% - 8px);
+	padding: 2px 5px;
+	overflow: hidden;
+	border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--panel) 82%, transparent);
+	color: var(--text);
+	font-size: 9px;
+	font-weight: 800;
+	line-height: 1;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	pointer-events: none;
 }
 
 .unavatar-preview-set-select {
@@ -5167,6 +5187,31 @@ textarea {
 	font-weight: 700;
 	line-height: 1;
 	pointer-events: none;
+}
+
+.unavatar-selected-preview-caption {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	width: min(100%, 330px);
+	min-height: 25px;
+	margin-top: 8px;
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.unavatar-selected-preview-caption strong,
+.unavatar-selected-preview-caption span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.unavatar-selected-preview-caption strong {
+	color: var(--text);
+	font-size: 12px;
 }
 
 .unavatar-icon-crop-panel {
