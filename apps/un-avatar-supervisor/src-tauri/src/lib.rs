@@ -2011,16 +2011,22 @@ pub fn run() {
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
 	tauri::Builder::default()
-		.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-			match run_startup_proxy_args(args) {
+		.plugin(tauri_plugin_single_instance::init(
+			|app, args, _cwd| match startup_proxy_manifest_arg(args).and_then(|manifest_path| {
+				if let Some(manifest_path) = manifest_path {
+					launch_renderer_manifest_in_existing_app(app, &manifest_path).map(|_| true)
+				} else {
+					Ok(false)
+				}
+			}) {
 				Ok(true) => {}
 				Ok(false) => show_main_window(app),
 				Err(error) => {
 					eprintln!("un-avatar-supervisor: single-instance proxy command failed: {error}");
 					show_main_window(app);
 				}
-			}
-		}))
+			},
+		))
 		.plugin(tauri_plugin_notification::init())
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))
@@ -7685,6 +7691,17 @@ where
 		return Ok(true);
 	}
 	Ok(false)
+}
+
+fn launch_renderer_manifest_in_existing_app(app: &tauri::AppHandle, manifest_path: &Path) -> Result<RendererInstance, String> {
+	let state = app.state::<Mutex<SupervisorState>>();
+	let settings = app.state::<Mutex<AppRuntimeSettings>>();
+	let settings = settings
+		.inner()
+		.lock()
+		.map(|settings| settings.clone())
+		.map_err(|_| "app settings state poisoned".to_string())?;
+	launch_renderer_in_state(&manifest_path.display().to_string(), state.inner(), &settings)
 }
 
 fn startup_proxy_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
