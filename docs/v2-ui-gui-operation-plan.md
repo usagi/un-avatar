@@ -51,6 +51,7 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - `Check Now` launches the selected profile from Supervisor so the user can verify appearance, physics, output, and motion before turning it into daily operation.
 - `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
 - These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
+- Running Renderer controls in Supervisor may group or scroll wardrobe / VRC menu candidates, but must not impose an app-side fixed candidate cap. If an action is available from the normalized runtime status, the user should be able to invoke it without switching surfaces.
 
 ### `.unavatar` Asset Review
 
