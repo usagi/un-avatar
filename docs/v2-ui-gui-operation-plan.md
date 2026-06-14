@@ -55,6 +55,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 
 - Counts and previews must be read from actual `.unavatar` metadata. Do not show fake wardrobe, dynamics, contact, Modular Avatar, or preview data.
 - `wardrobe.sets[].previewImages[]` are the source of truth for sample views. The dialog should let users inspect wardrobe sets and view angles before accepting the asset or choosing a profile icon.
+- Preview image `width` / `height` metadata should be preserved when available so profile-icon crop masks can match the saved square crop instead of guessing from the dialog frame.
 - Metadata reads must not pull the whole GLB BIN payload. The current contract is JSON chunk plus referenced preview bufferView ranges only.
 - Future large-wardrobe optimization: keep the set list available immediately, but lazy-load preview images for the selected set on demand. This avoids reading every sample image just to open the rights dialog while preserving wardrobe switching in the UI.
 
