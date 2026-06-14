@@ -37,6 +37,7 @@ Shortcut and launcher UX is a bridge from prepared profiles to daily operation.
 
 - Desktop shortcut launches a selected profile directly through the Renderer path.
 - Start Menu / taskbar launcher shortcut uses a stable launcher identity and AppUserModelID.
+- Renderer processes set the stable Renderer AppUserModelID themselves. Shortcut metadata alone is not the source of truth for taskbar grouping, tray-adjacent operation, or standalone Renderer launches.
 - Launching the pinned app without a profile opens or focuses Supervisor.
 - Launching a profile task starts or focuses the corresponding Renderer according to that profile's multiple-renderer policy when Supervisor is already running and can observe managed Renderer state. If Supervisor is not running, v2 launches a standalone Renderer and exits; focusing an already-running standalone Renderer is a future registry/discovery task. The single-instance handoff must route profile tasks through the same launch path instead of spawning a tray-only duplicate Renderer.
 - Jump List tasks should expose all visible profile launch tasks and Open Supervisor. Do not impose an app-side fixed count cap.
