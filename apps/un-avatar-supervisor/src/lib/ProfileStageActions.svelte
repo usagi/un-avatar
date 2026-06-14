@@ -69,7 +69,10 @@
 					class="profile-cache-state"
 					class:profile-cache-state-ready={sceneCacheReady}
 					class:profile-cache-state-refresh={sceneCacheNeedsRefresh}
-					class:profile-cache-state-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}>{sceneCacheActionLabel}</span
+					class:profile-cache-state-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}
+					role="status"
+					aria-live="polite"
+					aria-label={sceneCacheActionHint}>{sceneCacheActionLabel}</span
 				>
 			</div>
 			<p>{sceneCacheActionHint}</p>
