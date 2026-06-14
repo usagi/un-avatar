@@ -11922,6 +11922,7 @@ mod tests {
 			"read_vrm_metadata",
 			"read_unavatar_metadata",
 			"read_unavatar_wardrobe_options",
+			"save_avatar_thumbnail_icon",
 			"save_profile_icon_from_data_url",
 			"update_avatar_setting_value",
 		] {
