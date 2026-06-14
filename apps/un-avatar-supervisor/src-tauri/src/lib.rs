@@ -2552,8 +2552,8 @@ fn native_notification_status(app: &tauri::AppHandle) -> Result<NativeNotificati
 fn send_test_native_notification(app: tauri::AppHandle) -> Result<(), String> {
 	app.notification()
 		.builder()
-		.title("UN Avatar notification test")
-		.body("Native crash notifications are ready.")
+		.title(t!("notifications.test.title"))
+		.body(t!("notifications.test.body"))
 		.show()
 		.map_err(|error| format!("native notification test failed: {error}"))
 }
@@ -5404,14 +5404,30 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
 		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 		let detail = prewarm_renderer_scene_cache_detail(&stderr);
+		let elapsed_secs = format!("{elapsed:.1}");
 		let message = detail
 			.as_ref()
-			.map(|detail| format!("Renderer cache prewarm finished for {} in {:.1}s ({detail})", setting.name, elapsed))
-			.unwrap_or_else(|| format!("Renderer cache prewarm finished for {} in {:.1}s", setting.name, elapsed));
+			.map(|detail| {
+				t!(
+					"notifications.cache.ready_body_detail",
+					name = &setting.name,
+					seconds = &elapsed_secs,
+					detail = detail
+				)
+				.to_string()
+			})
+			.unwrap_or_else(|| {
+				t!(
+					"notifications.cache.ready_body",
+					name = &setting.name,
+					seconds = &elapsed_secs
+				)
+				.to_string()
+			});
 		push_notification(
 			&mut state,
 			NotificationLevel::Info,
-			"Renderer cache ready".to_string(),
+			t!("notifications.cache.ready_title").to_string(),
 			message.clone(),
 		);
 		return Ok(PrewarmSceneCacheResult {
@@ -5426,14 +5442,18 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		.rev()
 		.find(|line| !line.trim().is_empty())
 		.unwrap_or("no stderr output");
-	let message = format!(
-		"Renderer cache prewarm failed for {} after {:.1}s: {last_line}",
-		setting.name, elapsed
-	);
+	let elapsed_secs = format!("{elapsed:.1}");
+	let message = t!(
+		"notifications.cache.failed_body",
+		name = &setting.name,
+		seconds = &elapsed_secs,
+		error = last_line
+	)
+	.to_string();
 	push_notification(
 		&mut state,
 		NotificationLevel::Warning,
-		"Renderer cache prewarm failed".to_string(),
+		t!("notifications.cache.failed_title").to_string(),
 		message.clone(),
 	);
 	Err(message)
@@ -5488,8 +5508,8 @@ fn push_transparent_window_backend_warning(state: &mut SupervisorState, setting:
 	push_notification(
 		state,
 		NotificationLevel::Warning,
-		"Transparent Window uses DX12".to_string(),
-		"透明 Window は Windows で DX12 バックエンドを使います。Vulkan shader prewarm/cache は効かず、起動時間が長くなります。".to_string(),
+		t!("notifications.transparent_dx12.title").to_string(),
+		t!("notifications.transparent_dx12.body").to_string(),
 	);
 }
 
@@ -7355,10 +7375,10 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 		}
 	}
 	for (name, code, last_stderr) in notifications {
-		let title = format!("{name} crashed");
+		let title = t!("notifications.renderer_crashed.title", name = &name).to_string();
 		let body = last_stderr.unwrap_or_else(|| match code {
-			Some(code) => format!("Renderer exited with code {code}"),
-			None => "Renderer exited without an exit code".to_string(),
+			Some(code) => t!("notifications.renderer_crashed.exit_code", code = code).to_string(),
+			None => t!("notifications.renderer_crashed.no_exit_code").to_string(),
 		});
 		push_notification(state, NotificationLevel::Error, title.clone(), body.clone());
 		if let Some(app) = app {

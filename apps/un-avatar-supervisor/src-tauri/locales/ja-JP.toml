@@ -795,6 +795,26 @@ modular_avatar = "Modular Avatar components"
 avatar_selection_canceled = ".unavatar の読み込みをキャンセルしました"
 no_metadata = "選択中のアバターに .unavatar メタデータはありません"
 
+[notifications.test]
+title = "UN Avatar 通知テスト"
+body = "Renderer クラッシュ通知を表示できます。"
+
+[notifications.cache]
+ready_title = "Renderer キャッシュ準備完了"
+ready_body = "%{name} の Renderer キャッシュ準備が完了しました (%{seconds}s)"
+ready_body_detail = "%{name} の Renderer キャッシュ準備が完了しました (%{seconds}s / %{detail})"
+failed_title = "Renderer キャッシュ準備失敗"
+failed_body = "%{name} の Renderer キャッシュ準備に失敗しました (%{seconds}s): %{error}"
+
+[notifications.transparent_dx12]
+title = "透明 Window は DX12 を使用"
+body = "Windows の透明 Window は DX12 バックエンドで動作します。Vulkan shader prewarm/cache は効かず、起動時間が長くなります。"
+
+[notifications.renderer_crashed]
+title = "%{name} がクラッシュしました"
+exit_code = "Renderer が終了コード %{code} で終了しました"
+no_exit_code = "Renderer が終了コードなしで終了しました"
+
 [tray]
 open = "UN Avatar を開く"
 stop_all = "全 Renderer を停止"

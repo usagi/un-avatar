@@ -787,6 +787,26 @@ modular_avatar = "Modular Avatar components"
 avatar_selection_canceled = ".unavatar loading canceled"
 no_metadata = "Selected avatar has no .unavatar metadata"
 
+[notifications.test]
+title = "UN Avatar notification test"
+body = "Renderer crash notifications are ready."
+
+[notifications.cache]
+ready_title = "Renderer cache ready"
+ready_body = "Renderer cache prewarm finished for %{name} in %{seconds}s"
+ready_body_detail = "Renderer cache prewarm finished for %{name} in %{seconds}s (%{detail})"
+failed_title = "Renderer cache prewarm failed"
+failed_body = "Renderer cache prewarm failed for %{name} after %{seconds}s: %{error}"
+
+[notifications.transparent_dx12]
+title = "Transparent Window uses DX12"
+body = "Transparent Window uses the DX12 backend on Windows. Vulkan shader prewarm/cache is unavailable, so startup takes longer."
+
+[notifications.renderer_crashed]
+title = "%{name} crashed"
+exit_code = "Renderer exited with code %{code}"
+no_exit_code = "Renderer exited without an exit code"
+
 [tray]
 open = "Open UN Avatar"
 stop_all = "Stop All Renderers"
