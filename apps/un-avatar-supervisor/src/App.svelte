@@ -1476,12 +1476,12 @@
 
 	async function prewarmSceneCache(settingId: string): Promise<void> {
 		if (!hasTauriRuntime()) {
-			message = "Browser preview: cache warmup requires Tauri";
+			message = $_("profiles.messages.cache_warmup_requires_tauri");
 			return;
 		}
 		busy = true;
 		try {
-			message = "Warming renderer cache...";
+			message = $_("profiles.messages.cache_warming");
 			const result = await invoke<string>("prewarm_renderer_scene_cache", { settingId });
 			message = result;
 			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
