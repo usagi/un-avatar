@@ -7185,6 +7185,7 @@ dependencies = [
  "un-motion-frame",
  "un-motion-frame-zenoh",
  "wgpu",
+ "windows 0.61.3",
  "winit",
  "winresource",
  "zenoh",

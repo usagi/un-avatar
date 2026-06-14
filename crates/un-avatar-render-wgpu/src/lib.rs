@@ -22,6 +22,8 @@ mod skin_tone;
 #[cfg(windows)]
 mod spout;
 mod texture_pipeline;
+#[cfg(windows)]
+mod windows_identity;
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -4840,6 +4842,10 @@ fn resolve_activate_action_from_menu_path(
 
 /// イベントループをブロックしてウィンドウを表示する。
 pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
+	#[cfg(windows)]
+	if let Err(error) = windows_identity::set_renderer_app_user_model_id() {
+		eprintln!("un-avatar-renderer: set AppUserModelID failed: {error}");
+	}
 	let event_loop = EventLoop::<RendererControlEvent>::with_user_event()
 		.build()
 		.map_err(|e| RunError::EventLoop(e.to_string()))?;
