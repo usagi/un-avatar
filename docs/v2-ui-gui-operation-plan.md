@@ -49,6 +49,15 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
 - These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
 
+### `.unavatar` Asset Review
+
+The `.unavatar` rights / asset review dialog is part of profile creation, not a decorative metadata page.
+
+- Counts and previews must be read from actual `.unavatar` metadata. Do not show fake wardrobe, dynamics, contact, Modular Avatar, or preview data.
+- `wardrobe.sets[].previewImages[]` are the source of truth for sample views. The dialog should let users inspect wardrobe sets and view angles before accepting the asset or choosing a profile icon.
+- Metadata reads must not pull the whole GLB BIN payload. The current contract is JSON chunk plus referenced preview bufferView ranges only.
+- Future large-wardrobe optimization: keep the set list available immediately, but lazy-load preview images for the selected set on demand. This avoids reading every sample image just to open the rights dialog while preserving wardrobe switching in the UI.
+
 ## v2 UI Rules
 
 - Output resolution and preview window size are separate controls. No button may silently resize the preview when the user asked for an output mode.
