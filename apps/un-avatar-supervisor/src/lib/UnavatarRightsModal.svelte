@@ -79,14 +79,20 @@
 		const imageLeft = (100 - imageWidth) * 0.5;
 		const imageTop = (100 - imageHeight) * 0.5;
 		const side = Math.min(imageWidth, imageHeight) / clamp(zoomValue, 1, 4);
-		const travelX = Math.max(0, imageWidth - side);
-		const travelY = Math.max(0, imageHeight - side);
+		const imageCenterX = imageLeft + imageWidth * 0.5;
+		const imageCenterY = imageTop + imageHeight * 0.5;
+		const minCenterX = imageLeft + side * 0.5;
+		const maxCenterX = imageLeft + imageWidth - side * 0.5;
+		const minCenterY = imageTop + side * 0.5;
+		const maxCenterY = imageTop + imageHeight - side * 0.5;
+		const centerX = clamp(imageCenterX + clamp(offsetX, -1, 1) * imageWidth * 0.5, minCenterX, maxCenterX);
+		const centerY = clamp(imageCenterY + clamp(offsetY, -1, 1) * imageHeight * 0.5, minCenterY, maxCenterY);
 		return {
 			side,
-			left: imageLeft + imageWidth * 0.5 + clamp(offsetX, -1, 1) * travelX * 0.5,
-			top: imageTop + imageHeight * 0.5 + clamp(offsetY, -1, 1) * travelY * 0.5,
-			travelX,
-			travelY,
+			left: centerX,
+			top: centerY,
+			imageWidth,
+			imageHeight,
 		};
 	}
 
@@ -126,12 +132,12 @@
 	function moveCropDrag(event: PointerEvent) {
 		if (!dragStart || dragStart.pointerId !== event.pointerId || !cropFrame) return;
 		const rect = cropFrame.getBoundingClientRect();
-		const travelX = Math.max(1, rect.width * (cropLayout.travelX / 100) * 0.5);
-		const travelY = Math.max(1, rect.height * (cropLayout.travelY / 100) * 0.5);
+		const imageHalfWidthPx = Math.max(1, rect.width * (cropLayout.imageWidth / 100) * 0.5);
+		const imageHalfHeightPx = Math.max(1, rect.height * (cropLayout.imageHeight / 100) * 0.5);
 		profileIconCrop = {
 			...profileIconCrop,
-			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / travelX, -1, 1),
-			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / travelY, -1, 1),
+			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / imageHalfWidthPx, -1, 1),
+			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / imageHalfHeightPx, -1, 1),
 		};
 	}
 

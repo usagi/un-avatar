@@ -5275,6 +5275,7 @@ textarea {
 .unavatar-crop-instruction {
 	min-width: 0;
 	overflow: hidden;
+	color: var(--text);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
