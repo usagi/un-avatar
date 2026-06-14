@@ -441,7 +441,32 @@ fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 		snapshot.dynamics_group_count,
 		snapshot.dynamics_enabled_group_count,
 		snapshot.active_wardrobe_set.as_deref().unwrap_or(""),
-		snapshot.menu_wardrobe_candidates.len().max(snapshot.wardrobe_actions.len())
+		wardrobe_menu_signature(snapshot)
+	)
+}
+
+fn wardrobe_menu_signature(snapshot: &RendererRuntimeSnapshot) -> String {
+	if !snapshot.menu_wardrobe_candidates.is_empty() {
+		let first = snapshot.menu_wardrobe_candidates.first();
+		let last = snapshot.menu_wardrobe_candidates.last();
+		return format!(
+			"menu:{}:{}:{}:{}:{}",
+			snapshot.menu_wardrobe_candidates.len(),
+			first.map_or("", |candidate| candidate.action_id.as_str()),
+			first.map_or("", |candidate| candidate.wardrobe_set_id.as_str()),
+			last.map_or("", |candidate| candidate.action_id.as_str()),
+			last.map_or("", |candidate| candidate.wardrobe_set_id.as_str())
+		);
+	}
+	let first = snapshot.wardrobe_actions.first();
+	let last = snapshot.wardrobe_actions.last();
+	format!(
+		"actions:{}:{}:{}:{}:{}",
+		snapshot.wardrobe_actions.len(),
+		first.map_or("", |action| action.action_id.as_str()),
+		first.map_or("", |action| action.set_id.as_str()),
+		last.map_or("", |action| action.action_id.as_str()),
+		last.map_or("", |action| action.set_id.as_str())
 	)
 }
 
@@ -503,6 +528,27 @@ mod tests {
 		after.active_wardrobe_set = Some("field_drape".to_string());
 
 		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_tracks_wardrobe_source_changes_with_same_count() {
+		let mut actions_only = snapshot();
+		actions_only.wardrobe_actions = vec![gpu::RuntimeWardrobeActionStatus {
+			action_id: "action:field_drape".to_string(),
+			label: "Field Drape".to_string(),
+			set_id: "field_drape".to_string(),
+			..Default::default()
+		}];
+
+		let mut menu_candidates = snapshot();
+		menu_candidates.menu_wardrobe_candidates = vec![gpu::RuntimeMenuWardrobeCandidateStatus {
+			action_id: "menu:field_drape".to_string(),
+			wardrobe_set_id: "field_drape".to_string(),
+			menu_path: vec!["Wardrobe".to_string(), "Field Drape".to_string()],
+			..Default::default()
+		}];
+
+		assert_ne!(menu_key(&actions_only), menu_key(&menu_candidates));
 	}
 
 	#[test]
