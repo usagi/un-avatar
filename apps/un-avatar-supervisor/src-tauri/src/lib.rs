@@ -5011,7 +5011,8 @@ fn apply_window_setting_value(
 		}
 		"window.input_passthrough" => {
 			let input_passthrough = json_bool(&value, field)?;
-			if input_passthrough && !setting.transparent {
+			let transparent = manifest_window_bool(manifest, "transparent", setting.transparent);
+			if input_passthrough && !transparent {
 				return Err("Click-through requires Transparent to be enabled".to_string());
 			}
 			remove_root_key(manifest, "input_passthrough")?;
@@ -5037,6 +5038,14 @@ fn apply_window_setting_value(
 		"window.minimized" => set_nested_json_bool(manifest, &["window", "minimized"], &value, field),
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
+}
+
+fn manifest_window_bool(manifest: &toml::Value, key: &str, fallback: bool) -> bool {
+	manifest
+		.get("window")
+		.and_then(|window| window.get(key))
+		.and_then(toml::Value::as_bool)
+		.unwrap_or(fallback)
 }
 
 fn apply_debug_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
@@ -12345,6 +12354,37 @@ decorations = true
 		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
 		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(false));
 		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(false));
+	}
+
+	#[test]
+	fn window_setting_batch_can_enable_transparent_before_click_through() {
+		let seed_setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let setting = AvatarSetting {
+			transparent: false,
+			input_passthrough: false,
+			..seed_setting
+		};
+		assert!(!setting.transparent);
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[window]
+transparent = false
+input_passthrough = false
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "window.transparent", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.input_passthrough", serde_json::json!(true)).unwrap();
+
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
 	}
 
 	#[test]
