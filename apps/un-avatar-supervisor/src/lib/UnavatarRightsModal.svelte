@@ -29,6 +29,9 @@
 		profileIconCrop = {
 			...profileIconCrop,
 			imageDataUrl: selectedPreview?.data_url ?? null,
+			zoom: 1,
+			offsetX: 0,
+			offsetY: 0,
 		};
 	}
 	$: stats = [
