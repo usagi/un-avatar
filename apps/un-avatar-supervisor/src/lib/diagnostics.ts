@@ -214,7 +214,7 @@ export function diagnosticsTextureSummaryLabel(runtimeStatus: Record<string, unk
 }
 
 export function diagnosticsRendererCompareLabel(snapshot: DiagnosticsRendererSnapshotLabelData): string {
-	const runtime = snapshot.connected ? "connected" : "disconnected";
+	const runtime = snapshot.connected ? "live" : "no response";
 	const spout = snapshot.spoutEnabled ? `${snapshot.spoutFailures}/${snapshot.spoutConsecutiveFailures} Spout failures` : "Spout off";
 	return `${snapshot.state} / ${runtime} / AA ${aaModeLabel(snapshot.aa)} / ${snapshot.texturePolicy} / ${snapshot.textureSummary} / ${spout}`;
 }
@@ -395,7 +395,7 @@ export function diagnosticsBundleSummary(bundle: Record<string, unknown>): Diagn
 		},
 		{
 			label: "Renderers",
-			value: `${renderers.length} (${connectedRenderers} connected)`,
+			value: `${renderers.length} (${connectedRenderers} live)`,
 		},
 		{
 			label: "Issues",
@@ -454,7 +454,7 @@ export function diagnosticsBundleFindings(bundle: Record<string, unknown>): Diag
 		if (booleanField(runtimeStatus, "connected") === false) {
 			findings.push({
 				level: "warning",
-				title: `${name} runtime status is disconnected`,
+				title: `${name} runtime status has no response`,
 				body: runtimeNote ?? "Runtime status endpoint did not return a live snapshot.",
 			});
 		}
@@ -523,8 +523,8 @@ export function diagnosticsComparisonDetails(
 		},
 		{
 			label: "Renderers",
-			before: `${leftStats.renderers} / ${leftStats.connected} connected`,
-			after: `${rightStats.renderers} / ${rightStats.connected} connected`,
+			before: `${leftStats.renderers} / ${leftStats.connected} live`,
+			after: `${rightStats.renderers} / ${rightStats.connected} live`,
 			level: leftStats.renderers === rightStats.renderers && leftStats.connected === rightStats.connected ? "info" : "warning",
 		},
 		{
