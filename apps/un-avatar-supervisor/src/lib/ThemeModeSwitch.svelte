@@ -6,11 +6,10 @@
 	export let mode: ThemeMode;
 	export let className = "segmented-control";
 	export let title: string | undefined = undefined;
-	export let ariaLabel = "";
 	export let onChange: (mode: ThemeMode) => void;
 </script>
 
-<div class={className} {title} aria-label={ariaLabel || $_("settings.theme.label")}>
+<div class={className} {title} aria-label={$_("settings.theme.label")}>
 	<button class:active={mode === "system"} onclick={() => onChange("system")}>{$_("theme.system")}</button>
 	<button class:active={mode === "light"} onclick={() => onChange("light")}><Sun size={15} />{$_("theme.light")}</button>
 	<button class:active={mode === "dark"} onclick={() => onChange("dark")}><Moon size={15} />{$_("theme.dark")}</button>

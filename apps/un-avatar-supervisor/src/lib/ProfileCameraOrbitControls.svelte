@@ -17,7 +17,7 @@
 
 <CameraPresetRow
 	title={$_("profiles.editor.camera_orbit")}
-	ariaLabel="Camera orbit presets"
+	ariaLabel={$_("profiles.editor.camera_orbit_presets")}
 	className="orbit-preset-row"
 	{busy}
 	options={orbitPresetOptions}
