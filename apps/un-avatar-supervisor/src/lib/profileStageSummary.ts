@@ -1,8 +1,8 @@
 import { aaModeLabel, basename } from "./formatting";
 import {
 	cameraSummaryLabel,
-	lightingSummaryLabel,
 	motionLabel,
+	type LightingSummaryLabelData,
 	type LookSummaryLabelData,
 	type MotionLabelData,
 	type OutputLabelData,
@@ -10,14 +10,14 @@ import {
 	type WindowLabelData,
 } from "./profileLabels";
 import type { ProfileSummaryItem } from "./profileSummary";
-import { qualitySummaryLabel, type RuntimeOutputStatusData } from "./runtimeLabels";
+import { type ProfileQualityLabelData, type RuntimeOutputStatusData } from "./runtimeLabels";
 
 type Translate = (key: string, options?: { values?: Record<string, string | number> }) => string;
 
 export type ProfileStageSummarySetting = Parameters<typeof motionLabel>[0] &
 	OutputLabelData &
-	Parameters<typeof qualitySummaryLabel>[0] &
-	Parameters<typeof lightingSummaryLabel>[0] &
+	ProfileQualityLabelData &
+	LightingSummaryLabelData &
 	LookSummaryLabelData &
 	WindowLabelData &
 	Parameters<typeof cameraSummaryLabel>[0] & {
@@ -67,6 +67,41 @@ export function localizedLookLabel(setting: LookSummaryLabelData, translate: Tra
 	return `${color}${intensity} / ${bloom}`;
 }
 
+export function localizedQualitySummaryLabel(setting: ProfileQualityLabelData, translate: Translate): string {
+	const textureLimit =
+		setting.texture_resolution_limit === "off" ? translate("profiles.summary.texture_unlimited") : setting.texture_resolution_limit;
+	const compression = setting.texture_compression;
+	const advanced = localizedTextureCompressionAdvancedSummary(setting.texture_compression_advanced, translate);
+	const cache = setting.processed_texture_cache ? translate("profiles.summary.cache_on") : translate("profiles.summary.cache_off");
+	return `AA: ${aaModeLabel(setting.aa)} / Tex: ${textureLimit} / ${compression}${advanced} / ${cache}`;
+}
+
+function localizedTextureCompressionAdvancedSummary(
+	advanced: ProfileQualityLabelData["texture_compression_advanced"],
+	translate: Translate
+): string {
+	const colorBc7 = advanced.clothing === "high_quality" && advanced.generic_color === "high_quality";
+	const dataBc7 = advanced.data === "high_quality";
+	if (colorBc7 && dataBc7) return ` + ${translate("profiles.summary.bc7_color_data")}`;
+	if (colorBc7) return ` + ${translate("profiles.summary.bc7_color")}`;
+	if (dataBc7) return ` + ${translate("profiles.summary.bc7_data")}`;
+	return "";
+}
+
+export function localizedLightingSummaryLabel(setting: LightingSummaryLabelData, translate: Translate): string {
+	const env = setting.lighting_environment_enabled
+		? `${translate("profiles.summary.lighting_env")} ${setting.lighting_environment_intensity.toFixed(2)}`
+		: translate("profiles.summary.lighting_env_off");
+	const dir = setting.lighting_directional_enabled
+		? `${translate("profiles.summary.lighting_dir")} ${
+				setting.lighting_directional_follow_camera_yaw
+					? translate("profiles.summary.lighting_camera_azimuth")
+					: translate("profiles.summary.lighting_world")
+			} ${setting.lighting_directional_intensity.toFixed(2)}`
+		: translate("profiles.summary.lighting_dir_off");
+	return `${env} / ${dir}`;
+}
+
 export function localizedSettingSummary(setting: SettingSummaryLabelData, translate: Translate): string {
 	const parts = [localizedMotionLabel(setting, translate), localizedOutputLabel(setting, translate), localizedWindowLabel(setting, translate)];
 	if (setting.aa) parts.push(`AA ${aaModeLabel(setting.aa)}`);
@@ -93,12 +128,12 @@ export function profileStageSummaryItems(setting: ProfileStageSummarySetting, tr
 		{
 			section: "quality",
 			label: translate("profiles.sections.quality"),
-			value: qualitySummaryLabel(setting),
+			value: localizedQualitySummaryLabel(setting, translate),
 		},
 		{
 			section: "lighting",
 			label: translate("profiles.editor.lighting"),
-			value: lightingSummaryLabel(setting),
+			value: localizedLightingSummaryLabel(setting, translate),
 		},
 		{
 			section: "look",
