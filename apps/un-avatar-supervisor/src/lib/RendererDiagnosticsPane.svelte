@@ -83,6 +83,22 @@
 		return `${label}: ${state} [${parameters}]${targets}`;
 	}
 
+	function menuActionCandidateLabel(candidate: RendererRuntimeDiagnosticsData["menu_action_candidates"][number]): string {
+		const label = candidate.menu_path?.length ? candidate.menu_path.join(" / ") : candidate.menu_label || candidate.action_label;
+		const wardrobe = candidate.wardrobe_set_ids?.length ? ` wardrobe=${candidate.wardrobe_set_ids.join(",")}` : "";
+		const effects = candidate.effect_kinds
+			? Object.entries(candidate.effect_kinds)
+					.map(([kind, count]) => `${kind}=${count}`)
+					.join(",")
+			: `effects=${candidate.effect_count}`;
+		return `${label}: ${candidate.parameter_name}=${candidate.parameter_value} (${candidate.match_kind}, ${effects}${wardrobe}${candidate.menu_path_truncated ? ", truncated" : ""})`;
+	}
+
+	function wardrobeMenuCandidateLabel(candidate: RendererRuntimeDiagnosticsData["menu_wardrobe_candidates"][number]): string {
+		const label = candidate.menu_path?.length ? candidate.menu_path.join(" / ") : candidate.menu_label || candidate.wardrobe_set_id;
+		return `${label}: wardrobe=${candidate.wardrobe_set_id} action=${candidate.action_id}${candidate.menu_path_truncated ? " truncated" : ""}`;
+	}
+
 	function runtimeParameterDefinitionLabel(definition: RendererRuntimeDiagnosticsData["runtime_parameter_definitions"][number]): string {
 		const current = definition.current_value == null ? "-" : definition.current_value;
 		return `${definition.name}: sources=${definition.source_kinds?.join(",") ?? "-"} values=${definition.value_samples?.join(",") ?? "-"} current=${current}${definition.transient ? " transient" : ""}`;
@@ -277,6 +293,18 @@
 			{#if runtimeStatus.runtime_actions.length}
 				<dt>{$_("renderers.details.diag_runtime_actions")}</dt>
 				<dd class="stderr-block">{runtimeStatus.runtime_actions.slice(0, sampleLimit).map(runtimeActionLabel).join("\n")}</dd>
+			{/if}
+			{#if runtimeStatus.menu_action_candidates.length}
+				<dt>{$_("renderers.details.diag_vrc_menu_actions")}</dt>
+				<dd class="stderr-block">
+					{runtimeStatus.menu_action_candidates.slice(0, sampleLimit).map(menuActionCandidateLabel).join("\n")}
+				</dd>
+			{/if}
+			{#if runtimeStatus.menu_wardrobe_candidates.length}
+				<dt>{$_("renderers.details.diag_wardrobe_menu_candidates")}</dt>
+				<dd class="stderr-block">
+					{runtimeStatus.menu_wardrobe_candidates.slice(0, sampleLimit).map(wardrobeMenuCandidateLabel).join("\n")}
+				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_parameter_definitions.length}
 				<dt>{$_("renderers.details.diag_runtime_parameters")}</dt>
