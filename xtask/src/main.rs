@@ -140,21 +140,21 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 		return false;
 	}
 
-	let mut command = Command::new("cargo");
-	command
-		.arg("run")
-		.arg("-p")
-		.arg("un-avatar-render-wgpu")
-		.arg("--bin")
-		.arg("un-avatar-renderer");
-	if release {
-		command.arg("--release");
+	if !run_renderer_build(repo, release) {
+		return false;
 	}
-	command.arg("--").arg("--manifest").arg(&manifest);
+	let exe = target_exe(repo, release, "un-avatar-renderer");
+	if !exe.is_file() {
+		eprintln!("run-renderer: renderer executable not found after build: {}", exe.display());
+		return false;
+	}
+	let mut command = Command::new(&exe);
+	command.arg("--manifest").arg(&manifest);
 	if let Some(set_id) = wardrobe_set {
 		command.arg("--wardrobe-set").arg(set_id);
 	}
 	command.args(renderer_args);
+	add_spout_runtime_env_if_available(repo, &mut command);
 	eprintln!("run-renderer: manifest {}", manifest.display());
 	command
 		.current_dir(repo)
@@ -164,7 +164,7 @@ fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 		.status()
 		.map(|status| status.success())
 		.unwrap_or_else(|e| {
-			eprintln!("run-renderer: cargo run failed to start: {e}");
+			eprintln!("run-renderer: renderer failed to start: {e}");
 			false
 		})
 }
@@ -763,6 +763,25 @@ fn target_exe(repo: &Path, release: bool, name: &str) -> PathBuf {
 	target_profile_dir(repo, release).join(exe_name(name))
 }
 
+fn renderer_build_args(release: bool) -> Vec<&'static str> {
+	let mut args = vec!["build", "--locked", "-p", "un-avatar-render-wgpu", "--bin", "un-avatar-renderer"];
+	if release {
+		args.insert(1, "--release");
+	}
+	args
+}
+
+fn run_renderer_build(repo: &Path, release: bool) -> bool {
+	let mut renderer_args = renderer_build_args(release);
+	if spout2_dev_available(repo) {
+		renderer_args.extend(["--features", "spout-sdk"]);
+		run_cargo_with_spout_env(repo, &renderer_args, &[])
+	} else {
+		eprintln!("renderer build: Spout2 SDK/runtime not staged; renderer will be built without Spout2. Run `cargo xtask spout2` to enable it.");
+		run_cargo_with_env(repo, &renderer_args, &[]).success()
+	}
+}
+
 fn run_build(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let mut release = false;
 	for arg in args {
@@ -793,17 +812,7 @@ fn run_build(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 		return false;
 	}
 
-	let mut renderer_args = vec!["build", "--locked", "-p", "un-avatar-render-wgpu"];
-	if let Some(profile_arg) = profile_arg {
-		renderer_args.insert(1, profile_arg);
-	}
-	if spout2_dev_available(repo) {
-		renderer_args.extend(["--features", "spout-sdk"]);
-		run_cargo_with_spout_env(repo, &renderer_args, &[])
-	} else {
-		eprintln!("build: Spout2 SDK/runtime not staged; renderer will be built without Spout2. Run `cargo xtask spout2` to enable it.");
-		run_cargo_with_env(repo, &renderer_args, &[]).success()
-	}
+	run_renderer_build(repo, release)
 }
 
 fn run_app(repo: &Path, args: impl Iterator<Item = String>) -> bool {
@@ -1007,6 +1016,18 @@ fn run_cargo_with_spout_env(repo: &Path, args: &[&str], extra_envs: &[(&str, &st
 			eprintln!("cargo を実行できない（PATH に cargo があるか確認）: {e}");
 			false
 		})
+}
+
+fn add_spout_runtime_env_if_available(repo: &Path, command: &mut Command) {
+	if !spout2_dev_available(repo) {
+		return;
+	}
+	let runtime_dir = spout2_package_dir(repo);
+	let old_path = env::var_os("PATH").unwrap_or_default();
+	let mut paths = vec![runtime_dir];
+	paths.extend(env::split_paths(&old_path));
+	let path_value = env::join_paths(paths).expect("PATH join failed");
+	command.env("PATH", path_value);
 }
 
 fn path_str(path: &Path) -> &str {
@@ -2455,6 +2476,8 @@ fn print_run_renderer_usage() {
 		"cargo xtask run-renderer --profile <name> [--wardrobe-set <id>] [--release] [-- <renderer args>]\n\
 		cargo xtask run-renderer --manifest <path> [--wardrobe-set <id>] [--release] [-- <renderer args>]\n\
 	\n\
+	Renderer を必要なら cargo build --locked で更新してから target/{{debug|release}}/un-avatar-renderer を直接起動する。\n\
+	Spout2 SDK/runtime が staged 済みなら cargo xtask build/run と同じく spout-sdk feature 付きでビルドし、起動 PATH に Spout.dll を追加する。\n\
 	UN Avatar の user profile dir (%APPDATA%/UN Avatar/profiles) を優先し、次に repo の profiles/ を探す。\n\
 	<name> は file stem、timestamp接頭辞を除いた stem、[profile].id、[profile].display_name、title に一致する。\n\
 	--wardrobe-set は profile/manifest を上書き保存せず、この起動だけ renderer の wardrobe set を指定する。\n\
