@@ -710,6 +710,7 @@ fn append_vrc_menu_actions(
 		.iter()
 		.filter(|candidate| candidate.available)
 		.filter(|candidate| candidate.wardrobe_set_ids.is_empty())
+		.filter(|candidate| candidate.match_kind != "metadata" && candidate.effect_count > 0)
 		.collect();
 	let fallback_entries = if entries.is_empty() && !has_menu_candidates {
 		snapshot
@@ -1573,6 +1574,8 @@ mod tests {
 				parameter_name: "Smile".to_string(),
 				parameter_value: 1.0,
 				available: true,
+				effect_count: 1,
+				match_kind: "condition".to_string(),
 				..Default::default()
 			},
 			gpu::RuntimeMenuActionCandidateStatus {

@@ -3,6 +3,7 @@ import type { RendererRuntimeActionStatus, RendererRuntimeMenuActionCandidateSta
 export function animatorCandidateVisible(candidate: RendererRuntimeMenuActionCandidateStatus): boolean {
 	if (candidate.available === false) return false;
 	if (candidate.wardrobe_set_ids?.length) return false;
+	if (candidate.match_kind === "metadata" || candidate.effect_count <= 0) return false;
 	if (candidate.match_kind !== "metadata") return true;
 	if (candidate.control_type === "Button") return false;
 	const path = candidate.menu_path ?? [];
