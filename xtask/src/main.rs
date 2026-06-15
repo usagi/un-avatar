@@ -1,7 +1,7 @@
 //! UN Avatar workspace 用 xtask。`cargo xtask ci` 等を拡張する。
 
 use std::{
-	collections::BTreeMap,
+	collections::{BTreeMap, BTreeSet},
 	env, fs,
 	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
@@ -10,6 +10,7 @@ use std::{
 };
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
+use sha2::{Digest, Sha256};
 use un_avatar_core::UnaDocument;
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
 use un_avatar_skeleton::{apply_un_motion_frame_to_document_with_rest, ApplyUnMotionFrameOpts};
@@ -20,7 +21,7 @@ use un_motion_frame::{
 	TransformSample, UNMotionFrame,
 };
 use un_motion_frame_zenoh::ZenohTopicStrategy;
-use zip::{write::SimpleFileOptions, CompressionMethod};
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive};
 
 const SPOUT2_REPO_URL: &str = "https://github.com/leadedge/Spout2.git";
 const DEFAULT_SPOUT2_REF: &str = "2.007.017";
@@ -625,6 +626,38 @@ fn run_supervisor_frontend_check(repo: &Path) -> bool {
 		})
 }
 
+fn supervisor_frontend_has_check_tool(frontend_dir: &Path) -> bool {
+	let bin = frontend_dir.join("node_modules").join(".bin");
+	bin.join(if cfg!(windows) { "svelte-check.cmd" } else { "svelte-check" }).is_file()
+}
+
+fn run_supervisor_frontend_ci(repo: &Path) -> bool {
+	let frontend_dir = repo.join("apps").join("un-avatar-supervisor");
+	if !supervisor_frontend_has_check_tool(&frontend_dir) {
+		let (install_command, install_args): (&str, &[&str]) = if frontend_dir.join("node_modules").is_dir() {
+			("install", &["install", "--package-lock=false"])
+		} else {
+			("ci", &["ci"])
+		};
+		let npm_install = Command::new(npm_exe())
+			.args(install_args)
+			.current_dir(&frontend_dir)
+			.stdin(Stdio::inherit())
+			.stdout(Stdio::inherit())
+			.stderr(Stdio::inherit())
+			.status()
+			.map(|status| status.success())
+			.unwrap_or_else(|e| {
+				eprintln!("ci: npm {install_command} failed to start: {e}");
+				false
+			});
+		if !npm_install {
+			return false;
+		}
+	}
+	run_supervisor_frontend_check(repo)
+}
+
 fn run_acceptance_preflight(repo: &Path) -> bool {
 	run_cargo(repo, &["fmt", "--all", "--", "--check"]).success()
 		&& run_render_smoke(repo)
@@ -777,7 +810,9 @@ fn run_renderer_build(repo: &Path, release: bool) -> bool {
 		renderer_args.extend(["--features", "spout-sdk"]);
 		run_cargo_with_spout_env(repo, &renderer_args, &[])
 	} else {
-		eprintln!("renderer build: Spout2 SDK/runtime not staged; renderer will be built without Spout2. Run `cargo xtask spout2` to enable it.");
+		eprintln!(
+			"renderer build: Spout2 SDK/runtime not staged; renderer will be built without Spout2. Run `cargo xtask spout2` to enable it."
+		);
 		run_cargo_with_env(repo, &renderer_args, &[]).success()
 	}
 }
@@ -1202,12 +1237,10 @@ fn run_smoke(repo: &Path) -> bool {
 	true
 }
 
-fn run_render_smoke(repo: &Path) -> bool {
-	let mut dir = env::temp_dir();
-	dir.push(format!("un-avatar-xtask-render-smoke-{}", process::id()));
-	if let Err(e) = fs::create_dir_all(&dir) {
+fn write_render_smoke_fixture(dir: &Path) -> Option<PathBuf> {
+	if let Err(e) = fs::create_dir_all(dir) {
 		eprintln!("render-smoke: mkdir {}: {e}", dir.display());
-		return false;
+		return None;
 	}
 
 	let manifest = dir.join("renderer.toml");
@@ -1222,8 +1255,7 @@ fn run_render_smoke(repo: &Path) -> bool {
 	}
 	if let Err(e) = fs::write(&buffer, buffer_bytes) {
 		eprintln!("render-smoke: write {}: {e}", buffer.display());
-		let _ = fs::remove_dir_all(&dir);
-		return false;
+		return None;
 	}
 	let gltf = r#"{
   "asset": { "version": "2.0" },
@@ -1244,8 +1276,7 @@ fn run_render_smoke(repo: &Path) -> bool {
 "#;
 	if let Err(e) = fs::write(&model, gltf) {
 		eprintln!("render-smoke: write {}: {e}", model.display());
-		let _ = fs::remove_dir_all(&dir);
-		return false;
+		return None;
 	}
 	let model_literal = model.display().to_string().replace('\'', "''");
 	let text = format!(
@@ -1267,11 +1298,42 @@ fn run_render_smoke(repo: &Path) -> bool {
 	);
 	if let Err(e) = fs::write(&manifest, text) {
 		eprintln!("render-smoke: write {}: {e}", manifest.display());
+		return None;
+	}
+	Some(manifest)
+}
+
+fn renderer_validate_startup(mut command: Command, manifest: &Path, wardrobe_set: Option<&str>, label: &str) -> bool {
+	let status = command
+		.arg("--manifest")
+		.arg(manifest)
+		.args(
+			wardrobe_set
+				.filter(|set_id| !set_id.trim().is_empty())
+				.into_iter()
+				.flat_map(|set_id| ["--wardrobe-set", set_id.trim()]),
+		)
+		.arg("--validate-startup")
+		.stdin(Stdio::inherit())
+		.stdout(Stdio::inherit())
+		.stderr(Stdio::inherit())
+		.status();
+	let ok = status.is_ok_and(|status| status.success());
+	if !ok {
+		eprintln!("{label}: renderer manifest/model startup validation failed");
+	}
+	ok
+}
+
+fn run_render_smoke(repo: &Path) -> bool {
+	let mut dir = env::temp_dir();
+	dir.push(format!("un-avatar-xtask-render-smoke-{}", process::id()));
+	let Some(manifest) = write_render_smoke_fixture(&dir) else {
 		let _ = fs::remove_dir_all(&dir);
 		return false;
-	}
-
-	let status = Command::new("cargo")
+	};
+	let mut command = Command::new("cargo");
+	command
 		.args([
 			"run",
 			"--locked",
@@ -1281,21 +1343,96 @@ fn run_render_smoke(repo: &Path) -> bool {
 			"--bin",
 			"un-avatar-renderer",
 			"--",
-			"--manifest",
-			path_str(&manifest),
-			"--validate-startup",
 		])
-		.current_dir(repo)
-		.stdin(Stdio::inherit())
-		.stdout(Stdio::inherit())
-		.stderr(Stdio::inherit())
-		.status();
-	let ok = status.is_ok_and(|status| status.success());
-	if !ok {
-		eprintln!("render-smoke: renderer manifest/model startup validation failed");
-	}
+		.current_dir(repo);
+	let ok = renderer_validate_startup(command, &manifest, None, "render-smoke");
 	let _ = fs::remove_dir_all(&dir);
 	ok
+}
+
+#[derive(Default)]
+struct PackageRenderSmokeOptions {
+	manifest: Option<PathBuf>,
+	wardrobe_set: Option<String>,
+}
+
+fn parse_package_render_smoke_options(repo: &Path, mut args: impl Iterator<Item = String>) -> Result<PackageRenderSmokeOptions, ()> {
+	let mut opts = PackageRenderSmokeOptions::default();
+	while let Some(arg) = args.next() {
+		match arg.as_str() {
+			"--manifest" | "-m" => {
+				let Some(value) = args.next() else {
+					print_package_render_smoke_usage();
+					return Err(());
+				};
+				opts.manifest = Some(path_from_arg(repo, value));
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					print_package_render_smoke_usage();
+					return Err(());
+				};
+				opts.wardrobe_set = Some(value);
+			}
+			"--help" | "-h" => {
+				print_package_render_smoke_usage();
+				return Err(());
+			}
+			other => {
+				eprintln!("package-render-smoke: unknown argument: {other}");
+				print_package_render_smoke_usage();
+				return Err(());
+			}
+		}
+	}
+	if opts.wardrobe_set.is_some() && opts.manifest.is_none() {
+		eprintln!("package-render-smoke: --wardrobe-set requires --manifest");
+		print_package_render_smoke_usage();
+		return Err(());
+	}
+	Ok(opts)
+}
+
+fn run_package_render_smoke_with_options(repo: &Path, opts: PackageRenderSmokeOptions) -> bool {
+	let exe = repo
+		.join("target")
+		.join("package")
+		.join("un-avatar")
+		.join(exe_name("un-avatar-renderer"));
+	if !exe.is_file() {
+		eprintln!("package-render-smoke: packaged renderer not found: {}", exe.display());
+		return false;
+	}
+	let mut dir = env::temp_dir();
+	dir.push(format!("un-avatar-xtask-package-render-smoke-{}", process::id()));
+	let (manifest, remove_dir) = if let Some(manifest) = opts.manifest {
+		if !manifest.is_file() {
+			eprintln!("package-render-smoke: manifest not found: {}", manifest.display());
+			return false;
+		}
+		(manifest, false)
+	} else {
+		let Some(manifest) = write_render_smoke_fixture(&dir) else {
+			let _ = fs::remove_dir_all(&dir);
+			return false;
+		};
+		(manifest, true)
+	};
+	let mut command = Command::new(&exe);
+	command.current_dir(repo);
+	let ok = renderer_validate_startup(command, &manifest, opts.wardrobe_set.as_deref(), "package-render-smoke");
+	if remove_dir {
+		let _ = fs::remove_dir_all(&dir);
+	}
+	ok
+}
+
+fn run_package_render_smoke(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let opts = match parse_package_render_smoke_options(repo, args) {
+		Ok(opts) => opts,
+		Err(()) => return false,
+	};
+	run_package_render_smoke_with_options(repo, opts)
 }
 
 fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
@@ -1631,6 +1768,12 @@ fn run_unity_exporter_vcc(repo: &Path, args: impl Iterator<Item = String>) -> bo
 	if !create_package_contents_zip(&staging_dir, &zip_path) {
 		return false;
 	}
+	if !verify_vcc_package_zip_entries(&zip_path) {
+		return false;
+	}
+	if !verify_vcc_package_zip_manifest(&zip_path, &version) {
+		return false;
+	}
 	let Some(zip_sha256) = file_sha256(&zip_path) else {
 		eprintln!("unity-exporter-vcc: sha256 failed: {}", zip_path.display());
 		return false;
@@ -1738,20 +1881,46 @@ fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
 
 fn file_sha256(path: &Path) -> Option<String> {
 	let mut file = fs::File::open(path).ok()?;
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes).ok()?;
-	let output = Command::new("certutil")
-		.args(["-hashfile", path_str(path), "SHA256"])
-		.output()
-		.ok()?;
-	if !output.status.success() {
+	let mut hasher = Sha256::new();
+	let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+	loop {
+		let bytes_read = file.read(&mut buffer).ok()?;
+		if bytes_read == 0 {
+			break;
+		}
+		hasher.update(&buffer[..bytes_read]);
+	}
+	Some(format!("{:x}", hasher.finalize()))
+}
+
+fn checksum_file_path(path: &Path) -> Option<PathBuf> {
+	let parent = path.parent()?;
+	let mut file_name = path.file_name()?.to_os_string();
+	file_name.push(".sha256.txt");
+	Some(parent.join(file_name))
+}
+
+fn checksum_file_text(sha256: &str, artifact_name: &str) -> String {
+	format!("{}  {}\n", sha256.trim(), artifact_name)
+}
+
+fn parse_checksum_file(text: &str) -> Option<(&str, &str)> {
+	let mut parts = text.split_whitespace();
+	let hash = parts.next()?;
+	let artifact = parts.next()?;
+	if parts.next().is_some() {
 		return None;
 	}
-	let text = String::from_utf8_lossy(&output.stdout);
-	text.lines()
-		.map(str::trim)
-		.find(|line| line.len() == 64 && line.chars().all(|c| c.is_ascii_hexdigit()))
-		.map(str::to_string)
+	Some((hash, artifact))
+}
+
+fn write_sha256_file(artifact_path: &Path) -> Option<PathBuf> {
+	let sha256 = file_sha256(artifact_path)?;
+	let checksum_path = checksum_file_path(artifact_path)?;
+	let artifact_name = artifact_path.file_name()?.to_string_lossy();
+	let text = checksum_file_text(&sha256, &artifact_name);
+	fs::write(&checksum_path, text).ok()?;
+	Some(checksum_path)
 }
 
 fn write_spout2_build_info(source: &Path, dll: &Path, lib: &Path, dst: &Path) -> bool {
@@ -2043,6 +2212,322 @@ fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) 
 		eprintln!("release-package: finalize {}: {err}", zip_path.display());
 		return false;
 	}
+	true
+}
+
+fn required_release_zip_entries(package_name: &str, require_spout2: bool) -> Vec<String> {
+	let root = package_name.trim_end_matches('/');
+	let mut entries = vec![
+		format!("{root}/"),
+		format!("{root}/LICENSE"),
+		format!("{root}/README.md"),
+		format!("{root}/THIRD_PARTY_NOTICES.md"),
+		format!("{root}/LICENSES/third-party-licenses.md"),
+		format!("{root}/{}", exe_name("un-avatar-renderer")),
+		format!("{root}/{}", exe_name("un-avatar-supervisor")),
+		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/package.json"),
+		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/Editor/UNAvatarExporterWindow.cs"),
+		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/Editor/Plugins/x86_64/unavatar_fpng.dll"),
+	];
+	if require_spout2 {
+		entries.extend([
+			format!("{root}/Spout.dll"),
+			format!("{root}/LICENSES/Spout2-BSD-2-Clause.txt"),
+			format!("{root}/LICENSES/spout2-build-info.txt"),
+		]);
+	}
+	entries
+}
+
+fn release_zip_missing_entries(zip_path: &Path, package_name: &str, require_spout2: bool) -> Result<Vec<String>, String> {
+	let file = match fs::File::open(zip_path) {
+		Ok(file) => file,
+		Err(err) => return Err(format!("open {}: {err}", zip_path.display())),
+	};
+	let mut archive = match ZipArchive::new(file) {
+		Ok(archive) => archive,
+		Err(err) => return Err(format!("read zip {}: {err}", zip_path.display())),
+	};
+	let mut names = BTreeSet::new();
+	for index in 0..archive.len() {
+		let Ok(file) = archive.by_index(index) else {
+			return Err(format!("read zip entry {index} from {}", zip_path.display()));
+		};
+		names.insert(file.name().to_string());
+	}
+	Ok(required_release_zip_entries(package_name, require_spout2)
+		.into_iter()
+		.filter(|entry| !names.contains(entry))
+		.collect())
+}
+
+fn verify_release_zip_entries(zip_path: &Path, package_name: &str, require_spout2: bool) -> bool {
+	let missing = match release_zip_missing_entries(zip_path, package_name, require_spout2) {
+		Ok(missing) => missing,
+		Err(err) => {
+			eprintln!("release-package: {err}");
+			return false;
+		}
+	};
+	if !missing.is_empty() {
+		eprintln!("release-package: zip missing required entries: {}", missing.join(", "));
+		false
+	} else {
+		true
+	}
+}
+
+fn release_zip_entry_bytes(zip_path: &Path, entry: &str) -> Result<Vec<u8>, String> {
+	let file = fs::File::open(zip_path).map_err(|err| format!("open {}: {err}", zip_path.display()))?;
+	let mut archive = ZipArchive::new(file).map_err(|err| format!("read zip {}: {err}", zip_path.display()))?;
+	let mut file = archive
+		.by_name(entry)
+		.map_err(|err| format!("read zip entry {entry} from {}: {err}", zip_path.display()))?;
+	let mut bytes = Vec::new();
+	file.read_to_end(&mut bytes)
+		.map_err(|err| format!("read zip entry bytes {entry} from {}: {err}", zip_path.display()))?;
+	Ok(bytes)
+}
+
+fn verify_release_zip_entry_matches_file(zip_path: &Path, entry: &str, source: &Path) -> bool {
+	let expected = match fs::read(source) {
+		Ok(bytes) => bytes,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", source.display());
+			return false;
+		}
+	};
+	let actual = match release_zip_entry_bytes(zip_path, entry) {
+		Ok(bytes) => bytes,
+		Err(err) => {
+			eprintln!("release-audit: {err}");
+			return false;
+		}
+	};
+	if actual != expected {
+		eprintln!(
+			"release-audit: stale release zip entry {entry}: does not match {}",
+			source.display()
+		);
+		return false;
+	}
+	true
+}
+
+fn verify_release_zip_source_docs(zip_path: &Path, package_name: &str, repo: &Path) -> bool {
+	let root = package_name.trim_end_matches('/');
+	let checks = [
+		(format!("{root}/README.md"), repo.join("README.md")),
+		(format!("{root}/LICENSE"), repo.join("LICENSE")),
+		(
+			format!("{root}/THIRD_PARTY_NOTICES.md"),
+			repo.join("docs").join("third-party-licenses.md"),
+		),
+		(
+			format!("{root}/LICENSES/third-party-licenses.md"),
+			repo.join("docs").join("third-party-licenses.md"),
+		),
+	];
+	let ok = checks
+		.iter()
+		.all(|(entry, source)| verify_release_zip_entry_matches_file(zip_path, entry, source));
+	if ok {
+		println!("release-audit: release zip source docs ok");
+	}
+	ok
+}
+
+fn verify_release_zip_clean_unpack(zip_path: &Path, package_name: &str, require_spout2: bool) -> bool {
+	let unpack_root = env::temp_dir().join(format!("un-avatar-release-audit-unpack-{}-{}", package_name, process::id()));
+	let _ = fs::remove_dir_all(&unpack_root);
+	if let Err(err) = fs::create_dir_all(&unpack_root) {
+		eprintln!("release-audit: create clean unpack dir {}: {err}", unpack_root.display());
+		return false;
+	}
+
+	let result = (|| -> Result<(), String> {
+		let file = fs::File::open(zip_path).map_err(|err| format!("open {}: {err}", zip_path.display()))?;
+		let mut archive = ZipArchive::new(file).map_err(|err| format!("read zip {}: {err}", zip_path.display()))?;
+		archive
+			.extract(&unpack_root)
+			.map_err(|err| format!("extract {} to {}: {err}", zip_path.display(), unpack_root.display()))?;
+		for entry in required_release_zip_entries(package_name, require_spout2) {
+			if entry.ends_with('/') {
+				continue;
+			}
+			let path = unpack_root.join(&entry);
+			if !path.is_file() {
+				return Err(format!("clean unpack missing required file: {}", path.display()));
+			}
+		}
+		Ok(())
+	})();
+
+	let cleanup_result = fs::remove_dir_all(&unpack_root);
+	if let Err(err) = cleanup_result {
+		eprintln!("release-audit: cleanup clean unpack dir {}: {err}", unpack_root.display());
+		return false;
+	}
+	if let Err(err) = result {
+		eprintln!("release-audit: {err}");
+		false
+	} else {
+		println!("release-audit: clean unpack ok");
+		true
+	}
+}
+
+fn required_vcc_package_zip_entries() -> Vec<&'static str> {
+	vec![
+		"package.json",
+		"LICENSE.md",
+		"Editor/UNAvatar.UnityExporter.Editor.asmdef",
+		"Editor/UNAvatarExporterWindow.cs",
+		"Editor/UNAvatarExporterWindow.Export.cs",
+		"Editor/UNAvatarExporterWindow.ModularAvatar.cs",
+		"Editor/UNAvatarExporterWindow.Wardrobe.cs",
+		"Editor/MinimalGltfExporter.cs",
+		"Editor/GlbExtensionPatcher.cs",
+		"Editor/Plugins/x86_64/unavatar_fpng.dll",
+	]
+}
+
+fn vcc_package_zip_missing_entries(zip_path: &Path) -> Result<Vec<String>, String> {
+	let file = match fs::File::open(zip_path) {
+		Ok(file) => file,
+		Err(err) => return Err(format!("open {}: {err}", zip_path.display())),
+	};
+	let mut archive = match ZipArchive::new(file) {
+		Ok(archive) => archive,
+		Err(err) => return Err(format!("read zip {}: {err}", zip_path.display())),
+	};
+	let mut names = BTreeSet::new();
+	for index in 0..archive.len() {
+		let Ok(file) = archive.by_index(index) else {
+			return Err(format!("read zip entry {index} from {}", zip_path.display()));
+		};
+		names.insert(file.name().to_string());
+	}
+	Ok(required_vcc_package_zip_entries()
+		.into_iter()
+		.filter(|entry| !names.contains(*entry))
+		.map(str::to_string)
+		.collect())
+}
+
+fn verify_vcc_package_zip_entries(zip_path: &Path) -> bool {
+	let missing = match vcc_package_zip_missing_entries(zip_path) {
+		Ok(missing) => missing,
+		Err(err) => {
+			eprintln!("unity-exporter-vcc: {err}");
+			return false;
+		}
+	};
+	if !missing.is_empty() {
+		eprintln!("unity-exporter-vcc: zip missing required entries: {}", missing.join(", "));
+		false
+	} else {
+		true
+	}
+}
+
+fn verify_vcc_package_zip_staging_files(zip_path: &Path, staging_dir: &Path) -> bool {
+	if !staging_dir.is_dir() {
+		eprintln!("release-audit: VCC staging directory not found: {}", staging_dir.display());
+		return false;
+	}
+	let ok = required_vcc_package_zip_entries()
+		.into_iter()
+		.all(|entry| verify_release_zip_entry_matches_file(zip_path, entry, &staging_dir.join(entry)));
+	if ok {
+		println!("release-audit: VCC zip staging files ok");
+	}
+	ok
+}
+
+fn vcc_package_zip_manifest(zip_path: &Path) -> Result<serde_json::Value, String> {
+	let raw = match release_zip_entry_bytes(zip_path, "package.json") {
+		Ok(bytes) => bytes,
+		Err(err) => return Err(err),
+	};
+	serde_json::from_slice(&raw).map_err(|err| format!("parse VCC package.json from {}: {err}", zip_path.display()))
+}
+
+fn verify_vcc_package_zip_manifest(zip_path: &Path, version: &str) -> bool {
+	let manifest = match vcc_package_zip_manifest(zip_path) {
+		Ok(manifest) => manifest,
+		Err(err) => {
+			eprintln!("release-audit: {err}");
+			return false;
+		}
+	};
+	let name = manifest.get("name").and_then(serde_json::Value::as_str);
+	if name != Some(UNITY_EXPORTER_PACKAGE_ID) {
+		eprintln!(
+			"release-audit: VCC package.json name mismatch: manifest={:?} expected={UNITY_EXPORTER_PACKAGE_ID}",
+			name
+		);
+		return false;
+	}
+	let manifest_version = manifest.get("version").and_then(serde_json::Value::as_str);
+	if manifest_version != Some(version) {
+		eprintln!(
+			"release-audit: VCC package.json version mismatch: manifest={:?} expected={version}",
+			manifest_version
+		);
+		return false;
+	}
+	let expected_zip_name = format!("{UNITY_EXPORTER_PACKAGE_ID}-{version}.zip");
+	let url = manifest.get("url").and_then(serde_json::Value::as_str);
+	if !url.is_some_and(|url| url.trim_end_matches('/').ends_with(&format!("/{expected_zip_name}"))) {
+		eprintln!(
+			"release-audit: VCC package.json url mismatch: manifest={:?} expected suffix=/{expected_zip_name}",
+			url
+		);
+		return false;
+	}
+	println!("release-audit: VCC package manifest ok");
+	true
+}
+
+fn verify_vcc_package_manifest_matches_index(repo_index: &Path, zip_path: &Path, version: &str) -> bool {
+	let raw = match fs::read_to_string(repo_index) {
+		Ok(raw) => raw,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", repo_index.display());
+			return false;
+		}
+	};
+	let index: serde_json::Value = match serde_json::from_str(&raw) {
+		Ok(index) => index,
+		Err(err) => {
+			eprintln!("release-audit: parse {}: {err}", repo_index.display());
+			return false;
+		}
+	};
+	let index_url = index
+		.get("packages")
+		.and_then(|packages| packages.get(UNITY_EXPORTER_PACKAGE_ID))
+		.and_then(|package| package.get("versions"))
+		.and_then(|versions| versions.get(version))
+		.and_then(|entry| entry.get("url"))
+		.and_then(serde_json::Value::as_str);
+	let manifest = match vcc_package_zip_manifest(zip_path) {
+		Ok(manifest) => manifest,
+		Err(err) => {
+			eprintln!("release-audit: {err}");
+			return false;
+		}
+	};
+	let manifest_url = manifest.get("url").and_then(serde_json::Value::as_str);
+	if index_url != manifest_url {
+		eprintln!(
+			"release-audit: VCC package URL mismatch between repo index and package.json: index={:?} manifest={:?}",
+			index_url, manifest_url
+		);
+		return false;
+	}
+	println!("release-audit: VCC package index URL matches manifest");
 	true
 }
 
@@ -2357,6 +2842,9 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 		);
 		return false;
 	}
+	if !run_package_render_smoke_with_options(repo, PackageRenderSmokeOptions::default()) {
+		return false;
+	}
 
 	let package_name = format!("un-avatar-{version}");
 	let staging_root = repo.join("target").join("release").join("package");
@@ -2376,6 +2864,13 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 	if !create_release_zip(&staging_root, &package_name, &zip_path) {
 		return false;
 	}
+	if !verify_release_zip_entries(&zip_path, &package_name, !skip_spout2) {
+		return false;
+	}
+	let Some(checksum_path) = write_sha256_file(&zip_path) else {
+		eprintln!("release-package: sha256 failed: {}", zip_path.display());
+		return false;
+	};
 
 	if !keep_staging {
 		if let Err(err) = fs::remove_dir_all(&staging_dir) {
@@ -2390,7 +2885,432 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 	let size = fs::metadata(&zip_path).map(|metadata| metadata.len()).unwrap_or(0);
 	println!("release-package: created {}", zip_path.display());
 	println!("release-package: size {size} bytes");
+	println!("release-package: sha256 {}", checksum_path.display());
 	println!("PACKAGE_PATH={}", zip_path.display());
+	true
+}
+
+fn release_audit_vcc_index_hash(repo_index: &Path, version: &str) -> Result<String, String> {
+	let raw = fs::read_to_string(repo_index).map_err(|err| format!("read {}: {err}", repo_index.display()))?;
+	let index: serde_json::Value = serde_json::from_str(&raw).map_err(|err| format!("parse {}: {err}", repo_index.display()))?;
+	let entry = index
+		.get("packages")
+		.and_then(|packages| packages.get(UNITY_EXPORTER_PACKAGE_ID))
+		.and_then(|package| package.get("versions"))
+		.and_then(|versions| versions.get(version))
+		.ok_or_else(|| {
+			format!(
+				"{} missing packages.{UNITY_EXPORTER_PACKAGE_ID}.versions.{version}",
+				repo_index.display()
+			)
+		})?;
+	let name = entry.get("name").and_then(serde_json::Value::as_str).ok_or_else(|| {
+		format!(
+			"{} missing packages.{UNITY_EXPORTER_PACKAGE_ID}.versions.{version}.name",
+			repo_index.display()
+		)
+	})?;
+	if name != UNITY_EXPORTER_PACKAGE_ID {
+		return Err(format!(
+			"{} VCC package name mismatch for {version}: index={} expected={UNITY_EXPORTER_PACKAGE_ID}",
+			repo_index.display(),
+			name
+		));
+	}
+	let entry_version = entry.get("version").and_then(serde_json::Value::as_str).ok_or_else(|| {
+		format!(
+			"{} missing packages.{UNITY_EXPORTER_PACKAGE_ID}.versions.{version}.version",
+			repo_index.display()
+		)
+	})?;
+	if entry_version != version {
+		return Err(format!(
+			"{} VCC package version mismatch for {version}: index={entry_version}",
+			repo_index.display()
+		));
+	}
+	let url = entry.get("url").and_then(serde_json::Value::as_str).ok_or_else(|| {
+		format!(
+			"{} missing packages.{UNITY_EXPORTER_PACKAGE_ID}.versions.{version}.url",
+			repo_index.display()
+		)
+	})?;
+	let expected_zip_name = format!("{UNITY_EXPORTER_PACKAGE_ID}-{version}.zip");
+	if !url.trim_end_matches('/').ends_with(&format!("/{expected_zip_name}")) {
+		return Err(format!(
+			"{} VCC package URL mismatch for {version}: index={} expected suffix=/{expected_zip_name}",
+			repo_index.display(),
+			url
+		));
+	}
+	entry
+		.get("zipSHA256")
+		.and_then(serde_json::Value::as_str)
+		.map(str::to_string)
+		.ok_or_else(|| {
+			format!(
+				"{} missing packages.{UNITY_EXPORTER_PACKAGE_ID}.versions.{version}.zipSHA256",
+				repo_index.display()
+			)
+		})
+}
+
+fn release_notes_hash(raw: &str, label: &str) -> Option<String> {
+	let prefix = format!("- {label}: `");
+	raw.lines().find_map(|line| {
+		let rest = line.trim().strip_prefix(&prefix)?;
+		let (hash, _) = rest.split_once('`')?;
+		(!hash.trim().is_empty()).then(|| hash.trim().to_string())
+	})
+}
+
+fn release_doc_path(repo: &Path, path: &Path) -> Option<String> {
+	let rel = path.strip_prefix(repo).ok()?;
+	Some(
+		rel.components()
+			.map(|component| component.as_os_str().to_string_lossy().into_owned())
+			.collect::<Vec<_>>()
+			.join("/"),
+	)
+}
+
+fn verify_release_notes_hashes(release_notes: &Path, portable_hash: &str, vcc_hash: &str) -> bool {
+	if !release_notes.exists() {
+		return true;
+	}
+	let raw = match fs::read_to_string(release_notes) {
+		Ok(raw) => raw,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", release_notes.display());
+			return false;
+		}
+	};
+	let Some(notes_portable_hash) = release_notes_hash(&raw, "zip SHA-256") else {
+		eprintln!(
+			"release-audit: {} missing `zip SHA-256` release note entry",
+			release_notes.display()
+		);
+		return false;
+	};
+	if !notes_portable_hash.eq_ignore_ascii_case(portable_hash) {
+		eprintln!(
+			"release-audit: release notes portable hash mismatch: notes={} actual={} file={}",
+			notes_portable_hash,
+			portable_hash,
+			release_notes.display()
+		);
+		return false;
+	}
+	let Some(notes_vcc_hash) = release_notes_hash(&raw, "VCC zip SHA-256") else {
+		eprintln!(
+			"release-audit: {} missing `VCC zip SHA-256` release note entry",
+			release_notes.display()
+		);
+		return false;
+	};
+	if !notes_vcc_hash.eq_ignore_ascii_case(vcc_hash) {
+		eprintln!(
+			"release-audit: release notes VCC hash mismatch: notes={} actual={} file={}",
+			notes_vcc_hash,
+			vcc_hash,
+			release_notes.display()
+		);
+		return false;
+	}
+	println!("release-audit: release notes hashes ok");
+	true
+}
+
+fn verify_release_notes_required_text(release_notes: &Path) -> bool {
+	if !release_notes.exists() {
+		return true;
+	}
+	let raw = match fs::read_to_string(release_notes) {
+		Ok(raw) => raw,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", release_notes.display());
+			return false;
+		}
+	};
+	let checks = [
+		(
+			"portable zip source of truth",
+			"Portable Windows zip is the v2 distribution source of truth",
+		),
+		("installer outside v2", "Installer"),
+		("auto-update outside v2", "auto-update"),
+		("authenticode outside v2", "Authenticode"),
+		("portable zip hash", "- zip SHA-256: `"),
+		("VCC package hash", "- VCC zip SHA-256: `"),
+		("known limitations section", "## Known Limitations"),
+		("unsupported areas explicit", "State the unsupported v2 areas explicitly"),
+	];
+	let missing = checks
+		.into_iter()
+		.filter_map(|(label, needle)| (!raw.contains(needle)).then_some(label))
+		.collect::<Vec<_>>();
+	if !missing.is_empty() {
+		eprintln!(
+			"release-audit: {} missing required release-note text: {}",
+			release_notes.display(),
+			missing.join(", ")
+		);
+		return false;
+	}
+	println!("release-audit: release notes required text ok");
+	true
+}
+
+fn verify_release_doc_value(raw: &str, path: &Path, label: &str, expected: &str, context: &str, case_insensitive: bool) -> bool {
+	let Some(actual) = release_notes_hash(raw, label) else {
+		eprintln!("release-audit: {} missing `{label}` {context} entry", path.display());
+		return false;
+	};
+	let matches = if case_insensitive {
+		actual.eq_ignore_ascii_case(expected)
+	} else {
+		actual == expected
+	};
+	if !matches {
+		eprintln!(
+			"release-audit: {context} {label} mismatch: doc={} expected={} file={}",
+			actual,
+			expected,
+			path.display()
+		);
+		return false;
+	}
+	true
+}
+
+fn verify_manual_release_checklist_candidate(
+	checklist: &Path,
+	version: &str,
+	portable_zip: &str,
+	portable_hash: &str,
+	vcc_zip: &str,
+	vcc_hash: &str,
+) -> bool {
+	if !checklist.exists() {
+		return true;
+	}
+	let raw = match fs::read_to_string(checklist) {
+		Ok(raw) => raw,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", checklist.display());
+			return false;
+		}
+	};
+	let context = "manual checklist Candidate Build";
+	let required_lines = [
+		"`cargo xtask ci` result: passed".to_string(),
+		format!("`cargo xtask release-audit --version <version>` result: passed for `{version}`"),
+		"`release-audit` confirms release notes hashes: yes".to_string(),
+		"`cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
+		"`cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
+	];
+	let missing = required_lines
+		.iter()
+		.filter(|line| !raw.contains(line.as_str()))
+		.cloned()
+		.collect::<Vec<_>>();
+	if !missing.is_empty() {
+		eprintln!(
+			"release-audit: {} missing manual checklist Candidate Build evidence: {}",
+			checklist.display(),
+			missing.join(", ")
+		);
+		return false;
+	}
+	let ok = verify_release_doc_value(&raw, checklist, "Version", version, context, false)
+		&& verify_release_doc_value(&raw, checklist, "Portable zip", portable_zip, context, false)
+		&& verify_release_doc_value(&raw, checklist, "Portable zip SHA-256", portable_hash, context, true)
+		&& verify_release_doc_value(&raw, checklist, "VCC package zip", vcc_zip, context, false)
+		&& verify_release_doc_value(&raw, checklist, "VCC package SHA-256", vcc_hash, context, true);
+	if ok {
+		println!("release-audit: manual checklist Candidate Build ok");
+	}
+	ok
+}
+
+fn verify_release_checksum_sidecar(zip_path: &Path) -> bool {
+	let Some(checksum_path) = checksum_file_path(zip_path) else {
+		eprintln!("release-audit: cannot compute checksum sidecar path for {}", zip_path.display());
+		return false;
+	};
+	let expected_artifact = match zip_path.file_name().and_then(|name| name.to_str()) {
+		Some(name) => name,
+		None => {
+			eprintln!("release-audit: zip file name is not UTF-8: {}", zip_path.display());
+			return false;
+		}
+	};
+	let Some(actual_hash) = file_sha256(zip_path) else {
+		eprintln!("release-audit: sha256 failed: {}", zip_path.display());
+		return false;
+	};
+	let raw = match fs::read_to_string(&checksum_path) {
+		Ok(raw) => raw,
+		Err(err) => {
+			eprintln!("release-audit: read {}: {err}", checksum_path.display());
+			return false;
+		}
+	};
+	let Some((sidecar_hash, sidecar_artifact)) = parse_checksum_file(&raw) else {
+		eprintln!("release-audit: malformed checksum sidecar: {}", checksum_path.display());
+		return false;
+	};
+	if !sidecar_hash.eq_ignore_ascii_case(&actual_hash) {
+		eprintln!(
+			"release-audit: checksum sidecar hash mismatch for {}: sidecar={} actual={}",
+			zip_path.display(),
+			sidecar_hash,
+			actual_hash
+		);
+		return false;
+	}
+	if sidecar_artifact != expected_artifact {
+		eprintln!(
+			"release-audit: checksum sidecar artifact mismatch for {}: sidecar={} expected={}",
+			zip_path.display(),
+			sidecar_artifact,
+			expected_artifact
+		);
+		return false;
+	}
+	println!("release-audit: portable zip sha256 {actual_hash}");
+	true
+}
+
+fn run_release_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut version = None;
+	let mut output_dir = None;
+	let mut vcc_dir = None;
+	let mut repo_index = None;
+	let mut skip_spout2 = false;
+	let mut iter = args.peekable();
+	while let Some(arg) = iter.next() {
+		match arg.as_str() {
+			"--version" => {
+				let Some(value) = iter.next() else {
+					eprintln!("release-audit: --version には version が必要です");
+					return false;
+				};
+				version = Some(value);
+			}
+			"--output-dir" => {
+				let Some(value) = iter.next() else {
+					eprintln!("release-audit: --output-dir には path が必要です");
+					return false;
+				};
+				output_dir = Some(path_from_arg(repo, value));
+			}
+			"--vcc-dir" => {
+				let Some(value) = iter.next() else {
+					eprintln!("release-audit: --vcc-dir には path が必要です");
+					return false;
+				};
+				vcc_dir = Some(path_from_arg(repo, value));
+			}
+			"--repo-index" => {
+				let Some(value) = iter.next() else {
+					eprintln!("release-audit: --repo-index には path が必要です");
+					return false;
+				};
+				repo_index = Some(path_from_arg(repo, value));
+			}
+			"--skip-spout2" => skip_spout2 = true,
+			"help" | "--help" | "-h" => {
+				print_release_audit_usage();
+				return true;
+			}
+			other => {
+				eprintln!("release-audit: 不明な option: {other}");
+				print_release_audit_usage();
+				return false;
+			}
+		}
+	}
+	let Some(version) = version.or_else(|| default_package_version(repo)) else {
+		eprintln!("release-audit: Cargo.toml の workspace.package.version を読めませんでした");
+		return false;
+	};
+	let package_name = format!("un-avatar-{version}");
+	let output_dir = output_dir.unwrap_or_else(|| repo.join("release-packages"));
+	let zip_path = output_dir.join(format!("{package_name}.zip"));
+	if !verify_release_zip_entries(&zip_path, &package_name, !skip_spout2) {
+		return false;
+	}
+	if !verify_release_checksum_sidecar(&zip_path) {
+		return false;
+	}
+	if !verify_release_zip_clean_unpack(&zip_path, &package_name, !skip_spout2) {
+		return false;
+	}
+	if !verify_release_zip_source_docs(&zip_path, &package_name, repo) {
+		return false;
+	}
+
+	let vcc_dir = vcc_dir.unwrap_or_else(|| repo.join("target").join("unity").join("vcc"));
+	let vcc_zip = vcc_dir.join(format!("{UNITY_EXPORTER_PACKAGE_ID}-{version}.zip"));
+	if !verify_vcc_package_zip_entries(&vcc_zip) {
+		return false;
+	}
+	let vcc_staging = repo.join("target").join("unity").join("vcc-staging").join(UNITY_EXPORTER_PACKAGE);
+	if !verify_vcc_package_zip_staging_files(&vcc_zip, &vcc_staging) {
+		return false;
+	}
+	if !verify_vcc_package_zip_manifest(&vcc_zip, &version) {
+		return false;
+	}
+	let Some(vcc_hash) = file_sha256(&vcc_zip) else {
+		eprintln!("release-audit: sha256 failed: {}", vcc_zip.display());
+		return false;
+	};
+	let repo_index = repo_index.unwrap_or_else(|| repo.join("docs").join("vcc").join("index.json"));
+	let index_hash = match release_audit_vcc_index_hash(&repo_index, &version) {
+		Ok(hash) => hash,
+		Err(err) => {
+			eprintln!("release-audit: {err}");
+			return false;
+		}
+	};
+	if !index_hash.eq_ignore_ascii_case(&vcc_hash) {
+		eprintln!(
+			"release-audit: VCC zipSHA256 mismatch: index={} actual={} zip={}",
+			index_hash,
+			vcc_hash,
+			vcc_zip.display()
+		);
+		return false;
+	}
+	if !verify_vcc_package_manifest_matches_index(&repo_index, &vcc_zip, &version) {
+		return false;
+	}
+	println!("release-audit: VCC zip sha256 {vcc_hash}");
+	let Some(portable_hash) = file_sha256(&zip_path) else {
+		eprintln!("release-audit: sha256 failed: {}", zip_path.display());
+		return false;
+	};
+	if !verify_release_notes_hashes(&repo.join("docs").join("v2-release-notes-draft.md"), &portable_hash, &vcc_hash) {
+		return false;
+	}
+	if !verify_release_notes_required_text(&repo.join("docs").join("v2-release-notes-draft.md")) {
+		return false;
+	}
+	if let (Some(portable_doc_path), Some(vcc_doc_path)) = (release_doc_path(repo, &zip_path), release_doc_path(repo, &vcc_zip)) {
+		if !verify_manual_release_checklist_candidate(
+			&repo.join("docs").join("v2-manual-release-checklist.md"),
+			&version,
+			&portable_doc_path,
+			&portable_hash,
+			&vcc_doc_path,
+			&vcc_hash,
+		) {
+			return false;
+		}
+	}
+	println!("release-audit: ok for {version}");
 	true
 }
 
@@ -2447,9 +3367,29 @@ fn print_release_package_usage() {
 	eprintln!(
 		"cargo xtask release-package [--version <version>] [--output-dir <path>] [--skip-build] [--skip-spout2] [--keep-staging]\n\
 	\n\
-	配布ディレクトリを作成し、release-packages/un-avatar-<version>.zip を生成する。\n\
+	配布ディレクトリを作成し、release-packages/un-avatar-<version>.zip と .sha256.txt sidecar を生成する。\n\
+	packaged Renderer の windowless startup smoke と release zip の必須 entry 検査も実行する。\n\
 	既定versionは Cargo.toml の workspace.package.version。\n\
 	--skip-build は既存の target/package/un-avatar をzip化する。"
+	);
+}
+
+fn print_release_audit_usage() {
+	eprintln!(
+		"cargo xtask release-audit [--version <version>] [--output-dir <path>] [--vcc-dir <path>] [--repo-index <path>] [--skip-spout2]\n\
+	\n\
+	既存の portable zip / .sha256.txt / VCC package zip / docs/vcc/index.json / docs/v2-release-notes-draft.md / docs/v2-manual-release-checklist.md を再ビルドせず検査する。\n\
+	portable zip 内の README / LICENSE / third-party notices が現行 source と一致し、VCC zip の必須 entry が target/unity/vcc-staging の生成元と一致することも確認する。"
+	);
+}
+
+fn print_package_render_smoke_usage() {
+	eprintln!(
+		"cargo xtask package-render-smoke [--manifest <path> [--wardrobe-set <id>]]\n\
+	\n\
+	target/package/un-avatar の packaged Renderer で windowless startup validation を実行する。\n\
+	--manifest 未指定時は tiny fixture glTF manifest を一時生成する。\n\
+	--manifest 指定時は実 avatar/profile manifest を検査でき、--wardrobe-set で起動時 wardrobe set を上書きできる。"
 	);
 }
 
@@ -3480,6 +4420,7 @@ commands:\n\
   test         cargo test --workspace\n\
   smoke        CLI formats list / sample plugin / convert を確認\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
+  package-render-smoke target/package/un-avatar の renderer で render-smoke と同じ検証を実行（--manifest / --wardrobe-set対応）\n\
   run-renderer  profile名またはmanifest pathからrenderer windowを起動\n\
   summarize-renderer-log renderer stderr log の主要startup/bench値をTSV要約\n\
   retarget-audit VRM0/VRM1/.unavatar のCPU Humanoid retarget軸比較\n\
@@ -3492,7 +4433,8 @@ commands:\n\
   unity-exporter-vcc Unity Exporter の VCC Package Manager 用zip/repo listingを作る\n\
   package      Releaseビルドし、target/package/un-avatar に最小配布レイアウトを作る\n\
 	release-package target/package/un-avatar を release-packages/un-avatar-<version>.zip に固める\n\
-  ci           fmt --check → check --workspace → test --workspace → smoke → render-smoke\n"
+	release-audit   既存 release zip / sidecar / VCC zip / repo listing / release notes / manual checklist の整合を検査\n\
+  ci           supervisor frontend check → fmt --check → check --workspace → test --workspace → smoke → render-smoke\n"
 	);
 }
 
@@ -3512,6 +4454,7 @@ fn main() {
 		"test" => run_cargo(repo, &["test", "--workspace"]).success(),
 		"smoke" => run_smoke(repo),
 		"render-smoke" => run_render_smoke(repo),
+		"package-render-smoke" => run_package_render_smoke(repo, args),
 		"run-renderer" => run_renderer(repo, args),
 		"summarize-renderer-log" | "summarize-renderer-logs" => run_summarize_renderer_log(repo, args),
 		"retarget-audit" => run_retarget_audit(repo),
@@ -3524,8 +4467,10 @@ fn main() {
 		"unity-exporter-vcc" => run_unity_exporter_vcc(repo, args),
 		"package" => run_package(repo, args),
 		"release-package" | "make-release-package" => run_release_package(repo, args),
+		"release-audit" => run_release_audit(repo, args),
 		"ci" => {
-			run_cargo(repo, &["fmt", "--all", "--", "--check"]).success()
+			run_supervisor_frontend_ci(repo)
+				&& run_cargo(repo, &["fmt", "--all", "--", "--check"]).success()
 				&& run_cargo(repo, &["check", "--workspace"]).success()
 				&& run_cargo(repo, &["test", "--workspace"]).success()
 				&& run_smoke(repo)
@@ -3622,5 +4567,539 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 			&mut summary,
 		);
 		assert_eq!(summary.import_ms.as_deref(), Some("978.5"));
+	}
+
+	#[test]
+	fn vcc_repo_index_updates_package_version_without_dropping_existing_versions() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-vcc-index-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let index = dir.join("index.json");
+		fs::write(
+			&index,
+			r#"{
+  "name": "Old Name",
+  "id": "old.id",
+  "url": "https://old.invalid/index.json",
+  "author": "old@example.invalid",
+  "packages": {
+    "network.usagi.un-avatar.unity-exporter": {
+      "versions": {
+        "2.0.0-beta-1": {
+          "name": "network.usagi.un-avatar.unity-exporter",
+          "version": "2.0.0-beta-1",
+          "zipSHA256": "old-sha"
+        }
+      }
+    }
+  }
+}
+"#,
+		)
+		.expect("write existing index");
+		let manifest = serde_json::json!({
+			"name": "network.usagi.un-avatar.unity-exporter",
+			"displayName": "U.N. Avatar Unity Exporter",
+			"version": "2.0.0-beta-2",
+			"url": "https://github.com/usagi/un-avatar/releases/download/2.0.0-beta-2/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip"
+		});
+
+		assert!(write_vcc_repo_index(&index, manifest, "2.0.0-beta-2", "new-sha"));
+
+		let written: serde_json::Value =
+			serde_json::from_str(&fs::read_to_string(&index).expect("read written index")).expect("parse written index");
+		assert_eq!(written.get("name").and_then(serde_json::Value::as_str), Some("UN Avatar Packages"));
+		assert_eq!(
+			written.get("id").and_then(serde_json::Value::as_str),
+			Some("network.usagi.un-avatar")
+		);
+		let versions = written
+			.get("packages")
+			.and_then(|packages| packages.get(UNITY_EXPORTER_PACKAGE_ID))
+			.and_then(|package| package.get("versions"))
+			.and_then(serde_json::Value::as_object)
+			.expect("versions object");
+		assert_eq!(
+			versions
+				.get("2.0.0-beta-1")
+				.and_then(|version| version.get("zipSHA256"))
+				.and_then(serde_json::Value::as_str),
+			Some("old-sha")
+		);
+		assert_eq!(
+			versions
+				.get("2.0.0-beta-2")
+				.and_then(|version| version.get("zipSHA256"))
+				.and_then(serde_json::Value::as_str),
+			Some("new-sha")
+		);
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_checksum_file_uses_zip_sha256_sidecar_name() {
+		let path = Path::new("release-packages").join("un-avatar-2.0.0-beta-2.zip");
+		let expected = Path::new("release-packages").join("un-avatar-2.0.0-beta-2.zip.sha256.txt");
+		assert_eq!(checksum_file_path(&path), Some(expected));
+		assert_eq!(
+			checksum_file_text(" ABCD ", "un-avatar-2.0.0-beta-2.zip"),
+			"ABCD  un-avatar-2.0.0-beta-2.zip\n"
+		);
+		assert_eq!(
+			parse_checksum_file("ABCD  un-avatar-2.0.0-beta-2.zip\n"),
+			Some(("ABCD", "un-avatar-2.0.0-beta-2.zip"))
+		);
+		assert!(parse_checksum_file("ABCD artifact.zip extra").is_none());
+	}
+
+	#[test]
+	fn file_sha256_hashes_file_contents_without_platform_tools() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-sha256-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let path = dir.join("sample.bin");
+		fs::write(&path, b"abc").expect("write sample");
+
+		assert_eq!(
+			file_sha256(&path).as_deref(),
+			Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+		);
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn package_render_smoke_options_parse_manifest_and_wardrobe() {
+		let repo = Path::new("C:/repo");
+		let opts = parse_package_render_smoke_options(
+			repo,
+			[
+				"--manifest".to_string(),
+				"target/tmp/mizuki.toml".to_string(),
+				"--wardrobe-set".to_string(),
+				"field_drape".to_string(),
+			]
+			.into_iter(),
+		)
+		.expect("parse package render smoke options");
+		assert_eq!(opts.manifest.as_deref(), Some(Path::new("C:/repo/target/tmp/mizuki.toml")));
+		assert_eq!(opts.wardrobe_set.as_deref(), Some("field_drape"));
+	}
+
+	#[test]
+	fn package_render_smoke_options_require_manifest_for_wardrobe() {
+		assert!(parse_package_render_smoke_options(
+			Path::new("."),
+			["--wardrobe-set".to_string(), "field_drape".to_string()].into_iter()
+		)
+		.is_err());
+	}
+
+	#[test]
+	fn release_zip_verifier_requires_core_and_spout_entries() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-release-zip-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let staging_root = dir.join("staging");
+		let package_name = "un-avatar-test";
+		let package = staging_root.join(package_name);
+		for entry in required_release_zip_entries(package_name, true) {
+			if entry.ends_with('/') {
+				fs::create_dir_all(staging_root.join(entry)).expect("create dir entry");
+			} else {
+				let path = staging_root.join(entry);
+				fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+				fs::write(path, b"placeholder").expect("write entry");
+			}
+		}
+		assert!(package.is_dir());
+		let zip_path = dir.join("package.zip");
+
+		assert!(create_release_zip(&staging_root, package_name, &zip_path));
+		assert!(verify_release_zip_entries(&zip_path, package_name, true));
+		assert!(verify_release_zip_entries(&zip_path, package_name, false));
+		assert!(verify_release_zip_clean_unpack(&zip_path, package_name, true));
+
+		let no_spout_root = dir.join("staging-no-spout");
+		let no_spout_package = no_spout_root.join(package_name);
+		copy_dir_contents(&package, &no_spout_package);
+		for entry in ["Spout.dll", "LICENSES/Spout2-BSD-2-Clause.txt", "LICENSES/spout2-build-info.txt"] {
+			let _ = fs::remove_file(no_spout_package.join(entry));
+		}
+		let no_spout_zip_path = dir.join("package-no-spout.zip");
+		assert!(create_release_zip(&no_spout_root, package_name, &no_spout_zip_path));
+		assert_eq!(
+			release_zip_missing_entries(&no_spout_zip_path, package_name, true).expect("missing spout entries"),
+			vec![
+				format!("{package_name}/Spout.dll"),
+				format!("{package_name}/LICENSES/Spout2-BSD-2-Clause.txt"),
+				format!("{package_name}/LICENSES/spout2-build-info.txt"),
+			]
+		);
+		assert!(verify_release_zip_entries(&no_spout_zip_path, package_name, false));
+		assert!(!verify_release_zip_clean_unpack(&no_spout_zip_path, package_name, true));
+		assert!(verify_release_zip_clean_unpack(&no_spout_zip_path, package_name, false));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_zip_source_doc_verifier_detects_stale_packaged_readme_and_notices() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-release-docs-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let repo = dir.join("repo");
+		let staging_root = dir.join("staging");
+		let package_name = "un-avatar-test";
+		let package = staging_root.join(package_name);
+		fs::create_dir_all(repo.join("docs")).expect("repo docs dir");
+		fs::write(repo.join("README.md"), b"fresh readme").expect("repo readme");
+		fs::write(repo.join("LICENSE"), b"fresh license").expect("repo license");
+		fs::write(repo.join("docs").join("third-party-licenses.md"), b"fresh notices").expect("repo notices");
+		for entry in required_release_zip_entries(package_name, false) {
+			if entry.ends_with('/') {
+				fs::create_dir_all(staging_root.join(entry)).expect("create dir entry");
+			} else {
+				let path = staging_root.join(entry);
+				fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+				fs::write(path, b"placeholder").expect("write placeholder entry");
+			}
+		}
+		fs::write(package.join("README.md"), b"fresh readme").expect("package readme");
+		fs::write(package.join("LICENSE"), b"fresh license").expect("package license");
+		fs::write(package.join("THIRD_PARTY_NOTICES.md"), b"fresh notices").expect("package notices");
+		fs::write(package.join("LICENSES").join("third-party-licenses.md"), b"fresh notices").expect("package license notices");
+		let zip_path = dir.join("package.zip");
+		assert!(create_release_zip(&staging_root, package_name, &zip_path));
+		assert!(verify_release_zip_source_docs(&zip_path, package_name, &repo));
+
+		fs::write(package.join("README.md"), b"stale readme").expect("stale package readme");
+		let stale_zip_path = dir.join("package-stale.zip");
+		assert!(create_release_zip(&staging_root, package_name, &stale_zip_path));
+		assert!(!verify_release_zip_source_docs(&stale_zip_path, package_name, &repo));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn vcc_package_zip_verifier_requires_core_unity_exporter_entries() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-vcc-zip-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let package = dir.join("package");
+		for entry in required_vcc_package_zip_entries() {
+			let path = package.join(entry);
+			fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+			fs::write(path, b"placeholder").expect("write entry");
+		}
+		let zip_path = dir.join("vcc.zip");
+
+		assert!(create_package_contents_zip(&package, &zip_path));
+		assert!(verify_vcc_package_zip_entries(&zip_path));
+
+		let missing_package = dir.join("package-missing");
+		copy_dir_contents(&package, &missing_package);
+		fs::remove_file(missing_package.join("Editor/Plugins/x86_64/unavatar_fpng.dll")).expect("remove fpng dll");
+		let missing_zip_path = dir.join("vcc-missing.zip");
+		assert!(create_package_contents_zip(&missing_package, &missing_zip_path));
+		assert_eq!(
+			vcc_package_zip_missing_entries(&missing_zip_path).expect("missing vcc entries"),
+			vec!["Editor/Plugins/x86_64/unavatar_fpng.dll".to_string()]
+		);
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn vcc_package_zip_staging_verifier_detects_stale_required_entries() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-vcc-staging-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let package = dir.join("package");
+		for entry in required_vcc_package_zip_entries() {
+			let path = package.join(entry);
+			fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+			fs::write(path, format!("fresh {entry}")).expect("write entry");
+		}
+		let zip_path = dir.join("vcc.zip");
+		assert!(create_package_contents_zip(&package, &zip_path));
+		assert!(verify_vcc_package_zip_staging_files(&zip_path, &package));
+
+		let plugin = package.join("Editor/Plugins/x86_64/unavatar_fpng.dll");
+		fs::write(plugin, b"newer dll").expect("update staging dll");
+		assert!(!verify_vcc_package_zip_staging_files(&zip_path, &package));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn vcc_package_zip_manifest_verifier_checks_name_version_and_url() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-vcc-manifest-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let package = dir.join("package");
+		for entry in required_vcc_package_zip_entries() {
+			let path = package.join(entry);
+			fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+			fs::write(path, b"placeholder").expect("write placeholder");
+		}
+		fs::write(
+			package.join("package.json"),
+			serde_json::json!({
+				"name": UNITY_EXPORTER_PACKAGE_ID,
+				"version": "2.0.0-beta-2",
+				"url": "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip"
+			})
+			.to_string(),
+		)
+		.expect("write manifest");
+		let zip_path = dir.join("vcc.zip");
+		assert!(create_package_contents_zip(&package, &zip_path));
+		assert!(verify_vcc_package_zip_manifest(&zip_path, "2.0.0-beta-2"));
+
+		fs::write(
+			package.join("package.json"),
+			serde_json::json!({
+				"name": UNITY_EXPORTER_PACKAGE_ID,
+				"version": "2.0.0-beta-3",
+				"url": "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-3.zip"
+			})
+			.to_string(),
+		)
+		.expect("write mismatched manifest");
+		let mismatched_zip_path = dir.join("vcc-mismatched.zip");
+		assert!(create_package_contents_zip(&package, &mismatched_zip_path));
+		assert!(!verify_vcc_package_zip_manifest(&mismatched_zip_path, "2.0.0-beta-2"));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn vcc_package_manifest_url_must_match_repo_index_url() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-vcc-index-url-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		let package = dir.join("package");
+		for entry in required_vcc_package_zip_entries() {
+			let path = package.join(entry);
+			fs::create_dir_all(path.parent().expect("entry parent")).expect("create entry parent");
+			fs::write(path, b"placeholder").expect("write placeholder");
+		}
+		let matching_url = "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip";
+		fs::write(
+			package.join("package.json"),
+			serde_json::json!({
+				"name": UNITY_EXPORTER_PACKAGE_ID,
+				"version": "2.0.0-beta-2",
+				"url": matching_url
+			})
+			.to_string(),
+		)
+		.expect("write manifest");
+		let zip_path = dir.join("vcc.zip");
+		assert!(create_package_contents_zip(&package, &zip_path));
+		let index = dir.join("index.json");
+		fs::write(
+			&index,
+			serde_json::json!({
+				"packages": {
+					UNITY_EXPORTER_PACKAGE_ID: {
+						"versions": {
+							"2.0.0-beta-2": {
+								"url": matching_url
+							}
+						}
+					}
+				}
+			})
+			.to_string(),
+		)
+		.expect("write index");
+		assert!(verify_vcc_package_manifest_matches_index(&index, &zip_path, "2.0.0-beta-2"));
+
+		fs::write(
+			&index,
+			serde_json::json!({
+				"packages": {
+					UNITY_EXPORTER_PACKAGE_ID: {
+						"versions": {
+							"2.0.0-beta-2": {
+								"url": "https://example.invalid/releases/other.zip"
+							}
+						}
+					}
+				}
+			})
+			.to_string(),
+		)
+		.expect("write mismatched index");
+		assert!(!verify_vcc_package_manifest_matches_index(&index, &zip_path, "2.0.0-beta-2"));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_audit_reads_vcc_index_hash_for_version() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-release-audit-vcc-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let index = dir.join("index.json");
+		fs::write(
+			&index,
+			serde_json::json!({
+				"packages": {
+					UNITY_EXPORTER_PACKAGE_ID: {
+						"versions": {
+							"2.0.0-beta-2": {
+								"name": UNITY_EXPORTER_PACKAGE_ID,
+								"version": "2.0.0-beta-2",
+								"url": "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+								"zipSHA256": "abc123"
+							}
+						}
+					}
+				}
+			})
+			.to_string(),
+		)
+		.expect("write index");
+
+		assert_eq!(release_audit_vcc_index_hash(&index, "2.0.0-beta-2").as_deref(), Ok("abc123"));
+		assert!(release_audit_vcc_index_hash(&index, "2.0.0-beta-3").is_err());
+		fs::write(
+			&index,
+			serde_json::json!({
+				"packages": {
+					UNITY_EXPORTER_PACKAGE_ID: {
+						"versions": {
+							"2.0.0-beta-2": {
+								"name": "network.usagi.un-avatar.other-package",
+								"version": "2.0.0-beta-2",
+								"url": "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+								"zipSHA256": "abc123"
+							}
+						}
+					}
+				}
+			})
+			.to_string(),
+		)
+		.expect("write mismatched index");
+		assert!(release_audit_vcc_index_hash(&index, "2.0.0-beta-2").is_err());
+		fs::write(
+			&index,
+			serde_json::json!({
+				"packages": {
+					UNITY_EXPORTER_PACKAGE_ID: {
+						"versions": {
+							"2.0.0-beta-2": {
+								"name": UNITY_EXPORTER_PACKAGE_ID,
+								"version": "2.0.0-beta-2",
+								"url": "https://example.invalid/releases/network.usagi.un-avatar.unity-exporter-2.0.0-beta-1.zip",
+								"zipSHA256": "abc123"
+							}
+						}
+					}
+				}
+			})
+			.to_string(),
+		)
+		.expect("write mismatched URL index");
+		assert!(release_audit_vcc_index_hash(&index, "2.0.0-beta-2").is_err());
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_audit_checks_release_notes_hashes_when_present() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-release-notes-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let notes = dir.join("notes.md");
+		fs::write(&notes, "- zip SHA-256: `portable-sha`\n- VCC zip SHA-256: `vcc-sha`\n").expect("write release notes");
+
+		assert_eq!(
+			release_notes_hash(&fs::read_to_string(&notes).unwrap(), "zip SHA-256").as_deref(),
+			Some("portable-sha")
+		);
+		assert!(verify_release_notes_hashes(&notes, "portable-sha", "vcc-sha"));
+		assert!(!verify_release_notes_hashes(&notes, "other-portable-sha", "vcc-sha"));
+		assert!(!verify_release_notes_hashes(&notes, "portable-sha", "other-vcc-sha"));
+		assert!(verify_release_notes_hashes(
+			&dir.join("missing-notes.md"),
+			"portable-sha",
+			"vcc-sha"
+		));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_audit_checks_release_notes_required_public_text_when_present() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-release-notes-text-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let notes = dir.join("notes.md");
+		fs::write(
+			&notes,
+			"Portable Windows zip is the v2 distribution source of truth.\n\
+			 Installer, auto-update, and Authenticode signing are outside v2.\n\
+			 - zip SHA-256: `portable-sha`\n\
+			 - VCC zip SHA-256: `vcc-sha`\n\
+			 ## Known Limitations\n\
+			 State the unsupported v2 areas explicitly.\n",
+		)
+		.expect("write release notes");
+
+		assert!(verify_release_notes_required_text(&notes));
+		fs::write(&notes, "Portable Windows zip is the v2 distribution source of truth.\n").expect("write incomplete release notes");
+		assert!(!verify_release_notes_required_text(&notes));
+		assert!(verify_release_notes_required_text(&dir.join("missing-notes.md")));
+
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_audit_checks_manual_release_checklist_candidate_build_when_present() {
+		let dir = env::temp_dir().join(format!("un-avatar-xtask-manual-checklist-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).expect("temp dir");
+		let checklist = dir.join("checklist.md");
+		fs::write(
+			&checklist,
+			"- Version: `2.0.0-beta-2`\n\
+			 - Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`\n\
+			 - Portable zip SHA-256: `portable-sha`\n\
+			 - VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`\n\
+			 - VCC package SHA-256: `vcc-sha`\n\
+			 - `cargo xtask ci` result: passed\n\
+			 - `cargo xtask release-audit --version <version>` result: passed for `2.0.0-beta-2`\n\
+			 - `release-audit` confirms release notes hashes: yes\n\
+			 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`\n\
+			 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`\n",
+		)
+		.expect("write checklist");
+
+		assert!(verify_manual_release_checklist_candidate(
+			&checklist,
+			"2.0.0-beta-2",
+			"release-packages/un-avatar-2.0.0-beta-2.zip",
+			"PORTABLE-SHA",
+			"target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+			"VCC-SHA",
+		));
+		assert!(!verify_manual_release_checklist_candidate(
+			&checklist,
+			"2.0.0-beta-3",
+			"release-packages/un-avatar-2.0.0-beta-2.zip",
+			"portable-sha",
+			"target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+			"vcc-sha",
+		));
+		assert!(verify_manual_release_checklist_candidate(
+			&dir.join("missing-checklist.md"),
+			"2.0.0-beta-2",
+			"release-packages/un-avatar-2.0.0-beta-2.zip",
+			"portable-sha",
+			"target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+			"vcc-sha",
+		));
+
+		let _ = fs::remove_dir_all(&dir);
 	}
 }

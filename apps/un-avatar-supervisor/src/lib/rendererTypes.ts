@@ -279,12 +279,14 @@ export type RendererRuntimeMenuActionCandidateStatus = {
 	menu_path?: string[];
 	menu_path_truncated?: boolean;
 	menu_label?: string;
+	control_type?: string | null;
 	parameter_name: string;
 	parameter_value: number;
 	action_id: string;
 	action_label: string;
 	match_kind: string;
 	inverted: boolean;
+	available?: boolean;
 	effect_count: number;
 	effect_kinds?: Record<string, number>;
 	wardrobe_set_ids?: string[];
@@ -319,6 +321,7 @@ export type RendererRuntimeActionStatus = {
 	parameter_value?: number;
 	condition_parameter_names?: string[];
 	current_condition_state?: string;
+	available?: boolean;
 	target_writes?: RendererRuntimeActionTargetWrite[];
 	node_visibility_effects?: {
 		node_index?: number;
@@ -357,6 +360,7 @@ export type RendererRuntimeActionStatus = {
 export type RendererWardrobeAssetUploadPlan = {
 	mode: string;
 	active_asset_groups?: string[];
+	declared_asset_groups?: string[];
 	declared_asset_group_count: number;
 	owned_asset_group_count: number;
 	owned_mesh_primitive_count: number;
@@ -370,18 +374,27 @@ export type RendererWardrobeAssetUploadPlan = {
 	total_draw_mesh_primitive_count: number;
 	resident_draw_mesh_primitive_count: number;
 	inactive_draw_mesh_primitive_count: number;
+	total_draw_mesh_buffer_bytes?: number;
+	resident_draw_mesh_buffer_bytes?: number;
+	inactive_draw_mesh_buffer_bytes?: number;
 	total_image_texture_count: number;
 	resident_image_texture_count: number;
 	inactive_image_texture_count: number;
 	active_draws_using_inactive_image_texture_count: number;
 	inactive_image_textures_used_by_active_draw_count: number;
+	inactive_image_textures_used_by_active_draw?: number[];
+	inactive_image_textures_used_by_active_draw_truncated?: boolean;
 	active_draws_using_inactive_cube_texture_count?: number;
 	inactive_cube_textures_used_by_active_draw_count?: number;
+	inactive_cube_textures_used_by_active_draw?: number[];
+	inactive_cube_textures_used_by_active_draw_truncated?: boolean;
 	total_material_slot_count: number;
 	resident_material_slot_count: number;
 	inactive_material_slot_count: number;
 	active_draws_using_inactive_material_slot_count: number;
 	inactive_material_slots_used_by_active_draw_count: number;
+	inactive_material_slots_used_by_active_draw?: number[];
+	inactive_material_slots_used_by_active_draw_truncated?: boolean;
 	pending_image_texture_upload_count: number;
 	pending_cube_texture_upload_count?: number;
 	pending_material_slot_upload_count: number;
@@ -397,11 +410,13 @@ export type RendererWardrobeAssetUploadPlan = {
 	last_cubemap_scoped_load_count: number;
 	last_cubemap_scoped_unload_count: number;
 	last_material_slot_scoped_upload_count: number;
+	missing_active_asset_groups?: string[];
 	inactive_owned_asset_group_count: number;
 	scoped_draw_supported: boolean;
 	scoped_upload_supported: boolean;
 	all_resident: boolean;
 	active_residency_gaps_detected: boolean;
+	residency_gap_index_status_limit?: number;
 	reason?: string;
 };
 
@@ -474,6 +489,7 @@ export type RendererRuntimeStatus = {
 	unmotion_zenoh_received_fps?: number;
 	motion_applied_fps?: number;
 	active_wardrobe_set: string | null;
+	base_wardrobe_set?: string | null;
 	primary_motion_source: PrimaryMotionSource;
 	show_axes: boolean;
 	show_bone_colliders: boolean;
@@ -517,6 +533,7 @@ export type RendererRuntimeStatus = {
 	runtime_action_restore_baseline_candidates: RendererRuntimeActionRestoreBaselineCandidate[];
 	runtime_action_restore_baseline_capture_plan: RendererRuntimeActionRestoreBaselineEntry[];
 	runtime_action_restore_apply_plan: RendererRuntimeActionRestoreApplyEntry[];
+	runtime_parameter_values: Record<string, number>;
 	runtime_parameter_definitions: RendererRuntimeParameterDefinition[];
 	runtime_parameter_conflicts: RendererRuntimeParameterConflict[];
 	menu_action_candidates: RendererRuntimeMenuActionCandidateStatus[];
@@ -597,6 +614,8 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "menu_action_candidates"
 	| "menu_wardrobe_candidates"
 	| "wardrobe_asset_upload"
+	| "active_wardrobe_set"
+	| "base_wardrobe_set"
 	| "dynamics_groups"
 	| "dynamics_interaction_hooks"
 	| "dynamics_colliders"

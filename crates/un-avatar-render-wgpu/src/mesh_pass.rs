@@ -11743,8 +11743,12 @@ mod tests {
 		let active_image_texture_indices = BTreeSet::from([0]);
 		let active_cube_texture_indices = BTreeSet::from([2]);
 
-		let (image_residency, cube_residency) =
-			texture_residency_for_scene(&scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
+		let (image_residency, cube_residency) = texture_residency_for_scene(
+			&scene,
+			&asset_residency,
+			&active_image_texture_indices,
+			&active_cube_texture_indices,
+		);
 
 		assert_eq!(image_residency, vec![true, false, false]);
 		assert_eq!(cube_residency, vec![false, false, true]);

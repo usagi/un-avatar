@@ -591,6 +591,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		| "ModularAvatarMenuGroup"
 		| "ModularAvatarMenuInstaller"
 		| "ModularAvatarMenuInstallTarget"
+		| "VRCExpressionsMenuControl"
 		| "ModularAvatarParameters"
 		| "ModularAvatarGlobalCollider"
 		| "ModularAvatarPBBlocker"

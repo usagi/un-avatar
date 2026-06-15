@@ -17,6 +17,17 @@
 	$: canSetDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_dynamics_enabled") ?? false;
 	$: canSetAllDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_all_dynamics_enabled") ?? false;
 
+	function sampledLines<T>(items: T[], label: (item: T) => string): string {
+		const lines = items.slice(0, sampleLimit).map(label);
+		const omitted = items.length - lines.length;
+		if (omitted > 0) lines.push(`... ${omitted} more`);
+		return lines.join("\n");
+	}
+
+	function sampledStrings(items: string[]): string {
+		return sampledLines(items, (item) => item);
+	}
+
 	function groupLabel(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): string {
 		const path = group.root_path ?? group.source_id ?? `#${group.index}`;
 		const state = group.effective_enabled ? "on" : "off";
@@ -141,7 +152,48 @@
 		const inactiveCube = upload.inactive_cube_textures_used_by_active_draw_count ?? 0;
 		const activeCubeDraws = upload.active_draws_using_inactive_cube_texture_count ?? 0;
 		const groups = upload.active_asset_groups?.length ? upload.active_asset_groups.join(",") : "-";
-		return `mode=${upload.mode} groups=${groups} allResident=${upload.all_resident} scopedUpload=${upload.scoped_upload_supported} resident mesh=${upload.resident_draw_mesh_primitive_count}/${upload.total_draw_mesh_primitive_count} image=${upload.resident_image_texture_count}/${upload.total_image_texture_count} material=${upload.resident_material_slot_count}/${upload.total_material_slot_count} pending image=${upload.pending_image_texture_upload_count} cube=${pendingCube} material=${upload.pending_material_slot_upload_count} activeGaps imageDraws=${upload.active_draws_using_inactive_image_texture_count} cubeDraws=${activeCubeDraws} materialDraws=${upload.active_draws_using_inactive_material_slot_count} inactiveActive image=${upload.inactive_image_textures_used_by_active_draw_count} cube=${inactiveCube} material=${upload.inactive_material_slots_used_by_active_draw_count} lastLoad mesh=${upload.last_mesh_buffer_scoped_load_count}/${upload.last_mesh_buffer_scoped_unload_count} image=${upload.last_image_texture_scoped_load_count}/${upload.last_image_texture_scoped_unload_count} cube=${upload.last_cubemap_scoped_load_count}/${upload.last_cubemap_scoped_unload_count} material=${upload.last_material_slot_scoped_upload_count}`;
+		const missingGroups = upload.missing_active_asset_groups?.length ? upload.missing_active_asset_groups.join(",") : "-";
+		const meshBytes =
+			upload.total_draw_mesh_buffer_bytes == null
+				? "-"
+				: `${upload.resident_draw_mesh_buffer_bytes ?? 0}/${upload.total_draw_mesh_buffer_bytes}`;
+		const inactiveImages = upload.inactive_image_textures_used_by_active_draw?.length
+			? upload.inactive_image_textures_used_by_active_draw.join(",")
+			: "-";
+		const inactiveMaterials = upload.inactive_material_slots_used_by_active_draw?.length
+			? upload.inactive_material_slots_used_by_active_draw.join(",")
+			: "-";
+		const imagePreviewSuffix = upload.inactive_image_textures_used_by_active_draw_truncated ? ",..." : "";
+		const materialPreviewSuffix = upload.inactive_material_slots_used_by_active_draw_truncated ? ",..." : "";
+		return [
+			`active=${runtimeStatus?.active_wardrobe_set ?? "-"}`,
+			`mode=${upload.mode}`,
+			`groups=${groups}`,
+			`missing=${missingGroups}`,
+			`allResident=${upload.all_resident}`,
+			`scopedUpload=${upload.scoped_upload_supported}`,
+			`resident source mesh=${upload.resident_mesh_primitive_count}/${upload.owned_mesh_primitive_count}`,
+			`material=${upload.resident_material_count}/${upload.owned_material_count}`,
+			`image=${upload.resident_image_count}/${upload.owned_image_count}`,
+			`dynamics=${upload.resident_dynamics_count}/${upload.owned_dynamics_count}`,
+			`draw mesh=${upload.resident_draw_mesh_primitive_count}/${upload.total_draw_mesh_primitive_count}`,
+			`meshBytes=${meshBytes}`,
+			`image=${upload.resident_image_texture_count}/${upload.total_image_texture_count}`,
+			`material=${upload.resident_material_slot_count}/${upload.total_material_slot_count}`,
+			`pending image=${upload.pending_image_texture_upload_count}`,
+			`cube=${pendingCube}`,
+			`material=${upload.pending_material_slot_upload_count}`,
+			`activeGaps imageDraws=${upload.active_draws_using_inactive_image_texture_count}`,
+			`cubeDraws=${activeCubeDraws}`,
+			`materialDraws=${upload.active_draws_using_inactive_material_slot_count}`,
+			`inactiveActive image=${upload.inactive_image_textures_used_by_active_draw_count}[${inactiveImages}${imagePreviewSuffix}]`,
+			`cube=${inactiveCube}`,
+			`material=${upload.inactive_material_slots_used_by_active_draw_count}[${inactiveMaterials}${materialPreviewSuffix}]`,
+			`lastLoad mesh=${upload.last_mesh_buffer_scoped_load_count}/${upload.last_mesh_buffer_scoped_unload_count}`,
+			`image=${upload.last_image_texture_scoped_load_count}/${upload.last_image_texture_scoped_unload_count}`,
+			`cube=${upload.last_cubemap_scoped_load_count}/${upload.last_cubemap_scoped_unload_count}`,
+			`material=${upload.last_material_slot_scoped_upload_count}`,
+		].join(" ");
 	}
 
 	function toggleDynamicsGroup(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): void {
@@ -204,7 +256,7 @@
 			</dd>
 			{#if runtimeStatus.dynamics_warnings.length}
 				<dt>{$_("renderers.details.diag_dynamics_warnings")}</dt>
-				<dd class="stderr-block">{runtimeStatus.dynamics_warnings.slice(0, sampleLimit).join("\n")}</dd>
+				<dd class="stderr-block">{sampledStrings(runtimeStatus.dynamics_warnings)}</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
@@ -256,17 +308,17 @@
 			{#if runtimeStatus.dynamics_interaction_hooks.length}
 				<dt>{$_("renderers.details.diag_dynamics_interaction_hooks")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.dynamics_interaction_hooks.slice(0, sampleLimit).map(interactionHookLabel).join("\n")}
+					{sampledLines(runtimeStatus.dynamics_interaction_hooks, interactionHookLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_colliders.length}
 				<dt>{$_("renderers.details.diag_dynamics_colliders")}</dt>
-				<dd class="stderr-block">{runtimeStatus.dynamics_colliders.slice(0, sampleLimit).map(colliderLabel).join("\n")}</dd>
+				<dd class="stderr-block">{sampledLines(runtimeStatus.dynamics_colliders, colliderLabel)}</dd>
 			{/if}
 			{#if runtimeStatus.contact_parameter_declarations.length}
 				<dt>{$_("renderers.details.diag_contact_parameters")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.contact_parameter_declarations.slice(0, sampleLimit).map(contactDeclarationLabel).join("\n")}
+					{sampledLines(runtimeStatus.contact_parameter_declarations, contactDeclarationLabel)}
 				</dd>
 			{/if}
 			<dt>{$_("renderers.details.diag_contact_parameter_emission")}</dt>
@@ -277,85 +329,74 @@
 			{#if runtimeStatus.contact_parameter_emissions.length}
 				<dt>{$_("renderers.details.diag_contact_parameter_emissions")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.contact_parameter_emissions.slice(0, sampleLimit).map(contactEmissionLabel).join("\n")}
+					{sampledLines(runtimeStatus.contact_parameter_emissions, contactEmissionLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.contact_probes.length}
 				<dt>{$_("renderers.details.diag_contact_probes")}</dt>
-				<dd class="stderr-block">{runtimeStatus.contact_probes.slice(0, sampleLimit).map(contactProbeLabel).join("\n")}</dd>
+				<dd class="stderr-block">{sampledLines(runtimeStatus.contact_probes, contactProbeLabel)}</dd>
 			{/if}
 			{#if runtimeStatus.dynamics_constraint_refs.length}
 				<dt>{$_("renderers.details.diag_dynamics_constraints")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.dynamics_constraint_refs.slice(0, sampleLimit).map(constraintRefLabel).join("\n")}
+					{sampledLines(runtimeStatus.dynamics_constraint_refs, constraintRefLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_actions.length}
 				<dt>{$_("renderers.details.diag_runtime_actions")}</dt>
-				<dd class="stderr-block">{runtimeStatus.runtime_actions.slice(0, sampleLimit).map(runtimeActionLabel).join("\n")}</dd>
+				<dd class="stderr-block">{sampledLines(runtimeStatus.runtime_actions, runtimeActionLabel)}</dd>
 			{/if}
 			{#if runtimeStatus.menu_action_candidates.length}
 				<dt>{$_("renderers.details.diag_vrc_menu_actions")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.menu_action_candidates.slice(0, sampleLimit).map(menuActionCandidateLabel).join("\n")}
+					{sampledLines(runtimeStatus.menu_action_candidates, menuActionCandidateLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.menu_wardrobe_candidates.length}
 				<dt>{$_("renderers.details.diag_wardrobe_menu_candidates")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.menu_wardrobe_candidates.slice(0, sampleLimit).map(wardrobeMenuCandidateLabel).join("\n")}
+					{sampledLines(runtimeStatus.menu_wardrobe_candidates, wardrobeMenuCandidateLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_parameter_definitions.length}
 				<dt>{$_("renderers.details.diag_runtime_parameters")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_parameter_definitions.slice(0, sampleLimit).map(runtimeParameterDefinitionLabel).join("\n")}
+					{sampledLines(runtimeStatus.runtime_parameter_definitions, runtimeParameterDefinitionLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_parameter_conflicts.length}
 				<dt>{$_("renderers.details.diag_runtime_parameter_conflicts")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_parameter_conflicts.slice(0, sampleLimit).map(runtimeParameterConflictLabel).join("\n")}
+					{sampledLines(runtimeStatus.runtime_parameter_conflicts, runtimeParameterConflictLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_action_target_write_collisions.length}
 				<dt>{$_("renderers.details.diag_runtime_action_collisions")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_action_target_write_collisions.slice(0, sampleLimit).map(runtimeActionCollisionLabel).join("\n")}
+					{sampledLines(runtimeStatus.runtime_action_target_write_collisions, runtimeActionCollisionLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_action_restore_readiness.length}
 				<dt>{$_("renderers.details.diag_runtime_action_restore")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_action_restore_readiness
-						.slice(0, sampleLimit)
-						.map(runtimeActionRestoreReadinessLabel)
-						.join("\n")}
+					{sampledLines(runtimeStatus.runtime_action_restore_readiness, runtimeActionRestoreReadinessLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_action_restore_baseline_candidates.length}
 				<dt>{$_("renderers.details.diag_runtime_action_restore_baseline")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_action_restore_baseline_candidates
-						.slice(0, sampleLimit)
-						.map(runtimeActionRestoreBaselineLabel)
-						.join("\n")}
+					{sampledLines(runtimeStatus.runtime_action_restore_baseline_candidates, runtimeActionRestoreBaselineLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_action_restore_baseline_capture_plan.length}
 				<dt>{$_("renderers.details.diag_runtime_action_restore_capture")}</dt>
 				<dd class="stderr-block">
-					{runtimeStatus.runtime_action_restore_baseline_capture_plan
-						.slice(0, sampleLimit)
-						.map(runtimeActionRestoreCaptureLabel)
-						.join("\n")}
+					{sampledLines(runtimeStatus.runtime_action_restore_baseline_capture_plan, runtimeActionRestoreCaptureLabel)}
 				</dd>
 			{/if}
 			{#if runtimeStatus.runtime_action_restore_apply_plan.length}
 				<dt>{$_("renderers.details.diag_runtime_action_restore_apply")}</dt>
-				<dd class="stderr-block">
-					{runtimeStatus.runtime_action_restore_apply_plan.slice(0, sampleLimit).map(runtimeActionRestoreApplyLabel).join("\n")}
-				</dd>
+				<dd class="stderr-block">{sampledLines(runtimeStatus.runtime_action_restore_apply_plan, runtimeActionRestoreApplyLabel)}</dd>
 			{/if}
 		{/if}
 	</dl>

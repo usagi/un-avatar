@@ -19,6 +19,9 @@ export type RendererControlsStatus = RuntimeOutputStatusData &
 		| "camera_locked"
 		| "camera"
 		| "clear_color"
+		| "runtime_actions"
+		| "runtime_parameter_values"
+		| "menu_action_candidates"
 		| "menu_wardrobe_candidates"
 		| "active_wardrobe_set"
 	>;

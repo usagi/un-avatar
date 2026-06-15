@@ -32,6 +32,7 @@ namespace UNAvatar.UnityExporter
                 }
                 components.Add(BuildModularAvatarComponentPayload(root.transform, component, textureAssets));
             }
+            AddVrcAvatarDescriptorExpressionMenuComponents(root.transform, componentObjects, components);
 
             return new Dictionary<string, object>
             {
@@ -40,6 +41,111 @@ namespace UNAvatar.UnityExporter
                 ["componentCount"] = components.Count,
                 ["components"] = components
             };
+        }
+
+        private void AddVrcAvatarDescriptorExpressionMenuComponents(Transform root, Component[] componentObjects, List<object> components)
+        {
+            var descriptor = FirstVrcAvatarDescriptor(componentObjects);
+            if (descriptor == null)
+            {
+                return;
+            }
+            var menu = ReadMember(descriptor.GetType(), descriptor, "expressionsMenu") as UnityEngine.Object ??
+                ReadMember(descriptor.GetType(), descriptor, "expressionMenu") as UnityEngine.Object;
+            if (menu == null || !IsVrcExpressionsMenuObject(menu))
+            {
+                return;
+            }
+            var visited = new HashSet<int>();
+            var addedControlCount = 0;
+            AddVrcExpressionsMenuSyntheticControls(
+                root,
+                descriptor,
+                menu,
+                "VRC Menu",
+                0,
+                visited,
+                components,
+                ref addedControlCount,
+                1024);
+        }
+
+        private static Component FirstVrcAvatarDescriptor(Component[] componentObjects)
+        {
+            if (componentObjects == null)
+            {
+                return null;
+            }
+            foreach (var component in componentObjects)
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+                var type = component.GetType();
+                if (type.Name == "VRCAvatarDescriptor" || type.FullName == "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor")
+                {
+                    return component;
+                }
+            }
+            return null;
+        }
+
+        private void AddVrcExpressionsMenuSyntheticControls(
+            Transform root,
+            Component descriptor,
+            UnityEngine.Object menu,
+            string parentPath,
+            int depth,
+            HashSet<int> visited,
+            List<object> components,
+            ref int addedControlCount,
+            int limit)
+        {
+            if (menu == null || depth > 4 || addedControlCount >= limit)
+            {
+                return;
+            }
+            var instanceId = menu.GetInstanceID();
+            if (!visited.Add(instanceId))
+            {
+                return;
+            }
+            var controls = VrcExpressionsMenuControls(menu);
+            for (var index = 0; index < controls.Count && addedControlCount < limit; index++)
+            {
+                var control = controls[index];
+                var controlJson = VrcExpressionsMenuControlToJson(root, control, depth, visited);
+                var label = controlJson.TryGetValue("name", out var nameValue) ? nameValue?.ToString() ?? "" : "";
+                if (string.IsNullOrWhiteSpace(label))
+                {
+                    label = "control:" + index.ToString(CultureInfo.InvariantCulture);
+                }
+                var hierarchyPath = string.IsNullOrEmpty(parentPath) ? label : parentPath + "/" + label;
+                components.Add(new Dictionary<string, object>
+                {
+                    ["type"] = "VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu.Control",
+                    ["shortType"] = "VRCExpressionsMenuControl",
+                    ["supportKind"] = "metadata",
+                    ["target"] = TransformTargetJson(root, descriptor.transform),
+                    ["enabled"] = true,
+                    ["fields"] = new Dictionary<string, object>
+                    {
+                        ["Control"] = controlJson,
+                        ["hierarchyPath"] = hierarchyPath,
+                        ["siblingIndex"] = index,
+                        ["menuSource"] = "VRCAvatarDescriptor.expressionsMenu"
+                    }
+                });
+                addedControlCount++;
+                var controlType = controlJson.TryGetValue("type", out var typeValue) ? typeValue?.ToString() ?? "" : "";
+                var subMenu = control != null ? ReadMember(control.GetType(), control, "subMenu") as UnityEngine.Object : null;
+                if (controlType == "SubMenu" && subMenu != null && IsVrcExpressionsMenuObject(subMenu))
+                {
+                    AddVrcExpressionsMenuSyntheticControls(root, descriptor, subMenu, hierarchyPath, depth + 1, visited, components, ref addedControlCount, limit);
+                }
+            }
+            visited.Remove(instanceId);
         }
 
         private static bool IsModularAvatarComponent(Component component)
@@ -301,6 +407,14 @@ namespace UNAvatar.UnityExporter
             {
                 return ModularAvatarObjectReferenceToJson(root, unityObject);
             }
+            if (IsVrcExpressionsMenuControlObject(value))
+            {
+                return VrcExpressionsMenuControlToJson(root, value, depth, new HashSet<int>());
+            }
+            if (type.FullName == "nadena.dev.modular_avatar.core.PortableMenuControl")
+            {
+                return PortableMenuControlToJson(root, value, depth);
+            }
             if (type.FullName == "nadena.dev.modular_avatar.core.BlendshapeBinding")
             {
                 return BlendshapeBindingToJson(root, owner, value);
@@ -451,6 +565,20 @@ namespace UNAvatar.UnityExporter
                 fullName.EndsWith(".VRCExpressionsMenu", StringComparison.Ordinal);
         }
 
+        private static bool IsVrcExpressionsMenuControlObject(object obj)
+        {
+            var type = obj != null ? obj.GetType() : null;
+            if (type == null)
+            {
+                return false;
+            }
+            var fullName = type.FullName ?? "";
+            return fullName == "VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu+Control" ||
+                (type.Name == "Control" &&
+                    (type.DeclaringType?.FullName == "VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu" ||
+                        (type.DeclaringType?.FullName ?? "").EndsWith(".VRCExpressionsMenu", StringComparison.Ordinal)));
+        }
+
         private List<object> VrcExpressionsMenuControlsToJson(Transform root, UnityEngine.Object menu, int depth, HashSet<int> visited)
         {
             var controls = new List<object>();
@@ -490,6 +618,39 @@ namespace UNAvatar.UnityExporter
                 ["subMenu"] = subMenu != null ? VrcExpressionsMenuSubMenuReferenceToJson(root, subMenu, depth + 1, visited) : null
             };
             return json;
+        }
+
+        private Dictionary<string, object> PortableMenuControlToJson(Transform root, object control, int depth)
+        {
+            var type = control.GetType();
+            var subMenu = ReadMember(type, control, "VRChatSubMenu") as UnityEngine.Object;
+            var json = new Dictionary<string, object>
+            {
+                ["type"] = ReadMember(type, control, "Type")?.ToString() ?? "",
+                ["parameter"] = ReadMember(type, control, "Parameter")?.ToString() ?? "",
+                ["subParameters"] = PortableStringListToJson(ReadMember(type, control, "SubParameters") as IEnumerable),
+                ["value"] = NumberToFloat(ReadMember(type, control, "Value"), 0.0f),
+                ["subMenu"] = subMenu != null ? VrcExpressionsMenuSubMenuReferenceToJson(root, subMenu, depth + 1, new HashSet<int>()) : null
+            };
+            return json;
+        }
+
+        private static List<object> PortableStringListToJson(IEnumerable values)
+        {
+            var result = new List<object>();
+            if (values == null)
+            {
+                return result;
+            }
+            foreach (var value in values)
+            {
+                if (result.Count >= 16)
+                {
+                    break;
+                }
+                result.Add(value?.ToString() ?? "");
+            }
+            return result;
         }
 
         private object VrcExpressionsMenuSubMenuReferenceToJson(Transform root, UnityEngine.Object subMenu, int depth, HashSet<int> visited)

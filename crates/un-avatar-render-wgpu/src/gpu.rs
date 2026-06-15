@@ -17,7 +17,7 @@ use serde_json::Value;
 use un_avatar_core::{
 	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
 	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsCounts, UnaSceneNode, UnaSceneSnapshot,
+	UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
 	build_dynamics_bone_colliders_with_sources, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig,
@@ -115,6 +115,8 @@ pub(crate) struct RuntimeActionStatus {
 	pub(crate) condition_parameter_names: Vec<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) current_condition_state: Option<String>,
+	#[serde(default)]
+	pub(crate) available: bool,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) target_writes: Vec<un_avatar_core::UnaEvaluationRuntimeActionTargetWrite>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -183,12 +185,16 @@ pub(crate) struct RuntimeMenuActionCandidateStatus {
 	pub(crate) menu_path_truncated: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) menu_label: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) control_type: Option<String>,
 	pub(crate) parameter_name: String,
 	pub(crate) parameter_value: f32,
 	pub(crate) action_id: String,
 	pub(crate) action_label: String,
 	pub(crate) match_kind: String,
 	pub(crate) inverted: bool,
+	#[serde(default)]
+	pub(crate) available: bool,
 	pub(crate) effect_count: usize,
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub(crate) effect_kinds: BTreeMap<String, usize>,
@@ -735,6 +741,24 @@ fn runtime_action_ids_for_parameter_values(
 	ids
 }
 
+fn runtime_actions_reference_parameter(actions: &un_avatar_core::UnaRuntimeActionSet, name: &str) -> bool {
+	actions.actions.iter().any(|action| {
+		action
+			.conditions
+			.iter()
+			.any(|condition| condition.parameter_name.as_deref() == Some(name))
+			|| action.triggers.iter().any(|trigger| {
+				matches!(
+					trigger,
+					UnaRuntimeActionTrigger::ParameterValue {
+						name: trigger_name,
+						..
+					} if trigger_name == name
+				)
+			})
+	})
+}
+
 fn wardrobe_action_statuses(actions: &un_avatar_core::UnaRuntimeActionSet) -> Vec<RuntimeWardrobeActionStatus> {
 	let mut statuses = Vec::new();
 	for action in &actions.actions {
@@ -902,6 +926,7 @@ fn runtime_action_statuses(
 			current_condition_state: action
 				.current_parameter_condition_state(scene, parameter_values)
 				.map(str::to_string),
+			available: runtime_action_available(action, scene),
 			target_writes: action.evaluation_target_writes(),
 			node_visibility_effects: runtime_action_node_visibility_effects(action.effects.iter()),
 			material_property_effects: runtime_action_material_property_effects(action.effects.iter()),
@@ -945,6 +970,7 @@ struct RuntimeMenuComponentSummary {
 	hierarchy_path: Option<String>,
 	sibling_index: Option<usize>,
 	label: Option<String>,
+	control_type: Option<String>,
 	parameter_name: Option<String>,
 	value: Option<f32>,
 }
@@ -975,6 +1001,7 @@ struct RuntimeMenuGraphNodePath {
 fn menu_action_candidates_from_runtime(
 	unavatar: Option<&un_avatar_core::UnaUnavatarExtension>,
 	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&UnaSceneSnapshot>,
 ) -> Option<Vec<RuntimeMenuActionCandidateStatus>> {
 	let Some(unavatar) = unavatar else {
 		return Some(Vec::new());
@@ -995,6 +1022,7 @@ fn menu_action_candidates_from_runtime(
 		let (Some(parameter_name), Some(parameter_value)) = (&menu.parameter_name, menu.value) else {
 			continue;
 		};
+		let mut matched_any_action = false;
 		for action in &actions.actions {
 			let mut matched = None;
 			for condition in &action.conditions {
@@ -1022,6 +1050,7 @@ fn menu_action_candidates_from_runtime(
 			let Some((match_kind, inverted)) = matched else {
 				continue;
 			};
+			matched_any_action = true;
 			let wardrobe_set_ids = action
 				.effects
 				.iter()
@@ -1039,15 +1068,44 @@ fn menu_action_candidates_from_runtime(
 					.unwrap_or_default(),
 				menu_path_truncated: menu_path_by_key.get(menu.menu_key.as_str()).is_some_and(|path| path.truncated),
 				menu_label: menu.label.clone(),
+				control_type: menu.control_type.clone(),
 				parameter_name: parameter_name.clone(),
 				parameter_value,
 				action_id: action.id.clone(),
 				action_label: action.label.clone(),
 				match_kind: match_kind.to_string(),
 				inverted,
+				available: action_menu_conditions_available(action, scene),
 				effect_count: action.effects.len(),
 				effect_kinds: runtime_action_effect_kind_counts(action.effects.iter()),
 				wardrobe_set_ids,
+			});
+		}
+		let menu_path = menu_path_by_key
+			.get(menu.menu_key.as_str())
+			.map(|path| path.labels.clone())
+			.unwrap_or_default();
+		if !matched_any_action && metadata_menu_candidate_visible(menu, &menu_path) {
+			candidates.push(RuntimeMenuActionCandidateStatus {
+				menu_component_index: menu.component_index,
+				menu_key: menu.menu_key.clone(),
+				menu_path,
+				menu_path_truncated: menu_path_by_key.get(menu.menu_key.as_str()).is_some_and(|path| path.truncated),
+				menu_label: menu.label.clone(),
+				control_type: menu.control_type.clone(),
+				parameter_name: parameter_name.clone(),
+				parameter_value,
+				action_id: format!("menu:{}", menu.menu_key),
+				action_label: menu
+					.label
+					.clone()
+					.unwrap_or_else(|| format!("{}={parameter_value}", parameter_name)),
+				match_kind: "metadata".to_string(),
+				inverted: false,
+				available: true,
+				effect_count: 0,
+				effect_kinds: BTreeMap::new(),
+				wardrobe_set_ids: Vec::new(),
 			});
 		}
 	}
@@ -1066,6 +1124,114 @@ fn menu_action_candidates_from_runtime(
 			))
 	});
 	Some(candidates)
+}
+
+fn metadata_menu_candidate_visible(menu: &RuntimeMenuComponentSummary, menu_path: &[String]) -> bool {
+	if menu.control_type.as_deref() == Some("Button") {
+		return false;
+	}
+	if menu_path.len() > 2 {
+		return false;
+	}
+	if menu_path
+		.iter()
+		.any(|segment| segment == "Face_Tracking" || segment.contains("VRCFT") || segment.contains('<'))
+	{
+		return false;
+	}
+	if menu
+		.label
+		.as_deref()
+		.is_some_and(|label| label.contains("VRCFT") || label.contains('<'))
+	{
+		return false;
+	}
+	true
+}
+
+fn action_menu_conditions_available(action: &un_avatar_core::UnaRuntimeAction, scene: Option<&UnaSceneSnapshot>) -> bool {
+	let mut saw_scene_gate = false;
+	for condition in &action.conditions {
+		if condition.source_node.is_none() && condition.active_parent_nodes.is_empty() {
+			continue;
+		}
+		saw_scene_gate = true;
+		if condition.source_node_matches(scene) && condition.active_parent_nodes_match(scene) {
+			return true;
+		}
+	}
+	!saw_scene_gate
+}
+
+fn runtime_node_target_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> Option<usize> {
+	if let Some(index) = target.node_index {
+		if index < scene.nodes.len() {
+			return Some(index);
+		}
+	}
+	if let Some(source_node_id) = target.source_node_id.as_deref() {
+		if let Some(index) = scene
+			.nodes
+			.iter()
+			.position(|node| node.source_node_id.as_deref() == Some(source_node_id))
+		{
+			return Some(index);
+		}
+	}
+	if let Some(resolved_node_id) = target.resolved_node_id.as_deref() {
+		if let Some(index) = scene
+			.nodes
+			.iter()
+			.position(|node| node.resolved_node_id.as_deref() == Some(resolved_node_id))
+		{
+			return Some(index);
+		}
+	}
+	let path = target.path.as_deref()?;
+	scene_node_paths_by_index(scene)
+		.into_iter()
+		.position(|candidate| candidate.as_deref() == Some(path))
+}
+
+fn runtime_node_target_parent_available(scene: &UnaSceneSnapshot, target: &UnaRuntimeNodeTarget) -> bool {
+	let Some(index) = runtime_node_target_index(scene, target) else {
+		return false;
+	};
+	for (parent_index, node) in scene.nodes.iter().enumerate() {
+		if node.children.contains(&index) {
+			return scene.effective_node_visible(parent_index);
+		}
+	}
+	true
+}
+
+fn action_effect_targets_available(action: &un_avatar_core::UnaRuntimeAction, scene: Option<&UnaSceneSnapshot>) -> bool {
+	let Some(scene) = scene else {
+		return true;
+	};
+	let mut saw_scene_target = false;
+	for effect in &action.effects {
+		match effect {
+			UnaRuntimeActionEffect::NodeVisibility { target, .. } => {
+				saw_scene_target = true;
+				if runtime_node_target_parent_available(scene, target) {
+					return true;
+				}
+			}
+			UnaRuntimeActionEffect::MaterialSlot { target, .. } => {
+				saw_scene_target = true;
+				if runtime_node_target_parent_available(scene, &target.node) {
+					return true;
+				}
+			}
+			_ => {}
+		}
+	}
+	!saw_scene_target
+}
+
+fn runtime_action_available(action: &un_avatar_core::UnaRuntimeAction, scene: Option<&UnaSceneSnapshot>) -> bool {
+	action_menu_conditions_available(action, scene) && action_effect_targets_available(action, scene)
 }
 
 fn menu_wardrobe_candidates_from_runtime(
@@ -1478,6 +1644,7 @@ fn modular_avatar_menu_component_summary(component: &Value, component_index: usi
 		label: modular_avatar_component_string(component, &["label", "Label", "name", "Name", "displayName", "display_name"])
 			.or_else(|| modular_avatar_component_string(menu_item, &["label", "Label", "name", "Name", "displayName", "display_name"]))
 			.or_else(|| modular_avatar_component_string(control, &["name", "Name", "displayName", "display_name"])),
+		control_type: modular_avatar_component_string(control, &["type", "Type", "controlType", "control_type"]),
 		parameter_name: parameter,
 		value: control
 			.get("value")
@@ -1510,6 +1677,7 @@ fn modular_avatar_external_menu_component_summaries(component: &Value, component
 				)),
 				sibling_index: Some(control_index),
 				label,
+				control_type: modular_avatar_component_string(control, &["type", "Type", "controlType", "control_type"]),
 				parameter_name: modular_avatar_external_menu_control_parameter(control),
 				value: control
 					.get("value")
@@ -1692,7 +1860,11 @@ fn json_number_f64(value: &Value) -> Option<f64> {
 fn modular_avatar_is_menu_metadata_type(short_type: &str) -> bool {
 	matches!(
 		short_type,
-		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget"
+		"ModularAvatarMenuItem"
+			| "ModularAvatarMenuGroup"
+			| "ModularAvatarMenuInstaller"
+			| "ModularAvatarMenuInstallTarget"
+			| "VRCExpressionsMenuControl"
 	)
 }
 
@@ -5239,6 +5411,12 @@ impl GpuState {
 		doc.runtime_model().active_wardrobe_set().map(str::to_owned)
 	}
 
+	pub(crate) fn base_wardrobe_set(&self) -> Option<String> {
+		let doc_arc = self.document.as_ref()?;
+		let doc = doc_arc.read().ok()?;
+		model_loader::base_wardrobe_set_id(&doc)
+	}
+
 	pub(crate) fn active_asset_groups(&self) -> Vec<String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();
@@ -5427,7 +5605,7 @@ impl GpuState {
 		};
 		doc.runtime_model()
 			.runtime_actions()
-			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions))
+			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions, doc.runtime_model().scene()))
 			.unwrap_or_default()
 	}
 
@@ -5441,7 +5619,7 @@ impl GpuState {
 		let action_candidates = doc
 			.runtime_model()
 			.runtime_actions()
-			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions));
+			.and_then(|actions| menu_action_candidates_from_runtime(doc.unavatar.as_ref(), actions, doc.runtime_model().scene()));
 		let menu_action_candidates = match action_candidates {
 			Some(candidates) => candidates,
 			None => return Vec::new(),
@@ -5589,7 +5767,7 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model_mut().set_runtime_parameter_value(name.to_string(), value);
 		}
-		let (matching_action_ids, actions_snapshot) = {
+		let (matching_action_ids, parameter_is_action_related, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
 			let Some(actions) = runtime.runtime_actions() else {
@@ -5597,6 +5775,7 @@ impl GpuState {
 			};
 			(
 				runtime_action_ids_for_parameter(actions, runtime.scene(), name, value),
+				runtime_actions_reference_parameter(actions, name),
 				actions.clone(),
 			)
 		};
@@ -5605,6 +5784,9 @@ impl GpuState {
 			last_activation = Some(self.activate_runtime_action(Some(&action_id), None, None, None, None)?);
 		}
 		if last_activation.is_none() {
+			self.apply_metadata_expression_menu_parameter(name, value)?;
+		}
+		if last_activation.is_none() && parameter_is_action_related {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
@@ -5612,6 +5794,52 @@ impl GpuState {
 		}
 		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
 		Ok(last_activation)
+	}
+
+	fn apply_metadata_expression_menu_parameter(&mut self, name: &str, value: f32) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Ok(());
+		};
+		let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let Some(actions) = doc.runtime_model().runtime_actions() else {
+			return Ok(());
+		};
+		let Some(unavatar) = doc.unavatar.as_ref() else {
+			return Ok(());
+		};
+		let candidates = menu_action_candidates_from_runtime(Some(unavatar), actions, doc.runtime_model().scene()).unwrap_or_default();
+		let active_candidate = candidates.iter().find(|candidate| {
+			candidate.match_kind == "metadata"
+				&& candidate.parameter_name == name
+				&& (candidate.parameter_value - value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON
+		});
+		let active_label = active_candidate.and_then(|candidate| candidate.menu_label.clone());
+		let affected = candidates
+			.iter()
+			.filter(|candidate| candidate.match_kind == "metadata" && candidate.parameter_name == name)
+			.filter_map(|candidate| candidate.menu_label.as_deref())
+			.filter(|label| self.expression_presets.iter().any(|preset| preset == label))
+			.map(str::to_owned)
+			.collect::<BTreeSet<_>>();
+		if affected.is_empty() {
+			return Ok(());
+		}
+		if active_label
+			.as_ref()
+			.is_some_and(|label| !self.expression_presets.iter().any(|preset| preset == label))
+		{
+			return Ok(());
+		}
+		drop(doc);
+		for label in affected {
+			let weight = if active_label.as_deref() == Some(label.as_str()) {
+				1.0
+			} else {
+				0.0
+			};
+			self.set_expression_override(&label, weight);
+		}
+		Ok(())
 	}
 
 	pub(crate) fn evaluate_runtime_parameter_actions(&mut self) -> Result<Vec<RuntimeActionActivation>, String> {
@@ -7615,11 +7843,12 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		effective_window_backend, menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits,
-		modular_avatar_menu_components, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
-		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
-		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		RuntimeMenuGraphNode, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		effective_window_backend, menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
+		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, runtime_action_id_for_parameter,
+		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode,
+		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
+		wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode, WardrobeAssetUploadPlan,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
@@ -7681,6 +7910,77 @@ mod tests {
 		assert_eq!(components[1].label.as_deref(), Some("External Hat"));
 		assert_eq!(components[1].parameter_name.as_deref(), Some("Hat"));
 		assert_eq!(components[1].value, Some(1.0));
+	}
+
+	#[test]
+	fn modular_avatar_menu_components_include_synthetic_vrc_expression_controls() {
+		let unavatar = un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "VRCExpressionsMenuControl",
+						"enabled": true,
+						"fields": {
+							"hierarchyPath": "VRC Menu/Accessories/Hat",
+							"siblingIndex": 2,
+							"Control": {
+								"name": "Hat",
+								"type": "Toggle",
+								"parameter": { "name": "Hat" },
+								"value": 1.0
+							}
+						}
+					}]
+				}
+			}),
+		};
+
+		let components = modular_avatar_menu_components(&unavatar);
+		assert_eq!(components.len(), 1);
+		assert_eq!(components[0].menu_key, "component:0");
+		assert_eq!(components[0].hierarchy_path.as_deref(), Some("VRC Menu/Accessories/Hat"));
+		assert_eq!(components[0].sibling_index, Some(2));
+		assert_eq!(components[0].label.as_deref(), Some("Hat"));
+		assert_eq!(components[0].parameter_name.as_deref(), Some("Hat"));
+		assert_eq!(components[0].value, Some(1.0));
+	}
+
+	#[test]
+	fn menu_action_candidates_include_metadata_only_vrc_controls() {
+		let unavatar = un_avatar_core::UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: json!({
+				"modularAvatar": {
+					"components": [{
+						"shortType": "VRCExpressionsMenuControl",
+						"enabled": true,
+						"fields": {
+							"hierarchyPath": "VRC Menu/Object/Tail",
+							"siblingIndex": 1,
+							"Control": {
+								"name": "Tail",
+								"type": "Toggle",
+								"parameter": { "name": "Tail" },
+								"value": 1.0
+							}
+						}
+					}]
+				}
+			}),
+		};
+		let actions = un_avatar_core::UnaRuntimeActionSet { actions: Vec::new() };
+
+		let candidates = menu_action_candidates_from_runtime(Some(&unavatar), &actions, None).unwrap();
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].menu_key, "component:0");
+		assert_eq!(candidates[0].menu_path, vec!["Tail".to_string()]);
+		assert_eq!(candidates[0].parameter_name, "Tail");
+		assert_eq!(candidates[0].parameter_value, 1.0);
+		assert_eq!(candidates[0].action_id, "menu:component:0");
+		assert_eq!(candidates[0].match_kind, "metadata");
+		assert!(candidates[0].available);
+		assert_eq!(candidates[0].effect_count, 0);
 	}
 
 	#[test]
@@ -7866,6 +8166,39 @@ mod tests {
 		);
 		scene.nodes[0].visible = false;
 		assert_eq!(runtime_action_id_for_parameter(&actions, Some(&scene), "Hat", 1.0), None);
+	}
+
+	#[test]
+	fn runtime_action_statuses_gate_scene_target_actions_by_visible_parent() {
+		let mut scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![test_scene_node(vec![1]), test_scene_node(Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		scene.nodes[0].name = Some("Outfit".to_string());
+		scene.nodes[1].name = Some("Hat".to_string());
+		scene.nodes[1].visible = false;
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "hat:on".to_string(),
+				label: "Hat ON".to_string(),
+				effects: vec![un_avatar_core::UnaRuntimeActionEffect::NodeVisibility {
+					target: un_avatar_core::UnaRuntimeNodeTarget {
+						path: Some("Outfit/Hat".to_string()),
+						..Default::default()
+					},
+					visible: true,
+				}],
+				..Default::default()
+			}],
+		};
+
+		let statuses = runtime_action_statuses(&actions, Some(&scene), &BTreeMap::new());
+		assert!(statuses[0].available);
+
+		scene.nodes[0].visible = false;
+		let statuses = runtime_action_statuses(&actions, Some(&scene), &BTreeMap::new());
+		assert!(!statuses[0].available);
 	}
 
 	#[test]

@@ -17,6 +17,8 @@ export type RendererPaneActions = {
 	onColorModeChange: ColorModeChangeHandler;
 	onClearExpressionOverrides: (rendererId: number) => void | Promise<void>;
 	onSetExpressionOverride: (rendererId: number, preset: string, weight: number) => void;
+	onSetRuntimeParameter: (rendererId: number, name: string, value: number, label: string) => void | Promise<void>;
+	onActivateRuntimeAction: (rendererId: number, actionId: string, label: string) => void | Promise<void>;
 	onActivateWardrobeMenuCandidate: (rendererId: number, actionId: string, wardrobeSetId: string) => void | Promise<void>;
 	onSetDynamicsEnabled: (rendererId: number, sourceId: string, enabled: boolean) => void | Promise<void>;
 	onSetAllDynamicsEnabled: (rendererId: number, enabled: boolean) => void | Promise<void>;

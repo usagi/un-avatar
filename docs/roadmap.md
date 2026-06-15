@@ -66,7 +66,8 @@ v1 は **VRM / glTF avatar renderer + Supervisor Console + UNMF/Z / VMC input + 
 ```sh
 cargo xtask ci
 cargo xtask run --release
-cargo xtask release-package --version 1.0.0
+cargo xtask release-package --version <version>
+cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape
 ```
 
 ## 関連文書

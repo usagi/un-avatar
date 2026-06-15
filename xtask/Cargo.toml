@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 glam = { version = "0.32", features = ["bytemuck"] }
 serde_json = { workspace = true }
+sha2 = "0.10"
 toml = { workspace = true }
 un-avatar-core = { path = "../crates/un-avatar-core" }
 un-avatar-io = { path = "../crates/un-avatar-io" }

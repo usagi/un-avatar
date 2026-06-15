@@ -1612,6 +1612,20 @@ impl AvatarApp {
 		self.preview_window_enabled && self.window.as_ref().is_some_and(|window| !window.is_minimized().unwrap_or(false))
 	}
 
+	fn hide_minimized_spout_preview(&mut self) -> bool {
+		if !self.opts.spout.enabled || !self.preview_window_enabled {
+			return false;
+		}
+		let Some(window) = self.window.as_ref() else {
+			return false;
+		};
+		if !window.is_minimized().unwrap_or(false) {
+			return false;
+		}
+		self.set_preview_window_enabled(false, false);
+		true
+	}
+
 	fn set_preview_window_enabled(&mut self, enabled: bool, activate: bool) {
 		self.preview_window_enabled = enabled;
 		if let Some(window) = &self.window {
@@ -1628,6 +1642,27 @@ impl AvatarApp {
 		self.update_runtime_window_geometry();
 	}
 
+	fn toggle_preview_window_from_tray(&mut self) {
+		let next_enabled = !self.preview_window_output_enabled();
+		self.set_preview_window_enabled(next_enabled, next_enabled);
+		self.request_redraw();
+	}
+
+	fn apply_configured_window_icon(&self) {
+		let Some(window) = self.window.as_ref() else {
+			return;
+		};
+		if let Some(icon) = self
+			.opts
+			.icon_path
+			.as_deref()
+			.and_then(load_window_icon)
+			.or_else(load_default_window_icon)
+		{
+			window.set_window_icon(Some(icon));
+		}
+	}
+
 	#[cfg(windows)]
 	fn ensure_renderer_tray(&mut self) {
 		if self.renderer_tray.is_some() {
@@ -1639,7 +1674,7 @@ impl AvatarApp {
 		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
 			return;
 		};
-		match renderer_tray::RendererTray::new(&self.opts, &snapshot) {
+		match renderer_tray::RendererTray::new(&self.opts, &snapshot, self.event_proxy.clone()) {
 			Ok(tray) => {
 				self.renderer_tray = Some(tray);
 			}
@@ -1680,54 +1715,20 @@ impl AvatarApp {
 	#[cfg(windows)]
 	fn handle_renderer_tray_action(&mut self, event_loop: &ActiveEventLoop, action: renderer_tray::RendererTrayAction) {
 		use renderer_tray::RendererTrayAction;
+		if let Some(events) = renderer_tray_output_events(&action) {
+			for event in events {
+				let _ = self.event_proxy.send_event(event);
+			}
+			return;
+		}
 		match action {
 			RendererTrayAction::ActivatePreview => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
 			}
-			RendererTrayAction::SetWindowPreview => {
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-					enabled: false,
-					name: None,
-					width: None,
-					height: None,
-				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
-					enabled: true,
-					activate: true,
-				});
-			}
-			RendererTrayAction::SetSpoutPreview => {
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-					enabled: true,
-					name: None,
-					width: None,
-					height: None,
-				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
-					enabled: true,
-					activate: true,
-				});
-			}
-			RendererTrayAction::SetSpoutOnly => {
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-					enabled: true,
-					name: None,
-					width: None,
-					height: None,
-				});
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
-					enabled: false,
-					activate: false,
-				});
-			}
-			RendererTrayAction::SetSpoutResolution { width, height } => {
-				let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-					enabled: true,
-					name: None,
-					width: Some(width),
-					height: Some(height),
-				});
-			}
+			RendererTrayAction::SetWindowPreview
+			| RendererTrayAction::SetSpoutPreview
+			| RendererTrayAction::SetSpoutOnly
+			| RendererTrayAction::SetSpoutResolution { .. } => {}
 			RendererTrayAction::SetAlwaysOnTop(always_on_top) => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
 					decorations: None,
@@ -1950,6 +1951,7 @@ impl AvatarApp {
 			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
 			status.runtime_requires_fur = runtime_requirements.fur;
 			if refresh_runtime_metadata {
+				status.base_wardrobe_set = gpu.and_then(|g| g.base_wardrobe_set());
 				status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 				status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
 				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
@@ -2739,6 +2741,56 @@ impl AvatarApp {
 	}
 }
 
+#[cfg(windows)]
+fn renderer_tray_output_events(action: &renderer_tray::RendererTrayAction) -> Option<Vec<RendererControlEvent>> {
+	use renderer_tray::RendererTrayAction;
+	match action {
+		RendererTrayAction::SetWindowPreview => Some(vec![
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true,
+			},
+			RendererControlEvent::SetSpoutOutput {
+				enabled: false,
+				name: None,
+				width: None,
+				height: None,
+			},
+		]),
+		RendererTrayAction::SetSpoutPreview => Some(vec![
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None,
+			},
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true,
+			},
+		]),
+		RendererTrayAction::SetSpoutOnly => Some(vec![
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None,
+			},
+			RendererControlEvent::SetPreviewWindow {
+				enabled: false,
+				activate: false,
+			},
+		]),
+		RendererTrayAction::SetSpoutResolution { width, height } => Some(vec![RendererControlEvent::SetSpoutOutput {
+			enabled: true,
+			name: None,
+			width: Some(*width),
+			height: Some(*height),
+		}]),
+		_ => None,
+	}
+}
+
 impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
 		if self.window.is_some() {
@@ -2784,6 +2836,8 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				return;
 			}
 		};
+		self.window = Some(win.clone());
+		self.apply_configured_window_icon();
 		apply_window_hittest(&win, self.opts.transparent, self.opts.input_passthrough);
 		if let Some([x, y]) = self.opts.window_position {
 			win.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
@@ -2846,7 +2900,6 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
 		win.request_redraw();
-		self.window = Some(win);
 		self.update_runtime_window_geometry();
 		#[cfg(windows)]
 		self.ensure_renderer_tray();
@@ -2854,6 +2907,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 	}
 
 	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+		self.hide_minimized_spout_preview();
 		if self.opts.spout.enabled && !self.preview_window_output_enabled() {
 			event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(16)));
 			if self.render_frame() {
@@ -2871,6 +2925,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				event_loop.exit();
 			}
 			WindowEvent::Resized(size) => {
+				if self.hide_minimized_spout_preview() {
+					return;
+				}
 				self.reconfigure(size.width, size.height);
 				self.update_runtime_window_geometry();
 				if let Some(w) = &self.window {
@@ -3097,12 +3154,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 			}
 			RendererControlEvent::SetWardrobe { set_id, result } => {
-				let active_set_id = model_loader::normalize_wardrobe_set_id(Some(&set_id)).map(str::to_owned);
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.apply_wardrobe_set(&set_id),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if outcome.is_ok() {
+					let active_set_id = self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set());
 					self.update_runtime_wardrobe_set(active_set_id);
 					self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
 					self.update_runtime_wardrobe_asset_upload(
@@ -3495,9 +3552,8 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			RendererControlEvent::TrayMenu { id } => {
 				self.handle_renderer_tray_menu(event_loop, id);
 			}
-			#[cfg(windows)]
 			RendererControlEvent::TrayIconActivate => {
-				self.handle_renderer_tray_action(event_loop, renderer_tray::RendererTrayAction::ActivatePreview);
+				self.toggle_preview_window_from_tray();
 			}
 			RendererControlEvent::StartupProgress {
 				phase,
@@ -3600,6 +3656,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 						log_slow_renderer_step("startup status spout", step_start.elapsed());
 						log_slow_renderer_step("startup runtime status update", status_update_start.elapsed());
 						let title_start = Instant::now();
+						self.apply_configured_window_icon();
 						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
 						log_slow_renderer_step("startup title/redraw request", title_start.elapsed());
@@ -4048,6 +4105,8 @@ struct RendererRuntimeSnapshot {
 	texture_summary: Option<mesh_pass::TextureUploadSummary>,
 	#[serde(default)]
 	active_wardrobe_set: Option<String>,
+	#[serde(default)]
+	base_wardrobe_set: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	active_asset_groups: Vec<String>,
 	#[serde(default, skip_serializing_if = "wardrobe_asset_upload_plan_is_default")]
@@ -4302,6 +4361,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		processed_texture_cache: opts.processed_texture_cache,
 		texture_summary: None,
 		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
+		base_wardrobe_set: None,
 		active_asset_groups: Vec::new(),
 		wardrobe_asset_upload: WardrobeAssetUploadPlan::default(),
 		resolver_cache_key: None,
@@ -5666,7 +5726,7 @@ mod tests {
 		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command,
 		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, AvatarOutlineKind,
 		AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand,
-		WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		RendererControlEvent, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -5912,6 +5972,7 @@ mod tests {
 				parameter_value: Some(1.0),
 				condition_parameter_names: vec!["Outfit".to_string()],
 				current_condition_state: Some("active".to_string()),
+				available: true,
 				wardrobe_set_id: Some("field_drape".to_string()),
 				target_writes: vec![un_avatar_core::UnaEvaluationRuntimeActionTargetWrite {
 					owner_key: "action:wardrobe:field_drape".to_string(),
@@ -6014,12 +6075,14 @@ mod tests {
 				menu_path: vec!["Wardrobe".to_string()],
 				menu_path_truncated: false,
 				menu_label: Some("Wardrobe".to_string()),
+				control_type: None,
 				parameter_name: "Outfit".to_string(),
 				parameter_value: 1.0,
 				action_id: "wardrobe:field_drape".to_string(),
 				action_label: "Field Drape".to_string(),
 				match_kind: "trigger".to_string(),
 				inverted: false,
+				available: true,
 				effect_count: 4,
 				effect_kinds: [
 					("node_visibility".to_string(), 1),
@@ -7150,6 +7213,52 @@ mod tests {
 		assert_eq!(name.as_deref(), Some("Live"));
 		assert_eq!(width, Some(1280));
 		assert_eq!(height, Some(720));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn renderer_tray_window_preview_shows_preview_before_disabling_spout() {
+		let events = super::renderer_tray_output_events(&super::renderer_tray::RendererTrayAction::SetWindowPreview).unwrap();
+		assert_eq!(events.len(), 2);
+		assert!(matches!(
+			&events[0],
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true
+			}
+		));
+		assert!(matches!(
+			&events[1],
+			RendererControlEvent::SetSpoutOutput {
+				enabled: false,
+				name: None,
+				width: None,
+				height: None
+			}
+		));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn renderer_tray_spout_only_enables_spout_before_hiding_preview() {
+		let events = super::renderer_tray_output_events(&super::renderer_tray::RendererTrayAction::SetSpoutOnly).unwrap();
+		assert_eq!(events.len(), 2);
+		assert!(matches!(
+			&events[0],
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None
+			}
+		));
+		assert!(matches!(
+			&events[1],
+			RendererControlEvent::SetPreviewWindow {
+				enabled: false,
+				activate: false
+			}
+		));
 	}
 
 	#[test]

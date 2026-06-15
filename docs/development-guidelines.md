@@ -21,7 +21,7 @@ push 前または大きな変更後は、リポジトリルートで次を実行
 cargo xtask ci
 ```
 
-`ci` は `fmt --check`、`check --workspace`、`test --workspace`、CLI smoke、renderer smoke を順に実行する。
+`ci` は `apps/un-avatar-supervisor` の frontend check、`fmt --check`、`check --workspace`、`test --workspace`、CLI smoke、renderer smoke を順に実行する。ローカルでは `svelte-check` があれば `npm run check` を使い、未準備なら `npm ci`、半端な `node_modules` が残っている場合は `npm install --package-lock=false` で補修してから check する。GitHub Actions は先に `npm ci` で依存を準備し、`cargo xtask ci` 内の `npm run check` で Svelte / TypeScript の型崩れを release 前に落とす。
 
 個別には次を使う。
 
@@ -64,10 +64,14 @@ cargo xtask run-renderer --profile model2 -- --debug-material-dump
 ```sh
 cargo xtask spout2
 cargo xtask unity-exporter-package
-cargo xtask release-package --version 1.0.0
+cargo xtask release-package --version <version>
+cargo xtask release-audit --version <version>
+cargo xtask package-render-smoke
 ```
 
-`release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` を作る。
+`release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` と `release-packages/un-avatar-<version>.zip.sha256.txt` を作る。zip 作成前に packaged Renderer の windowless startup smoke を実行し、zip 作成後に Renderer / Supervisor executable、license files、Unity Exporter、Spout2 runtime（`--skip-spout2` なしの場合）の必須 entry も検査する。
+`release-audit` は既存の portable zip / checksum sidecar / VCC package zip / VCC repo listing / release notes draft / manual release checklist の hash と VCC listing の name / version / URL suffix を再ビルドせずに再検査する。portable zip は clean temp directory へ展開し、必須実行ファイル / license / Unity Exporter / Spout2 runtime が通常ファイルとして取り出せること、zip 内の README / LICENSE / third-party notices が現行 source と一致すること、release notes draft に v2 release text の必須事項が残っていること、さらに VCC zip の必須 entry が `target/unity/vcc-staging` の生成元と一致し、zip 内 `package.json` の name / version / release asset URL suffix と VCC repo listing の package URL が正しいことも確認する。GitHub Release draft、manual checklist、VCC `zipSHA256` / package URL、README 更新後の package 作り直し忘れ確認に使う。
+`package-render-smoke` は `target/package/un-avatar/un-avatar-renderer` を使い、window を開かず fixture glTF manifest を `--validate-startup` で検査する。実 profile / `.unavatar` も `cargo xtask package-render-smoke --manifest <path> --wardrobe-set <id>` で同じ packaged Renderer から windowless 検査できる。
 `unity-exporter-package` は Unity Editor を起動せず、`unity/un-avatar-unity-exporter` を `target/unity/un-avatar-unity-exporter` へ UPM package layout としてコピーする。
 
 VCC Package Manager 向け Unity Exporter は、GitHub Release 作成後に次を実行する。
@@ -76,7 +80,7 @@ VCC Package Manager 向け Unity Exporter は、GitHub Release 作成後に次�
 cargo xtask unity-exporter-vcc --version <version>
 ```
 
-`unity-exporter-vcc` は `target/unity/vcc/network.usagi.un-avatar.unity-exporter-<version>.zip` と `docs/vcc/index.json` を生成する。既定の download URL は `https://github.com/usagi/un-avatar/releases/download/<version>/...` で、UN Avatar の git tag / release title と同じく `v` prefix は付けない。生成した zip を同じ GitHub Release asset に添付し、更新された `docs/vcc/index.json` を commit / push すれば、VCC の Package Manager で更新候補として表示される。
+`unity-exporter-vcc` は `target/unity/vcc/network.usagi.un-avatar.unity-exporter-<version>.zip` と `docs/vcc/index.json` を生成する。生成後に VCC zip 内の `package.json`、主要 Editor scripts、native `unavatar_fpng.dll`、license file の必須 entry と `zipSHA256` を検査する。既定の download URL は `https://github.com/usagi/un-avatar/releases/download/<version>/...` で、UN Avatar の git tag / release title と同じく `v` prefix は付けない。生成した zip を同じ GitHub Release asset に添付し、更新された `docs/vcc/index.json` を commit / push すれば、VCC の Package Manager で更新候補として表示される。
 
 ### Windows 配布方針
 
@@ -87,9 +91,14 @@ Authenticode 署名も v2 では未対応・対応未定とする。自己署名
 ## v2 リリース候補前の手動確認
 
 v2 は `.unavatar` / VRC 由来機能を含むため、VRM だけでなく軽量 VRC model と重い wardrobe model を確認対象に入れる。
+実機 GUI / tray / Spout2 / migration の証跡は [`v2-manual-release-checklist.md`](v2-manual-release-checklist.md) に沿って残す。
 
 - `cargo xtask ci`
-- `cargo xtask release-package --version <version>` が portable zip を生成すること
+- `cargo xtask release-package --version <version>` が portable zip、sha256 sidecar を生成し、packaged Renderer smoke と zip entry 検査を通すこと
+- `cargo xtask release-audit --version <version>` が portable zip checksum sidecar、clean unpack、source docs freshness、release notes required text、VCC zip staging freshness、VCC package manifest、VCC package URL consistency、VCC zipSHA256、VCC listing name / version / URL suffix、release notes draft hash、manual checklist Candidate Build、必須 entry 検査を通すこと
+- `cargo xtask unity-exporter-vcc --version <version>` が VCC zip、repo listing、zipSHA256、必須 Unity Exporter entry 検査を通すこと
+- `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` が packaged Renderer で代表 wardrobe set の windowless startup validation を通すこと
+- `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` が packaged Renderer で別系統の代表 wardrobe set の windowless startup validation を通すこと
 - `cargo xtask run --release` で Supervisor が起動し、profile 作成 / 編集 / Renderer 起動 / 停止ができること
 - Renderer 直接起動用 shortcut、taskbar launcher、Renderer tray からの停止 / Supervisor 起動が機能すること
 - profile UI のユーザー向け物理名は `UNPhysics` / `UNDynamics` とし、`SpringBone` / `PhysBone` は source diagnostics や互換文脈以外に出さないこと
@@ -115,7 +124,7 @@ v2 は `.unavatar` / VRC 由来機能を含むため、VRM だけでなく軽量
 - Spout2 Sender が実アバター描画開始後に出ること
 - スクリーンショット保存と保存先フォルダー open
 - アバターサムネイル icon cache
-- README / LICENSE / `docs/third-party-licenses.md` が配布物へ入ること
+- README / LICENSE / `THIRD_PARTY_NOTICES.md` / `LICENSES/third-party-licenses.md` が配布物へ入ること
 
 ## フォーマット
 

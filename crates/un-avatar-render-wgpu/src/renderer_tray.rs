@@ -3,6 +3,9 @@ use std::{
 	env,
 	path::{Path, PathBuf},
 	process::Command,
+	sync::{mpsc, Arc, Mutex},
+	thread,
+	time::Duration,
 };
 
 use tray_icon::{
@@ -35,42 +38,173 @@ pub(crate) enum RendererTrayAction {
 }
 
 pub(crate) struct RendererTray {
-	icon: TrayIcon,
-	actions: HashMap<String, RendererTrayAction>,
-	last_menu_key: String,
+	backend: RendererTrayBackend,
+}
+
+enum RendererTrayBackend {
+	Worker {
+		tx: mpsc::Sender<RendererTrayWorkerCommand>,
+		actions: Arc<Mutex<HashMap<String, RendererTrayAction>>>,
+	},
+	Local {
+		icon: TrayIcon,
+		actions: HashMap<String, RendererTrayAction>,
+		last_menu_key: String,
+	},
 }
 
 impl RendererTray {
-	pub(crate) fn new(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> Result<Self, String> {
+	pub(crate) fn new(
+		opts: &AvatarWindowOptions,
+		snapshot: &RendererRuntimeSnapshot,
+		proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Result<Self, String> {
+		match Self::new_worker(opts, snapshot, proxy.clone()) {
+			Ok(tray) => Ok(tray),
+			Err(error) => {
+				eprintln!("un-avatar-renderer: renderer tray worker disabled: {error}");
+				Self::new_local(opts, snapshot)
+			}
+		}
+	}
+
+	fn new_local(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> Result<Self, String> {
 		let (menu, actions) = build_menu(opts, snapshot);
 		let icon = TrayIconBuilder::new()
 			.with_id(tray_icon_id())
 			.with_tooltip(tray_tooltip(opts, snapshot))
 			.with_icon(load_tray_icon(opts.icon_path.as_deref()).unwrap_or_else(default_tray_icon))
+			.with_menu_on_left_click(false)
 			.with_menu(Box::new(menu))
 			.build()
 			.map_err(|error| format!("build renderer tray: {error}"))?;
 		Ok(Self {
-			icon,
-			actions,
-			last_menu_key: menu_key(snapshot),
+			backend: RendererTrayBackend::Local {
+				icon,
+				actions,
+				last_menu_key: menu_key(snapshot),
+			},
+		})
+	}
+
+	fn new_worker(
+		opts: &AvatarWindowOptions,
+		snapshot: &RendererRuntimeSnapshot,
+		_proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Result<Self, String> {
+		let (startup_tx, startup_rx) = mpsc::channel();
+		let opts = opts.clone();
+		let snapshot = snapshot.clone();
+		let actions = Arc::new(Mutex::new(HashMap::new()));
+		let worker_actions = Arc::clone(&actions);
+		thread::Builder::new()
+			.name("un-avatar-renderer-tray".into())
+			.spawn(move || renderer_tray_worker(opts, snapshot, worker_actions, startup_tx))
+			.map_err(|error| format!("spawn renderer tray worker: {error}"))?;
+		let tx = startup_rx
+			.recv_timeout(Duration::from_secs(2))
+			.map_err(|error| format!("start renderer tray worker: {error}"))??;
+		Ok(Self {
+			backend: RendererTrayBackend::Worker { tx, actions },
 		})
 	}
 
 	pub(crate) fn refresh(&mut self, opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) {
-		let key = menu_key(snapshot);
-		let _ = self.icon.set_tooltip(Some(tray_tooltip(opts, snapshot)));
-		if key == self.last_menu_key {
-			return;
+		match &mut self.backend {
+			RendererTrayBackend::Worker { tx, .. } => {
+				let _ = tx.send(RendererTrayWorkerCommand::Refresh {
+					opts: opts.clone(),
+					snapshot: snapshot.clone(),
+				});
+			}
+			RendererTrayBackend::Local {
+				icon,
+				actions,
+				last_menu_key,
+			} => {
+				let key = menu_key(snapshot);
+				let _ = icon.set_tooltip(Some(tray_tooltip(opts, snapshot)));
+				if key == *last_menu_key {
+					return;
+				}
+				let (menu, next_actions) = build_menu(opts, snapshot);
+				icon.set_menu(Some(Box::new(menu)));
+				*actions = next_actions;
+				*last_menu_key = key;
+			}
 		}
-		let (menu, actions) = build_menu(opts, snapshot);
-		self.icon.set_menu(Some(Box::new(menu)));
-		self.actions = actions;
-		self.last_menu_key = key;
 	}
 
 	pub(crate) fn action(&self, id: &str) -> Option<RendererTrayAction> {
-		self.actions.get(id).cloned()
+		match &self.backend {
+			RendererTrayBackend::Worker { actions, .. } => actions.lock().ok().and_then(|actions| actions.get(id).cloned()),
+			RendererTrayBackend::Local { actions, .. } => actions.get(id).cloned(),
+		}
+	}
+}
+
+impl Drop for RendererTray {
+	fn drop(&mut self) {
+		if let RendererTrayBackend::Worker { tx, .. } = &self.backend {
+			let _ = tx.send(RendererTrayWorkerCommand::Shutdown);
+		}
+	}
+}
+
+enum RendererTrayWorkerCommand {
+	Refresh {
+		opts: AvatarWindowOptions,
+		snapshot: RendererRuntimeSnapshot,
+	},
+	Shutdown,
+}
+
+fn renderer_tray_worker(
+	opts: AvatarWindowOptions,
+	snapshot: RendererRuntimeSnapshot,
+	actions: Arc<Mutex<HashMap<String, RendererTrayAction>>>,
+	startup: mpsc::Sender<Result<mpsc::Sender<RendererTrayWorkerCommand>, String>>,
+) {
+	let (tx, rx) = mpsc::channel();
+	let (menu, menu_actions) = build_menu(&opts, &snapshot);
+	if let Ok(mut actions) = actions.lock() {
+		*actions = menu_actions;
+	}
+	let icon = match TrayIconBuilder::new()
+		.with_id(tray_icon_id())
+		.with_tooltip(tray_tooltip(&opts, &snapshot))
+		.with_icon(load_tray_icon(opts.icon_path.as_deref()).unwrap_or_else(default_tray_icon))
+		.with_menu_on_left_click(false)
+		.with_menu(Box::new(menu))
+		.build()
+	{
+		Ok(icon) => icon,
+		Err(error) => {
+			let _ = startup.send(Err(format!("build renderer tray: {error}")));
+			return;
+		}
+	};
+	let _ = startup.send(Ok(tx));
+	let mut last_menu_key = menu_key(&snapshot);
+	loop {
+		pump_windows_messages();
+		match rx.recv_timeout(Duration::from_millis(16)) {
+			Ok(RendererTrayWorkerCommand::Refresh { opts, snapshot }) => {
+				let key = menu_key(&snapshot);
+				let _ = icon.set_tooltip(Some(tray_tooltip(&opts, &snapshot)));
+				if key != last_menu_key {
+					let (menu, menu_actions) = build_menu(&opts, &snapshot);
+					icon.set_menu(Some(Box::new(menu)));
+					if let Ok(mut actions) = actions.lock() {
+						*actions = menu_actions;
+					}
+					last_menu_key = key;
+				}
+			}
+			Ok(RendererTrayWorkerCommand::Shutdown) => break,
+			Err(mpsc::RecvTimeoutError::Timeout) => {}
+			Err(mpsc::RecvTimeoutError::Disconnected) => break,
+		}
 	}
 }
 
@@ -94,6 +228,19 @@ pub(crate) fn install_event_handlers(proxy: EventLoopProxy<RendererControlEvent>
 			let _ = proxy.send_event(RendererControlEvent::TrayIconActivate);
 		}
 	}));
+}
+
+#[cfg(windows)]
+fn pump_windows_messages() {
+	use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+
+	unsafe {
+		let mut msg = MSG::default();
+		while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+			let _ = TranslateMessage(&msg);
+			DispatchMessageW(&msg);
+		}
+	}
 }
 
 pub(crate) fn open_supervisor(manifest_path: Option<&Path>) -> Result<(), String> {
@@ -283,15 +430,18 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 }
 
 fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
+	let has_menu_candidates = !snapshot.menu_action_candidates.is_empty();
 	let entries: Vec<_> = snapshot
 		.menu_action_candidates
 		.iter()
+		.filter(|candidate| candidate.available)
 		.filter(|candidate| candidate.wardrobe_set_ids.is_empty())
 		.collect();
-	let fallback_entries = if entries.is_empty() {
+	let fallback_entries = if entries.is_empty() && !has_menu_candidates {
 		snapshot
 			.runtime_actions
 			.iter()
+			.filter(|action| action.available)
 			.filter(|action| action.wardrobe_set_id.is_none())
 			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
 			.collect::<Vec<_>>()
@@ -325,7 +475,7 @@ fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTr
 		}
 	} else {
 		for (index, candidate) in entries.into_iter().enumerate() {
-			let active = runtime_action_active(snapshot, &candidate.action_id);
+			let active = menu_candidate_active(snapshot, candidate);
 			append_menu_item(
 				&vrc_menu,
 				actions,
@@ -351,37 +501,63 @@ fn runtime_action_active(snapshot: &RendererRuntimeSnapshot, action_id: &str) ->
 		== Some("active")
 }
 
+fn menu_candidate_active(snapshot: &RendererRuntimeSnapshot, candidate: &gpu::RuntimeMenuActionCandidateStatus) -> bool {
+	if candidate.match_kind == "metadata" {
+		return snapshot
+			.runtime_parameter_values
+			.get(&candidate.parameter_name)
+			.is_some_and(|value| (*value - candidate.parameter_value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON);
+	}
+	runtime_action_active(snapshot, &candidate.action_id)
+}
+
 fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
-	let mut entries: Vec<(String, String)> = Vec::new();
+	let mut entries: Vec<(String, String, RendererTrayAction)> = Vec::new();
 	for candidate in &snapshot.menu_wardrobe_candidates {
-		entries.push((menu_wardrobe_label(candidate), candidate.wardrobe_set_id.clone()));
+		entries.push((
+			menu_wardrobe_label(candidate),
+			candidate.wardrobe_set_id.clone(),
+			RendererTrayAction::ActivateAction(candidate.action_id.clone()),
+		));
 	}
 	if entries.is_empty() {
 		for action in &snapshot.wardrobe_actions {
-			entries.push((action.label.clone(), action.set_id.clone()));
+			entries.push((
+				action.label.clone(),
+				action.set_id.clone(),
+				RendererTrayAction::ActivateAction(action.action_id.clone()),
+			));
 		}
 	}
-	if entries.iter().all(|(_, set_id)| !set_id.trim().is_empty()) {
-		entries.insert(0, ("Base".to_string(), String::new()));
+	if entries.iter().all(|(_, set_id, _)| !set_id.trim().is_empty()) {
+		entries.insert(
+			0,
+			("Base".to_string(), String::new(), RendererTrayAction::SetWardrobe(String::new())),
+		);
 	}
 	if entries.is_empty() {
 		return;
 	}
 	let wardrobe = Submenu::with_id("renderer:wardrobe", "Wardrobe", true);
 	let active_set = snapshot.active_wardrobe_set.as_deref().unwrap_or("").trim();
-	for (index, (label, set_id)) in entries.into_iter().enumerate() {
+	let base_set = snapshot.base_wardrobe_set.as_deref().unwrap_or("").trim();
+	for (index, (label, set_id, action)) in entries.into_iter().enumerate() {
 		let set_id = set_id.trim().to_string();
-		let active = set_id == active_set;
+		let active = wardrobe_set_active(active_set, base_set, &set_id);
 		append_menu_item(
 			&wardrobe,
 			actions,
 			format!("wardrobe:{index}"),
 			check_label(truncate_label(&label, 56), active),
 			true,
-			RendererTrayAction::SetWardrobe(set_id),
+			action,
 		);
 	}
 	append_submenu(menu, &wardrobe);
+}
+
+fn wardrobe_set_active(active_set: &str, base_set: &str, set_id: &str) -> bool {
+	set_id == active_set || (set_id.is_empty() && !base_set.is_empty() && active_set == base_set)
 }
 
 fn menu_action_label(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> String {
@@ -517,7 +693,7 @@ fn tray_icon_id() -> String {
 
 fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
-		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
 		snapshot.scene_state,
 		snapshot.spout_available,
 		snapshot.spout_enabled,
@@ -530,6 +706,7 @@ fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 		snapshot.dynamics_group_count,
 		snapshot.dynamics_enabled_group_count,
 		snapshot.active_wardrobe_set.as_deref().unwrap_or(""),
+		snapshot.base_wardrobe_set.as_deref().unwrap_or(""),
 		menu_action_signature(snapshot),
 		wardrobe_menu_signature(snapshot)
 	)
@@ -549,11 +726,17 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 		signature.push(':');
 		signature.push_str(&signature_field(candidate.menu_label.as_deref().unwrap_or("")));
 		signature.push(':');
+		signature.push_str(if candidate.available { "1" } else { "0" });
+		signature.push(':');
 		signature.push_str(&signature_field(&candidate.action_label));
+		signature.push(':');
+		signature.push_str(&signature_field(&candidate.parameter_name));
+		signature.push(':');
+		signature.push_str(&signature_field(&candidate.parameter_value.to_string()));
 		signature.push(':');
 		signature.push_str(if candidate.wardrobe_set_ids.is_empty() { "0" } else { "1" });
 		signature.push(':');
-		signature.push_str(if runtime_action_active(snapshot, &candidate.action_id) {
+		signature.push_str(if menu_candidate_active(snapshot, candidate) {
 			"active"
 		} else {
 			"inactive"
@@ -563,12 +746,16 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 		let fallback_actions = snapshot
 			.runtime_actions
 			.iter()
+			.filter(|action| action.available)
+			.filter(|action| action.wardrobe_set_id.is_none())
 			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
 			.collect::<Vec<_>>();
 		signature.push_str(&format!("|fallback:{}", fallback_actions.len()));
 		for action in fallback_actions {
 			signature.push('|');
 			signature.push_str(&signature_field(&action.action_id));
+			signature.push(':');
+			signature.push_str(if action.available { "1" } else { "0" });
 			signature.push(':');
 			signature.push_str(&signature_field(action.expression_menu_path.as_deref().unwrap_or("")));
 			signature.push(':');
@@ -680,6 +867,18 @@ mod tests {
 	}
 
 	#[test]
+	fn menu_key_tracks_base_wardrobe_set_resolution() {
+		let mut before = snapshot();
+		before.active_wardrobe_set = Some("base".to_string());
+		before.base_wardrobe_set = None;
+
+		let mut after = before.clone();
+		after.base_wardrobe_set = Some("base".to_string());
+
+		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
 	fn menu_key_tracks_transparent_window_for_input_passthrough_availability() {
 		let mut before = snapshot();
 		before.transparent_window = false;
@@ -746,6 +945,7 @@ mod tests {
 			menu_label: Some("Smile".to_string()),
 			parameter_name: "Smile".to_string(),
 			parameter_value: 1.0,
+			available: true,
 			..Default::default()
 		}];
 
@@ -753,6 +953,71 @@ mod tests {
 		after.menu_action_candidates[0].menu_label = Some("Big Smile".to_string());
 
 		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_tracks_vrc_menu_parameter_dispatch_values() {
+		let mut before = snapshot();
+		before.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
+			action_id: "action:smile".to_string(),
+			action_label: "Smile".to_string(),
+			menu_key: "expressions/smile".to_string(),
+			menu_label: Some("Smile".to_string()),
+			parameter_name: "Smile".to_string(),
+			parameter_value: 1.0,
+			available: true,
+			..Default::default()
+		}];
+
+		let mut after = before.clone();
+		after.menu_action_candidates[0].parameter_value = 2.0;
+
+		assert_ne!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_does_not_fallback_when_menu_candidates_exist() {
+		let mut before = snapshot();
+		before.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
+			action_id: "wardrobe:field_drape".to_string(),
+			action_label: "Field Drape".to_string(),
+			menu_key: "wardrobe/field_drape".to_string(),
+			parameter_name: "Wardrobe".to_string(),
+			parameter_value: 1.0,
+			wardrobe_set_ids: vec!["field_drape".to_string()],
+			available: true,
+			..Default::default()
+		}];
+		before.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "action:smile".to_string(),
+			label: "Smile".to_string(),
+			expression_menu_path: Some("Expressions/Smile".to_string()),
+			parameter_name: Some("Smile".to_string()),
+			parameter_value: Some(1.0),
+			..Default::default()
+		}];
+
+		let mut after = before.clone();
+		after.runtime_actions[0].expression_menu_path = Some("Expressions/Big Smile".to_string());
+
+		assert_eq!(menu_key(&before), menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_ignores_wardrobe_runtime_actions_in_vrc_menu_fallback() {
+		let mut before = snapshot();
+		before.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "wardrobe:field_drape".to_string(),
+			label: "Field Drape".to_string(),
+			expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+			wardrobe_set_id: Some("field_drape".to_string()),
+			..Default::default()
+		}];
+
+		let mut after = before.clone();
+		after.runtime_actions[0].expression_menu_path = Some("Wardrobe/Field Drape Updated".to_string());
+
+		assert_eq!(menu_key(&before), menu_key(&after));
 	}
 
 	#[test]
@@ -804,6 +1069,14 @@ mod tests {
 	}
 
 	#[test]
+	fn synthetic_base_entry_is_active_when_active_set_matches_resolved_base_set() {
+		assert!(wardrobe_set_active("base", "base", ""));
+		assert!(wardrobe_set_active("", "base", ""));
+		assert!(wardrobe_set_active("field_drape", "base", "field_drape"));
+		assert!(!wardrobe_set_active("field_drape", "base", ""));
+	}
+
+	#[test]
 	fn wardrobe_menu_exposes_all_candidates_without_fixed_cap() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
@@ -817,14 +1090,23 @@ mod tests {
 			.collect();
 
 		let (_menu, actions) = build_menu(&opts, &status);
-		let wardrobe_actions = actions
+		let direct_wardrobe_actions = actions
 			.values()
 			.filter(|action| matches!(action, RendererTrayAction::SetWardrobe(_)))
 			.count();
-		assert_eq!(wardrobe_actions, 33);
+		let activate_actions = actions
+			.values()
+			.filter(|action| matches!(action, RendererTrayAction::ActivateAction(_)))
+			.count();
+		assert_eq!(direct_wardrobe_actions, 1);
+		assert_eq!(activate_actions, 32);
 		assert!(matches!(
 			actions.get("renderer:wardrobe:0"),
 			Some(RendererTrayAction::SetWardrobe(set_id)) if set_id.is_empty()
+		));
+		assert!(matches!(
+			actions.get("renderer:wardrobe:1"),
+			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "wardrobe:0"
 		));
 	}
 
@@ -840,6 +1122,7 @@ mod tests {
 				menu_label: Some("Expressions".to_string()),
 				parameter_name: "Smile".to_string(),
 				parameter_value: 1.0,
+				available: true,
 				..Default::default()
 			},
 			gpu::RuntimeMenuActionCandidateStatus {
@@ -850,6 +1133,7 @@ mod tests {
 				parameter_name: "Wardrobe".to_string(),
 				parameter_value: 2.0,
 				wardrobe_set_ids: vec!["field_drape".to_string()],
+				available: true,
 				..Default::default()
 			},
 		];
@@ -864,6 +1148,34 @@ mod tests {
 	}
 
 	#[test]
+	fn vrc_menu_excludes_unavailable_menu_candidates_without_fallback() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
+			action_id: "action:field_drape_hat_off".to_string(),
+			action_label: "Hat OFF".to_string(),
+			menu_key: "field_drape/hat_off".to_string(),
+			menu_label: Some("Hat OFF".to_string()),
+			parameter_name: "HatOff".to_string(),
+			parameter_value: 1.0,
+			available: false,
+			..Default::default()
+		}];
+		status.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "action:field_drape_hat_off".to_string(),
+			label: "Hat OFF".to_string(),
+			expression_menu_path: Some("Field Drape/Hat OFF".to_string()),
+			parameter_name: Some("HatOff".to_string()),
+			parameter_value: Some(1.0),
+			..Default::default()
+		}];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(!actions.contains_key("renderer:vrc_menu:0"));
+	}
+
+	#[test]
 	fn vrc_menu_falls_back_to_expression_menu_runtime_actions() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
@@ -871,6 +1183,7 @@ mod tests {
 			action_id: "action:hat".to_string(),
 			label: "Hat".to_string(),
 			expression_menu_path: Some("Wardrobe/Hat".to_string()),
+			available: true,
 			..Default::default()
 		}];
 
@@ -891,6 +1204,7 @@ mod tests {
 				action_id: "action:smile".to_string(),
 				label: "Smile".to_string(),
 				expression_menu_path: Some("Expressions/Smile".to_string()),
+				available: true,
 				..Default::default()
 			},
 			gpu::RuntimeActionStatus {
@@ -898,6 +1212,7 @@ mod tests {
 				label: "Field Drape".to_string(),
 				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
 				wardrobe_set_id: Some("field_drape".to_string()),
+				available: true,
 				..Default::default()
 			},
 		];
@@ -922,6 +1237,7 @@ mod tests {
 			parameter_name: Some("HatOff".to_string()),
 			parameter_value: Some(1.0),
 			current_condition_state: Some("inactive".to_string()),
+			available: true,
 			..Default::default()
 		}];
 
@@ -949,6 +1265,7 @@ mod tests {
 			menu_label: Some("Smile Menu".to_string()),
 			parameter_name: "Smile".to_string(),
 			parameter_value: 1.0,
+			available: true,
 			..Default::default()
 		};
 

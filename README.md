@@ -11,14 +11,15 @@ U.N. Avatar はアバターを軽快にレンダリングする「仮想アバ�
 - U.N. Motion や VMC 送信対応アプリと組み合わせて、Web カメラや各種入力デバイスからのモーションでアバターを動かしたい VStreamer / VTuber / virtual avatar user
 - アバターを透過ウィンドウや Spout2 で配信ソフトへ載せたい民
 - 軽快な単体アバターレンダラーを求める民
-- UNMF/Z や VRM / MToon 表示の検証、ツール連携、研究用途で renderer を直接扱いたい研究者 / 開発者
+- UNMF/Z や VRM / `.unavatar` / UNToon 表示の検証、ツール連携、研究用途で renderer を直接扱いたい研究者 / 開発者
 
 ## できること
 
 - Supervisor Console で複数のプロファイルと Renderer を統合的に管理。
 - Renderer でプロファイルごとの設定に基づいたアバターを描画。
-- VRM / glTF ベースのアバターを wgpu renderer (backend: Vulkan / DX12) で描画、出力。
-- UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、SpringBone を反映。
+- VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (backend: Vulkan / DX12) で描画、出力。
+- UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、UNPhysics / UNDynamics を反映。
+- `.unavatar` Wardrobe set、VRC Expression Menu 由来の runtime action、lilToon-compatible UNToon material を v2 範囲として扱う。
 - プロファイルごとにアバターファイル、モーション入力、出力、描画品質、ルック、ウィンドウ、カメラ、ライティングを設定。
 - 透過ウィンドウ、クリック透過、最前面表示、背景色、XYZ 軸表示、簡易コライダー表示などの便利機能。
 - Spout2 Sender として OBS などへアバター映像を転送。
@@ -80,15 +81,21 @@ cargo xtask ci
 cargo xtask build
 cargo xtask run
 cargo xtask run --release
-cargo xtask release-package --version 1.0.0
+cargo xtask release-package --version <version>
+cargo xtask release-audit --version <version>
+cargo xtask package-render-smoke
+cargo xtask package-render-smoke --manifest <path> --wardrobe-set <set-id>
+cargo xtask unity-exporter-vcc --version <version>
 ```
 
 Renderer だけを smoke test する場合:
 
 ```sh
 cargo xtask render-smoke
-cargo xtask unity-exporter-package
 ```
+
+`package-render-smoke --manifest <path> --wardrobe-set <set-id>` は packaged Renderer で実 avatar manifest と代表 wardrobe set の起動検証を windowless に実行します。
+`release-audit --version <version>` は既存の portable zip、checksum sidecar、VCC package zip、`docs/vcc/index.json`、`docs/v2-release-notes-draft.md`、`docs/v2-manual-release-checklist.md` の hash / 必須 entry / VCC listing name・version・URL 整合を再ビルドなしで検査します。
 
 Supervisor の UI を編集する場合:
 
@@ -103,7 +110,7 @@ npm run dev
 ## ドキュメント
 
 - [Documentation Index](docs/README.md): 公開文書と開発メモの索引
-- [Roadmap](docs/roadmap.md): 実装状況、v1 境界、次の候補
+- [Roadmap](docs/roadmap.md): v1 安定対象と v2 への接続
 - [v2 Roadmap](docs/v2-roadmap.md): `.unavatar` / VRC Unity Exporter を中核にした v2 計画
 - [Runtime MVP](docs/runtime-mvp.md): VRM / VMC / MToon / wgpu / Spout2 runtime
 - [Profile Settings UI v1 Design](docs/profile-settings-ui-v1-design.md): Profiles / Renderers UI の情報設計メモ

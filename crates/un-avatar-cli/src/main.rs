@@ -3737,7 +3737,11 @@ fn menu_parent_path(path: &str) -> Option<&str> {
 fn modular_avatar_is_menu_metadata_type(short_type: &str) -> bool {
 	matches!(
 		short_type,
-		"ModularAvatarMenuItem" | "ModularAvatarMenuGroup" | "ModularAvatarMenuInstaller" | "ModularAvatarMenuInstallTarget"
+		"ModularAvatarMenuItem"
+			| "ModularAvatarMenuGroup"
+			| "ModularAvatarMenuInstaller"
+			| "ModularAvatarMenuInstallTarget"
+			| "VRCExpressionsMenuControl"
 	)
 }
 
@@ -5090,6 +5094,7 @@ fn diagnose_menu_action_candidates(
 		let (Some(parameter_name), Some(parameter_value)) = (&menu.parameter, menu.value) else {
 			continue;
 		};
+		let mut matched_any_action = false;
 		for action in &actions.actions {
 			let mut matched = None;
 			for condition in &action.conditions {
@@ -5117,6 +5122,7 @@ fn diagnose_menu_action_candidates(
 			let Some((match_kind, inverted)) = matched else {
 				continue;
 			};
+			matched_any_action = true;
 			let wardrobe_set_ids = action
 				.effects
 				.iter()
@@ -5140,6 +5146,25 @@ fn diagnose_menu_action_candidates(
 				wardrobe_set_ids,
 			});
 		}
+		if !matched_any_action && metadata_menu_candidate_visible(menu) {
+			candidates.push(DiagnoseMenuActionCandidate {
+				menu_component_index: menu.component_index,
+				menu_key: menu.menu_key.clone(),
+				menu_label: menu.label.clone(),
+				parameter_name: parameter_name.clone(),
+				parameter_value,
+				action_id: format!("menu:{}", menu.menu_key),
+				action_label: menu
+					.label
+					.clone()
+					.unwrap_or_else(|| format!("{}={parameter_value}", parameter_name)),
+				match_kind: "metadata".to_string(),
+				inverted: false,
+				effect_count: 0,
+				effect_kinds: BTreeMap::new(),
+				wardrobe_set_ids: Vec::new(),
+			});
+		}
 	}
 	candidates.sort_by(|a, b| {
 		(
@@ -5156,6 +5181,37 @@ fn diagnose_menu_action_candidates(
 			))
 	});
 	candidates
+}
+
+fn metadata_menu_candidate_visible(menu: &DiagnoseModularAvatarMenuComponentSummary) -> bool {
+	if menu.control_type.as_deref() == Some("Button") {
+		return false;
+	}
+	let Some(path) = menu.hierarchy_path.as_deref() else {
+		return true;
+	};
+	let segments = path
+		.trim_matches('/')
+		.split('/')
+		.filter(|segment| !segment.is_empty() && *segment != "VRC Menu")
+		.collect::<Vec<_>>();
+	if segments.len() > 2 {
+		return false;
+	}
+	if segments
+		.iter()
+		.any(|segment| *segment == "Face_Tracking" || segment.contains("VRCFT") || segment.contains('<'))
+	{
+		return false;
+	}
+	if menu
+		.label
+		.as_deref()
+		.is_some_and(|label| label.contains("VRCFT") || label.contains('<'))
+	{
+		return false;
+	}
+	true
 }
 
 fn menu_graph_node_display_label(node: &DiagnoseModularAvatarMenuGraphNode) -> Option<String> {

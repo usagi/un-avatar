@@ -2044,6 +2044,10 @@ td small {
 	order: 2;
 }
 
+.renderer-control-vrc-menu {
+	order: 2;
+}
+
 .renderer-control-window {
 	order: 3;
 }
@@ -2962,11 +2966,20 @@ dd {
 	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent-cool) 76%, var(--accent));
 }
 
-.wardrobe-menu-grid {
+.wardrobe-menu-grid,
+.vrc-menu-grid {
+	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
 }
 
-.wardrobe-menu-grid button span {
+.wardrobe-menu-grid button,
+.vrc-menu-grid button {
+	min-width: 0;
+	justify-content: start;
+}
+
+.wardrobe-menu-grid button span,
+.vrc-menu-grid button span {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;

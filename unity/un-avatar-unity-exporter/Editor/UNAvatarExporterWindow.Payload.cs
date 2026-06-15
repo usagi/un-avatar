@@ -604,6 +604,7 @@ namespace UNAvatar.UnityExporter
                 "ModularAvatarMenuGroup" or
                 "ModularAvatarMenuInstaller" or
                 "ModularAvatarMenuInstallTarget" or
+                "VRCExpressionsMenuControl" or
                 "ModularAvatarParameters" or
                 "ModularAvatarGlobalCollider" or
                 "ModularAvatarPBBlocker" or

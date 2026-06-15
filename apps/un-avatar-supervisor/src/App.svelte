@@ -1898,7 +1898,7 @@
 		}
 	}
 
-	async function reviewSelectedVrmMetadata(): Promise<void> {
+	async function reviewSelectedAvatarMetadata(): Promise<void> {
 		if (!selectedSetting?.avatar_path) return;
 		if (!hasTauriRuntime()) {
 			message = $_("vrm_metadata.messages.tauri_required");
@@ -2418,7 +2418,37 @@
 				id: renderer.id,
 				actionId,
 			});
+			await refreshRendererRuntimeView();
 			message = $_("renderers.messages.activated_wardrobe", { values: { name: renderer.name, wardrobe: wardrobeSetId } });
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function activateRendererRuntimeAction(renderer: RendererInstance | null, actionId: string, label: string): Promise<void> {
+		if (!renderer || !hasTauriRuntime()) return;
+		try {
+			await invoke("activate_renderer_runtime_action", {
+				id: renderer.id,
+				actionId,
+			});
+			await refreshRendererRuntimeView();
+			message = $_("renderers.messages.activated_vrc_menu_action", { values: { name: renderer.name, label } });
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function setRendererRuntimeParameter(renderer: RendererInstance | null, name: string, value: number, label: string): Promise<void> {
+		if (!renderer || !hasTauriRuntime()) return;
+		try {
+			await invoke("set_renderer_runtime_parameter", {
+				id: renderer.id,
+				name,
+				value,
+			});
+			await refreshRendererRuntimeView();
+			message = $_("renderers.messages.activated_vrc_menu_action", { values: { name: renderer.name, label } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -3028,6 +3058,14 @@
 							const renderer = selectedRendererById(rendererId);
 							setExpressionOverride(renderer, preset, weight);
 						}}
+						onSetRuntimeParameter={(rendererId, name, value, label) => {
+							const renderer = selectedRendererById(rendererId);
+							return setRendererRuntimeParameter(renderer, name, value, label);
+						}}
+						onActivateRuntimeAction={(rendererId, actionId, label) => {
+							const renderer = selectedRendererById(rendererId);
+							return activateRendererRuntimeAction(renderer, actionId, label);
+						}}
 						onActivateWardrobeMenuCandidate={(rendererId, actionId, wardrobeSetId) => {
 							const renderer = selectedRendererById(rendererId);
 							return activateWardrobeMenuCandidate(renderer, actionId, wardrobeSetId);
@@ -3146,7 +3184,7 @@
 									{wardrobeOptions}
 									{busy}
 									onBrowseAvatar={() => browseSettingPath("avatar_path", "avatar")}
-									onReviewMetadata={() => reviewSelectedVrmMetadata()}
+									onReviewMetadata={() => reviewSelectedAvatarMetadata()}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onActivate={() => (activeProfileSection = "avatar")}
 								/>

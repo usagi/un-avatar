@@ -30,6 +30,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
 - Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
 - Wardrobe candidates and non-wardrobe VRC menu action candidates are both sourced from normalized runtime status. Resolved VRC menu paths should be preserved in runtime status and used for tray labels when available. The tray may group action kinds separately, but it must not invent model-specific entries or require Supervisor to stay resident for basic menu operation.
+- The native tray icon and context menu should run on a dedicated UI worker thread when needed so modal menu tracking cannot stall Renderer drawing or Spout2 publishing.
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 

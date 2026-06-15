@@ -36,7 +36,7 @@
 		: sceneCacheNeedsRefresh
 			? $_("profiles.actions.warm_cache_again")
 			: $_("profiles.actions.warm_cache");
-	$: actionGroupTitle = $_("profiles.action_groups.next_launch");
+	$: actionGroupTitle = $_("profiles.action_groups.prepare");
 	$: sceneCacheActionHint = sceneCacheReady
 		? $_("profiles.actions.cache_ready_hint", { values: { at: sceneCachePrewarmedAt ?? "-" } })
 		: sceneCacheNeedsRefresh

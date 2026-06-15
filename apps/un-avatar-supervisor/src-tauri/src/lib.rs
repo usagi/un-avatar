@@ -273,6 +273,10 @@ struct RendererRuntimeStatus {
 	mipmap_filter: Option<String>,
 	processed_texture_cache: Option<bool>,
 	texture_summary: Option<TextureRuntimeSummary>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	wardrobe_asset_upload: Option<serde_json::Value>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -682,6 +686,10 @@ struct RendererRuntimeTelemetry {
 	#[serde(default)]
 	texture_summary: Option<TextureRuntimeSummary>,
 	#[serde(default)]
+	wardrobe_asset_upload: Option<serde_json::Value>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
+	#[serde(default)]
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -1051,6 +1059,10 @@ enum RendererControlCommand {
 		menu_path: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
 		wardrobe_set_id: Option<String>,
+	},
+	SetParameter {
+		name: String,
+		value: f32,
 	},
 	ClearExpressionOverrides,
 	SetLookAt {
@@ -2117,6 +2129,7 @@ pub fn run() {
 			capture_renderer_screenshot,
 			set_renderer_expression_override,
 			activate_renderer_runtime_action,
+			set_renderer_runtime_parameter,
 			clear_renderer_expression_overrides,
 			set_renderer_look_at,
 			set_renderer_show_axes,
@@ -2959,13 +2972,6 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 				("name".to_string(), toml::Value::String("UN Avatar Spout".to_string())),
 			])),
 		)])),
-	);
-	manifest.insert(
-		"spout".to_string(),
-		toml::Value::Table(toml::map::Map::from_iter([
-			("enabled".to_string(), toml::Value::Boolean(false)),
-			("name".to_string(), toml::Value::String("UN Avatar Spout".to_string())),
-		])),
 	);
 	let path = unique_user_profile_path(&profile_file_stem(&created_at, &name));
 	if let Some(dir) = path.parent() {
@@ -5939,6 +5945,15 @@ fn activate_renderer_runtime_action(
 }
 
 #[tauri::command]
+fn set_renderer_runtime_parameter(id: u32, name: String, value: f32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+	let name = name.trim().to_string();
+	if name.is_empty() {
+		return Err("parameter name is required".to_string());
+	}
+	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetParameter { name, value })
+}
+
+#[tauri::command]
 fn clear_renderer_expression_overrides(id: u32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::ClearExpressionOverrides)
 }
@@ -6715,6 +6730,8 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		mipmap_filter: telemetry.as_ref().and_then(|telemetry| telemetry.mipmap_filter.clone()),
 		processed_texture_cache: telemetry.as_ref().and_then(|telemetry| telemetry.processed_texture_cache),
 		texture_summary: telemetry.as_ref().and_then(|telemetry| telemetry.texture_summary.clone()),
+		wardrobe_asset_upload: telemetry.as_ref().and_then(|telemetry| telemetry.wardrobe_asset_upload.clone()),
+		active_wardrobe_set: telemetry.as_ref().and_then(|telemetry| telemetry.active_wardrobe_set.clone()),
 		spout_available: telemetry.as_ref().is_some_and(|telemetry| telemetry.spout_available),
 		spout_enabled: telemetry.as_ref().map_or(info.spout_enabled, |telemetry| telemetry.spout_enabled),
 		spout_name: telemetry
@@ -9744,6 +9761,7 @@ fn migrate_avatar_manifest_to_v2(manifest: &mut toml::Value) -> Result<(), Strin
 	migrate_root_key_to_nested_if_missing(manifest, "vmc_port", &["motion", "vmc_udp", "port"])?;
 	migrate_root_key_to_nested_if_missing(manifest, "spout", &["output", "spout2"])?;
 	migrate_root_key_to_nested_if_missing(manifest, "spring_bones", &["physics", "dynamics", "enabled"])?;
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
 	Ok(())
 }
 
@@ -10705,6 +10723,8 @@ mod tests {
 				uploaded_mip_bytes: 2048,
 				..TextureRuntimeSummary::default()
 			}),
+			wardrobe_asset_upload: None,
+			active_wardrobe_set: None,
 			spout_available: true,
 			spout_enabled: true,
 			spout_name: Some("UN Avatar Spout".to_string()),
@@ -11008,7 +11028,7 @@ mod tests {
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_rotation_translation_writeback_group_count":2,"dynamics_translation_writeback_candidate_count":3,"dynamics_translation_writeback_target_count":2,"dynamics_stretch_translation_writeback_group_count":1,"dynamics_stretch_translation_writeback_target_group_count":1,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_interaction_hooks":[{{"group_index":0,"source_id":"physbone:hair","parameter":"HairPB","suffix_parameters":["HairPB_IsGrabbed"],"metadata_only":true}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver"],"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"active_wardrobe_set":"field_drape","wardrobe_asset_upload":{{"mode":"scoped","active_asset_groups":["","outfit:field_drape"],"resident_mesh_primitive_count":80,"resident_material_count":23,"resident_image_count":58,"resident_dynamics_count":76,"last_mesh_buffer_scoped_load_count":4,"last_mesh_buffer_scoped_unload_count":2,"last_image_texture_scoped_load_count":6,"last_image_texture_scoped_unload_count":3,"last_material_slot_scoped_upload_count":5,"scoped_upload_supported":true,"all_resident":false}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_rotation_translation_writeback_group_count":2,"dynamics_translation_writeback_candidate_count":3,"dynamics_translation_writeback_target_count":2,"dynamics_stretch_translation_writeback_group_count":1,"dynamics_stretch_translation_writeback_target_group_count":1,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_interaction_hooks":[{{"group_index":0,"source_id":"physbone:hair","parameter":"HairPB","suffix_parameters":["HairPB_IsGrabbed"],"metadata_only":true}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver"],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -11025,6 +11045,19 @@ mod tests {
 		assert_eq!(telemetry.texture_compression.as_deref(), Some("auto"));
 		assert_eq!(telemetry.processed_texture_cache, Some(true));
 		assert_eq!(telemetry.texture_summary.as_ref().map(|summary| summary.image_count), Some(3));
+		assert_eq!(telemetry.active_wardrobe_set.as_deref(), Some("field_drape"));
+		let wardrobe_upload = telemetry.wardrobe_asset_upload.as_ref().expect("wardrobe asset upload");
+		assert_eq!(wardrobe_upload.get("mode").and_then(serde_json::Value::as_str), Some("scoped"));
+		assert_eq!(
+			wardrobe_upload
+				.get("last_image_texture_scoped_load_count")
+				.and_then(serde_json::Value::as_u64),
+			Some(6)
+		);
+		assert_eq!(
+			wardrobe_upload.get("scoped_upload_supported").and_then(serde_json::Value::as_bool),
+			Some(true)
+		);
 		assert_eq!(telemetry.fps, Some(59.5));
 		assert_eq!(telemetry.dynamics_group_count, 9);
 		assert_eq!(telemetry.dynamics_limit_group_count, 8);
@@ -12464,12 +12497,182 @@ mod tests {
 			"launch_renderer",
 			"activate_renderer_window",
 			"capture_renderer_screenshot",
+			"activate_renderer_runtime_action",
+			"set_renderer_runtime_parameter",
+			"set_renderer_dynamics",
 		] {
 			assert!(
 				permissions.contains(&format!("\"{command}\"")),
 				"supervisor permission must allow {command} for profile operation workflow"
 			);
 		}
+	}
+
+	#[test]
+	fn supervisor_permission_allows_all_registered_invoke_commands() {
+		let lib_rs = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("src")
+				.join("lib.rs"),
+		)
+		.expect("lib.rs should be readable");
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		let handler_start = lib_rs
+			.find(".invoke_handler(tauri::generate_handler![")
+			.expect("invoke handler should be registered");
+		let handler_rest = &lib_rs[handler_start..];
+		let handler_end = handler_rest.find("])").expect("invoke handler list should be closed");
+		let registered = handler_rest[..handler_end]
+			.lines()
+			.skip(1)
+			.filter_map(|line| {
+				let command = line.trim().trim_end_matches(',').trim();
+				if command.is_empty() || command.starts_with("//") {
+					return None;
+				}
+				Some(command.rsplit("::").next().unwrap_or(command).to_string())
+			})
+			.collect::<BTreeSet<_>>();
+		assert!(!registered.is_empty(), "expected registered invoke commands");
+
+		let allowed = permissions
+			.lines()
+			.filter_map(|line| {
+				let line = line.trim();
+				if !line.starts_with('"') {
+					return None;
+				}
+				let end = line[1..].find('"')?;
+				Some(line[1..=end].to_string())
+			})
+			.collect::<BTreeSet<_>>();
+		let missing = registered.difference(&allowed).cloned().collect::<Vec<_>>();
+		assert!(
+			missing.is_empty(),
+			"supervisor-invoke permission must allow every registered invoke command: {missing:?}"
+		);
+	}
+
+	#[test]
+	fn static_renderer_output_buttons_keep_spout_window_ordering() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererOutputActionButtons.svelte"),
+		)
+		.expect("RendererOutputActionButtons.svelte should be readable");
+		let window_preview = source
+			.split("async function setWindowPreview")
+			.nth(1)
+			.and_then(|rest| rest.split("async function setSpoutPreview").next())
+			.expect("setWindowPreview function should exist");
+		let spout_only = source
+			.split("async function setSpoutOnly")
+			.nth(1)
+			.and_then(|rest| rest.split("</script>").next())
+			.expect("setSpoutOnly function should exist");
+
+		let window_restore = window_preview
+			.find(r#"onSetWindow({ minimized: false }, "window preview")"#)
+			.expect("Window Preview should restore preview window");
+		let spout_disable = window_preview
+			.find(r#"onSetSpoutOutput(false, null, "window preview")"#)
+			.expect("Window Preview should disable Spout2");
+		assert!(
+			window_restore < spout_disable,
+			"Window Preview must restore the preview before disabling Spout2"
+		);
+
+		let spout_enable = spout_only
+			.find(r#"onSetSpoutOutput(true, null, "spout2 only")"#)
+			.expect("Spout2 Only should enable Spout2");
+		let window_minimize = spout_only
+			.find(r#"onSetWindow({ minimized: true }, "spout2 only")"#)
+			.expect("Spout2 Only should minimize the preview window");
+		assert!(
+			spout_enable < window_minimize,
+			"Spout2 Only must enable Spout2 before minimizing the preview window"
+		);
+	}
+
+	#[test]
+	fn static_renderer_vrc_menu_controls_keep_wardrobe_and_parameter_boundaries() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererVrcMenuControls.svelte"),
+		)
+		.expect("RendererVrcMenuControls.svelte should be readable");
+		assert!(
+			source.contains(r#".filter((candidate) => !candidate.wardrobe_set_ids?.length)"#),
+			"VRC Menu controls should exclude wardrobe menu candidates from non-wardrobe action controls"
+		);
+		assert!(
+			source.contains(r#".filter("#) && source.contains("!action.wardrobe_set_id") && source.contains("expression_menu_path"),
+			"VRC Menu fallback should only use non-wardrobe expression-menu runtime actions"
+		);
+		assert!(
+			source.contains("activeActionIds.has(candidate.action_id) ? 0 : candidate.parameter_value")
+				&& source.contains("onSetRuntimeParameter(renderer.id, candidate.parameter_name, value"),
+			"VRC Menu candidate activation should toggle active parameter actions back to 0 through the parameter control path"
+		);
+		assert!(
+			source.contains("action.current_condition_state === \"active\" ? 0 : action.parameter_value")
+				&& source.contains("onSetRuntimeParameter(renderer.id, action.parameter_name, value"),
+			"VRC Menu fallback parameter actions should also toggle active actions back to 0 through the parameter control path"
+		);
+	}
+
+	#[test]
+	fn static_unavatar_review_workflow_keeps_selected_wardrobe_and_icon_save_order() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let read_metadata = app_svelte
+			.split("async function readUnavatarMetadataForPath")
+			.nth(1)
+			.and_then(|rest| rest.split("function firstUnavatarPreviewDataUrl").next())
+			.expect("readUnavatarMetadataForPath function should exist");
+		assert!(
+			read_metadata.contains(r#"wardrobeSet: setting.wardrobe_set"#),
+			".unavatar metadata review should request previews for the selected wardrobe set"
+		);
+
+		let accept_unavatar = app_svelte
+			.split("async function acceptUnavatarMetadataAndUse")
+			.nth(1)
+			.and_then(|rest| rest.split("async function applySelectedAvatarThumbnail").next())
+			.expect("acceptUnavatarMetadataAndUse function should exist");
+		let save_avatar = accept_unavatar
+			.find("saveAvatarPath(modal.pendingPath")
+			.expect(".unavatar accept flow should save avatar path");
+		let save_icon = accept_unavatar
+			.find("saveUnavatarProfileIconCrop")
+			.expect(".unavatar accept flow should optionally save selected profile icon");
+		assert!(
+			save_avatar < save_icon,
+			".unavatar accept flow must save avatar_path before saving profile icon"
+		);
+		assert!(
+			accept_unavatar.contains(r#"unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl"#),
+			".unavatar accept flow should save a profile icon only when the preview crop is enabled"
+		);
 	}
 
 	#[test]
@@ -12768,6 +12971,135 @@ address = "127.0.0.1:39541"
 			.unwrap();
 		assert_eq!(spout.get("enabled").and_then(toml::Value::as_bool), Some(true));
 		assert_eq!(spout.get("name").and_then(toml::Value::as_str), Some("LegacySpout"));
+		assert_eq!(spout.get("width").and_then(toml::Value::as_integer), Some(1280));
+		assert_eq!(spout.get("height").and_then(toml::Value::as_integer), Some(720));
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_does_not_overwrite_existing_v2_spout2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Spout"
+
+[spout]
+enabled = true
+name = "LegacySpout"
+width = 1280
+height = 720
+
+[output.spout2]
+enabled = false
+name = "V2Spout"
+width = 1920
+height = 1080
+"#,
+			Path::new("legacy-spout.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("spout").is_none(), "legacy spout table should be removed after migration");
+		let spout = table
+			.get("output")
+			.and_then(toml::Value::as_table)
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout.get("enabled").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(spout.get("name").and_then(toml::Value::as_str), Some("V2Spout"));
+		assert_eq!(spout.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout.get("height").and_then(toml::Value::as_integer), Some(1080));
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_moves_legacy_spring_bone_solver_without_overwriting_v2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Solver"
+
+[physics.spring_bone]
+simulation_hz = 45.0
+substeps = 2
+
+[[physics.spring_bone.overrides]]
+category = "Hair"
+solver = "compat_univrm"
+
+[physics.dynamics.solver]
+simulation_hz = 90.0
+"#,
+			Path::new("legacy-solver.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		assert!(manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("spring_bone"))
+			.is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.and_then(|dynamics| dynamics.get("solver"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(90.0));
+		assert!(
+			solver.get("substeps").is_none(),
+			"existing v2 solver table should remain authoritative"
+		);
+	}
+
+	#[test]
+	fn spring_bone_solver_setting_migrates_legacy_table_to_v2_solver() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Solver"
+
+[profile]
+id = "test"
+
+[physics.spring_bone]
+simulation_hz = 45.0
+substeps = 2
+
+[physics.spring_bone.overrides.Hair]
+stiffness = 0.35
+"#,
+			Path::new("legacy-solver.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.simulation_hz",
+			serde_json::json!(90.0),
+		)
+		.unwrap();
+
+		assert!(manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("spring_bone"))
+			.is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.and_then(|dynamics| dynamics.get("solver"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(90.0));
+		assert_eq!(solver.get("substeps").and_then(toml::Value::as_integer), Some(2));
+		assert!(solver
+			.get("overrides")
+			.and_then(toml::Value::as_table)
+			.and_then(|overrides| overrides.get("Hair"))
+			.is_some());
 	}
 
 	#[test]
@@ -14186,6 +14518,32 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_set_parameter_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::SetParameter {
+				name: "Hat".to_string(),
+				value: 0.0,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"set_parameter","name":"Hat","value":0.0}"#
 		);
 	}
 

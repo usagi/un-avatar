@@ -26,6 +26,8 @@
 	export let onColorModeChange: RendererPaneActions["onColorModeChange"];
 	export let onClearExpressionOverrides: RendererPaneActions["onClearExpressionOverrides"];
 	export let onSetExpressionOverride: RendererPaneActions["onSetExpressionOverride"];
+	export let onSetRuntimeParameter: RendererPaneActions["onSetRuntimeParameter"];
+	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
 	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
@@ -53,6 +55,8 @@
 			{onRestoreCamera}
 			{onSetClearColor}
 			{onColorModeChange}
+			{onSetRuntimeParameter}
+			{onActivateRuntimeAction}
 			{onActivateWardrobeMenuCandidate}
 		/>
 	{/await}

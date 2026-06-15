@@ -15,8 +15,8 @@
 	$: spoutOnlyActive = runtimeStatus?.connected ? runtimeStatus.spout_enabled && Boolean(runtimeStatus.minimized) : renderer.spout_enabled && Boolean(renderer.minimized);
 
 	async function setWindowPreview(): Promise<void> {
-		await onSetSpoutOutput(false, null, "window preview");
 		await onSetWindow({ minimized: false }, "window preview");
+		await onSetSpoutOutput(false, null, "window preview");
 	}
 
 	async function setSpoutPreview(): Promise<void> {

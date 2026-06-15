@@ -74,7 +74,9 @@ memory-stats = "1.2"
 spout-rs = { version = "0.1.3", optional = true }
 tray-icon = "0.21.3"
 windows = { version = "0.61.3", features = [
+ "Win32_Foundation",
  "Win32_UI_Shell",
+ "Win32_UI_WindowsAndMessaging",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]
@@ -83,5 +85,5 @@ winresource = "0.1"
 [dev-dependencies]
 naga = { version = "29.0.3", features = ["wgsl-in"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"

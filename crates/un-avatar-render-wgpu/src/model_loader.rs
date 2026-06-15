@@ -15,7 +15,7 @@ pub(crate) fn require_wardrobe_set_id(wardrobe_set: &str) -> Result<&str, String
 	normalize_wardrobe_set_id(Some(wardrobe_set)).ok_or_else(|| "wardrobe set id required".to_string())
 }
 
-fn base_wardrobe_set_id(document: &UnaDocument) -> Option<String> {
+pub(crate) fn base_wardrobe_set_id(document: &UnaDocument) -> Option<String> {
 	let wardrobe = document.unavatar.as_ref()?.source.get("wardrobe")?.as_object()?;
 	let explicit_base = wardrobe.get("baseSet").and_then(serde_json::Value::as_str).map(str::trim);
 	let sets = wardrobe.get("sets").and_then(serde_json::Value::as_array)?;
