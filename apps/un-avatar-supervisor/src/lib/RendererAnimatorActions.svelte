@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import { ListTree } from "lucide-svelte";
-	import { animatorCandidateVisible, animatorFallbackActionVisible } from "./rendererAnimator";
+	import {
+		animatorCandidateVisible,
+		animatorFallbackActionVisible,
+		animatorNormalizedToggleLabel,
+		animatorToggleStateLabel,
+	} from "./rendererAnimator";
 	import type { RendererRuntimeActionStatus, RendererRuntimeMenuActionCandidateStatus } from "./rendererTypes";
 
 	export let rendererId: number | null = null;
@@ -28,15 +33,25 @@
 	}
 
 	function candidateLabel(candidate: RendererRuntimeMenuActionCandidateStatus): string {
-		if (candidate.menu_path?.length) return candidate.menu_path.join(" / ");
-		return candidate.menu_label || candidate.action_label || candidate.action_id;
+		const path = candidate.menu_path?.length ? candidate.menu_path : [candidate.menu_label || candidate.action_label || candidate.action_id];
+		const last = path[path.length - 1] ?? candidate.action_id;
+		const normalized = animatorNormalizedToggleLabel(last);
+		return [...path.slice(0, -1), normalized.label].join(" / ");
+	}
+
+	function candidateStateLabel(candidate: RendererRuntimeMenuActionCandidateStatus): string {
+		const raw = candidate.menu_path?.at(-1) ?? candidate.menu_label ?? candidate.action_label ?? candidate.action_id;
+		const normalized = animatorNormalizedToggleLabel(raw);
+		return animatorToggleStateLabel(candidateActive(candidate), normalized.polarity);
 	}
 
 	function candidateTitle(candidate: RendererRuntimeMenuActionCandidateStatus): string {
 		const dispatch = `${candidate.parameter_name}=${candidate.parameter_value}`;
-		if (!candidate.menu_path_truncated) return dispatch;
+		const source = candidate.menu_label || candidate.action_label || candidate.action_id;
+		const title = `${source} / ${dispatch}`;
+		if (!candidate.menu_path_truncated) return title;
 		return $_("renderers.animator.path_truncated_title", {
-			values: { action: candidate.action_id, dispatch },
+			values: { action: candidate.action_id, dispatch: title },
 		});
 	}
 
@@ -47,8 +62,18 @@
 	}
 
 	function fallbackActionLabel(action: RendererRuntimeActionStatus): string {
-		if (action.expression_menu_path?.trim()) return action.expression_menu_path.replaceAll("/", " / ");
-		return action.label || action.action_id;
+		const path = action.expression_menu_path?.trim()
+			? action.expression_menu_path.split("/").map((segment) => segment.trim())
+			: [action.label || action.action_id];
+		const last = path[path.length - 1] ?? action.action_id;
+		const normalized = animatorNormalizedToggleLabel(last);
+		return [...path.slice(0, -1), normalized.label].join(" / ");
+	}
+
+	function fallbackActionStateLabel(action: RendererRuntimeActionStatus): string {
+		const raw = action.expression_menu_path?.split("/").at(-1)?.trim() || action.label || action.action_id;
+		const normalized = animatorNormalizedToggleLabel(raw);
+		return animatorToggleStateLabel(action.current_condition_state === "active", normalized.polarity);
 	}
 
 	function fallbackActionTitle(action: RendererRuntimeActionStatus): string {
@@ -86,6 +111,7 @@
 					>
 						<ListTree size={14} />
 						<span>{candidateLabel(candidate)}</span>
+						<small>{candidateStateLabel(candidate)}</small>
 					</button>
 				{/each}
 			{:else}
@@ -99,6 +125,7 @@
 					>
 						<ListTree size={14} />
 						<span>{fallbackActionLabel(action)}</span>
+						<small>{fallbackActionStateLabel(action)}</small>
 					</button>
 				{/each}
 			{/if}

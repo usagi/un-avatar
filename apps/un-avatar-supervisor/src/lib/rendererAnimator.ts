@@ -1,5 +1,7 @@
 import type { RendererRuntimeActionStatus, RendererRuntimeMenuActionCandidateStatus } from "./rendererTypes";
 
+export type AnimatorTogglePolarity = "on" | "off" | null;
+
 export function animatorCandidateVisible(candidate: RendererRuntimeMenuActionCandidateStatus): boolean {
 	if (candidate.available === false) return false;
 	if (candidate.wardrobe_set_ids?.length) return false;
@@ -18,14 +20,32 @@ export function animatorFallbackActionVisible(action: RendererRuntimeActionStatu
 	return !action.wardrobe_set_id && Boolean(action.expression_menu_path?.trim());
 }
 
+export function animatorNormalizedToggleLabel(label: string): { label: string; polarity: AnimatorTogglePolarity } {
+	const trimmed = label.trim();
+	const match = trimmed.match(/^(.*?)(?:[\s_:/-]+)?(ON|OFF)$/i);
+	if (!match) return { label: trimmed, polarity: null };
+	const base = match[1].trim().replace(/[\s_:/-]+$/g, "");
+	if (!base) return { label: trimmed, polarity: null };
+	return {
+		label: base,
+		polarity: match[2].toUpperCase() === "OFF" ? "off" : "on",
+	};
+}
+
+export function animatorToggleStateLabel(active: boolean, polarity: AnimatorTogglePolarity): string {
+	if (polarity === "off") return active ? "OFF" : "ON";
+	if (polarity === "on") return active ? "ON" : "OFF";
+	return active ? "ON" : "OFF";
+}
+
 export function animatorItemCount(
-	expressionPresets: readonly string[],
-	menuActionCandidates: readonly RendererRuntimeMenuActionCandidateStatus[],
-	runtimeActions: readonly RendererRuntimeActionStatus[]
+	expressionPresets: readonly string[] | null | undefined,
+	menuActionCandidates: readonly RendererRuntimeMenuActionCandidateStatus[] | null | undefined,
+	runtimeActions: readonly RendererRuntimeActionStatus[] | null | undefined
 ): number {
 	return (
-		expressionPresets.length +
-		menuActionCandidates.filter(animatorCandidateVisible).length +
-		runtimeActions.filter(animatorFallbackActionVisible).length
+		(expressionPresets ?? []).length +
+		(menuActionCandidates ?? []).filter(animatorCandidateVisible).length +
+		(runtimeActions ?? []).filter(animatorFallbackActionVisible).length
 	);
 }
