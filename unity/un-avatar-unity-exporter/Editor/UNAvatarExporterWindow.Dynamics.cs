@@ -25,10 +25,6 @@ namespace UNAvatar.UnityExporter
                 {
                     continue;
                 }
-                if (component is Behaviour behaviour && (!behaviour.enabled || !behaviour.gameObject.activeInHierarchy))
-                {
-                    continue;
-                }
                 var sourceId = BuildVrcPhysBoneSourceId(root.transform, component, sourceIdCounts);
                 payload.Add(BuildVrcPhysBonePayload(root.transform, component, sourceId));
             }
@@ -48,10 +44,6 @@ namespace UNAvatar.UnityExporter
             foreach (var component in components)
             {
                 if (!IsVrcContactComponent(component))
-                {
-                    continue;
-                }
-                if (component is Behaviour behaviour && (!behaviour.enabled || !behaviour.gameObject.activeInHierarchy))
                 {
                     continue;
                 }

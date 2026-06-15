@@ -283,11 +283,16 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 }
 
 fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
-	let entries: Vec<_> = snapshot.menu_action_candidates.iter().collect();
+	let entries: Vec<_> = snapshot
+		.menu_action_candidates
+		.iter()
+		.filter(|candidate| candidate.wardrobe_set_ids.is_empty())
+		.collect();
 	let fallback_entries = if entries.is_empty() {
 		snapshot
 			.runtime_actions
 			.iter()
+			.filter(|action| action.wardrobe_set_id.is_none())
 			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
 			.collect::<Vec<_>>()
 	} else {
@@ -824,7 +829,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_exposes_all_vrc_menu_action_candidates() {
+	fn vrc_menu_excludes_wardrobe_set_candidates() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.menu_action_candidates = vec![
@@ -855,10 +860,7 @@ mod tests {
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "Smile" && (*value - 1.0).abs() < f32::EPSILON
 		));
-		assert!(matches!(
-			actions.get("renderer:vrc_menu:1"),
-			Some(RendererTrayAction::SetParameter { name, value }) if name == "Wardrobe" && (*value - 2.0).abs() < f32::EPSILON
-		));
+		assert!(!actions.contains_key("renderer:vrc_menu:1"));
 	}
 
 	#[test]
@@ -878,6 +880,35 @@ mod tests {
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:hat"
 		));
+	}
+
+	#[test]
+	fn vrc_menu_fallback_excludes_wardrobe_set_actions() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.runtime_actions = vec![
+			gpu::RuntimeActionStatus {
+				action_id: "action:smile".to_string(),
+				label: "Smile".to_string(),
+				expression_menu_path: Some("Expressions/Smile".to_string()),
+				..Default::default()
+			},
+			gpu::RuntimeActionStatus {
+				action_id: "action:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+				wardrobe_set_id: Some("field_drape".to_string()),
+				..Default::default()
+			},
+		];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:smile"
+		));
+		assert!(!actions.contains_key("renderer:vrc_menu:1"));
 	}
 
 	#[test]
