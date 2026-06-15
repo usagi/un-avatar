@@ -4259,23 +4259,14 @@ impl GpuState {
 					),
 				);
 			}
-			let mut material_slot_load_indices = self
-				.last_asset_residency_refresh
-				.material_slot_load_indices
-				.iter()
-				.chain(active_gaps.inactive_material_slot_indices.iter())
-				.copied()
-				.collect::<Vec<_>>();
-			material_slot_load_indices.sort_unstable();
-			material_slot_load_indices.dedup();
-			let material_slot_upload_count = sm.promote_material_slot_residency(&material_slot_load_indices);
+			let material_slot_upload_count = sm.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
 			self.last_material_slot_scoped_upload_count = material_slot_upload_count;
 			if material_slot_upload_count > 0 && self.debug_log.is_enabled() {
 				self.debug_log.line(
 					"wardrobe",
 					format!(
 						"material slot scoped upload count={} slots={:?}",
-						material_slot_upload_count, material_slot_load_indices
+						material_slot_upload_count, active_gaps.inactive_material_slot_indices
 					),
 				);
 			}
