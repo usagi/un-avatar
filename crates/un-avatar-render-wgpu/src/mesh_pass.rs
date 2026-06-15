@@ -2123,6 +2123,31 @@ fn residency_unload_indices(old: impl IntoIterator<Item = bool>, next: impl Into
 	residency_transition_indices(old, next, true, false)
 }
 
+fn texture_residency_for_scene(
+	scene: &UnaSceneSnapshot,
+	asset_residency: &SceneAssetResidencySets,
+	active_image_texture_indices: &BTreeSet<usize>,
+	active_cube_texture_indices: &BTreeSet<usize>,
+) -> (Vec<bool>, Vec<bool>) {
+	let image_residency = scene
+		.images
+		.iter()
+		.enumerate()
+		.map(|(image_index, _)| asset_residency.image_resident(image_index) && active_image_texture_indices.contains(&image_index))
+		.collect();
+	let cube_residency = scene
+		.images
+		.iter()
+		.enumerate()
+		.map(|(image_index, _)| {
+			asset_residency.image_resident(image_index)
+				&& active_cube_texture_indices.contains(&image_index)
+				&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
+		})
+		.collect();
+	(image_residency, cube_residency)
+}
+
 fn residency_transition_indices(
 	old: impl IntoIterator<Item = bool>,
 	next: impl IntoIterator<Item = bool>,
@@ -10801,6 +10826,19 @@ impl SceneMeshes {
 		promoted
 	}
 
+	fn active_draw_texture_indices(&self) -> (BTreeSet<usize>, BTreeSet<usize>) {
+		let mut image_indices = BTreeSet::new();
+		let mut cube_indices = BTreeSet::new();
+		for draw in &self.draws {
+			if !draw.active() {
+				continue;
+			}
+			image_indices.extend(draw.texture_indices.iter().copied());
+			cube_indices.extend(draw.cube_texture_indices.iter().copied());
+		}
+		(image_indices, cube_indices)
+	}
+
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
 		self.refresh_asset_group_residency_with_changes(scene, active_asset_groups)
 			.active_draw_state_changed_count
@@ -10828,51 +10866,27 @@ impl SceneMeshes {
 				refresh.active_draw_state_changed_count += 1;
 			}
 		}
+		let (active_image_texture_indices, active_cube_texture_indices) = self.active_draw_texture_indices();
+		let (next_image_texture_residency, next_cube_texture_residency) =
+			texture_residency_for_scene(scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
 		refresh.image_texture_load_indices = residency_load_indices(
 			self.image_texture_residency.iter().copied(),
-			scene
-				.images
-				.iter()
-				.enumerate()
-				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
+			next_image_texture_residency.iter().copied(),
 		);
 		refresh.image_texture_unload_indices = residency_unload_indices(
 			self.image_texture_residency.iter().copied(),
-			scene
-				.images
-				.iter()
-				.enumerate()
-				.map(|(image_index, _)| asset_residency.image_resident(image_index)),
+			next_image_texture_residency.iter().copied(),
 		);
 		refresh.cube_texture_load_indices = residency_load_indices(
 			self.cube_texture_residency.iter().copied(),
-			scene.images.iter().enumerate().map(|(image_index, _)| {
-				asset_residency.image_resident(image_index)
-					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
-			}),
+			next_cube_texture_residency.iter().copied(),
 		);
 		refresh.cube_texture_unload_indices = residency_unload_indices(
 			self.cube_texture_residency.iter().copied(),
-			scene.images.iter().enumerate().map(|(image_index, _)| {
-				asset_residency.image_resident(image_index)
-					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
-			}),
+			next_cube_texture_residency.iter().copied(),
 		);
-		self.image_texture_residency = scene
-			.images
-			.iter()
-			.enumerate()
-			.map(|(image_index, _)| asset_residency.image_resident(image_index))
-			.collect();
-		self.cube_texture_residency = scene
-			.images
-			.iter()
-			.enumerate()
-			.map(|(image_index, _)| {
-				asset_residency.image_resident(image_index)
-					&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
-			})
-			.collect();
+		self.image_texture_residency = next_image_texture_residency;
+		self.cube_texture_residency = next_cube_texture_residency;
 		refresh.material_slot_load_indices = residency_load_indices(
 			self.material_slot_residency.iter().copied(),
 			scene
@@ -11703,6 +11717,38 @@ mod tests {
 			initial_active_texture_indices_for_scene(&scene, &effective_visibility, &residency, &SceneMeshLoadOpts::default()),
 			BTreeSet::from([0])
 		);
+	}
+
+	#[test]
+	fn hot_switch_texture_residency_tracks_active_draw_texture_slots() {
+		let image = || UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut cube_source = empty_source_metadata();
+		cube_source.texture_shape = Some("cube".to_string());
+		let scene = UnaSceneSnapshot {
+			images: vec![image(), image(), image()],
+			image_sources: vec![None, None, Some(cube_source)],
+			asset_group_ownership: vec![un_avatar_core::UnaSceneAssetGroupOwnership {
+				group_id: "outfit:coat".to_string(),
+				images: vec![0, 1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let asset_residency = SceneAssetResidencySets::for_scene(&scene, &["outfit:coat".to_string()]);
+		let active_image_texture_indices = BTreeSet::from([0]);
+		let active_cube_texture_indices = BTreeSet::from([2]);
+
+		let (image_residency, cube_residency) =
+			texture_residency_for_scene(&scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
+
+		assert_eq!(image_residency, vec![true, false, false]);
+		assert_eq!(cube_residency, vec![false, false, true]);
+		assert_eq!(residency_load_indices([false, false, false], image_residency), vec![0]);
 	}
 
 	#[test]
