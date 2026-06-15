@@ -1217,11 +1217,7 @@ mod tests {
 				inside_bounds: false,
 			},
 		];
-		let source_ids = vec![
-			String::new(),
-			"physbone:hair".to_string(),
-			"physbone:skirt".to_string(),
-		];
+		let source_ids = vec![String::new(), "physbone:hair".to_string(), "physbone:skirt".to_string()];
 		let mut scratch = Vec::new();
 		let selected = select_group_world_colliders(&colliders, &source_ids, "physbone:hair", &mut scratch);
 		assert_eq!(selected.len(), 2);

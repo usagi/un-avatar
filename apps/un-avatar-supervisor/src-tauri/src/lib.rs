@@ -3339,7 +3339,11 @@ fn unavatar_wardrobe_preview_sets(
 	let Some(sets) = wardrobe.get("sets").and_then(serde_json::Value::as_array) else {
 		return Vec::new();
 	};
-	let base_set_id = wardrobe.get("baseSet").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("");
+	let base_set_id = wardrobe
+		.get("baseSet")
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.unwrap_or("");
 	let base_set_name = unavatar_wardrobe_base_label(wardrobe);
 	sets.iter()
 		.filter_map(|set| {
@@ -3572,11 +3576,7 @@ fn read_gltf_metadata_root_and_source(path: &Path) -> Result<(serde_json::Value,
 			match chunk_type {
 				0x4E4F534A => {
 					if length > MAX_UNAVATAR_METADATA_JSON_BYTES {
-						return Err(format!(
-							"GLB JSON chunk is too large in {}: {} bytes",
-							path.display(),
-							length
-						));
+						return Err(format!("GLB JSON chunk is too large in {}: {} bytes", path.display(), length));
 					}
 					let length = usize::try_from(length).map_err(|_| format!("GLB JSON chunk is too large in {}", path.display()))?;
 					let mut bytes = vec![0u8; length];
@@ -3663,12 +3663,10 @@ fn safe_gltf_external_uri_path(source_path: &Path, uri: &str) -> Option<PathBuf>
 	if uri.trim().is_empty() || relative.is_absolute() {
 		return None;
 	}
-	if relative.components().any(|component| {
-		matches!(
-			component,
-			Component::Prefix(_) | Component::RootDir | Component::ParentDir
-		)
-	}) {
+	if relative
+		.components()
+		.any(|component| matches!(component, Component::Prefix(_) | Component::RootDir | Component::ParentDir))
+	{
 		return None;
 	}
 	Some(source_path.parent()?.join(relative))
@@ -3745,7 +3743,11 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 			error: None,
 		});
 	};
-	let base_set_id = wardrobe.get("baseSet").and_then(|value| value.as_str()).map(str::trim).unwrap_or("");
+	let base_set_id = wardrobe
+		.get("baseSet")
+		.and_then(|value| value.as_str())
+		.map(str::trim)
+		.unwrap_or("");
 	let base_label = unavatar_wardrobe_base_label(wardrobe);
 	let sets = wardrobe
 		.get("sets")
@@ -5605,14 +5607,7 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 				)
 				.to_string()
 			})
-			.unwrap_or_else(|| {
-				t!(
-					"notifications.cache.ready_body",
-					name = &setting.name,
-					seconds = &elapsed_secs
-				)
-				.to_string()
-			});
+			.unwrap_or_else(|| t!("notifications.cache.ready_body", name = &setting.name, seconds = &elapsed_secs).to_string());
 		push_notification(
 			&mut state,
 			NotificationLevel::Info,
@@ -8234,12 +8229,7 @@ fn update_windows_jump_lists(
 	let active_app_ids = std::iter::once(UN_AVATAR_LAUNCHER_APP_ID.to_string())
 		.chain(renderer_app_ids.iter().cloned())
 		.collect::<Vec<_>>();
-	windows_integration::replace_jump_lists(
-		UN_AVATAR_LAUNCHER_APP_ID,
-		&renderer_app_ids,
-		&active_app_ids,
-		&tasks,
-	)
+	windows_integration::replace_jump_lists(UN_AVATAR_LAUNCHER_APP_ID, &renderer_app_ids, &active_app_ids, &tasks)
 }
 
 #[cfg(not(windows))]
@@ -10542,8 +10532,7 @@ mod windows_integration {
 	}
 
 	unsafe fn write_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
-		let list: ICustomDestinationList =
-			CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
 		let app_id_wide = WideString::new(app_id);
 		list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
 		let mut min_slots = 0;
@@ -10665,9 +10654,10 @@ mod tests {
 		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
 		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest,
-		ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
+		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain,
+		LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
+		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -11685,11 +11675,7 @@ mod tests {
 			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
 			.unwrap();
 		let preview_items = (0..8)
-			.map(|index| {
-				format!(
-					r#"{{ "view": "view{index}", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}"#
-				)
-			})
+			.map(|index| format!(r#"{{ "view": "view{index}", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}"#))
 			.collect::<Vec<_>>()
 			.join(",\n              ");
 		write_glb_with_json_and_bin_bytes(
@@ -12842,7 +12828,13 @@ decorations = true
 		.unwrap();
 
 		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.transparent", serde_json::json!(true)).unwrap();
-		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.input_passthrough", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&transparent_setting,
+			"window.input_passthrough",
+			serde_json::json!(true),
+		)
+		.unwrap();
 		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.decorations", serde_json::json!(false)).unwrap();
 
 		let table = manifest.as_table().unwrap();
@@ -13675,7 +13667,10 @@ constraint_iterations = 6
 			.expect("v2 dynamics solver");
 		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(144.0));
 		assert_eq!(solver.get("substeps").and_then(toml::Value::as_integer), Some(3));
-		let overrides = solver.get("overrides").and_then(toml::Value::as_array).expect("legacy overrides migrated");
+		let overrides = solver
+			.get("overrides")
+			.and_then(toml::Value::as_array)
+			.expect("legacy overrides migrated");
 		assert_eq!(overrides.len(), 1);
 		assert_eq!(overrides[0].get("category").and_then(toml::Value::as_str), Some("hair"));
 		assert_eq!(overrides[0].get("solver").and_then(toml::Value::as_str), Some("xpbd"));

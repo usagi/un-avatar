@@ -5707,11 +5707,7 @@ fn run_diagnose(
 			collider.inside_bounds
 		);
 	}
-	print_omitted_text_items(
-		"dynamics_collider",
-		report.dynamics.colliders.len(),
-		DIAGNOSE_TEXT_LIST_LIMIT,
-	);
+	print_omitted_text_items("dynamics_collider", report.dynamics.colliders.len(), DIAGNOSE_TEXT_LIST_LIMIT);
 	for group in report.dynamics.groups.iter().take(DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT) {
 		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {
 			(None, None, None, None) => String::new(),

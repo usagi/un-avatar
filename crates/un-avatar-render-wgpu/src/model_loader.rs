@@ -20,7 +20,10 @@ fn base_wardrobe_set_id(document: &UnaDocument) -> Option<String> {
 	let explicit_base = wardrobe.get("baseSet").and_then(serde_json::Value::as_str).map(str::trim);
 	let sets = wardrobe.get("sets").and_then(serde_json::Value::as_array)?;
 	if let Some(base_id) = explicit_base {
-		if sets.iter().any(|set| set.get("id").and_then(serde_json::Value::as_str).map(str::trim) == Some(base_id)) {
+		if sets
+			.iter()
+			.any(|set| set.get("id").and_then(serde_json::Value::as_str).map(str::trim) == Some(base_id))
+		{
 			return Some(base_id.to_string());
 		}
 	}
