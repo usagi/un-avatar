@@ -14,6 +14,7 @@
 	export let profileGroups: string[];
 	export let iconSrc: (path: string | null) => string;
 	export let groupCount: (group: string) => number;
+	export let onToggleOpen: () => void;
 	export let onSelectGroup: (group: string) => void;
 	export let onSelectSetting: (settingId: string) => void;
 
@@ -28,11 +29,12 @@
 
 <div class="launch-target">
 	<button
+		type="button"
 		class="launch-select-button"
 		class:launch-select-text-only={Boolean(launchGroupName)}
 		disabled={avatarSettings.length === 0}
 		title={selectedTargetTitle}
-		onclick={() => (launchMenuOpen = !launchMenuOpen)}
+		onclick={onToggleOpen}
 	>
 		{#if launchGroupName}
 			<strong>{$_("renderers.ready.group_title", { values: { group: launchGroupName } })}</strong>

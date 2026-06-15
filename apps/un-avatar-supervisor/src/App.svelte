@@ -380,6 +380,10 @@
 	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
 	$effect(() => {
+		reconcileSelectedRendererId(renderers);
+	});
+
+	$effect(() => {
 		if (rendererPaneTab !== "animator" || !selectedRuntimeStatus) return;
 		if (
 			animatorItemCount(
@@ -1019,6 +1023,16 @@
 		return id == null ? null : (rendererTableById.get(id) ?? null);
 	}
 
+	function reconcileSelectedRendererId(instances: RendererInstance[] = renderers): void {
+		const selectable = showStoppedRenderers
+			? instances
+			: instances.filter((renderer) => renderer.state !== "Exited" && renderer.state !== "Crashed");
+		if (selectedRendererId != null && selectable.some((renderer) => renderer.id === selectedRendererId)) return;
+		const nextId = selectable[0]?.id ?? null;
+		if (selectedRendererId !== nextId) selectedRendererId = nextId;
+		if (nextId == null && rendererPaneTab !== "overview") rendererPaneTab = "overview";
+	}
+
 	function avatarSettingBySelectedId(id: string | null): AvatarSetting | null {
 		return id == null ? null : (avatarSettingById.get(id) ?? null);
 	}
@@ -1128,7 +1142,7 @@
 			await refreshRendererRuntimeStatuses(instances);
 			notifications = appNotifications;
 			nativeNotificationStatus = nativeNotifications;
-			selectedRendererId ??= instances[0]?.id ?? null;
+			reconcileSelectedRendererId(instances);
 			selectedSettingId = pickInitialSelectedSettingId(selectedSettingId, appSettings.last_selected_setting_id, settings);
 			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, settings);
 		} catch (error) {
@@ -1196,9 +1210,7 @@
 			renderers = instances;
 			await refreshRendererRuntimeStatuses(instances);
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
-			if (!instances.some((renderer) => renderer.id === selectedRendererId)) {
-				selectedRendererId = instances[0]?.id ?? null;
-			}
+			reconcileSelectedRendererId(instances);
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -2914,8 +2926,8 @@
 					{launchTargetSetting}
 					{launchGroupName}
 					{launchTargetId}
-					bind:launchMenuOpen
-					bind:showStoppedRenderers
+					{launchMenuOpen}
+					{showStoppedRenderers}
 					{avatarSettings}
 					{profileGroups}
 					{message}
@@ -2923,6 +2935,8 @@
 					groupCount={(group) => avatarSettingsByGroup.get(group)?.length ?? 0}
 					onLaunch={() => launchSetting(launchTargetSetting?.id ?? null)}
 					onRefresh={refreshAll}
+					onToggleLaunchMenu={() => (launchMenuOpen = !launchMenuOpen)}
+					onShowStoppedRenderersChange={(checked) => (showStoppedRenderers = checked)}
 					onSelectGroup={(group) => {
 						launchTargetId = `group:${group}`;
 						launchMenuOpen = false;
@@ -3002,7 +3016,7 @@
 					<RendererDetailsPanel
 						renderer={selectedRenderer}
 						runtimeStatus={selectedRuntimeStatus}
-						bind:rendererPaneTab
+						{rendererPaneTab}
 						{launchGroupName}
 						{launchTargetSetting}
 						launchGroupCount={launchGroupSettings.length}

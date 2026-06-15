@@ -9,6 +9,7 @@
 
 <div class="renderer-pane-tabs" role="tablist">
 	<button
+		type="button"
 		role="tab"
 		aria-selected={rendererPaneTab === "overview"}
 		class:active={rendererPaneTab === "overview"}
@@ -16,6 +17,7 @@
 		><strong>{$_("renderers.details.overview")}</strong><small>{$_("renderers.details.overview_subtitle")}</small></button
 	>
 	<button
+		type="button"
 		role="tab"
 		aria-selected={rendererPaneTab === "controls"}
 		class:active={rendererPaneTab === "controls"}
@@ -23,6 +25,7 @@
 		><strong>{$_("renderers.details.controls")}</strong><small>{$_("renderers.details.controls_subtitle")}</small></button
 	>
 	<button
+		type="button"
 		role="tab"
 		aria-selected={rendererPaneTab === "animator"}
 		class:active={rendererPaneTab === "animator"}
@@ -33,6 +36,7 @@
 		>{#if animatorItemCount > 0}<span class="tab-count">{animatorItemCount}</span>{/if}</button
 	>
 	<button
+		type="button"
 		role="tab"
 		aria-selected={rendererPaneTab === "diagnostics"}
 		class:active={rendererPaneTab === "diagnostics"}

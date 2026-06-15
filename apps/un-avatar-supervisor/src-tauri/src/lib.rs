@@ -2111,6 +2111,7 @@ pub fn run() {
 			reorder_avatar_settings,
 			reveal_path,
 			save_supervisor_logs,
+			log_frontend_error,
 			reveal_supervisor_logs_dir,
 			capture_renderer_screenshot,
 			set_renderer_expression_override,
@@ -3038,6 +3039,23 @@ fn save_supervisor_logs(content: String, file_prefix: String) -> Result<String, 
 	let path = dir.join(format!("{prefix}-{ts}.txt"));
 	std::fs::write(&path, content.as_bytes()).map_err(|e| format!("write logs: {e}"))?;
 	Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn log_frontend_error(message: String) -> Result<(), String> {
+	let dir = supervisor_logs_dir();
+	std::fs::create_dir_all(&dir).map_err(|e| format!("create logs dir: {e}"))?;
+	let ts = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let line = format!("[{ts}] {message}\n");
+	std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(dir.join("frontend-errors.log"))
+		.and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()))
+		.map_err(|e| format!("write frontend error log: {e}"))
 }
 
 #[tauri::command]

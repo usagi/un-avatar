@@ -35,6 +35,7 @@ commands.allow = [
 	"reorder_avatar_settings",
 	"reveal_path",
 	"save_supervisor_logs",
+	"log_frontend_error",
 	"reveal_supervisor_logs_dir",
 	"capture_renderer_screenshot",
 	"activate_renderer_runtime_action",
