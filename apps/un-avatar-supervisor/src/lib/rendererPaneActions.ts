@@ -4,6 +4,8 @@ import type { RendererWindowPatch } from "./rendererTypes";
 
 export type RendererPaneActions = {
 	onSetSpoutOutput: (enabled: boolean, size: { width: number; height: number } | null, label?: string) => void | Promise<void>;
+	onSaveOutput: () => void | Promise<void>;
+	onRestoreOutput: () => void | Promise<void>;
 	onSetWindow: (patch: RendererWindowPatch, label: string) => void | Promise<void>;
 	onSaveWindow: () => void | Promise<void>;
 	onRestoreWindow: () => void | Promise<void>;
@@ -21,5 +23,4 @@ export type RendererPaneActions = {
 	onActivateRuntimeAction: (rendererId: number, actionId: string, label: string) => void | Promise<void>;
 	onActivateWardrobeMenuCandidate: (rendererId: number, actionId: string, wardrobeSetId: string) => void | Promise<void>;
 	onSetDynamicsEnabled: (rendererId: number, sourceId: string, enabled: boolean) => void | Promise<void>;
-	onSetAllDynamicsEnabled: (rendererId: number, enabled: boolean) => void | Promise<void>;
 };

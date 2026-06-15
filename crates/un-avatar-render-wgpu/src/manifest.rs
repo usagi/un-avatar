@@ -274,7 +274,6 @@ pub(crate) struct PhysicsManifest {
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct DynamicsPhysicsManifest {
 	pub enabled: Option<bool>,
-	pub enable_all_on_launch: Option<bool>,
 	pub solver: Option<SpringBonePhysicsConfig>,
 }
 
@@ -999,9 +998,6 @@ impl DynamicsPhysicsManifest {
 		if let Some(enabled) = self.enabled {
 			opts.dynamics_enabled = enabled;
 		}
-		if let Some(enabled) = self.enable_all_on_launch {
-			opts.dynamics_enable_all_on_launch = enabled;
-		}
 		if let Some(solver) = self.solver {
 			opts.spring_bone_physics = solver.normalized();
 		}
@@ -1342,9 +1338,6 @@ hands = 70
 [physics.contacts]
 parameter_emission = true
 
-[physics.dynamics]
-enable_all_on_launch = true
-
 [physics.dynamics.solver]
 simulation_hz = 240
 substeps = 2
@@ -1443,7 +1436,6 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.hands, 70.0);
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
-		assert!(opts.dynamics_enable_all_on_launch);
 		assert!(opts.dynamics_enabled);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);

@@ -2267,7 +2267,6 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) texture_compression_etc2_supported: bool,
 	pub(crate) processed_texture_cache: bool,
 	pub(crate) dynamics_enabled: bool,
-	pub(crate) dynamics_enable_all_on_launch: bool,
 	pub(crate) bone_colliders: BoneColliderConfig,
 	pub(crate) spring_bone_physics: DynamicsPhysicsConfig,
 	pub(crate) debug_material_dump: bool,
@@ -2679,7 +2678,6 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		texture_compression_etc2_supported: false,
 		processed_texture_cache: opts.processed_texture_cache,
 		dynamics_enabled: opts.dynamics_enabled,
-		dynamics_enable_all_on_launch: opts.dynamics_enable_all_on_launch,
 		bone_colliders: opts.bone_colliders,
 		spring_bone_physics: opts.spring_bone_physics.clone(),
 		debug_material_dump: opts.debug_material_dump,
@@ -6131,7 +6129,6 @@ impl GpuState {
 			audio_link,
 			debug_vmc,
 			dynamics_enabled,
-			dynamics_enable_all_on_launch,
 			bone_colliders,
 			spring_bone_physics,
 			..
@@ -6163,13 +6160,6 @@ impl GpuState {
 		self.bone_collider_source = prepared.bone_collider_source;
 		self.apply_runtime_requirements(prepared.runtime_requirements, audio_link);
 		log_slow_gpu_scene_context_step("attach prepared state assignment", state_assign_start.elapsed());
-		if dynamics_enable_all_on_launch {
-			let dynamics_start = Instant::now();
-			if let Err(e) = self.set_all_runtime_dynamics_enabled(true) {
-				eprintln!("un-avatar-renderer: enable all dynamics on launch skipped: {e}");
-			}
-			log_slow_gpu_scene_context_step("attach enable all dynamics", dynamics_start.elapsed());
-		}
 		let motion_receiver_start = Instant::now();
 		self.reconfigure_motion_receivers(vmc_address, unmotion_zenoh, debug_vmc)?;
 		log_slow_gpu_scene_context_step("attach motion receiver reconfigure", motion_receiver_start.elapsed());

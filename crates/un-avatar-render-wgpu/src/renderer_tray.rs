@@ -1,8 +1,10 @@
 use std::{
+	borrow::Cow,
 	collections::HashMap,
-	env,
+	env, fs,
 	path::{Path, PathBuf},
 	process::Command,
+	sync::LazyLock,
 	sync::{mpsc, Arc, Mutex},
 	thread,
 	time::Duration,
@@ -18,6 +20,81 @@ use crate::{gpu, AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnaps
 
 const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
+const RENDERER_TRAY_LOCALE_ENV: &str = "UN_AVATAR_LOCALE";
+const RENDERER_TRAY_FALLBACK_LOCALE: &str = "ja-JP";
+
+static RENDERER_TRAY_I18N: LazyLock<un_i18n::UnI18nStore> = LazyLock::new(|| {
+	let mut store = un_i18n::UnI18nStore::new();
+	store.add_locale_toml(
+		"ja-JP",
+		r#"
+show_focus_preview = "プレビューを表示 / 前面へ"
+output = "出力"
+window_preview = "ウィンドウプレビュー"
+spout_preview = "Spout2 + プレビュー"
+spout_only = "Spout2 のみ"
+spout_resolution = "Spout2 解像度 %{width} x %{height}"
+spout_output_size = "Spout2 出力: %{width} x %{height}"
+spout_output_default = "Spout2 出力: レンダラー既定"
+profile = "プロファイル"
+save_output_profile = "現在の出力を保存"
+restore_output_profile = "出力を復元"
+save_window_profile = "現在のウィンドウを保存"
+restore_window_profile = "ウィンドウを復元"
+wardrobe = "ワードローブ"
+base_wardrobe = "Base"
+vrc_menu = "VRC メニュー"
+unphysics = "UNPhysics"
+unphysics_summary = "有効グループ %{enabled} / %{total}"
+dynamics_enabled = "有効"
+window = "ウィンドウ"
+window_hidden = "ウィンドウ非表示"
+always_on_top = "常に手前"
+input_passthrough = "クリックを透過"
+reset_camera = "カメラをリセット"
+open_supervisor = "Supervisor を開く"
+quit_renderer = "この Renderer を終了"
+scene_starting = "起動中"
+scene_avatar_scene = "アバター表示中"
+scene_loading = "読み込み中"
+"#,
+	);
+	store.add_locale_toml(
+		"en-US",
+		r#"
+show_focus_preview = "Show / Focus Preview"
+output = "Output"
+window_preview = "Window Preview"
+spout_preview = "Spout2 + Preview"
+spout_only = "Spout2 Only"
+spout_resolution = "Spout2 %{width} x %{height}"
+spout_output_size = "Spout2 output: %{width} x %{height}"
+spout_output_default = "Spout2 output: renderer default"
+profile = "Profile"
+save_output_profile = "Save Current Output"
+restore_output_profile = "Restore Output"
+save_window_profile = "Save Current Window"
+restore_window_profile = "Restore Window"
+wardrobe = "Wardrobe"
+base_wardrobe = "Base"
+vrc_menu = "VRC Menu"
+unphysics = "UNPhysics"
+unphysics_summary = "%{enabled} / %{total} effective groups"
+dynamics_enabled = "Enabled"
+window = "Window"
+window_hidden = "Window Hidden"
+always_on_top = "Always on Top"
+input_passthrough = "Input Passthrough"
+reset_camera = "Reset Camera"
+open_supervisor = "Open Supervisor"
+quit_renderer = "Quit this Renderer"
+scene_starting = "starting"
+scene_avatar_scene = "avatar scene"
+scene_loading = "loading"
+"#,
+	);
+	store
+});
 
 #[derive(Clone, Debug)]
 pub(crate) enum RendererTrayAction {
@@ -26,9 +103,13 @@ pub(crate) enum RendererTrayAction {
 	SetSpoutPreview,
 	SetSpoutOnly,
 	SetSpoutResolution { width: u32, height: u32 },
+	SaveOutputToProfile,
+	RestoreOutputFromProfile,
+	SaveWindowToProfile,
+	RestoreWindowFromProfile,
 	SetAlwaysOnTop(bool),
 	SetInputPassthrough(bool),
-	SetAllDynamics(bool),
+	SetCurrentWardrobeDynamics(bool),
 	SetWardrobe(String),
 	SetParameter { name: String, value: f32 },
 	ActivateAction(String),
@@ -157,6 +238,166 @@ enum RendererTrayWorkerCommand {
 		snapshot: RendererRuntimeSnapshot,
 	},
 	Shutdown,
+}
+
+struct TrayText {
+	locale: String,
+}
+
+impl TrayText {
+	#[cfg(test)]
+	fn en() -> Self {
+		Self {
+			locale: "en-US".to_string(),
+		}
+	}
+
+	#[cfg(test)]
+	fn ja() -> Self {
+		Self {
+			locale: "ja-JP".to_string(),
+		}
+	}
+
+	fn resolve() -> Self {
+		let locale = env::var(RENDERER_TRAY_LOCALE_ENV)
+			.ok()
+			.filter(|locale| RENDERER_TRAY_I18N.has_locale(locale))
+			.unwrap_or_else(|| un_i18n::resolve_default_locale(&RENDERER_TRAY_I18N, RENDERER_TRAY_FALLBACK_LOCALE));
+		Self { locale }
+	}
+
+	fn msg(&self, key: &'static str) -> Cow<'static, str> {
+		RENDERER_TRAY_I18N
+			.messages_for_locale(&self.locale)
+			.and_then(|messages| messages.get(key))
+			.map(|value| Cow::Owned(value.clone()))
+			.unwrap_or(Cow::Borrowed(key))
+	}
+
+	fn format_msg(&self, key: &'static str, replacements: &[(&str, String)]) -> String {
+		let mut text = self.msg(key).into_owned();
+		for (name, value) in replacements {
+			text = text.replace(&format!("%{{{name}}}"), value);
+		}
+		text
+	}
+
+	fn show_focus_preview(&self) -> Cow<'static, str> {
+		self.msg("show_focus_preview")
+	}
+
+	fn output(&self) -> Cow<'static, str> {
+		self.msg("output")
+	}
+
+	fn window_preview(&self) -> Cow<'static, str> {
+		self.msg("window_preview")
+	}
+
+	fn spout_preview(&self) -> Cow<'static, str> {
+		self.msg("spout_preview")
+	}
+
+	fn spout_only(&self) -> Cow<'static, str> {
+		self.msg("spout_only")
+	}
+
+	fn spout_resolution(&self, width: u32, height: u32) -> String {
+		self.format_msg("spout_resolution", &[("width", width.to_string()), ("height", height.to_string())])
+	}
+
+	fn spout_output_size(&self, width: u32, height: u32) -> String {
+		self.format_msg("spout_output_size", &[("width", width.to_string()), ("height", height.to_string())])
+	}
+
+	fn spout_output_default(&self) -> Cow<'static, str> {
+		self.msg("spout_output_default")
+	}
+
+	fn profile(&self) -> Cow<'static, str> {
+		self.msg("profile")
+	}
+
+	fn save_output_profile(&self) -> Cow<'static, str> {
+		self.msg("save_output_profile")
+	}
+
+	fn restore_output_profile(&self) -> Cow<'static, str> {
+		self.msg("restore_output_profile")
+	}
+
+	fn save_window_profile(&self) -> Cow<'static, str> {
+		self.msg("save_window_profile")
+	}
+
+	fn restore_window_profile(&self) -> Cow<'static, str> {
+		self.msg("restore_window_profile")
+	}
+
+	fn wardrobe(&self) -> Cow<'static, str> {
+		self.msg("wardrobe")
+	}
+
+	fn base_wardrobe(&self) -> Cow<'static, str> {
+		self.msg("base_wardrobe")
+	}
+
+	fn vrc_menu(&self) -> Cow<'static, str> {
+		self.msg("vrc_menu")
+	}
+
+	fn unphysics(&self) -> Cow<'static, str> {
+		self.msg("unphysics")
+	}
+
+	fn unphysics_summary(&self, enabled: u32, total: u32) -> String {
+		self.format_msg(
+			"unphysics_summary",
+			&[("enabled", enabled.to_string()), ("total", total.to_string())],
+		)
+	}
+
+	fn dynamics_enabled(&self) -> Cow<'static, str> {
+		self.msg("dynamics_enabled")
+	}
+
+	fn window(&self) -> Cow<'static, str> {
+		self.msg("window")
+	}
+
+	fn window_hidden(&self) -> Cow<'static, str> {
+		self.msg("window_hidden")
+	}
+
+	fn always_on_top(&self) -> Cow<'static, str> {
+		self.msg("always_on_top")
+	}
+
+	fn input_passthrough(&self) -> Cow<'static, str> {
+		self.msg("input_passthrough")
+	}
+
+	fn reset_camera(&self) -> Cow<'static, str> {
+		self.msg("reset_camera")
+	}
+
+	fn open_supervisor(&self) -> Cow<'static, str> {
+		self.msg("open_supervisor")
+	}
+
+	fn quit_renderer(&self) -> Cow<'static, str> {
+		self.msg("quit_renderer")
+	}
+
+	fn scene_state(&self, state: &str) -> String {
+		match state.trim() {
+			"" => self.msg("scene_starting").into_owned(),
+			"avatar_scene" => self.msg("scene_avatar_scene").into_owned(),
+			"startup" | "loading" => self.msg("scene_loading").into_owned(),
+			other => other.replace('_', " "),
+		}
+	}
 }
 
 fn renderer_tray_worker(
@@ -292,26 +533,27 @@ fn resolve_supervisor_exe() -> Option<PathBuf> {
 }
 
 fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> (Menu, HashMap<String, RendererTrayAction>) {
+	let text = TrayText::resolve();
 	let menu = Menu::new();
 	let mut actions = HashMap::new();
 
-	append_header(&menu, opts, snapshot);
+	append_header(&menu, opts, snapshot, &text);
 	append_separator(&menu);
 	append_menu_item(
 		&menu,
 		&mut actions,
 		"preview:show",
-		"Show / Focus Preview",
+		text.show_focus_preview(),
 		true,
 		RendererTrayAction::ActivatePreview,
 	);
 
-	let output = Submenu::with_id("renderer:output", "Output", true);
+	let output = Submenu::with_id("renderer:output", text.output(), true);
 	append_menu_item(
 		&output,
 		&mut actions,
 		"output:window",
-		check_label("Window Preview", !snapshot.spout_enabled && !snapshot.minimized),
+		check_label(text.window_preview(), !snapshot.spout_enabled && !snapshot.minimized),
 		true,
 		RendererTrayAction::SetWindowPreview,
 	);
@@ -319,7 +561,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		&output,
 		&mut actions,
 		"output:spout_preview",
-		check_label("Spout2 + Preview", snapshot.spout_enabled && !snapshot.minimized),
+		check_label(text.spout_preview(), snapshot.spout_enabled && !snapshot.minimized),
 		snapshot.spout_available,
 		RendererTrayAction::SetSpoutPreview,
 	);
@@ -327,18 +569,18 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		&output,
 		&mut actions,
 		"output:spout_only",
-		check_label("Spout2 Only", snapshot.spout_enabled && snapshot.minimized),
+		check_label(text.spout_only(), snapshot.spout_enabled && snapshot.minimized),
 		snapshot.spout_available,
 		RendererTrayAction::SetSpoutOnly,
 	);
 	append_separator(&output);
-	append_disabled(&output, spout_resolution_label(snapshot));
+	append_disabled(&output, spout_resolution_label(snapshot, &text));
 	append_menu_item(
 		&output,
 		&mut actions,
 		"output:spout_720p",
 		check_label(
-			"Spout2 1280 x 720",
+			text.spout_resolution(1280, 720),
 			snapshot.spout_width == Some(1280) && snapshot.spout_height == Some(720),
 		),
 		snapshot.spout_available,
@@ -349,7 +591,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		&mut actions,
 		"output:spout_1080p",
 		check_label(
-			"Spout2 1920 x 1080",
+			text.spout_resolution(1920, 1080),
 			snapshot.spout_width == Some(1920) && snapshot.spout_height == Some(1080),
 		),
 		snapshot.spout_available,
@@ -357,12 +599,69 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	);
 	append_submenu(&menu, &output);
 
-	let window = Submenu::with_id("renderer:window", "Window", true);
+	let profile_enabled = opts.manifest_path.is_some();
+	let profile = Submenu::with_id("renderer:profile", text.profile(), profile_enabled);
+	append_menu_item(
+		&profile,
+		&mut actions,
+		"profile:save_output",
+		text.save_output_profile(),
+		profile_enabled,
+		RendererTrayAction::SaveOutputToProfile,
+	);
+	append_menu_item(
+		&profile,
+		&mut actions,
+		"profile:restore_output",
+		text.restore_output_profile(),
+		profile_enabled,
+		RendererTrayAction::RestoreOutputFromProfile,
+	);
+	append_separator(&profile);
+	append_menu_item(
+		&profile,
+		&mut actions,
+		"profile:save_window",
+		text.save_window_profile(),
+		profile_enabled && snapshot.window_position.is_some(),
+		RendererTrayAction::SaveWindowToProfile,
+	);
+	append_menu_item(
+		&profile,
+		&mut actions,
+		"profile:restore_window",
+		text.restore_window_profile(),
+		profile_enabled,
+		RendererTrayAction::RestoreWindowFromProfile,
+	);
+	append_submenu(&menu, &profile);
+
+	append_wardrobe_menu(&menu, &mut actions, snapshot, &text);
+	append_vrc_menu_actions(&menu, &mut actions, snapshot, &text);
+
+	if snapshot.dynamics_group_count > 0 {
+		let dynamics = Submenu::with_id("renderer:dynamics", text.unphysics(), true);
+		let summary = text.unphysics_summary(snapshot.dynamics_enabled_group_count, snapshot.dynamics_group_count);
+		let enabled = snapshot.dynamics_enabled_group_count > 0;
+		append_disabled(&dynamics, summary);
+		append_separator(&dynamics);
+		append_menu_item(
+			&dynamics,
+			&mut actions,
+			"dynamics:toggle",
+			check_label(text.dynamics_enabled(), enabled),
+			true,
+			RendererTrayAction::SetCurrentWardrobeDynamics(!enabled),
+		);
+		append_submenu(&menu, &dynamics);
+	}
+
+	let window = Submenu::with_id("renderer:window", text.window(), true);
 	append_menu_item(
 		&window,
 		&mut actions,
 		"window:always_on_top",
-		check_label("Always on Top", snapshot.always_on_top),
+		check_label(text.always_on_top(), snapshot.always_on_top),
 		true,
 		RendererTrayAction::SetAlwaysOnTop(!snapshot.always_on_top),
 	);
@@ -370,48 +669,18 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		&window,
 		&mut actions,
 		"window:input_passthrough",
-		check_label("Input Passthrough", snapshot.input_passthrough),
+		check_label(text.input_passthrough(), snapshot.input_passthrough),
 		snapshot.transparent_window,
 		RendererTrayAction::SetInputPassthrough(!snapshot.input_passthrough),
 	);
 	append_submenu(&menu, &window);
-
-	if snapshot.dynamics_group_count > 0 {
-		let dynamics = Submenu::with_id("renderer:dynamics", "UNPhysics", true);
-		let summary = format!(
-			"{} / {} effective groups",
-			snapshot.dynamics_enabled_group_count, snapshot.dynamics_group_count
-		);
-		append_disabled(&dynamics, summary);
-		append_separator(&dynamics);
-		append_menu_item(
-			&dynamics,
-			&mut actions,
-			"dynamics:on",
-			"Enable Current Wardrobe",
-			true,
-			RendererTrayAction::SetAllDynamics(true),
-		);
-		append_menu_item(
-			&dynamics,
-			&mut actions,
-			"dynamics:off",
-			"Disable Current Wardrobe",
-			true,
-			RendererTrayAction::SetAllDynamics(false),
-		);
-		append_submenu(&menu, &dynamics);
-	}
-
-	append_vrc_menu_actions(&menu, &mut actions, snapshot);
-	append_wardrobe_menu(&menu, &mut actions, snapshot);
 
 	append_separator(&menu);
 	append_menu_item(
 		&menu,
 		&mut actions,
 		"camera:reset",
-		"Reset Camera",
+		text.reset_camera(),
 		true,
 		RendererTrayAction::ResetCamera,
 	);
@@ -419,17 +688,22 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		&menu,
 		&mut actions,
 		"supervisor:open",
-		"Open Supervisor",
+		text.open_supervisor(),
 		true,
 		RendererTrayAction::OpenSupervisor,
 	);
 	append_separator(&menu);
-	append_menu_item(&menu, &mut actions, "quit", "Quit this Renderer", true, RendererTrayAction::Quit);
+	append_menu_item(&menu, &mut actions, "quit", text.quit_renderer(), true, RendererTrayAction::Quit);
 
 	(menu, actions)
 }
 
-fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
+fn append_vrc_menu_actions(
+	menu: &Menu,
+	actions: &mut HashMap<String, RendererTrayAction>,
+	snapshot: &RendererRuntimeSnapshot,
+	text: &TrayText,
+) {
 	let has_menu_candidates = !snapshot.menu_action_candidates.is_empty();
 	let entries: Vec<_> = snapshot
 		.menu_action_candidates
@@ -451,7 +725,7 @@ fn append_vrc_menu_actions(menu: &Menu, actions: &mut HashMap<String, RendererTr
 	if entries.is_empty() && fallback_entries.is_empty() {
 		return;
 	}
-	let vrc_menu = Submenu::with_id("renderer:vrc_menu", "VRC Menu", true);
+	let vrc_menu = Submenu::with_id("renderer:vrc_menu", text.vrc_menu(), true);
 	if entries.is_empty() {
 		for (index, action) in fallback_entries.into_iter().enumerate() {
 			let active = action.current_condition_state.as_deref() == Some("active");
@@ -511,7 +785,12 @@ fn menu_candidate_active(snapshot: &RendererRuntimeSnapshot, candidate: &gpu::Ru
 	runtime_action_active(snapshot, &candidate.action_id)
 }
 
-fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayAction>, snapshot: &RendererRuntimeSnapshot) {
+fn append_wardrobe_menu(
+	menu: &Menu,
+	actions: &mut HashMap<String, RendererTrayAction>,
+	snapshot: &RendererRuntimeSnapshot,
+	text: &TrayText,
+) {
 	let mut entries: Vec<(String, String, RendererTrayAction)> = Vec::new();
 	for candidate in &snapshot.menu_wardrobe_candidates {
 		entries.push((
@@ -532,13 +811,17 @@ fn append_wardrobe_menu(menu: &Menu, actions: &mut HashMap<String, RendererTrayA
 	if entries.iter().all(|(_, set_id, _)| !set_id.trim().is_empty()) {
 		entries.insert(
 			0,
-			("Base".to_string(), String::new(), RendererTrayAction::SetWardrobe(String::new())),
+			(
+				text.base_wardrobe().to_string(),
+				String::new(),
+				RendererTrayAction::SetWardrobe(String::new()),
+			),
 		);
 	}
 	if entries.is_empty() {
 		return;
 	}
-	let wardrobe = Submenu::with_id("renderer:wardrobe", "Wardrobe", true);
+	let wardrobe = Submenu::with_id("renderer:wardrobe", text.wardrobe(), true);
 	let active_set = snapshot.active_wardrobe_set.as_deref().unwrap_or("").trim();
 	let base_set = snapshot.base_wardrobe_set.as_deref().unwrap_or("").trim();
 	for (index, (label, set_id, action)) in entries.into_iter().enumerate() {
@@ -574,13 +857,9 @@ fn menu_action_label(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> Strin
 	}
 }
 
-fn append_header(menu: &Menu, opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) {
+fn append_header(menu: &Menu, opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot, text: &TrayText) {
 	append_disabled(menu, format!("{}  pid {}", truncate_label(&opts.title, 48), std::process::id()));
-	let state = if snapshot.scene_state.is_empty() {
-		"starting".to_string()
-	} else {
-		snapshot.scene_state.clone()
-	};
+	let state = text.scene_state(&snapshot.scene_state);
 	let fps = snapshot.fps.map_or("--".to_string(), |fps| format!("{fps:.0} fps"));
 	append_disabled(menu, format!("{state}  {fps}"));
 }
@@ -637,11 +916,181 @@ fn check_label(label: impl AsRef<str>, checked: bool) -> String {
 	}
 }
 
-fn spout_resolution_label(snapshot: &RendererRuntimeSnapshot) -> String {
+fn spout_resolution_label(snapshot: &RendererRuntimeSnapshot, text: &TrayText) -> String {
 	match (snapshot.spout_width, snapshot.spout_height) {
-		(Some(width), Some(height)) => format!("Spout2 output: {width} x {height}"),
-		_ => "Spout2 output: renderer default".to_string(),
+		(Some(width), Some(height)) => text.spout_output_size(width, height),
+		_ => text.spout_output_default().to_string(),
 	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrayOutputProfileState {
+	pub(crate) spout_enabled: bool,
+	pub(crate) spout_name: Option<String>,
+	pub(crate) spout_width: Option<u32>,
+	pub(crate) spout_height: Option<u32>,
+	pub(crate) minimized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TrayWindowProfileState {
+	pub(crate) position: Option<[i32; 2]>,
+	pub(crate) inner_size: Option<[u32; 2]>,
+}
+
+pub(crate) fn output_profile_state_from_snapshot(snapshot: &RendererRuntimeSnapshot) -> TrayOutputProfileState {
+	TrayOutputProfileState {
+		spout_enabled: snapshot.spout_enabled,
+		spout_name: snapshot.spout_name.clone(),
+		spout_width: snapshot.spout_width.or(snapshot.spout_sender_width),
+		spout_height: snapshot.spout_height.or(snapshot.spout_sender_height),
+		minimized: snapshot.minimized,
+	}
+}
+
+pub(crate) fn window_profile_state_from_snapshot(snapshot: &RendererRuntimeSnapshot) -> Result<TrayWindowProfileState, String> {
+	let position = snapshot
+		.window_position
+		.ok_or_else(|| "renderer has not reported window position yet".to_string())?;
+	Ok(TrayWindowProfileState {
+		position: Some(position),
+		inner_size: snapshot.window_inner_size,
+	})
+}
+
+pub(crate) fn save_output_state_to_profile(manifest_path: &Path, state: &TrayOutputProfileState) -> Result<(), String> {
+	let mut manifest = read_profile_manifest(manifest_path)?;
+	{
+		let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+		let output_table = table
+			.entry("output".to_string())
+			.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+			.as_table_mut()
+			.ok_or_else(|| "manifest [output] must be a table".to_string())?;
+		let spout2_table = output_table
+			.entry("spout2".to_string())
+			.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+			.as_table_mut()
+			.ok_or_else(|| "manifest [output.spout2] must be a table".to_string())?;
+		spout2_table.insert("enabled".to_string(), toml::Value::Boolean(state.spout_enabled));
+		if let Some(name) = state.spout_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+			spout2_table.insert("name".to_string(), toml::Value::String(name.to_string()));
+		}
+		if let Some(width) = state.spout_width {
+			spout2_table.insert("width".to_string(), toml::Value::Integer(i64::from(width)));
+		}
+		if let Some(height) = state.spout_height {
+			spout2_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
+		}
+		let window_table = table
+			.entry("window".to_string())
+			.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+			.as_table_mut()
+			.ok_or_else(|| "manifest [window] must be a table".to_string())?;
+		window_table.insert("minimized".to_string(), toml::Value::Boolean(state.minimized));
+	}
+	write_profile_manifest(manifest_path, &manifest)
+}
+
+pub(crate) fn save_window_state_to_profile(manifest_path: &Path, state: &TrayWindowProfileState) -> Result<(), String> {
+	let mut manifest = read_profile_manifest(manifest_path)?;
+	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+	let window_table = table
+		.entry("window".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [window] must be a table".to_string())?;
+	if let Some([x, y]) = state.position {
+		window_table.insert("x".to_string(), toml::Value::Integer(i64::from(x)));
+		window_table.insert("y".to_string(), toml::Value::Integer(i64::from(y)));
+	}
+	if let Some([width, height]) = state.inner_size {
+		window_table.insert("width".to_string(), toml::Value::Integer(i64::from(width)));
+		window_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
+	}
+	write_profile_manifest(manifest_path, &manifest)
+}
+
+pub(crate) fn read_output_state_from_profile(manifest_path: &Path) -> Result<TrayOutputProfileState, String> {
+	let manifest = read_profile_manifest(manifest_path)?;
+	let root = manifest
+		.as_table()
+		.ok_or_else(|| format!("manifest {} root must be a table", manifest_path.display()))?;
+	let output_table = root.get("output").and_then(toml::Value::as_table);
+	let spout2_table = output_table
+		.and_then(|output| output.get("spout2"))
+		.and_then(toml::Value::as_table)
+		.or_else(|| root.get("spout").and_then(toml::Value::as_table));
+	let spout2_table = spout2_table.ok_or_else(|| format!("manifest {} has no [output.spout2]", manifest_path.display()))?;
+	let window_table = root.get("window").and_then(toml::Value::as_table);
+	Ok(TrayOutputProfileState {
+		spout_enabled: spout2_table.get("enabled").and_then(toml::Value::as_bool).unwrap_or(false),
+		spout_name: spout2_table
+			.get("name")
+			.and_then(toml::Value::as_str)
+			.map(str::trim)
+			.filter(|name| !name.is_empty())
+			.map(ToOwned::to_owned),
+		spout_width: read_profile_u32(spout2_table, "width"),
+		spout_height: read_profile_u32(spout2_table, "height"),
+		minimized: window_table
+			.and_then(|window| window.get("minimized"))
+			.and_then(toml::Value::as_bool)
+			.unwrap_or(false),
+	})
+}
+
+pub(crate) fn read_window_state_from_profile(manifest_path: &Path) -> Result<TrayWindowProfileState, String> {
+	let manifest = read_profile_manifest(manifest_path)?;
+	let root = manifest
+		.as_table()
+		.ok_or_else(|| format!("manifest {} root must be a table", manifest_path.display()))?;
+	let window_table = root
+		.get("window")
+		.and_then(toml::Value::as_table)
+		.ok_or_else(|| format!("manifest {} has no [window]", manifest_path.display()))?;
+	let x = read_profile_i32(window_table, "x");
+	let y = read_profile_i32(window_table, "y");
+	let width = read_profile_u32(window_table, "width");
+	let height = read_profile_u32(window_table, "height");
+	if x.is_none() && y.is_none() && width.is_none() && height.is_none() {
+		return Err(format!("manifest {} has no window x/y/width/height", manifest_path.display()));
+	}
+	Ok(TrayWindowProfileState {
+		position: match (x, y) {
+			(Some(x), Some(y)) => Some([x, y]),
+			_ => None,
+		},
+		inner_size: match (width, height) {
+			(Some(width), Some(height)) => Some([width, height]),
+			_ => None,
+		},
+	})
+}
+
+fn read_profile_manifest(manifest_path: &Path) -> Result<toml::Value, String> {
+	let text = fs::read_to_string(manifest_path).map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
+	let table = toml::from_str::<toml::Table>(&text).map_err(|error| format!("parse {}: {error}", manifest_path.display()))?;
+	Ok(toml::Value::Table(table))
+}
+
+fn write_profile_manifest(manifest_path: &Path, manifest: &toml::Value) -> Result<(), String> {
+	let text = toml::to_string_pretty(manifest).map_err(|error| format!("serialize manifest: {error}"))?;
+	fs::write(manifest_path, text).map_err(|error| format!("write {}: {error}", manifest_path.display()))
+}
+
+fn read_profile_u32(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<u32> {
+	table
+		.get(key)
+		.and_then(toml::Value::as_integer)
+		.and_then(|value| u32::try_from(value).ok())
+}
+
+fn read_profile_i32(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<i32> {
+	table
+		.get(key)
+		.and_then(toml::Value::as_integer)
+		.and_then(|value| i32::try_from(value).ok())
 }
 
 fn menu_wardrobe_label(candidate: &gpu::RuntimeMenuWardrobeCandidateStatus) -> String {
@@ -667,23 +1116,24 @@ fn truncate_label(label: &str, max_chars: usize) -> String {
 }
 
 fn tray_tooltip(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> String {
+	let text = TrayText::resolve();
 	format!(
 		"UN Avatar Renderer - {} - pid {} - {}",
 		opts.title,
 		std::process::id(),
-		tray_output_mode_label(snapshot)
+		tray_output_mode_label(snapshot, &text)
 	)
 }
 
-fn tray_output_mode_label(snapshot: &RendererRuntimeSnapshot) -> &'static str {
+fn tray_output_mode_label(snapshot: &RendererRuntimeSnapshot, text: &TrayText) -> Cow<'static, str> {
 	if snapshot.spout_enabled && snapshot.minimized {
-		"Spout2 Only"
+		text.spout_only()
 	} else if snapshot.spout_enabled {
-		"Spout2 + Preview"
+		text.spout_preview()
 	} else if snapshot.minimized {
-		"Window / Minimized"
+		text.window_hidden()
 	} else {
-		"Window Preview"
+		text.window_preview()
 	}
 }
 
@@ -1307,8 +1757,8 @@ mod tests {
 			Some(RendererTrayAction::SetAlwaysOnTop(true))
 		));
 		assert!(matches!(
-			actions.get("renderer:dynamics:on"),
-			Some(RendererTrayAction::SetAllDynamics(true))
+			actions.get("renderer:dynamics:toggle"),
+			Some(RendererTrayAction::SetCurrentWardrobeDynamics(true))
 		));
 		assert!(matches!(
 			actions.get("renderer:camera:reset"),
@@ -1323,24 +1773,21 @@ mod tests {
 
 	#[test]
 	fn tray_tooltip_identifies_output_mode() {
-		let mut opts = AvatarWindowOptions::default();
-		opts.title = "mizuki-split".to_string();
+		let text = TrayText::en();
 		let mut status = snapshot();
 		status.spout_enabled = false;
 		status.minimized = false;
-		assert!(tray_tooltip(&opts, &status).contains("Window Preview"));
+		assert_eq!(tray_output_mode_label(&status, &text), "Window Preview");
 
 		status.minimized = true;
-		assert!(tray_tooltip(&opts, &status).contains("Window / Minimized"));
+		assert_eq!(tray_output_mode_label(&status, &text), "Window Hidden");
 
 		status.spout_enabled = true;
 		status.minimized = false;
-		let tooltip = tray_tooltip(&opts, &status);
-		assert!(tooltip.contains("mizuki-split"));
-		assert!(tooltip.contains("Spout2 + Preview"));
+		assert_eq!(tray_output_mode_label(&status, &text), "Spout2 + Preview");
 
 		status.minimized = true;
-		assert!(tray_tooltip(&opts, &status).contains("Spout2 Only"));
+		assert_eq!(tray_output_mode_label(&status, &text), "Spout2 Only");
 	}
 
 	#[test]
@@ -1365,14 +1812,25 @@ mod tests {
 
 	#[test]
 	fn spout_resolution_label_does_not_imply_preview_sync() {
+		let text = TrayText::en();
 		let mut status = snapshot();
 		status.spout_width = None;
 		status.spout_height = None;
-		assert_eq!(spout_resolution_label(&status), "Spout2 output: renderer default");
+		assert_eq!(spout_resolution_label(&status, &text), "Spout2 output: renderer default");
 
 		status.spout_width = Some(1280);
 		status.spout_height = Some(720);
-		assert_eq!(spout_resolution_label(&status), "Spout2 output: 1280 x 720");
+		assert_eq!(spout_resolution_label(&status, &text), "Spout2 output: 1280 x 720");
+	}
+
+	#[test]
+	fn tray_text_localizes_primary_runtime_labels() {
+		let text = TrayText::ja();
+		assert_eq!(text.show_focus_preview(), "プレビューを表示 / 前面へ");
+		assert_eq!(text.output(), "出力");
+		assert_eq!(text.wardrobe(), "ワードローブ");
+		assert_eq!(text.vrc_menu(), "VRC メニュー");
+		assert_eq!(text.quit_renderer(), "この Renderer を終了");
 	}
 
 	#[test]

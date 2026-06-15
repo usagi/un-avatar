@@ -13,6 +13,8 @@
 	export let expressionOverrides: ExpressionOverrides = {};
 	export let expressionFilter = "";
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
+	export let onSaveOutput: RendererPaneActions["onSaveOutput"];
+	export let onRestoreOutput: RendererPaneActions["onRestoreOutput"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
 	export let onRestoreWindow: RendererPaneActions["onRestoreWindow"];
@@ -30,7 +32,6 @@
 	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
-	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 </script>
 
 {#if rendererPaneTab === "overview"}
@@ -44,6 +45,8 @@
 			{busy}
 			{colorDisplayMode}
 			{onSetSpoutOutput}
+			{onSaveOutput}
+			{onRestoreOutput}
 			{onSetWindow}
 			{onSaveWindow}
 			{onRestoreWindow}
@@ -77,6 +80,6 @@
 {:else if rendererPaneTab === "diagnostics"}
 	{#await import("./RendererDiagnosticsPane.svelte") then module}
 		{@const RendererDiagnosticsPane = module.default}
-		<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} {onSetAllDynamicsEnabled} />
+		<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} />
 	{/await}
 {/if}

@@ -112,7 +112,6 @@
 	} from "./lib/runtimePayloads";
 	import {
 		DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
-		DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD,
 		DYNAMICS_ENABLED_FIELD,
 		DYNAMICS_OVERRIDE_FIELD_PREFIX,
 		defaultDynamicsCategoryOverrides,
@@ -431,7 +430,6 @@
 			look_at_clamp_deg: 30,
 			primary_motion_source: "vmc",
 			dynamics_enabled: true,
-			dynamics_enable_all_on_launch: false,
 			contact_parameter_emission: false,
 			dynamics_physics_configured: false,
 			dynamics_simulation_hz: 60,
@@ -552,7 +550,6 @@
 			look_at_clamp_deg: 30,
 			primary_motion_source: "vmc",
 			dynamics_enabled: true,
-			dynamics_enable_all_on_launch: false,
 			contact_parameter_emission: false,
 			dynamics_physics_configured: false,
 			dynamics_simulation_hz: 60,
@@ -2038,13 +2035,6 @@
 		setting: AvatarSetting,
 		renderersToApply: RendererInstance[]
 	): Promise<void> {
-		if (fieldSetIncludes(fields, DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD)) {
-			const applied = await applyRendererCommand(renderersToApply, "set_renderer_all_dynamics_launch_setting", () => ({ setting }));
-			await setAppliedMessage(applied, $_("renderers.messages.updated_dynamics_override"), (count) =>
-				$_("renderers.messages.updated_dynamics_override_count", { values: { count } })
-			);
-			return;
-		}
 		if (
 			fieldSetIncludes(fields, DYNAMICS_ENABLED_FIELD) ||
 			fieldSetStartsWith(fields, DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
@@ -2513,6 +2503,33 @@
 		}
 	}
 
+	async function saveRendererOutputToProfile(renderer: RendererInstance | null): Promise<void> {
+		if (!renderer) return;
+		if (!hasTauriRuntime()) return;
+		busy = true;
+		try {
+			await invoke("save_renderer_output_to_profile", { id: renderer.id });
+			message = $_("renderers.messages.output_saved_to_profile", { values: { name: renderer.name } });
+			await refreshAll();
+		} catch (error) {
+			message = String(error);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function restoreRendererOutputFromProfile(renderer: RendererInstance | null): Promise<void> {
+		if (!renderer) return;
+		if (!hasTauriRuntime()) return;
+		try {
+			await invoke("restore_renderer_output_from_profile", { id: renderer.id });
+			message = $_("renderers.messages.output_restored_from_profile", { values: { name: renderer.name } });
+			await refreshRendererRuntimeView();
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
 	async function setRendererWindow(
 		renderer: RendererInstance | null,
 		patch: {
@@ -2588,20 +2605,6 @@
 			await invoke("set_renderer_dynamics_enabled", {
 				id: renderer.id,
 				sourceId,
-				enabled,
-			});
-			await refreshRendererRuntimeView();
-		} catch (error) {
-			message = String(error);
-		}
-	}
-
-	async function setRendererAllDynamicsEnabled(renderer: RendererInstance | null, enabled: boolean): Promise<void> {
-		if (!renderer) return;
-		if (!hasTauriRuntime()) return;
-		try {
-			await invoke("set_renderer_all_dynamics_enabled", {
-				id: renderer.id,
 				enabled,
 			});
 			await refreshRendererRuntimeView();
@@ -3009,6 +3012,14 @@
 							if (!selectedRenderer) return;
 							return setRendererSpoutOutput(selectedRenderer, enabled, size, label);
 						}}
+						onSaveOutput={() => {
+							if (!selectedRenderer) return;
+							return saveRendererOutputToProfile(selectedRenderer);
+						}}
+						onRestoreOutput={() => {
+							if (!selectedRenderer) return;
+							return restoreRendererOutputFromProfile(selectedRenderer);
+						}}
 						onSetWindow={(patch, label) => {
 							if (!selectedRenderer) return;
 							return setRendererWindow(selectedRenderer, patch, label);
@@ -3073,10 +3084,6 @@
 						onSetDynamicsEnabled={(rendererId, sourceId, enabled) => {
 							const renderer = selectedRendererById(rendererId);
 							return setRendererDynamicsEnabled(renderer, sourceId, enabled);
-						}}
-						onSetAllDynamicsEnabled={(rendererId, enabled) => {
-							const renderer = selectedRendererById(rendererId);
-							return setRendererAllDynamicsEnabled(renderer, enabled);
 						}}
 						onOpenProfile={() => {
 							if (!launchTargetSetting) return;

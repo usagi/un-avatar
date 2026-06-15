@@ -7182,6 +7182,7 @@ dependencies = [
  "un-avatar-skeleton",
  "un-avatar-vmc",
  "un-avatar-zenoh",
+ "un-i18n",
  "un-motion-frame",
  "un-motion-frame-zenoh",
  "wgpu",

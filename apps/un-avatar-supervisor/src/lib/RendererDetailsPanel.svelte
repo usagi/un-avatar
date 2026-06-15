@@ -25,6 +25,8 @@
 	export let expressionOverrides: ExpressionOverrides = {};
 	export let expressionFilter = "";
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
+	export let onSaveOutput: RendererPaneActions["onSaveOutput"];
+	export let onRestoreOutput: RendererPaneActions["onRestoreOutput"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
 	export let onRestoreWindow: RendererPaneActions["onRestoreWindow"];
@@ -42,7 +44,6 @@
 	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
-	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 	export let onOpenProfile: () => void;
 	export let onRevealProfilesDir: () => void | Promise<void>;
 	export let onSelectRendererPaneTab: (tab: RendererPaneTab) => void;
@@ -62,6 +63,8 @@
 			{expressionOverrides}
 			bind:expressionFilter
 			{onSetSpoutOutput}
+			{onSaveOutput}
+			{onRestoreOutput}
 			{onSetWindow}
 			{onSaveWindow}
 			{onRestoreWindow}
@@ -79,7 +82,6 @@
 			{onActivateRuntimeAction}
 			{onActivateWardrobeMenuCandidate}
 			{onSetDynamicsEnabled}
-			{onSetAllDynamicsEnabled}
 		/>
 	{:else}
 		<RendererReadyPanel

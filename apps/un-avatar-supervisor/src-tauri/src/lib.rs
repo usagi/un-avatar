@@ -996,12 +996,6 @@ struct RendererSpringBoneSetting {
 	bone_collider_hands: f32,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-struct RendererAllDynamicsSetting {
-	dynamics_enable_all_on_launch: bool,
-}
-
 #[derive(Serialize, Deserialize)]
 struct RendererCameraTransition {
 	#[serde(alias = "durationMs")]
@@ -1128,9 +1122,6 @@ enum RendererControlCommand {
 		source_id: String,
 		enabled: bool,
 	},
-	SetAllDynamicsEnabled {
-		enabled: bool,
-	},
 	SetAvatarOutline {
 		policy: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -1222,9 +1213,6 @@ struct AvatarSetting {
 	/// UNPhysics / UNDynamics の runtime solver を有効化するか。
 	/// manifest `[physics.dynamics] enabled` に対応。
 	dynamics_enabled: bool,
-	/// 起動後に authored default OFF を含む dynamics group を明示的に全 ON へ上書きするか。
-	/// manifest `[physics.dynamics] enable_all_on_launch` に対応。既定 false。
-	dynamics_enable_all_on_launch: bool,
 	/// VRC Contact Receiver の runtime parameter emission を有効化するか。
 	/// manifest `[physics.contacts] parameter_emission` に対応。既定 false。
 	contact_parameter_emission: bool,
@@ -1448,7 +1436,6 @@ struct DebugSettings {
 
 struct PhysicsSettings {
 	dynamics_enabled: Option<bool>,
-	dynamics_enable_all_on_launch: bool,
 	contact_parameter_emission: bool,
 	dynamics_physics_configured: bool,
 	dynamics_simulation_hz: f32,
@@ -1769,7 +1756,6 @@ struct ManifestContactsPhysics {
 #[serde(default)]
 struct ManifestDynamicsPhysics {
 	enabled: Option<bool>,
-	enable_all_on_launch: Option<bool>,
 	solver: Option<ManifestDynamicsSolverPhysics>,
 }
 
@@ -2138,9 +2124,7 @@ pub fn run() {
 			set_renderer_apply_vmc_root_translation,
 			set_renderer_motion_receivers,
 			set_renderer_dynamics,
-			set_renderer_all_dynamics_launch_setting,
 			set_renderer_dynamics_enabled,
-			set_renderer_all_dynamics_enabled,
 			set_renderer_primary_motion_source,
 			set_renderer_avatar_outline,
 			set_renderer_lighting,
@@ -2152,6 +2136,8 @@ pub fn run() {
 			set_renderer_camera_state,
 			save_renderer_camera_to_profile,
 			restore_renderer_camera_from_profile,
+			save_renderer_output_to_profile,
+			restore_renderer_output_from_profile,
 			save_renderer_window_to_profile,
 			restore_renderer_window_from_profile,
 			reset_renderer_camera,
@@ -5236,9 +5222,6 @@ fn apply_physics_setting_value(
 		"physics.contacts.parameter_emission" => {
 			set_nested_json_bool(manifest, &["physics", "contacts", "parameter_emission"], &value, field)
 		}
-		"physics.dynamics.enable_all_on_launch" => {
-			set_nested_json_bool(manifest, &["physics", "dynamics", "enable_all_on_launch"], &value, field)
-		}
 		"physics.dynamics.solver.simulation_hz" | "physics.spring_bone.simulation_hz" => {
 			migrate_legacy_spring_bone_solver_to_v2(manifest)?;
 			set_nested_ranged_float(
@@ -5412,7 +5395,6 @@ fn launch_renderer_in_state(
 	let pid = child.id();
 	let (runtime_status_cache, runtime_status_stream_stop) =
 		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
-	let launch_control_commands = renderer_launch_control_commands(&setting);
 	let info = RendererInstance {
 		id,
 		name: setting.name,
@@ -5456,9 +5438,6 @@ fn launch_renderer_in_state(
 		},
 	);
 	prewarm_runtime_control_session();
-	for command in launch_control_commands {
-		spawn_renderer_launch_control(runtime_bus_key.clone(), command);
-	}
 	Ok(info_for_return)
 }
 
@@ -5842,6 +5821,171 @@ fn set_renderer_spout_output(
 }
 
 #[tauri::command]
+fn save_renderer_output_to_profile(
+	id: u32,
+	state: State<'_, Mutex<SupervisorState>>,
+	app: tauri::AppHandle,
+) -> Result<RendererRuntimeStatus, String> {
+	let (output, manifest_path) = {
+		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		refresh_renderer_states(&mut state, false, None);
+		let renderer = state.renderers.get(&id).ok_or_else(|| format!("renderer not found: {id}"))?;
+		if matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed) {
+			return Err(format!("renderer {id} is not running"));
+		}
+		let (telemetry, _telemetry_err) = cached_runtime_telemetry(renderer);
+		let telemetry = telemetry.ok_or_else(|| format!("renderer {id} has not reported output state yet"))?;
+		let output = RendererOutputProfileState {
+			spout_enabled: telemetry.spout_enabled,
+			spout_name: telemetry.spout_name.or_else(|| renderer.info.spout_name.clone()),
+			spout_width: telemetry.spout_width.or(telemetry.spout_sender_width).or(renderer.info.spout_width),
+			spout_height: telemetry
+				.spout_height
+				.or(telemetry.spout_sender_height)
+				.or(renderer.info.spout_height),
+			minimized: telemetry.minimized,
+		};
+		let manifest_path = renderer.info.manifest_path.clone();
+		(output, manifest_path)
+	};
+	let manifest_path = manifest_path.ok_or_else(|| format!("renderer {id} has no manifest path"))?;
+	write_output_state_to_manifest(Path::new(&manifest_path), &output)?;
+	refresh_tray_menu(&app)?;
+	get_renderer_runtime_status(id, state)
+}
+
+#[tauri::command]
+fn restore_renderer_output_from_profile(id: u32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+	let manifest_path = renderer_manifest_path(id, state.inner())?;
+	let manifest = read_manifest_value(Path::new(&manifest_path))?;
+	let output = read_output_state_from_manifest(&manifest, &manifest_path)?;
+	if output.spout_enabled {
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetSpoutOutput {
+				enabled: true,
+				name: output.spout_name.clone(),
+				width: output.spout_width,
+				height: output.spout_height,
+			},
+		)?;
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: Some(output.minimized),
+				width: None,
+				height: None,
+			},
+		)
+	} else {
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: Some(output.minimized),
+				width: None,
+				height: None,
+			},
+		)?;
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetSpoutOutput {
+				enabled: false,
+				name: output.spout_name,
+				width: output.spout_width,
+				height: output.spout_height,
+			},
+		)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererOutputProfileState {
+	spout_enabled: bool,
+	spout_name: Option<String>,
+	spout_width: Option<u32>,
+	spout_height: Option<u32>,
+	minimized: bool,
+}
+
+fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) -> Result<RendererOutputProfileState, String> {
+	let root = manifest
+		.as_table()
+		.ok_or_else(|| format!("manifest {manifest_path} root must be a table"))?;
+	let output_table = root.get("output").and_then(toml::Value::as_table);
+	let spout2_table = output_table
+		.and_then(|output| output.get("spout2"))
+		.and_then(toml::Value::as_table)
+		.or_else(|| root.get("spout").and_then(toml::Value::as_table));
+	let spout2_table = spout2_table.ok_or_else(|| format!("manifest {manifest_path} has no [output.spout2] section"))?;
+	let window_table = root.get("window").and_then(toml::Value::as_table);
+	Ok(RendererOutputProfileState {
+		spout_enabled: spout2_table.get("enabled").and_then(toml::Value::as_bool).unwrap_or(false),
+		spout_name: spout2_table
+			.get("name")
+			.and_then(toml::Value::as_str)
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(ToOwned::to_owned),
+		spout_width: spout2_table
+			.get("width")
+			.and_then(toml::Value::as_integer)
+			.and_then(|value| u32::try_from(value).ok()),
+		spout_height: spout2_table
+			.get("height")
+			.and_then(toml::Value::as_integer)
+			.and_then(|value| u32::try_from(value).ok()),
+		minimized: window_table
+			.and_then(|window| window.get("minimized"))
+			.and_then(toml::Value::as_bool)
+			.unwrap_or(false),
+	})
+}
+
+fn write_output_state_to_manifest(manifest_path: &Path, output: &RendererOutputProfileState) -> Result<(), String> {
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+	let output_table = table
+		.entry("output".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [output] must be a table".to_string())?;
+	let spout2_table = output_table
+		.entry("spout2".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [output.spout2] must be a table".to_string())?;
+	spout2_table.insert("enabled".to_string(), toml::Value::Boolean(output.spout_enabled));
+	if let Some(name) = output.spout_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+		spout2_table.insert("name".to_string(), toml::Value::String(name.to_string()));
+	}
+	if let Some(width) = output.spout_width {
+		spout2_table.insert("width".to_string(), toml::Value::Integer(i64::from(width)));
+	}
+	if let Some(height) = output.spout_height {
+		spout2_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
+	}
+	let window_table = table
+		.entry("window".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [window] must be a table".to_string())?;
+	window_table.insert("minimized".to_string(), toml::Value::Boolean(output.minimized));
+	write_manifest_value(manifest_path, &manifest)
+}
+
+#[tauri::command]
 fn capture_renderer_screenshot(id: u32, path: Option<String>, state: State<'_, Mutex<SupervisorState>>) -> Result<String, String> {
 	let renderer_name = with_running_renderer(id, state.inner(), |renderer| Ok(renderer.info.name.clone()))?;
 	let resolved = resolve_screenshot_path(path, &renderer_name)?;
@@ -6024,24 +6168,6 @@ fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: Sta
 }
 
 #[tauri::command]
-fn set_renderer_all_dynamics_launch_setting(
-	id: u32,
-	setting: RendererAllDynamicsSetting,
-	state: State<'_, Mutex<SupervisorState>>,
-) -> Result<(), String> {
-	if !setting.dynamics_enable_all_on_launch {
-		return Ok(());
-	}
-	send_renderer_command_by_id(
-		id,
-		state.inner(),
-		RendererControlCommand::SetAllDynamicsEnabled {
-			enabled: setting.dynamics_enable_all_on_launch,
-		},
-	)
-}
-
-#[tauri::command]
 fn set_renderer_dynamics_enabled(
 	id: u32,
 	source_id: String,
@@ -6053,11 +6179,6 @@ fn set_renderer_dynamics_enabled(
 		return Err("source_id must not be empty".to_string());
 	}
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetDynamicsEnabled { source_id, enabled })
-}
-
-#[tauri::command]
-fn set_renderer_all_dynamics_enabled(id: u32, enabled: bool, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetAllDynamicsEnabled { enabled })
 }
 
 /// 旧 UI / IPC 互換の primary motion source 更新。
@@ -7126,27 +7247,6 @@ fn send_managed_renderer_control(renderer: &ManagedRenderer, command: &RendererC
 	send_renderer_control_bus(&renderer.runtime_bus_key, command)
 }
 
-fn renderer_launch_control_commands(setting: &AvatarSetting) -> Vec<RendererControlCommand> {
-	if setting.dynamics_enable_all_on_launch {
-		vec![RendererControlCommand::SetAllDynamicsEnabled { enabled: true }]
-	} else {
-		Vec::new()
-	}
-}
-
-fn spawn_renderer_launch_control(runtime_bus_key: String, command: RendererControlCommand) {
-	let _ = std::thread::Builder::new()
-		.name("un-avatar-renderer-launch-control".into())
-		.spawn(move || {
-			for _ in 0..40 {
-				if send_renderer_control_bus(&runtime_bus_key, &command).is_ok() {
-					return;
-				}
-				std::thread::sleep(Duration::from_millis(250));
-			}
-		});
-}
-
 fn send_managed_renderer_shutdown(renderer: &ManagedRenderer) -> Result<(), String> {
 	let runtime_bus_key = renderer.runtime_bus_key.clone();
 	std::thread::Builder::new()
@@ -7723,7 +7823,6 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
 		dynamics_enabled: physics.dynamics_enabled.unwrap_or(true),
-		dynamics_enable_all_on_launch: physics.dynamics_enable_all_on_launch,
 		contact_parameter_emission: physics.contact_parameter_emission,
 		dynamics_physics_configured: physics.dynamics_physics_configured,
 		dynamics_simulation_hz: physics.dynamics_simulation_hz,
@@ -9337,7 +9436,6 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
 		dynamics_enabled: dynamics.and_then(|dynamics| dynamics.enabled),
-		dynamics_enable_all_on_launch: dynamics.and_then(|dynamics| dynamics.enable_all_on_launch).unwrap_or(false),
 		contact_parameter_emission: contacts
 			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
 			.unwrap_or(false),
@@ -10669,13 +10767,12 @@ mod tests {
 		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
 		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_crop_webp,
 		encode_profile_icon_thumbnail_webp, migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata,
-		renderer_launch_control_commands, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
-		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
-		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, AvatarSetting, AvatarSettingFieldDomain,
-		LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
-		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
+		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
+		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, startup_open_profile_manifest_arg,
+		startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension,
+		AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
+		RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -12621,7 +12718,7 @@ mod tests {
 		)
 		.expect("RendererVrcMenuControls.svelte should be readable");
 		assert!(
-			source.contains(r#".filter((candidate) => !candidate.wardrobe_set_ids?.length)"#),
+			source.contains("!candidate.wardrobe_set_ids?.length"),
 			"VRC Menu controls should exclude wardrobe menu candidates from non-wardrobe action controls"
 		);
 		assert!(
@@ -12629,7 +12726,7 @@ mod tests {
 			"VRC Menu fallback should only use non-wardrobe expression-menu runtime actions"
 		);
 		assert!(
-			source.contains("activeActionIds.has(candidate.action_id) ? 0 : candidate.parameter_value")
+			source.contains("candidateActive(candidate) ? 0 : candidate.parameter_value")
 				&& source.contains("onSetRuntimeParameter(renderer.id, candidate.parameter_name, value"),
 			"VRC Menu candidate activation should toggle active parameter actions back to 0 through the parameter control path"
 		);
@@ -12820,49 +12917,6 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
-	}
-
-	#[test]
-	fn dynamics_enable_all_on_launch_setting_round_trips_manifest_value() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		assert!(!setting.dynamics_enable_all_on_launch);
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(
-			&mut manifest,
-			&setting,
-			"physics.dynamics.enable_all_on_launch",
-			serde_json::json!(true),
-		)
-		.unwrap();
-		assert_eq!(
-			manifest
-				.get("physics")
-				.and_then(toml::Value::as_table)
-				.and_then(|physics| physics.get("dynamics"))
-				.and_then(toml::Value::as_table)
-				.and_then(|dynamics| dynamics.get("enable_all_on_launch"))
-				.and_then(toml::Value::as_bool),
-			Some(true)
-		);
-
-		let path = std::env::temp_dir().join(format!(
-			"un-avatar-dynamics-enable-all-test-{}-{}.toml",
-			std::process::id(),
-			Instant::now().elapsed().as_nanos()
-		));
-		fs::write(&path, toml::to_string(&manifest).unwrap()).unwrap();
-		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
-		let _ = fs::remove_file(path);
-		assert!(parsed.dynamics_enable_all_on_launch);
 	}
 
 	#[test]
@@ -13305,21 +13359,6 @@ id = "test"
 		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
 		let _ = fs::remove_file(path);
 		assert!(parsed.contact_parameter_emission);
-	}
-
-	#[test]
-	fn launch_control_commands_enable_all_dynamics_only_when_opted_in() {
-		let mut setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		setting.dynamics_enable_all_on_launch = false;
-		assert!(renderer_launch_control_commands(&setting).is_empty());
-
-		setting.dynamics_enable_all_on_launch = true;
-		let commands = renderer_launch_control_commands(&setting);
-		assert_eq!(commands.len(), 1);
-		assert_eq!(
-			serde_json::to_string(&commands[0]).unwrap(),
-			r#"{"command":"set_all_dynamics_enabled","enabled":true}"#
-		);
 	}
 
 	#[test]
@@ -14570,25 +14609,6 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"set_dynamics_enabled","source_id":"physbone:hair","enabled":true}"#
-		);
-	}
-
-	#[test]
-	fn renderer_control_sends_all_dynamics_enabled_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(address, &RendererControlCommand::SetAllDynamicsEnabled { enabled: true }).unwrap();
-		assert_eq!(
-			server.join().unwrap().trim(),
-			r#"{"command":"set_all_dynamics_enabled","enabled":true}"#
 		);
 	}
 

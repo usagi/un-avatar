@@ -111,7 +111,6 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	look_at_clamp_deg: number | null;
 	primary_motion_source: PrimaryMotionSource;
 	dynamics_enabled: boolean;
-	dynamics_enable_all_on_launch: boolean;
 	contact_parameter_emission: boolean;
 	dynamics_physics_configured: boolean;
 	dynamics_simulation_hz: number;
@@ -258,7 +257,6 @@ export type MotionSetting = Pick<
 	| "look_at_enabled"
 	| "look_at_clamp_deg"
 	| "dynamics_enabled"
-	| "dynamics_enable_all_on_launch"
 	| "contact_parameter_emission"
 	| "dynamics_category_overrides"
 	| "apply_vmc_root_translation"

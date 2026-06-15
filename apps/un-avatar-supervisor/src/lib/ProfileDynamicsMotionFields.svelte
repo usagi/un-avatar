@@ -1,16 +1,13 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD, DYNAMICS_ENABLED_FIELD } from "./dynamicsPresets";
+	import { DYNAMICS_ENABLED_FIELD } from "./dynamicsPresets";
 	import ProfileDynamicsOverrides from "./ProfileDynamicsOverrides.svelte";
 	import ProfileToggleField from "./ProfileToggleField.svelte";
 	import type { MotionSetting, ProfileSettingValue } from "./profileTypes";
 
 	export let setting: Pick<
 		MotionSetting,
-		| "dynamics_enabled"
-		| "dynamics_enable_all_on_launch"
-		| "contact_parameter_emission"
-		| "dynamics_category_overrides"
+		"dynamics_enabled" | "contact_parameter_emission" | "dynamics_category_overrides"
 	>;
 	export let busy = false;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
@@ -26,12 +23,6 @@
 		/>
 		<div class="physics-source-note">{$_("profiles.editor.dynamics_compat_sources")}</div>
 	</div>
-	<ProfileToggleField
-		label={$_("profiles.editor.dynamics_enable_all_on_launch")}
-		hint={$_("profiles.hints.motion.dynamics_enable_all_on_launch")}
-		checked={setting.dynamics_enable_all_on_launch}
-		onChange={(checked) => onUpdateSettingValue(DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD, checked)}
-	/>
 	<ProfileToggleField
 		label={$_("profiles.editor.contact_parameter_emission")}
 		hint={$_("profiles.hints.motion.contact_parameter_emission")}

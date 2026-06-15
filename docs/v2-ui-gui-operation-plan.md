@@ -10,12 +10,22 @@ The source policy is [`v2-near-term-plan.md`](v2-near-term-plan.md), especially 
 Supervisor is the management and authoring UI.
 
 - First-run setup and profile creation.
-- Profile editing while watching a Renderer.
+- Profile editing while watching a Renderer. Durable default values belong to the Profiles workflow, not the Renderers tab.
 - Multi-renderer launch, focus, restart, screenshot, diagnostics, and telemetry comparison.
 - Cache warmup, desktop shortcut creation, Start Menu / taskbar launcher shortcut creation, and future Jump List registration.
 - Migration from v1 user profiles into v2 schema.
 
 Supervisor must not be required for mature daily operation once a profile is prepared.
+
+### Supervisor Renderers Tab
+
+The Renderers tab is a live-operation and observation surface for running Renderer processes.
+
+- It should answer "what is this Renderer doing right now?" and "change this running Renderer now."
+- It may provide explicit `Save to profile` / `Restore from profile` actions for live state that users naturally tune while watching the result: output mode, preview window geometry, camera, and future visual defaults.
+- It should not become the primary editor for profile startup policy, prepared daily-use state, shortcut setup, cache warmup, migration, or avatar-source paths. Those belong to the Profiles workflow.
+- Runtime diagnostics, action lists, and telemetry are allowed here because they are process-scoped and often meaningless without a running Renderer.
+- If a control edits durable profile data, the UI must say so directly. Silent persistence from a live control is not allowed.
 
 ### Renderer Tray
 
@@ -27,10 +37,12 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
 - UNPhysics, wardrobe, VRC menu actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
 - Open Supervisor carries the Renderer profile manifest when available. A cold Supervisor start should select that profile; an already-running Supervisor should receive an event and switch the Profiles view to the same profile without launching another Renderer.
+- Profile sync actions may be exposed here for standalone Renderer operation: save current output mode / preview window state to the profile, and restore those values from the profile. These must use the same manifest fields and control events as Supervisor.
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
 - Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
 - Wardrobe candidates and non-wardrobe VRC menu action candidates are both sourced from normalized runtime status. Resolved VRC menu paths should be preserved in runtime status and used for tray labels when available. The tray may group action kinds separately, but it must not invent model-specific entries or require Supervisor to stay resident for basic menu operation.
 - The native tray icon and context menu should run on a dedicated UI worker thread when needed so modal menu tracking cannot stall Renderer drawing or Spout2 publishing.
+- Renderer tray labels are localized independently from Supervisor so standalone Renderer operation remains readable without requiring Supervisor to be running.
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 

@@ -17,7 +17,6 @@ export type DynamicsCategoryOverrideSetting = {
 };
 
 export const DYNAMICS_ENABLED_FIELD = "dynamics_enabled";
-export const DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD = "physics.dynamics.enable_all_on_launch";
 export const DYNAMICS_OVERRIDE_FIELD_PREFIX = "physics.dynamics.solver.";
 export const DYNAMICS_BONE_COLLIDER_FIELD_PREFIX = "physics.bone_colliders.";
 

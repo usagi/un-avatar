@@ -44,7 +44,6 @@ key = ""
 
 [physics.dynamics]
 enabled = true
-enable_all_on_launch = false
 
 [output.spout2]
 enabled = false

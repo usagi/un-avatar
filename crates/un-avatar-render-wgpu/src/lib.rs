@@ -111,7 +111,6 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"activate_action",
 	"set_parameter",
 	"set_dynamics_enabled",
-	"set_all_dynamics_enabled",
 	"set_expression_override",
 	"clear_expression_overrides",
 	"set_look_at",
@@ -258,10 +257,6 @@ enum RendererControlEvent {
 	},
 	SetDynamicsEnabled {
 		source_id: String,
-		enabled: bool,
-		result: CommandResultSlot,
-	},
-	SetAllDynamicsEnabled {
 		enabled: bool,
 		result: CommandResultSlot,
 	},
@@ -465,9 +460,6 @@ enum RendererControlCommand {
 	SetDynamicsEnabled {
 		#[serde(alias = "sourceId")]
 		source_id: String,
-		enabled: bool,
-	},
-	SetAllDynamicsEnabled {
 		enabled: bool,
 	},
 	SetExpressionOverride {
@@ -687,7 +679,6 @@ impl RendererControlCommand {
 			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
 			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
 			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
-			Self::SetAllDynamicsEnabled { .. } => unreachable!("SetAllDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -1729,6 +1720,26 @@ impl AvatarApp {
 			| RendererTrayAction::SetSpoutPreview
 			| RendererTrayAction::SetSpoutOnly
 			| RendererTrayAction::SetSpoutResolution { .. } => {}
+			RendererTrayAction::SaveOutputToProfile => {
+				if let Err(error) = self.save_tray_output_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::RestoreOutputFromProfile => {
+				if let Err(error) = self.restore_tray_output_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveWindowToProfile => {
+				if let Err(error) = self.save_tray_window_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::RestoreWindowFromProfile => {
+				if let Err(error) = self.restore_tray_window_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
 			RendererTrayAction::SetAlwaysOnTop(always_on_top) => {
 				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
 					decorations: None,
@@ -1751,7 +1762,7 @@ impl AvatarApp {
 					height: None,
 				});
 			}
-			RendererTrayAction::SetAllDynamics(enabled) => {
+			RendererTrayAction::SetCurrentWardrobeDynamics(enabled) => {
 				let result = Arc::new(Mutex::new(None));
 				let _ = self
 					.event_proxy
@@ -1793,6 +1804,93 @@ impl AvatarApp {
 				event_loop.exit();
 			}
 		}
+	}
+
+	#[cfg(windows)]
+	fn tray_manifest_path(&self) -> Result<&std::path::Path, String> {
+		self.opts
+			.manifest_path
+			.as_deref()
+			.ok_or_else(|| "renderer has no profile manifest path".to_string())
+	}
+
+	#[cfg(windows)]
+	fn tray_runtime_snapshot(&self) -> Result<RendererRuntimeSnapshot, String> {
+		let status = self
+			.runtime_status
+			.as_ref()
+			.ok_or_else(|| "renderer has no runtime status snapshot".to_string())?;
+		status
+			.lock()
+			.map(|status| status.clone())
+			.map_err(|_| "runtime status snapshot poisoned".to_string())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_output_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let state = renderer_tray::output_profile_state_from_snapshot(&snapshot);
+		renderer_tray::save_output_state_to_profile(manifest_path, &state)
+	}
+
+	#[cfg(windows)]
+	fn save_tray_window_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let state = renderer_tray::window_profile_state_from_snapshot(&snapshot)?;
+		renderer_tray::save_window_state_to_profile(manifest_path, &state)
+	}
+
+	#[cfg(windows)]
+	fn restore_tray_output_from_profile(&self) -> Result<(), String> {
+		let output = renderer_tray::read_output_state_from_profile(self.tray_manifest_path()?)?;
+		if output.spout_enabled {
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: output.spout_name.clone(),
+				width: output.spout_width,
+				height: output.spout_height,
+			});
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
+				enabled: !output.minimized,
+				activate: !output.minimized,
+			});
+		} else {
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
+				enabled: !output.minimized,
+				activate: !output.minimized,
+			});
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
+				enabled: false,
+				name: output.spout_name,
+				width: output.spout_width,
+				height: output.spout_height,
+			});
+		}
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	fn restore_tray_window_from_profile(&self) -> Result<(), String> {
+		let window = renderer_tray::read_window_state_from_profile(self.tray_manifest_path()?)?;
+		if let Some([x, y]) = window.position {
+			let _ = self
+				.event_proxy
+				.send_event(RendererControlEvent::SetWindowPosition { x: Some(x), y: Some(y) });
+		}
+		if let Some([width, height]) = window.inner_size {
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: None,
+				width: Some(width),
+				height: Some(height),
+			});
+		}
+		Ok(())
 	}
 
 	fn update_runtime_focus_status(&self) {
@@ -2473,7 +2571,6 @@ impl AvatarApp {
 			texture_compression_etc2_supported: false,
 			processed_texture_cache: self.opts.processed_texture_cache,
 			dynamics_enabled: self.opts.dynamics_enabled,
-			dynamics_enable_all_on_launch: self.opts.dynamics_enable_all_on_launch,
 			bone_colliders: self.opts.bone_colliders,
 			spring_bone_physics: self.opts.spring_bone_physics.clone(),
 			debug_material_dump: self.opts.debug_material_dump,
@@ -3237,18 +3334,6 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			} => {
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.set_runtime_dynamics_enabled(&source_id, enabled),
-					None => Err("renderer is not initialized".to_string()),
-				};
-				if outcome.is_ok() {
-					self.request_redraw();
-				}
-				if let Ok(mut guard) = result.lock() {
-					*guard = Some(outcome);
-				}
-			}
-			RendererControlEvent::SetAllDynamicsEnabled { enabled, result } => {
-				let outcome = match self.gpu.as_mut() {
-					Some(gpu) => gpu.set_all_runtime_dynamics_enabled(enabled),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if outcome.is_ok() {
@@ -4727,7 +4812,6 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 		Ok(RendererControlCommand::SetDynamicsEnabled { source_id, enabled }) => {
 			dispatch_set_dynamics_enabled_command(proxy, source_id, enabled)
 		}
-		Ok(RendererControlCommand::SetAllDynamicsEnabled { enabled }) => dispatch_set_all_dynamics_enabled_command(proxy, enabled),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -4768,18 +4852,6 @@ fn dispatch_set_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlE
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_dynamics_enabled")
-}
-
-fn dispatch_set_all_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlEvent>, enabled: bool) -> String {
-	let result: CommandResultSlot = Arc::new(Mutex::new(None));
-	let event = RendererControlEvent::SetAllDynamicsEnabled {
-		enabled,
-		result: Arc::clone(&result),
-	};
-	if proxy.send_event(event).is_err() {
-		return "err event-loop-closed".to_string();
-	}
-	wait_command_result(result, Duration::from_secs(2), "set_all_dynamics_enabled")
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
@@ -5326,7 +5398,6 @@ pub fn run_cli() -> Result<(), RunError> {
 			a: cli.ca,
 		},
 		dynamics_enabled: !cli.no_dynamics,
-		dynamics_enable_all_on_launch: false,
 		bone_colliders: Default::default(),
 		spring_bone_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {
@@ -6881,10 +6952,6 @@ mod tests {
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
 			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_dynamics_enabled"))));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_all_dynamics_enabled"))));
 	}
 
 	#[test]
@@ -7092,15 +7159,6 @@ mod tests {
 			panic!("expected set_dynamics_enabled command");
 		};
 		assert_eq!(source_id, "physbone:hair");
-		assert!(enabled);
-	}
-
-	#[test]
-	fn parses_json_set_all_dynamics_enabled_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_all_dynamics_enabled","enabled":true}"#).unwrap();
-		let RendererControlCommand::SetAllDynamicsEnabled { enabled } = command else {
-			panic!("expected set_all_dynamics_enabled command");
-		};
 		assert!(enabled);
 	}
 

@@ -8,14 +8,12 @@
 	export let runtimeStatus: RendererRuntimeDiagnosticsData | null;
 	export let busy = false;
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
-	export let onSetAllDynamicsEnabled: RendererPaneActions["onSetAllDynamicsEnabled"];
 
 	const sampleLimit = 4;
 
 	$: rendererRunning = renderer.pid != null;
 	$: dynamicsGroups = runtimeStatus?.dynamics_groups ?? [];
 	$: canSetDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_dynamics_enabled") ?? false;
-	$: canSetAllDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_all_dynamics_enabled") ?? false;
 
 	function sampledLines<T>(items: T[], label: (item: T) => string): string {
 		const lines = items.slice(0, sampleLimit).map(label);
@@ -200,11 +198,6 @@
 		if (!canSetDynamicsEnabled || !group.source_id) return;
 		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
 	}
-
-	function setAllDynamicsGroups(enabled: boolean): void {
-		if (!canSetAllDynamicsEnabled) return;
-		void onSetAllDynamicsEnabled(renderer.id, enabled);
-	}
 </script>
 
 <div class="renderer-pane-scroll">
@@ -260,29 +253,6 @@
 			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
-				<dd class="diagnostics-action-list compact">
-					<div class="diagnostics-action-row">
-						<code>{$_("renderers.details.dynamics_all_runtime_overrides")}</code>
-						<span>
-							<button
-								type="button"
-								disabled={busy || !rendererRunning || !canSetAllDynamicsEnabled || !runtimeStatus.dynamics_group_count}
-								onclick={() => setAllDynamicsGroups(true)}
-							>
-								<Power size={13} />
-								<span>{$_("renderers.details.dynamics_enable_all")}</span>
-							</button>
-							<button
-								type="button"
-								disabled={busy || !rendererRunning || !canSetAllDynamicsEnabled || !runtimeStatus.dynamics_group_count}
-								onclick={() => setAllDynamicsGroups(false)}
-							>
-								<Power size={13} />
-								<span>{$_("renderers.details.dynamics_disable_all")}</span>
-							</button>
-						</span>
-					</div>
-				</dd>
 				<dd class="diagnostics-action-list">
 					{#each dynamicsGroups as group}
 						<div class="diagnostics-action-row">

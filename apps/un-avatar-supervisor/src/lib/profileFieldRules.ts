@@ -1,6 +1,5 @@
 import {
 	DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
-	DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD,
 	DYNAMICS_ENABLED_FIELD,
 	DYNAMICS_OVERRIDE_FIELD_PREFIX,
 } from "./dynamicsPresets";
@@ -30,7 +29,6 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field === "icon_path" ||
 		field.startsWith("motion.") ||
 		field === DYNAMICS_ENABLED_FIELD ||
-		field === DYNAMICS_ENABLE_ALL_ON_LAUNCH_FIELD ||
 		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
 		field.startsWith(DYNAMICS_BONE_COLLIDER_FIELD_PREFIX) ||
 		field.startsWith("effects.avatar.outline.") ||
