@@ -58,12 +58,10 @@
 			{onRestoreCamera}
 			{onSetClearColor}
 			{onColorModeChange}
-			{onSetRuntimeParameter}
-			{onActivateRuntimeAction}
 			{onActivateWardrobeMenuCandidate}
 		/>
 	{/await}
-{:else if rendererPaneTab === "expressions"}
+{:else if rendererPaneTab === "animator"}
 	{#await import("./RendererExpressionsPane.svelte") then module}
 		{@const RendererExpressionsPane = module.default}
 		<RendererExpressionsPane
@@ -72,9 +70,14 @@
 			{busy}
 			expressionPresets={runtimeStatus?.expression_presets ?? []}
 			{expressionOverrides}
+			runtimeActions={runtimeStatus?.runtime_actions ?? []}
+			menuActionCandidates={runtimeStatus?.menu_action_candidates ?? []}
+			runtimeParameterValues={runtimeStatus?.runtime_parameter_values ?? {}}
 			bind:expressionFilter
 			{onClearExpressionOverrides}
 			{onSetExpressionOverride}
+			{onSetRuntimeParameter}
+			{onActivateRuntimeAction}
 		/>
 	{/await}
 {:else if rendererPaneTab === "diagnostics"}

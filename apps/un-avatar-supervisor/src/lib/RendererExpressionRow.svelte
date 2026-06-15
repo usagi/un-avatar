@@ -20,7 +20,7 @@
 <div class:active class="expression-row" title={preset}>
 	<div class="expression-name">
 		<strong>{preset}</strong>
-		<small>{active ? $_("renderers.details.expression_overridden") : $_("renderers.details.expression_idle")}</small>
+		<small>{active ? $_("renderers.animator.expression_overridden") : $_("renderers.animator.expression_idle")}</small>
 	</div>
 	<label class="expression-slider">
 		<input

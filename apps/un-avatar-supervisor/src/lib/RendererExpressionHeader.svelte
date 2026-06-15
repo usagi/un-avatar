@@ -11,7 +11,7 @@
 
 <section class="renderer-expression-header">
 	<div>
-		<h3>{$_("renderers.details.expressions")}</h3>
+		<h3>{$_("renderers.animator.expressions")}</h3>
 		<span
 			>{$_("renderers.details.expressions_summary", {
 				values: {

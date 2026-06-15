@@ -29,7 +29,7 @@ export type TextureRuntimeSummary = {
 	limit_max_dimension: number | null;
 };
 
-export type RendererPaneTab = "overview" | "controls" | "expressions" | "diagnostics";
+export type RendererPaneTab = "overview" | "controls" | "animator" | "diagnostics";
 
 export type RendererCameraSnapshot = {
 	target: [number, number, number];

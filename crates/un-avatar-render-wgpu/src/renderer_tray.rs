@@ -43,7 +43,7 @@ save_window_profile = "現在のウィンドウを保存"
 restore_window_profile = "ウィンドウを復元"
 wardrobe = "ワードローブ"
 base_wardrobe = "Base"
-vrc_menu = "VRC メニュー"
+vrc_menu = "UNAnimator"
 unphysics = "UNPhysics"
 unphysics_summary = "有効グループ %{enabled} / %{total}"
 dynamics_enabled = "有効"
@@ -77,7 +77,7 @@ save_window_profile = "Save Current Window"
 restore_window_profile = "Restore Window"
 wardrobe = "Wardrobe"
 base_wardrobe = "Base"
-vrc_menu = "VRC Menu"
+vrc_menu = "UNAnimator"
 unphysics = "UNPhysics"
 unphysics_summary = "%{enabled} / %{total} effective groups"
 dynamics_enabled = "Enabled"
@@ -1829,7 +1829,7 @@ mod tests {
 		assert_eq!(text.show_focus_preview(), "プレビューを表示 / 前面へ");
 		assert_eq!(text.output(), "出力");
 		assert_eq!(text.wardrobe(), "ワードローブ");
-		assert_eq!(text.vrc_menu(), "VRC メニュー");
+		assert_eq!(text.vrc_menu(), "UNAnimator");
 		assert_eq!(text.quit_renderer(), "この Renderer を終了");
 	}
 

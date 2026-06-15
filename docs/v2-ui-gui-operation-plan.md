@@ -35,12 +35,12 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 - Header identifies avatar / profile and pid.
 - Output operations are local to that Renderer: Window Preview, Spout2 + Preview, Spout2 Only, and explicit Spout2 resolution presets.
 - Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
-- UNPhysics, wardrobe, VRC menu actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
+- UNPhysics, wardrobe, UNAnimator actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
 - Open Supervisor carries the Renderer profile manifest when available. A cold Supervisor start should select that profile; an already-running Supervisor should receive an event and switch the Profiles view to the same profile without launching another Renderer.
 - Profile sync actions may be exposed here for standalone Renderer operation: save current output mode / preview window state to the profile, and restore those values from the profile. These must use the same manifest fields and control events as Supervisor.
 - Tray refresh reads throttled runtime snapshots; it is not a per-frame UI.
 - Wardrobe / VRC menu actions should remain reachable from the tray without an app-side fixed count cap. Very large menus may be long, but hiding available actions behind "more in Supervisor" breaks the tray's role as the reliable runtime operation surface.
-- Wardrobe candidates and non-wardrobe VRC menu action candidates are both sourced from normalized runtime status. Resolved VRC menu paths should be preserved in runtime status and used for tray labels when available. The tray may group action kinds separately, but it must not invent model-specific entries or require Supervisor to stay resident for basic menu operation.
+- Wardrobe candidates and non-wardrobe Animator / expression-menu action candidates are both sourced from normalized runtime status. Resolved source menu paths should be preserved in runtime status and used for tray labels when available. The tray may group action kinds separately, but it must not invent model-specific entries or require Supervisor to stay resident for basic menu operation.
 - The native tray icon and context menu should run on a dedicated UI worker thread when needed so modal menu tracking cannot stall Renderer drawing or Spout2 publishing.
 - Renderer tray labels are localized independently from Supervisor so standalone Renderer operation remains readable without requiring Supervisor to be running.
 
@@ -68,7 +68,7 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - `Check Now` launches the selected profile from Supervisor so the user can verify appearance, physics, output, and motion before turning it into daily operation.
 - `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
 - These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
-- Running Renderer controls in Supervisor may group or scroll wardrobe / VRC menu candidates, but must not impose an app-side fixed candidate cap. If an action is available from the normalized runtime status, the user should be able to invoke it without switching surfaces.
+- Running Renderer controls in Supervisor expose wardrobe switching in Controls and expression / Animator actions in the UNAnimator tab. They may group or scroll candidates, but must not impose an app-side fixed candidate cap. If an action is available from the normalized runtime status and is not a known non-user runtime control such as VRCFT metadata, the user should be able to invoke it without switching surfaces.
 
 ### `.unavatar` Asset Review
 
@@ -93,6 +93,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 - Screen / viewer effects may be profile controls: Silhouette Outline, Bloom, SSAO, contact shadow, color grading, background, capture / output policy.
 - Runtime status labels should describe user-visible operation. Prefer `Live` / `No response` style wording over transport-centric `connected` / `disconnected` in Supervisor UI and diagnostics previews.
 - Runtime UI should show only operations that can work now, or clearly mark unavailable backend support. Do not advertise headless output until the renderer architecture supports it.
+- `VRC Menu` is not a primary user-facing surface name in v2. Source VRC menu metadata is an import path into normalized UNAnimator actions; raw VRC menu diagnostics may remain in diagnostics until the exporter/runtime normalization is complete.
 
 ## Implementation Order
 

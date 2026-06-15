@@ -3,7 +3,7 @@
 	import type { RendererPaneTab } from "./rendererTypes";
 
 	export let rendererPaneTab: RendererPaneTab;
-	export let expressionPresetCount = 0;
+	export let animatorItemCount = 0;
 	export let onSelectTab: (tab: RendererPaneTab) => void;
 </script>
 
@@ -24,15 +24,13 @@
 	>
 	<button
 		role="tab"
-		aria-selected={rendererPaneTab === "expressions"}
-		class:active={rendererPaneTab === "expressions"}
-		disabled={expressionPresetCount === 0}
-		onclick={() => onSelectTab("expressions")}
-		title={expressionPresetCount > 0
-			? $_("renderers.details.expressions_tip_available")
-			: $_("renderers.details.expressions_tip_unavailable")}
-		><strong>{$_("renderers.details.expressions")}</strong><small>{$_("renderers.details.expressions_subtitle")}</small
-		>{#if expressionPresetCount > 0}<span class="tab-count">{expressionPresetCount}</span>{/if}</button
+		aria-selected={rendererPaneTab === "animator"}
+		class:active={rendererPaneTab === "animator"}
+		disabled={animatorItemCount === 0}
+		onclick={() => onSelectTab("animator")}
+		title={animatorItemCount > 0 ? $_("renderers.details.animator_tip_available") : $_("renderers.details.animator_tip_unavailable")}
+		><strong>{$_("renderers.details.animator")}</strong><small>{$_("renderers.details.animator_subtitle")}</small
+		>{#if animatorItemCount > 0}<span class="tab-count">{animatorItemCount}</span>{/if}</button
 	>
 	<button
 		role="tab"

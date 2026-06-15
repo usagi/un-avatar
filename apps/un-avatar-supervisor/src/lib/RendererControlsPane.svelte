@@ -3,7 +3,6 @@
 	import RendererCameraControls from "./RendererCameraControls.svelte";
 	import RendererDisplayControls from "./RendererDisplayControls.svelte";
 	import RendererOutputControls from "./RendererOutputControls.svelte";
-	import RendererVrcMenuControls from "./RendererVrcMenuControls.svelte";
 	import RendererWardrobeMenuControls from "./RendererWardrobeMenuControls.svelte";
 	import RendererWindowControls from "./RendererWindowControls.svelte";
 	import type { RendererControlsData, RendererControlsStatus } from "./rendererControlTypes";
@@ -28,8 +27,6 @@
 	export let onRestoreCamera: RendererPaneActions["onRestoreCamera"];
 	export let onSetClearColor: RendererPaneActions["onSetClearColor"];
 	export let onColorModeChange: RendererPaneActions["onColorModeChange"];
-	export let onSetRuntimeParameter: RendererPaneActions["onSetRuntimeParameter"];
-	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 </script>
 
@@ -38,7 +35,6 @@
 	<RendererWindowControls {renderer} {runtimeStatus} {busy} {onSetWindow} {onSaveWindow} {onRestoreWindow} />
 	<RendererDisplayControls {renderer} {runtimeStatus} {busy} {onSetShowAxes} {onSetShowBoneColliders} {onSetCameraLock} />
 	<RendererWardrobeMenuControls {renderer} {runtimeStatus} {busy} {onActivateWardrobeMenuCandidate} />
-	<RendererVrcMenuControls {renderer} {runtimeStatus} {busy} {onSetRuntimeParameter} {onActivateRuntimeAction} />
 	<RendererCameraControls {renderer} {runtimeStatus} {busy} {onSetCameraOrbitPreset} {onSaveCamera} {onRestoreCamera} />
 	<RendererBackgroundControls {renderer} {runtimeStatus} {busy} {colorDisplayMode} {onSetClearColor} {onColorModeChange} />
 </div>

@@ -5,6 +5,7 @@
 	import RendererReadyPanel from "./RendererReadyPanel.svelte";
 	import RendererRuntimeSummaryGrid from "./RendererRuntimeSummaryGrid.svelte";
 	import type { ProfileLaunchSetting } from "./profileTypes";
+	import { animatorItemCount as countAnimatorItems } from "./rendererAnimator";
 	import type { ExpressionOverrides } from "./rendererExpressions";
 	import type { RendererPaneActions } from "./rendererPaneActions";
 	import type { RendererInstance, RendererPaneTab, RendererRuntimeStatus } from "./rendererTypes";
@@ -47,13 +48,19 @@
 	export let onOpenProfile: () => void;
 	export let onRevealProfilesDir: () => void | Promise<void>;
 	export let onSelectRendererPaneTab: (tab: RendererPaneTab) => void;
+
+	$: animatorItemCount = countAnimatorItems(
+		runtimeStatus?.expression_presets ?? [],
+		runtimeStatus?.menu_action_candidates ?? [],
+		runtimeStatus?.runtime_actions ?? []
+	);
 </script>
 
 <aside class="panel details-panel">
 	<h2>{renderer ? $_("renderers.details.title") : $_("renderers.ready.title")}</h2>
 	{#if renderer}
 		<RendererRuntimeSummaryGrid {renderer} {runtimeStatus} />
-		<RendererPaneTabs {rendererPaneTab} expressionPresetCount={runtimeStatus?.expression_presets?.length ?? 0} onSelectTab={onSelectRendererPaneTab} />
+		<RendererPaneTabs {rendererPaneTab} {animatorItemCount} onSelectTab={onSelectRendererPaneTab} />
 		<RendererPaneContent
 			{renderer}
 			{runtimeStatus}

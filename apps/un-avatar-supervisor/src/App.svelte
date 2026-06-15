@@ -123,6 +123,7 @@
 		saveLaunchTargetId,
 		type ColorDisplayMode,
 	} from "./lib/storageState";
+	import { animatorItemCount } from "./lib/rendererAnimator";
 	import { spoutSenderLabel, spoutTimingLabel, textureCacheLabel, texturePolicyLabel, textureSummaryLabel } from "./lib/runtimeLabels";
 	import { Activity, AlertTriangle, Camera, FileCog, FolderOpen, Monitor, Play, Settings, TerminalSquare } from "lucide-svelte";
 	import ThemeModeSwitch from "./lib/ThemeModeSwitch.svelte";
@@ -379,8 +380,14 @@
 	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
 	$effect(() => {
-		if (rendererPaneTab !== "expressions" || !selectedRuntimeStatus) return;
-		if (selectedRuntimeStatus.expression_presets.length === 0) {
+		if (rendererPaneTab !== "animator" || !selectedRuntimeStatus) return;
+		if (
+			animatorItemCount(
+				selectedRuntimeStatus.expression_presets,
+				selectedRuntimeStatus.menu_action_candidates,
+				selectedRuntimeStatus.runtime_actions
+			) === 0
+		) {
 			rendererPaneTab = "overview";
 		}
 	});
@@ -2423,7 +2430,7 @@
 				actionId,
 			});
 			await refreshRendererRuntimeView();
-			message = $_("renderers.messages.activated_vrc_menu_action", { values: { name: renderer.name, label } });
+			message = $_("renderers.messages.activated_animator_action", { values: { name: renderer.name, label } });
 		} catch (error) {
 			message = String(error);
 		}
@@ -2438,7 +2445,7 @@
 				value,
 			});
 			await refreshRendererRuntimeView();
-			message = $_("renderers.messages.activated_vrc_menu_action", { values: { name: renderer.name, label } });
+			message = $_("renderers.messages.activated_animator_action", { values: { name: renderer.name, label } });
 		} catch (error) {
 			message = String(error);
 		}
