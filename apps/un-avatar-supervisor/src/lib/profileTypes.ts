@@ -217,6 +217,8 @@ export type AnimatorActionSetting = {
 	id: string;
 	mode: AnimatorActionMode;
 	value?: number | null;
+	transition_curve?: string | null;
+	transition_ms?: number | null;
 };
 
 export type AnimatorBindingSetting = {

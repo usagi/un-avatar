@@ -5,9 +5,9 @@ use serde::Deserialize;
 use crate::{
 	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
-		AnimatorActionBindingOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook,
-		ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
-		WardrobeBindingKind, WardrobeBindingOptions,
+		AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality,
+		ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
+		PrimaryMotionSource, SsaoOptions, WardrobeBindingKind, WardrobeBindingOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -145,6 +145,8 @@ pub(crate) struct AnimatorActionManifest {
 	pub mode: Option<String>,
 	/// Optional parameter value to send when activating this action.
 	pub value: Option<f32>,
+	pub transition_curve: Option<String>,
+	pub transition_ms: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -676,7 +678,11 @@ impl AnimatorManifest {
 			}
 			opts.animator_action_modes.insert(id.clone(), mode);
 			if let Some(value) = action.value.filter(|value| value.is_finite()) {
-				opts.animator_action_values.insert(id, value);
+				opts.animator_action_values.insert(id.clone(), value);
+			}
+			let transition = animator_transition_from_fields(action.transition_curve.as_deref(), action.transition_ms);
+			if transition.duration_ms > 0 && transition.curve != "none" {
+				opts.animator_action_transitions.insert(id, transition);
 			}
 		}
 		for id in &ids {
@@ -689,6 +695,21 @@ impl AnimatorManifest {
 			.into_iter()
 			.filter_map(animator_binding_from_manifest)
 			.collect();
+	}
+}
+
+fn animator_transition_from_fields(curve: Option<&str>, duration_ms: Option<u32>) -> AnimatorActionTransitionOptions {
+	let curve = match curve.unwrap_or("none").trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => "linear",
+		"ease_in" | "easein" | "ease_in_quad" => "ease_in",
+		"ease_out" | "easeout" | "ease_out_quad" => "ease_out",
+		"ease_in_out" | "easeinout" | "ease_in_out_quad" => "ease_in_out",
+		_ => "none",
+	}
+	.to_string();
+	AnimatorActionTransitionOptions {
+		curve,
+		duration_ms: duration_ms.unwrap_or(0).min(3000),
 	}
 }
 
@@ -1469,6 +1490,8 @@ action_ids = ["animator:0:0:hat_off:0"]
 id = "animator:0:0:beam:0"
 mode = "one_shot"
 value = 0.45
+transition_curve = "ease_out"
+transition_ms = 250
 
 [[animator.actions]]
 id = "animator:0:0:debug_hidden:0"
@@ -1640,6 +1663,12 @@ constraint_iterations = 6
 			Some("one_shot")
 		);
 		assert_eq!(opts.animator_action_values.get("animator:0:0:beam:0").copied(), Some(0.45));
+		assert_eq!(
+			opts.animator_action_transitions
+				.get("animator:0:0:beam:0")
+				.map(|transition| (transition.curve.as_str(), transition.duration_ms)),
+			Some(("ease_out", 250))
+		);
 		assert_eq!(opts.animator_bindings.len(), 2);
 		assert_eq!(opts.animator_bindings[0].action_id, "animator:0:0:beam:0");
 		assert_eq!(opts.animator_bindings[0].kind, WardrobeBindingKind::Keyboard);

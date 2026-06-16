@@ -92,6 +92,15 @@
 		return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
 	}
 
+	function selectedTransitionCurveFor(id: string): string {
+		return setting.animator_actions.find((action) => action.id === id)?.transition_curve ?? "none";
+	}
+
+	function selectedTransitionMsFor(id: string): number {
+		const value = setting.animator_actions.find((action) => action.id === id)?.transition_ms;
+		return typeof value === "number" && Number.isFinite(value) ? Math.min(3000, Math.max(0, Math.round(value))) : 0;
+	}
+
 	async function refreshAnimatorPage(): Promise<void> {
 		traceFrontendEvent("unanimator:refresh:enter", {
 			avatarPath: setting.avatar_path ?? "",
@@ -206,9 +215,16 @@
 	}
 
 	async function updateAnimatorAction(id: string, mode: AnimatorActionMode, value = selectedValueFor(id)): Promise<void> {
+		const existing = setting.animator_actions.find((action) => action.id === id);
 		const next = setting.animator_actions.filter((action) => action.id !== id);
 		if (mode !== "off") {
-			next.push({ id, mode, value: Math.min(1, Math.max(0, value)) });
+			next.push({
+				id,
+				mode,
+				value: Math.min(1, Math.max(0, value)),
+				transition_curve: existing?.transition_curve ?? null,
+				transition_ms: existing?.transition_ms ?? null,
+			});
 		}
 		if (animatorPage) {
 			animatorCandidates = animatorCandidates.map((candidate) =>
@@ -224,6 +240,21 @@
 
 	async function updateAnimatorActionValue(id: string, value: number): Promise<void> {
 		await updateAnimatorAction(id, selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id), value);
+	}
+
+	async function updateAnimatorTransition(id: string, curve: string, durationMs = selectedTransitionMsFor(id)): Promise<void> {
+		const mode = selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id);
+		const next = setting.animator_actions.filter((action) => action.id !== id);
+		const normalizedCurve = curve === "none" ? null : curve;
+		const normalizedMs = normalizedCurve ? Math.min(3000, Math.max(0, Math.round(durationMs))) : null;
+		next.push({
+			id,
+			mode,
+			value: selectedValueFor(id),
+			transition_curve: normalizedCurve,
+			transition_ms: normalizedMs && normalizedMs > 0 ? normalizedMs : null,
+		});
+		await onUpdateSettingValue("animator.actions", next);
 	}
 
 	function wardrobeSettingRows(options: UnavatarWardrobeOptions | null): WardrobeSetOption[] {
@@ -604,6 +635,40 @@
 										value={selectedValueFor(action.id).toFixed(2)}
 										disabled={busy || selectedModeFor(action.id) === "off"}
 										onchange={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+									/>
+								</div>
+								<div class="animator-transition-row">
+									<select
+										value={selectedTransitionCurveFor(action.id)}
+										disabled={busy || selectedModeFor(action.id) === "off"}
+										onchange={(event) => updateAnimatorTransition(action.id, (event.currentTarget as HTMLSelectElement).value)}
+									>
+										<option value="none">{$_("profiles.editor.unanimator_transition_none")}</option>
+										<option value="linear">Linear</option>
+										<option value="ease_in">Ease In</option>
+										<option value="ease_out">Ease Out</option>
+										<option value="ease_in_out">Ease InOut</option>
+									</select>
+									<input
+										type="range"
+										min="0"
+										max="1000"
+										step="10"
+										value={selectedTransitionMsFor(action.id)}
+										disabled={busy || selectedTransitionCurveFor(action.id) === "none"}
+										oninput={(event) =>
+											updateAnimatorTransition(action.id, selectedTransitionCurveFor(action.id), Number((event.currentTarget as HTMLInputElement).value))}
+									/>
+									<input
+										type="number"
+										min="0"
+										max="3000"
+										step="10"
+										value={selectedTransitionMsFor(action.id)}
+										disabled={busy || selectedTransitionCurveFor(action.id) === "none"}
+										aria-label={$_("profiles.editor.unanimator_transition_ms")}
+										onchange={(event) =>
+											updateAnimatorTransition(action.id, selectedTransitionCurveFor(action.id), Number((event.currentTarget as HTMLInputElement).value))}
 									/>
 								</div>
 								<div class="animator-binding-row">

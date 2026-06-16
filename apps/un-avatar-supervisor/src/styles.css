@@ -3901,6 +3901,18 @@ dd {
 	align-items: center;
 }
 
+.animator-transition-row {
+	grid-column: 1 / -1;
+	display: grid;
+	grid-template-columns: 132px minmax(120px, 1fr) 72px;
+	gap: 8px;
+	align-items: center;
+}
+
+.animator-transition-row input[type="number"] {
+	min-width: 0;
+}
+
 .animator-action-row select {
 	width: 112px;
 	flex: 0 0 auto;

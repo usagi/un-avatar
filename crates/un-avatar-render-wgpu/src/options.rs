@@ -533,6 +533,8 @@ pub struct AvatarWindowOptions {
 	pub animator_action_modes: BTreeMap<String, String>,
 	/// Optional per-action parameter value used when a profile wants ON to mean e.g. 0.45 instead of the exported value.
 	pub animator_action_values: BTreeMap<String, f32>,
+	/// Optional per-action numeric transition settings.
+	pub animator_action_transitions: BTreeMap<String, AnimatorActionTransitionOptions>,
 	/// Renderer-global UNAnimator input bindings. Active only while this renderer process is running.
 	pub animator_bindings: Vec<AnimatorActionBindingOptions>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
@@ -695,6 +697,21 @@ pub struct AnimatorActionBindingOptions {
 	pub note: Option<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnimatorActionTransitionOptions {
+	pub curve: String,
+	pub duration_ms: u32,
+}
+
+impl Default for AnimatorActionTransitionOptions {
+	fn default() -> Self {
+		Self {
+			curve: "none".to_string(),
+			duration_ms: 0,
+		}
+	}
+}
+
 impl Default for AvatarWindowOptions {
 	fn default() -> Self {
 		Self {
@@ -720,6 +737,7 @@ impl Default for AvatarWindowOptions {
 			animator_action_ids: Vec::new(),
 			animator_action_modes: BTreeMap::new(),
 			animator_action_values: BTreeMap::new(),
+			animator_action_transitions: BTreeMap::new(),
 			animator_bindings: Vec::new(),
 			icon_path: None,
 			app_user_model_id: None,

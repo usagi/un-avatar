@@ -1026,6 +1026,10 @@ struct AnimatorActionSetting {
 	mode: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	value: Option<f64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	transition_curve: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	transition_ms: Option<u32>,
 }
 
 impl Default for AnimatorActionSetting {
@@ -1034,6 +1038,8 @@ impl Default for AnimatorActionSetting {
 			id: String::new(),
 			mode: "off".to_string(),
 			value: None,
+			transition_curve: None,
+			transition_ms: None,
 		}
 	}
 }
@@ -1851,6 +1857,8 @@ struct ManifestAnimatorAction {
 	id: Option<String>,
 	mode: Option<String>,
 	value: Option<f64>,
+	transition_curve: Option<String>,
+	transition_ms: Option<u32>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2191,6 +2199,8 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 			id: id.to_string(),
 			mode: "toggle".to_string(),
 			value: None,
+			transition_curve: None,
+			transition_ms: None,
 		});
 	}
 	for action in animator.actions.iter().flatten() {
@@ -2202,11 +2212,15 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 		if let Some(existing) = actions.iter_mut().find(|existing| existing.id == id) {
 			existing.mode = mode;
 			existing.value = action.value.filter(|value| value.is_finite());
+			existing.transition_curve = normalize_animator_transition_curve_opt(action.transition_curve.as_deref());
+			existing.transition_ms = action.transition_ms.map(|value| value.min(3000)).filter(|value| *value > 0);
 		} else {
 			actions.push(AnimatorActionSetting {
 				id: id.to_string(),
 				mode,
 				value: action.value.filter(|value| value.is_finite()),
+				transition_curve: normalize_animator_transition_curve_opt(action.transition_curve.as_deref()),
+				transition_ms: action.transition_ms.map(|value| value.min(3000)).filter(|value| *value > 0),
 			});
 		}
 	}
@@ -2362,6 +2376,17 @@ fn normalize_animator_action_mode(mode: &str) -> String {
 		"one_shot" | "oneshot" | "one shot" => "one_shot".to_string(),
 		_ => "off".to_string(),
 	}
+}
+
+fn normalize_animator_transition_curve_opt(curve: Option<&str>) -> Option<String> {
+	let curve = match curve.unwrap_or("none").trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => "linear",
+		"ease_in" | "easein" => "ease_in",
+		"ease_out" | "easeout" => "ease_out",
+		"ease_in_out" | "easeinout" => "ease_in_out",
+		_ => "none",
+	};
+	(curve != "none").then(|| curve.to_string())
 }
 
 fn animator_action_mode_is_enabled(mode: &str) -> bool {
@@ -5730,6 +5755,13 @@ fn apply_animator_setting_value(manifest: &mut toml::Value, field: &str, value: 
 				table.insert("mode".to_string(), toml::Value::String(mode));
 				if let Some(value) = action.value.filter(|value| value.is_finite()) {
 					table.insert("value".to_string(), toml::Value::Float(value));
+				}
+				if let Some(curve) = normalize_animator_transition_curve_opt(action.transition_curve.as_deref()) {
+					let duration_ms = action.transition_ms.unwrap_or(0).min(3000);
+					if duration_ms > 0 {
+						table.insert("transition_curve".to_string(), toml::Value::String(curve));
+						table.insert("transition_ms".to_string(), toml::Value::Integer(i64::from(duration_ms)));
+					}
 				}
 				out.push(toml::Value::Table(table));
 			}
@@ -14009,7 +14041,7 @@ action_ids = ["animator:old"]
 			"animator.actions",
 			serde_json::json!([
 				{ "id": " animator:0:0:hat_off:0 ", "mode": "toggle" },
-				{ "id": "animator:0:0:beam:0", "mode": "one-shot", "value": 0.45 },
+				{ "id": "animator:0:0:beam:0", "mode": "one-shot", "value": 0.45, "transition_curve": "ease-out", "transition_ms": 250 },
 				{ "id": "animator:0:0:hidden:0", "mode": "off" },
 				{ "id": "animator:0:0:hat_off:0", "mode": "toggle" }
 			]),
@@ -14040,6 +14072,20 @@ action_ids = ["animator:old"]
 				.and_then(|table| table.get("value"))
 				.and_then(toml::Value::as_float),
 			Some(0.45)
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("transition_curve"))
+				.and_then(toml::Value::as_str),
+			Some("ease_out")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("transition_ms"))
+				.and_then(toml::Value::as_integer),
+			Some(250)
 		);
 	}
 

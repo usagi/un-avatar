@@ -75,6 +75,8 @@ UNAnimator actions use `[[animator.bindings]]`:
 id = "expression:angry"
 mode = "toggle"
 value = 1.0
+transition_curve = "ease_out"
+transition_ms = 250
 
 [[animator.bindings]]
 action_id = "expression:angry"
@@ -91,9 +93,20 @@ note = 61
 
 For `toggle`, Renderer owns the current on/off state while the process is running. If the action is active and it has a runtime parameter, Renderer writes the inactive parameter value. Expression-only profile actions are restored by clearing their expression override.
 
+`transition_curve` and `transition_ms` are optional numeric-action easing fields. They apply only to range-like UNAnimator effects such as expression weights and runtime parameters. Valid curves are:
+
+- `none`
+- `linear`
+- `ease_in`
+- `ease_out`
+- `ease_in_out`
+
+Wardrobe set changes do not use this transition model. Wardrobe needs a separate transit system because it involves scoped asset loading, visibility/material swaps, physics reset, and presentation timing.
+
 ## Deferred
 
 - Mouse button global bindings.
 - MIDI Control Change and continuous value mapping.
 - Velocity-to-value mapping.
 - Per-binding conflict UI.
+- Wardrobe set transit system.

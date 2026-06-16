@@ -46,10 +46,10 @@ pub use gpu::FrameTimings;
 use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
 pub use mesh_pass::{AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshLoadOpts};
 pub use options::{
-	AaMode, AnimatorActionBindingOptions, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook,
-	ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend,
-	SpoutWindowOptions, SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference,
-	TextureMipmapFilter, TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
+	AaMode, AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions,
+	BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
+	LightingOptions, RenderBackend, SpoutWindowOptions, SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
+	TextureCompressionPreference, TextureMipmapFilter, TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
 };
 use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
@@ -196,6 +196,30 @@ struct ActiveCameraTransition {
 	started_at: Instant,
 	duration: Duration,
 	easing: CameraTransitionEasing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnimatorTransitionCurve {
+	Linear,
+	EaseIn,
+	EaseOut,
+	EaseInOut,
+}
+
+#[derive(Clone, Debug)]
+enum AnimatorTransitionTarget {
+	Expression { name: String },
+	Parameter { name: String },
+}
+
+#[derive(Clone, Debug)]
+struct ActiveAnimatorTransition {
+	target: AnimatorTransitionTarget,
+	start: f32,
+	end: f32,
+	started_at: Instant,
+	duration: Duration,
+	curve: AnimatorTransitionCurve,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -875,6 +899,32 @@ fn ease_camera_transition(t: f32, easing: CameraTransitionEasing) -> f32 {
 	}
 }
 
+fn parse_animator_transition_curve(value: &str) -> Option<AnimatorTransitionCurve> {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => Some(AnimatorTransitionCurve::Linear),
+		"ease_in" | "easein" => Some(AnimatorTransitionCurve::EaseIn),
+		"ease_out" | "easeout" => Some(AnimatorTransitionCurve::EaseOut),
+		"ease_in_out" | "easeinout" => Some(AnimatorTransitionCurve::EaseInOut),
+		_ => None,
+	}
+}
+
+fn ease_animator_transition(t: f32, curve: AnimatorTransitionCurve) -> f32 {
+	let t = t.clamp(0.0, 1.0);
+	match curve {
+		AnimatorTransitionCurve::Linear => t,
+		AnimatorTransitionCurve::EaseIn => t * t,
+		AnimatorTransitionCurve::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+		AnimatorTransitionCurve::EaseInOut => {
+			if t < 0.5 {
+				2.0 * t * t
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(2) * 0.5
+			}
+		}
+	}
+}
+
 fn lerp_camera_state(start: gpu::CameraStateSnapshot, end: gpu::CameraStateSnapshot, t: f32) -> gpu::CameraStateSnapshot {
 	gpu::CameraStateSnapshot {
 		target: [
@@ -1227,6 +1277,7 @@ struct AvatarApp {
 	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
 	wardrobe_midi: Option<WardrobeMidiRuntime>,
 	active_profile_animator_actions: BTreeSet<String>,
+	active_animator_transitions: Vec<ActiveAnimatorTransition>,
 }
 
 #[derive(Clone, Debug)]
@@ -1542,6 +1593,7 @@ impl AvatarApp {
 			wardrobe_hotkeys: None,
 			wardrobe_midi: None,
 			active_profile_animator_actions: BTreeSet::new(),
+			active_animator_transitions: Vec::new(),
 		}
 	}
 
@@ -1829,8 +1881,8 @@ impl AvatarApp {
 			.opts
 			.animator_action_modes
 			.get(action_id)
-			.map(String::as_str)
-			.unwrap_or("toggle");
+			.cloned()
+			.unwrap_or_else(|| "toggle".to_string());
 		let active = self.active_profile_animator_actions.contains(action_id)
 			|| self
 				.runtime_status
@@ -1859,16 +1911,24 @@ impl AvatarApp {
 				} else {
 					0.0
 				};
-				let activation = match self.gpu.as_mut() {
-					Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
-					None => return Err("renderer is not initialized".to_string()),
-				};
-				self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
-				activation
+				if self.schedule_animator_parameter_transition(action_id, &name, inactive_value) {
+					None
+				} else {
+					let activation = match self.gpu.as_mut() {
+						Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
+						None => return Err("renderer is not initialized".to_string()),
+					};
+					self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
+					activation
+				}
 			} else {
-				match self.gpu.as_mut() {
-					Some(gpu) => Some(gpu.deactivate_runtime_action(action_id)?),
-					None => return Err("renderer is not initialized".to_string()),
+				if self.schedule_animator_expression_transitions(action_id, false) {
+					None
+				} else {
+					match self.gpu.as_mut() {
+						Some(gpu) => Some(gpu.deactivate_runtime_action(action_id)?),
+						None => return Err("renderer is not initialized".to_string()),
+					}
 				}
 			};
 			self.active_profile_animator_actions.remove(action_id);
@@ -1882,12 +1942,138 @@ impl AvatarApp {
 			Some(gpu) => gpu.activate_runtime_action(Some(action_id), None, None, None, None),
 			None => Err("renderer is not initialized".to_string()),
 		}?;
+		self.schedule_animator_activation_transitions(action_id, &outcome);
 		if mode == "toggle" {
 			self.active_profile_animator_actions.insert(action_id.to_string());
 		}
 		self.apply_runtime_activation_status(&outcome);
 		self.request_redraw();
 		Ok(())
+	}
+
+	fn animator_transition_options(&self, action_id: &str) -> Option<(AnimatorTransitionCurve, Duration)> {
+		let AnimatorActionTransitionOptions { curve, duration_ms } = self.opts.animator_action_transitions.get(action_id)?;
+		let curve = parse_animator_transition_curve(curve)?;
+		if *duration_ms == 0 {
+			return None;
+		}
+		Some((curve, Duration::from_millis(u64::from((*duration_ms).min(3000)))))
+	}
+
+	fn schedule_animator_activation_transitions(&mut self, action_id: &str, activation: &gpu::RuntimeActionActivation) {
+		for (name, end) in &activation.parameter_values {
+			let _ = self.schedule_animator_parameter_transition(action_id, name, *end);
+		}
+		let _ = self.schedule_animator_expression_transitions(action_id, true);
+	}
+
+	fn schedule_animator_parameter_transition(&mut self, action_id: &str, name: &str, end: f32) -> bool {
+		let Some((curve, duration)) = self.animator_transition_options(action_id) else {
+			return false;
+		};
+		let start = self
+			.runtime_status
+			.as_ref()
+			.and_then(|status| status.lock().ok())
+			.and_then(|status| status.runtime_parameter_values.get(name).copied())
+			.unwrap_or_else(|| {
+				if end.abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON {
+					1.0
+				} else {
+					0.0
+				}
+			});
+		if let Some(gpu) = self.gpu.as_mut() {
+			let _ = gpu.set_runtime_parameter(name, start);
+		}
+		self.update_runtime_parameters(BTreeMap::from([(name.to_string(), start)]));
+		self.replace_animator_transition(ActiveAnimatorTransition {
+			target: AnimatorTransitionTarget::Parameter { name: name.to_string() },
+			start,
+			end: end.clamp(0.0, 1.0),
+			started_at: Instant::now(),
+			duration,
+			curve,
+		});
+		true
+	}
+
+	fn schedule_animator_expression_transitions(&mut self, action_id: &str, on: bool) -> bool {
+		let Some((curve, duration)) = self.animator_transition_options(action_id) else {
+			return false;
+		};
+		let targets = self
+			.gpu
+			.as_ref()
+			.map(|gpu| gpu.runtime_action_expression_weights(action_id))
+			.unwrap_or_default();
+		if targets.is_empty() {
+			return false;
+		}
+		let now = Instant::now();
+		for (name, weight) in targets {
+			let (start, end) = if on { (0.0, weight) } else { (weight, 0.0) };
+			if let Some(gpu) = self.gpu.as_mut() {
+				gpu.set_expression_override(&name, start);
+			}
+			self.replace_animator_transition(ActiveAnimatorTransition {
+				target: AnimatorTransitionTarget::Expression { name },
+				start: start.clamp(0.0, 1.0),
+				end: end.clamp(0.0, 1.0),
+				started_at: now,
+				duration,
+				curve,
+			});
+		}
+		true
+	}
+
+	fn replace_animator_transition(&mut self, transition: ActiveAnimatorTransition) {
+		self.active_animator_transitions
+			.retain(|existing| match (&existing.target, &transition.target) {
+				(AnimatorTransitionTarget::Expression { name: a }, AnimatorTransitionTarget::Expression { name: b }) => a != b,
+				(AnimatorTransitionTarget::Parameter { name: a }, AnimatorTransitionTarget::Parameter { name: b }) => a != b,
+				_ => true,
+			});
+		self.active_animator_transitions.push(transition);
+	}
+
+	fn advance_animator_transitions(&mut self, now: Instant) {
+		if self.active_animator_transitions.is_empty() {
+			return;
+		}
+		let mut next = Vec::new();
+		let mut parameter_updates = BTreeMap::new();
+		for transition in self.active_animator_transitions.drain(..) {
+			let raw_t = if transition.duration.is_zero() {
+				1.0
+			} else {
+				now.saturating_duration_since(transition.started_at).as_secs_f32() / transition.duration.as_secs_f32()
+			};
+			let done = raw_t >= 1.0;
+			let value = lerp(transition.start, transition.end, ease_animator_transition(raw_t, transition.curve)).clamp(0.0, 1.0);
+			match &transition.target {
+				AnimatorTransitionTarget::Expression { name } => {
+					if let Some(gpu) = self.gpu.as_mut() {
+						gpu.set_expression_override(name, value);
+					}
+				}
+				AnimatorTransitionTarget::Parameter { name } => {
+					if let Some(gpu) = self.gpu.as_mut() {
+						let _ = gpu.set_runtime_parameter(name, value);
+					}
+					parameter_updates.insert(name.clone(), value);
+				}
+			}
+			if !done {
+				next.push(transition);
+			}
+		}
+		if !parameter_updates.is_empty() {
+			self.update_runtime_parameters(parameter_updates);
+		}
+		self.active_animator_transitions = next;
+		self.request_redraw();
 	}
 
 	#[cfg(windows)]
@@ -2811,6 +2997,7 @@ impl AvatarApp {
 			return false;
 		}
 		self.advance_camera_transition(now);
+		self.advance_animator_transitions(now);
 		let preview_window_output_enabled = self.preview_window_output_enabled();
 		let Some(gpu) = self.gpu.as_mut() else {
 			return false;
@@ -5949,6 +6136,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		animator_action_ids: Vec::new(),
 		animator_action_modes: Default::default(),
 		animator_action_values: Default::default(),
+		animator_action_transitions: Default::default(),
 		animator_bindings: Vec::new(),
 		icon_path: cli.icon,
 		app_user_model_id: None,

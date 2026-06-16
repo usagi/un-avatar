@@ -5481,6 +5481,33 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	pub(crate) fn runtime_action_expression_weights(&self, action_id: &str) -> Vec<(String, f32)> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Vec::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return Vec::new();
+		};
+		let Some(actions) = doc.runtime_model().runtime_actions() else {
+			return Vec::new();
+		};
+		actions
+			.actions
+			.iter()
+			.find(|action| action.id == action_id)
+			.map(|action| {
+				action
+					.effects
+					.iter()
+					.filter_map(|effect| match effect {
+						un_avatar_core::UnaRuntimeActionEffect::ExpressionWeight { name, weight } => Some((name.clone(), *weight)),
+						_ => None,
+					})
+					.collect()
+			})
+			.unwrap_or_default()
+	}
+
 	pub(crate) fn runtime_parameter_definitions(&self) -> Vec<un_avatar_core::UnaRuntimeParameterDefinition> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();
