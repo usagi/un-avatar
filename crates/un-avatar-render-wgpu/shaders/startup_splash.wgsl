@@ -170,15 +170,19 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 		* smoothstep(0.36, 0.12, orbit_sweep)
 		* rect_mask;
 
-	let hanger_hook = ring_mask(length((local_ndc - vec2(0.0, 0.40)) * vec2(1.0, 1.45)), 0.105, 0.012)
-		* smoothstep(-0.02, 0.18, local_ndc.y - 0.40);
-	let hanger_top = segment_mask(local_ndc, vec2(0.0, 0.34), vec2(0.0, 0.22), 0.014);
-	let hanger_l = segment_mask(local_ndc, vec2(0.0, 0.22), vec2(-0.34, 0.06), 0.018);
-	let hanger_r = segment_mask(local_ndc, vec2(0.0, 0.22), vec2(0.34, 0.06), 0.018);
-	let shirt_body = rounded_rect_fill(local_ndc - vec2(0.0, -0.07), vec2(0.25, 0.25), 0.055)
-		* (1.0 - rounded_rect_fill(local_ndc - vec2(0.0, 0.18), vec2(0.095, 0.065), 0.030));
-	let sleeve_l = segment_mask(local_ndc, vec2(-0.24, 0.10), vec2(-0.42, -0.04), 0.070);
-	let sleeve_r = segment_mask(local_ndc, vec2(0.24, 0.10), vec2(0.42, -0.04), 0.070);
+	let spin = cos(t * 3.1);
+	let spin_width = mix(0.22, 1.0, abs(spin));
+	let hanger_p = vec2(local_ndc.x / spin_width, local_ndc.y);
+	let flip_glow = smoothstep(0.10, 0.42, 1.0 - abs(spin)) * rect_mask;
+	let hanger_hook = ring_mask(length((hanger_p - vec2(0.0, 0.40)) * vec2(1.0, 1.45)), 0.105, 0.012)
+		* smoothstep(-0.02, 0.18, hanger_p.y - 0.40);
+	let hanger_top = segment_mask(hanger_p, vec2(0.0, 0.34), vec2(0.0, 0.22), 0.014);
+	let hanger_l = segment_mask(hanger_p, vec2(0.0, 0.22), vec2(-0.34, 0.06), 0.018);
+	let hanger_r = segment_mask(hanger_p, vec2(0.0, 0.22), vec2(0.34, 0.06), 0.018);
+	let shirt_body = rounded_rect_fill(hanger_p - vec2(0.0, -0.07), vec2(0.25, 0.25), 0.055)
+		* (1.0 - rounded_rect_fill(hanger_p - vec2(0.0, 0.18), vec2(0.095, 0.065), 0.030));
+	let sleeve_l = segment_mask(hanger_p, vec2(-0.24, 0.10), vec2(-0.42, -0.04), 0.070);
+	let sleeve_r = segment_mask(hanger_p, vec2(0.24, 0.10), vec2(0.42, -0.04), 0.070);
 	let garment = clamp(hanger_hook + hanger_top + hanger_l + hanger_r + shirt_body + sleeve_l + sleeve_r, 0.0, 1.0) * rect_mask;
 
 	let word = changing_word(local_ndc) * rect_mask * (0.78 + 0.22 * sin(t * 5.0));
@@ -191,9 +195,9 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 	let dots = (dot1 + dot2 + dot3) * rect_mask;
 
 	let sweep = line_mask(local_ndc.y + local_ndc.x * 0.16 - 0.72 + fract(t * 0.36) * 1.44, 0.020) * rect_mask;
-	let garment_shine = line_mask(local_ndc.x * 0.72 + local_ndc.y * 0.18 - 0.48 + fract(t * 0.58) * 0.96, 0.035)
-		* smoothstep(0.40, 0.05, abs(local_ndc.x))
-		* smoothstep(0.35, 0.02, abs(local_ndc.y + 0.04))
+	let garment_shine = line_mask(hanger_p.x * 0.72 + hanger_p.y * 0.18 - 0.48 + fract(t * 0.58) * 0.96, 0.035)
+		* smoothstep(0.40, 0.05, abs(hanger_p.x))
+		* smoothstep(0.35, 0.02, abs(hanger_p.y + 0.04))
 		* rect_mask;
 	let sparkle_a = sparkle(local_ndc - vec2(-0.58, 0.42 + sin(t * 1.7) * 0.035), 0.055);
 	let sparkle_b = sparkle(local_ndc - vec2(0.62, 0.30 + sin(t * 1.3 + 1.2) * 0.035), 0.047);
@@ -206,8 +210,8 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 	let halo = soft_disc(vec2(local_ndc.x * 0.76, local_ndc.y * 1.10 - 0.04), 0.34 + pulse * 0.028) * rect_mask;
 	let lace = line_mask(fract((local_ndc.x * 0.42 - local_ndc.y * 0.30) * 8.0 + t * 0.24) - 0.5, 0.018) * booth * 0.12;
 
-	let glow = stage * 0.18 + halo * 0.25 + orbit_arc * 1.15 + booth_edge * 0.85 + inner * 0.20 + garment * 1.20 + garment_shine * 1.40 + word * 1.35 + dots * 1.15 + sweep * 0.42 + sparkles * 0.80 + lace * 0.18;
-	let pastel = mint * (booth_edge * 0.55 + garment * 0.70 + garment_shine * 0.90 + sparkle_b * 0.80 + dots * 0.95)
+	let glow = stage * 0.18 + halo * 0.25 + orbit_arc * 1.15 + booth_edge * 0.85 + inner * 0.20 + garment * 1.20 + garment_shine * 1.40 + flip_glow * 0.95 + word * 1.35 + dots * 1.15 + sweep * 0.42 + sparkles * 0.80 + lace * 0.18;
+	let pastel = mint * (booth_edge * 0.55 + garment * 0.70 + garment_shine * 0.90 + flip_glow * 0.60 + sparkle_b * 0.80 + dots * 0.95)
 		+ peach * (word * 0.78 + sparkle_a * 0.75 + sparkle_c * 0.70)
 		+ sky * (hanger_hook * 0.80 + inner * 0.35 + sweep * 0.45 + orbit_arc * 0.85)
 		+ cream * (sparkle_e * 0.95 + stage * 0.10);
