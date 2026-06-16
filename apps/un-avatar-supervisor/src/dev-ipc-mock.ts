@@ -51,6 +51,7 @@ let avatarSettings = [
 		manifest_path: "profiles/main.toml",
 		avatar_path: "assets/example/main.vrm",
 		wardrobe_set: null,
+		wardrobe_shortcuts: [],
 		animator_actions: [],
 		vmc_address: "0.0.0.0:39539",
 		vmc_port: 39539,
@@ -165,6 +166,7 @@ let avatarSettings = [
 		manifest_path: "profiles/debug.toml",
 		avatar_path: "assets/example/debug.vrm",
 		wardrobe_set: null,
+		wardrobe_shortcuts: [],
 		animator_actions: [],
 		vmc_address: "0.0.0.0:39540",
 		vmc_port: 39540,
@@ -447,6 +449,9 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "wardrobe_set") {
 					(setting as { wardrobe_set: string | null }).wardrobe_set = String(args.value ?? "") || null;
+				}
+				if (setting && field === "wardrobe.shortcuts") {
+					(setting as { wardrobe_shortcuts: unknown[] }).wardrobe_shortcuts = (args.value as unknown[]) ?? [];
 				}
 				if (setting && field === "animator.actions") {
 					(setting as unknown as { animator_actions: unknown[] }).animator_actions = (args.value as unknown[]) ?? [];

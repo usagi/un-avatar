@@ -6,7 +6,7 @@ use crate::{
 	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
 		AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
-		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
+		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions, WardrobeShortcutOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -45,9 +45,23 @@ pub(crate) struct RendererManifest {
 	pub diagnostics: Option<MeshDiagnosticsManifest>,
 	pub effects: Option<EffectsManifest>,
 	pub animator: Option<AnimatorManifest>,
+	pub wardrobe: Option<WardrobeManifest>,
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
 	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeManifest {
+	pub shortcuts: Option<Vec<WardrobeShortcutManifest>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeShortcutManifest {
+	pub set_id: Option<String>,
+	pub shortcut: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -457,6 +471,23 @@ impl RendererManifest {
 		}
 		if let Some(set_id) = self.wardrobe_set {
 			opts.wardrobe_set = Some(set_id);
+		}
+		if let Some(wardrobe) = self.wardrobe {
+			opts.wardrobe_shortcuts = wardrobe
+				.shortcuts
+				.unwrap_or_default()
+				.into_iter()
+				.filter_map(|shortcut| {
+					let shortcut_value = shortcut.shortcut.unwrap_or_default().trim().to_string();
+					if shortcut_value.is_empty() {
+						return None;
+					}
+					Some(WardrobeShortcutOptions {
+						set_id: shortcut.set_id.unwrap_or_default().trim().to_string(),
+						shortcut: shortcut_value,
+					})
+				})
+				.collect();
 		}
 		if let Some(path) = self.icon_path {
 			opts.icon_path = Some(path);
@@ -1268,6 +1299,12 @@ transparent = true
 input_passthrough = true
 clear_color = [0.0, 0.0, 0.0, 0.0]
 
+[wardrobe]
+shortcuts = [
+  { set_id = "", shortcut = "Ctrl+Alt+B" },
+  { set_id = "noble1", shortcut = "Ctrl+Alt+1" },
+]
+
 [profile]
 id = "mizuki-copy"
 
@@ -1423,6 +1460,11 @@ constraint_iterations = 6
 		assert_eq!(opts.title, "Manifest Title");
 		assert_eq!(opts.gltf_path.as_deref(), Some(std::path::Path::new("target/tmp/model1.vrm")));
 		assert_eq!(opts.wardrobe_set.as_deref(), Some("noble1"));
+		assert_eq!(opts.wardrobe_shortcuts.len(), 2);
+		assert_eq!(opts.wardrobe_shortcuts[0].set_id, "");
+		assert_eq!(opts.wardrobe_shortcuts[0].shortcut, "Ctrl+Alt+B");
+		assert_eq!(opts.wardrobe_shortcuts[1].set_id, "noble1");
+		assert_eq!(opts.wardrobe_shortcuts[1].shortcut, "Ctrl+Alt+1");
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))

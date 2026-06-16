@@ -525,6 +525,8 @@ pub struct AvatarWindowOptions {
 	pub manifest_path: Option<PathBuf>,
 	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
 	pub wardrobe_set: Option<String>,
+	/// Renderer-global wardrobe set hotkeys. Active only while this renderer process is running.
+	pub wardrobe_shortcuts: Vec<WardrobeShortcutOptions>,
 	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
 	pub animator_action_ids: Vec<String>,
 	/// Optional per-action parameter value used when a profile wants ON to mean e.g. 0.45 instead of the exported value.
@@ -663,6 +665,12 @@ pub struct AvatarWindowOptions {
 	pub mesh_diagnostics: SceneMeshLoadOpts,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WardrobeShortcutOptions {
+	pub set_id: String,
+	pub shortcut: String,
+}
+
 impl Default for AvatarWindowOptions {
 	fn default() -> Self {
 		Self {
@@ -684,6 +692,7 @@ impl Default for AvatarWindowOptions {
 			gltf_path: None,
 			manifest_path: None,
 			wardrobe_set: None,
+			wardrobe_shortcuts: Vec::new(),
 			animator_action_ids: Vec::new(),
 			animator_action_values: BTreeMap::new(),
 			icon_path: None,

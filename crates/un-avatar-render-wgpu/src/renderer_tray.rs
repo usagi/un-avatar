@@ -163,7 +163,7 @@ impl RendererTray {
 			backend: RendererTrayBackend::Local {
 				icon,
 				actions,
-				last_menu_key: menu_key(snapshot),
+				last_menu_key: menu_key(opts, snapshot),
 			},
 		})
 	}
@@ -203,7 +203,7 @@ impl RendererTray {
 				actions,
 				last_menu_key,
 			} => {
-				let key = menu_key(snapshot);
+				let key = menu_key(opts, snapshot);
 				let _ = icon.set_tooltip(Some(tray_tooltip(opts, snapshot)));
 				if key == *last_menu_key {
 					return;
@@ -426,12 +426,12 @@ fn renderer_tray_worker(
 		}
 	};
 	let _ = startup.send(Ok(tx));
-	let mut last_menu_key = menu_key(&snapshot);
+	let mut last_menu_key = menu_key(&opts, &snapshot);
 	loop {
 		pump_windows_messages();
 		match rx.recv_timeout(Duration::from_millis(16)) {
 			Ok(RendererTrayWorkerCommand::Refresh { opts, snapshot }) => {
-				let key = menu_key(&snapshot);
+				let key = menu_key(&opts, &snapshot);
 				let _ = icon.set_tooltip(Some(tray_tooltip(&opts, &snapshot)));
 				if key != last_menu_key {
 					let (menu, menu_actions) = build_menu(&opts, &snapshot);
@@ -636,7 +636,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	);
 	append_submenu(&menu, &profile);
 
-	append_wardrobe_menu(&menu, &mut actions, snapshot, &text);
+	append_wardrobe_menu(&menu, &mut actions, opts, snapshot, &text);
 	append_vrc_menu_actions(&menu, &mut actions, snapshot, &text);
 
 	if snapshot.dynamics_group_count > 0 {
@@ -906,6 +906,7 @@ fn menu_candidate_active(snapshot: &RendererRuntimeSnapshot, candidate: &gpu::Ru
 fn append_wardrobe_menu(
 	menu: &Menu,
 	actions: &mut HashMap<String, RendererTrayAction>,
+	opts: &AvatarWindowOptions,
 	snapshot: &RendererRuntimeSnapshot,
 	text: &TrayText,
 ) {
@@ -945,16 +946,30 @@ fn append_wardrobe_menu(
 	for (index, (label, set_id, action)) in entries.into_iter().enumerate() {
 		let set_id = set_id.trim().to_string();
 		let active = wardrobe_set_active(active_set, base_set, &set_id);
+		let label = wardrobe_label_with_shortcut(truncate_label(&label, 56), opts, &set_id);
 		append_menu_item(
 			&wardrobe,
 			actions,
 			format!("wardrobe:{index}"),
-			check_label(truncate_label(&label, 56), active),
+			check_label(label, active),
 			true,
 			action,
 		);
 	}
 	append_submenu(menu, &wardrobe);
+}
+
+fn wardrobe_label_with_shortcut(label: String, opts: &AvatarWindowOptions, set_id: &str) -> String {
+	let Some(shortcut) = opts
+		.wardrobe_shortcuts
+		.iter()
+		.find(|shortcut| shortcut.set_id.trim() == set_id)
+		.map(|shortcut| shortcut.shortcut.trim())
+		.filter(|shortcut| !shortcut.is_empty())
+	else {
+		return label;
+	};
+	format!("{label} ({shortcut})")
 }
 
 fn wardrobe_set_active(active_set: &str, base_set: &str, set_id: &str) -> bool {
@@ -1354,9 +1369,9 @@ fn tray_icon_id() -> String {
 	format!("{TRAY_ICON_ID_PREFIX}-{}", std::process::id())
 }
 
-fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
+fn menu_key(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
-		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
 		snapshot.scene_state,
 		snapshot.spout_available,
 		snapshot.spout_enabled,
@@ -1371,8 +1386,20 @@ fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 		snapshot.active_wardrobe_set.as_deref().unwrap_or(""),
 		snapshot.base_wardrobe_set.as_deref().unwrap_or(""),
 		menu_action_signature(snapshot),
-		wardrobe_menu_signature(snapshot)
+		wardrobe_menu_signature(snapshot),
+		wardrobe_shortcut_signature(opts)
 	)
+}
+
+fn wardrobe_shortcut_signature(opts: &AvatarWindowOptions) -> String {
+	let mut signature = format!("shortcuts:{}", opts.wardrobe_shortcuts.len());
+	for shortcut in &opts.wardrobe_shortcuts {
+		signature.push('|');
+		signature.push_str(&signature_field(shortcut.set_id.trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(shortcut.shortcut.trim()));
+	}
+	signature
 }
 
 fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
@@ -1510,6 +1537,10 @@ mod tests {
 		initial_runtime_snapshot(&AvatarWindowOptions::default())
 	}
 
+	fn test_menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
+		menu_key(&AvatarWindowOptions::default(), snapshot)
+	}
+
 	#[test]
 	fn menu_key_tracks_runtime_operation_state() {
 		let mut before = snapshot();
@@ -1529,7 +1560,7 @@ mod tests {
 		after.dynamics_enabled_group_count = 3;
 		after.active_wardrobe_set = Some("field_drape".to_string());
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1541,7 +1572,7 @@ mod tests {
 		let mut after = before.clone();
 		after.base_wardrobe_set = Some("base".to_string());
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1553,7 +1584,7 @@ mod tests {
 		let mut after = before.clone();
 		after.transparent_window = true;
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1574,7 +1605,7 @@ mod tests {
 			..Default::default()
 		}];
 
-		assert_ne!(menu_key(&actions_only), menu_key(&menu_candidates));
+		assert_ne!(test_menu_key(&actions_only), test_menu_key(&menu_candidates));
 	}
 
 	#[test]
@@ -1598,7 +1629,7 @@ mod tests {
 		let mut after = before.clone();
 		after.menu_wardrobe_candidates[1].menu_path = vec!["Wardrobe".to_string(), "Field drape".to_string()];
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1618,7 +1649,7 @@ mod tests {
 		let mut after = before.clone();
 		after.menu_action_candidates[0].menu_label = Some("Big Smile".to_string());
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1638,7 +1669,7 @@ mod tests {
 		let mut after = before.clone();
 		after.menu_action_candidates[0].parameter_value = 2.0;
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1668,7 +1699,7 @@ mod tests {
 		let mut after = before.clone();
 		after.runtime_actions[0].expression_menu_path = Some("Expressions/Big Smile".to_string());
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1685,7 +1716,7 @@ mod tests {
 		let mut after = before.clone();
 		after.runtime_actions[0].expression_menu_path = Some("Wardrobe/Field Drape Updated".to_string());
 
-		assert_eq!(menu_key(&before), menu_key(&after));
+		assert_eq!(test_menu_key(&before), test_menu_key(&after));
 	}
 
 	#[test]
@@ -1709,7 +1740,36 @@ mod tests {
 		let mut after = before.clone();
 		after.wardrobe_actions[1].label = "Noble13".to_string();
 
-		assert_ne!(menu_key(&before), menu_key(&after));
+		assert_ne!(test_menu_key(&before), test_menu_key(&after));
+	}
+
+	#[test]
+	fn menu_key_tracks_wardrobe_shortcut_changes() {
+		let snapshot = snapshot();
+		let mut before = AvatarWindowOptions::default();
+		before.wardrobe_shortcuts = vec![crate::WardrobeShortcutOptions {
+			set_id: "field_drape".to_string(),
+			shortcut: "F12".to_string(),
+		}];
+		let mut after = before.clone();
+		after.wardrobe_shortcuts[0].shortcut = "Ctrl+Alt+1".to_string();
+
+		assert_ne!(menu_key(&before, &snapshot), menu_key(&after, &snapshot));
+	}
+
+	#[test]
+	fn wardrobe_label_includes_key_binding_when_configured() {
+		let mut opts = AvatarWindowOptions::default();
+		opts.wardrobe_shortcuts = vec![crate::WardrobeShortcutOptions {
+			set_id: "field_drape".to_string(),
+			shortcut: "F12".to_string(),
+		}];
+
+		assert_eq!(
+			wardrobe_label_with_shortcut("Field Drape".to_string(), &opts, "field_drape"),
+			"Field Drape (F12)"
+		);
+		assert_eq!(wardrobe_label_with_shortcut("Base".to_string(), &opts, ""), "Base");
 	}
 
 	#[test]

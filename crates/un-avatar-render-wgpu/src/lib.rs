@@ -49,7 +49,7 @@ pub use options::{
 	AaMode, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions,
 	DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend, SpoutWindowOptions,
 	SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
-	TextureResolutionLimit,
+	TextureResolutionLimit, WardrobeShortcutOptions,
 };
 use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
@@ -1219,6 +1219,8 @@ struct AvatarApp {
 	renderer_tray: Option<renderer_tray::RendererTray>,
 	#[cfg(windows)]
 	last_renderer_tray_refresh_at: Option<Instant>,
+	#[cfg(windows)]
+	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
 }
 
 #[derive(Clone, Debug)]
@@ -1530,6 +1532,8 @@ impl AvatarApp {
 			renderer_tray: None,
 			#[cfg(windows)]
 			last_renderer_tray_refresh_at: None,
+			#[cfg(windows)]
+			wardrobe_hotkeys: None,
 		}
 	}
 
@@ -3870,6 +3874,237 @@ fn normalize_key_name(name: &str) -> String {
 	}
 }
 
+#[cfg(windows)]
+struct WardrobeHotkeyRuntime {
+	thread_id: u32,
+	handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl WardrobeHotkeyRuntime {
+	fn start(shortcuts: &[WardrobeShortcutOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
+		let registrations = wardrobe_hotkey_registrations(shortcuts);
+		if registrations.is_empty() {
+			return None;
+		}
+		let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+		let handle = thread::spawn(move || wardrobe_hotkey_thread(registrations, proxy, ready_tx));
+		match ready_rx.recv_timeout(Duration::from_secs(2)) {
+			Ok(thread_id) if thread_id != 0 => Some(Self {
+				thread_id,
+				handle: Some(handle),
+			}),
+			_ => {
+				eprintln!("un-avatar-renderer: wardrobe global hotkey thread did not start");
+				None
+			}
+		}
+	}
+}
+
+#[cfg(windows)]
+impl Drop for WardrobeHotkeyRuntime {
+	fn drop(&mut self) {
+		if self.thread_id != 0 {
+			unsafe {
+				let _ = windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+					self.thread_id,
+					windows::Win32::UI::WindowsAndMessaging::WM_QUIT,
+					windows::Win32::Foundation::WPARAM(0),
+					windows::Win32::Foundation::LPARAM(0),
+				);
+			}
+		}
+		if let Some(handle) = self.handle.take() {
+			let _ = handle.join();
+		}
+	}
+}
+
+#[cfg(windows)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WardrobeHotkeyRegistration {
+	id: i32,
+	set_id: String,
+	shortcut: String,
+	modifiers: windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS,
+	virtual_key: u32,
+}
+
+#[cfg(windows)]
+fn wardrobe_hotkey_registrations(shortcuts: &[WardrobeShortcutOptions]) -> Vec<WardrobeHotkeyRegistration> {
+	let mut out = Vec::new();
+	for shortcut in shortcuts {
+		let shortcut_text = shortcut.shortcut.trim();
+		if shortcut_text.is_empty() {
+			continue;
+		}
+		match parse_windows_hotkey(shortcut_text) {
+			Ok((modifiers, virtual_key)) => {
+				if out
+					.iter()
+					.any(|existing: &WardrobeHotkeyRegistration| existing.modifiers.0 == modifiers.0 && existing.virtual_key == virtual_key)
+				{
+					eprintln!("un-avatar-renderer: duplicate wardrobe global hotkey ignored: {shortcut_text}");
+					continue;
+				}
+				out.push(WardrobeHotkeyRegistration {
+					id: 0x554E_5700_i32.saturating_add(out.len() as i32),
+					set_id: shortcut.set_id.trim().to_string(),
+					shortcut: shortcut_text.to_string(),
+					modifiers,
+					virtual_key,
+				});
+			}
+			Err(error) => eprintln!("un-avatar-renderer: invalid wardrobe global hotkey `{shortcut_text}`: {error}"),
+		}
+	}
+	out
+}
+
+#[cfg(windows)]
+fn parse_windows_hotkey(text: &str) -> Result<(windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS, u32), String> {
+	use windows::Win32::UI::Input::KeyboardAndMouse::*;
+	let mut modifiers = MOD_NOREPEAT.0;
+	let mut key = None;
+	for part in text.split('+').map(str::trim).filter(|part| !part.is_empty()) {
+		match normalize_key_name(part).as_str() {
+			"ctrl" | "control" => modifiers |= MOD_CONTROL.0,
+			"shift" => modifiers |= MOD_SHIFT.0,
+			"alt" | "option" => modifiers |= MOD_ALT.0,
+			"super" | "meta" | "cmd" | "command" | "win" | "windows" => modifiers |= MOD_WIN.0,
+			candidate => {
+				let vk = match candidate {
+					"a" => VK_A.0,
+					"b" => VK_B.0,
+					"c" => VK_C.0,
+					"d" => VK_D.0,
+					"e" => VK_E.0,
+					"f" => VK_F.0,
+					"g" => VK_G.0,
+					"h" => VK_H.0,
+					"i" => VK_I.0,
+					"j" => VK_J.0,
+					"k" => VK_K.0,
+					"l" => VK_L.0,
+					"m" => VK_M.0,
+					"n" => VK_N.0,
+					"o" => VK_O.0,
+					"p" => VK_P.0,
+					"q" => VK_Q.0,
+					"r" => VK_R.0,
+					"s" => VK_S.0,
+					"t" => VK_T.0,
+					"u" => VK_U.0,
+					"v" => VK_V.0,
+					"w" => VK_W.0,
+					"x" => VK_X.0,
+					"y" => VK_Y.0,
+					"z" => VK_Z.0,
+					"0" => VK_0.0,
+					"1" => VK_1.0,
+					"2" => VK_2.0,
+					"3" => VK_3.0,
+					"4" => VK_4.0,
+					"5" => VK_5.0,
+					"6" => VK_6.0,
+					"7" => VK_7.0,
+					"8" => VK_8.0,
+					"9" => VK_9.0,
+					"f1" => VK_F1.0,
+					"f2" => VK_F2.0,
+					"f3" => VK_F3.0,
+					"f4" => VK_F4.0,
+					"f5" => VK_F5.0,
+					"f6" => VK_F6.0,
+					"f7" => VK_F7.0,
+					"f8" => VK_F8.0,
+					"f9" => VK_F9.0,
+					"f10" => VK_F10.0,
+					"f11" => VK_F11.0,
+					"f12" => VK_F12.0,
+					"escape" => VK_ESCAPE.0,
+					"enter" => VK_RETURN.0,
+					"space" => VK_SPACE.0,
+					"tab" => VK_TAB.0,
+					"delete" => VK_DELETE.0,
+					"insert" => VK_INSERT.0,
+					"home" => VK_HOME.0,
+					"end" => VK_END.0,
+					"pageup" => VK_PRIOR.0,
+					"pagedown" => VK_NEXT.0,
+					"arrowleft" => VK_LEFT.0,
+					"arrowright" => VK_RIGHT.0,
+					"arrowup" => VK_UP.0,
+					"arrowdown" => VK_DOWN.0,
+					_ => return Err("unsupported key".to_string()),
+				};
+				if key.replace(vk).is_some() {
+					return Err("hotkey must contain a single non-modifier key".to_string());
+				}
+			}
+		}
+	}
+	let key = key.ok_or_else(|| "hotkey must contain a non-modifier key".to_string())?;
+	Ok((HOT_KEY_MODIFIERS(modifiers), u32::from(key)))
+}
+
+#[cfg(windows)]
+fn wardrobe_hotkey_thread(
+	registrations: Vec<WardrobeHotkeyRegistration>,
+	proxy: EventLoopProxy<RendererControlEvent>,
+	ready_tx: std::sync::mpsc::Sender<u32>,
+) {
+	use windows::Win32::{
+		System::Threading::GetCurrentThreadId,
+		UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey},
+		UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_NOREMOVE, WM_HOTKEY},
+	};
+	unsafe {
+		let thread_id = GetCurrentThreadId();
+		let mut message = MSG::default();
+		let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+		let _ = ready_tx.send(thread_id);
+		let mut active = Vec::new();
+		for registration in registrations {
+			match RegisterHotKey(None, registration.id, registration.modifiers, registration.virtual_key) {
+				Ok(()) => {
+					eprintln!(
+						"un-avatar-renderer: registered wardrobe global hotkey `{}` for set `{}`",
+						registration.shortcut, registration.set_id
+					);
+					active.push(registration);
+				}
+				Err(error) => eprintln!(
+					"un-avatar-renderer: register wardrobe global hotkey `{}` failed: {error}",
+					registration.shortcut
+				),
+			}
+		}
+		if active.is_empty() {
+			return;
+		}
+		while GetMessageW(&mut message, None, 0, 0).into() {
+			if message.message == WM_HOTKEY {
+				let id = message.wParam.0 as i32;
+				if let Some(registration) = active.iter().find(|registration| registration.id == id) {
+					let result = Arc::new(Mutex::new(None));
+					let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+						set_id: registration.set_id.clone(),
+						result,
+					});
+				}
+			} else {
+				let _ = TranslateMessage(&message);
+				DispatchMessageW(&message);
+			}
+		}
+		for registration in active {
+			let _ = UnregisterHotKey(None, registration.id);
+		}
+	}
+}
+
 fn is_false(value: &bool) -> bool {
 	!*value
 }
@@ -5069,6 +5304,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	let event_proxy = event_loop.create_proxy();
 	#[cfg(windows)]
 	renderer_tray::install_event_handlers(event_proxy.clone());
+	#[cfg(windows)]
+	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_shortcuts, event_proxy.clone());
 	if opts.runtime_bus_key.is_none() {
 		if let Some(address) = opts.runtime_control_address {
 			start_runtime_control_server(address, event_proxy.clone());
@@ -5076,6 +5313,10 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	}
 
 	let mut app = AvatarApp::new(opts, event_proxy);
+	#[cfg(windows)]
+	{
+		app.wardrobe_hotkeys = wardrobe_hotkeys;
+	}
 	event_loop.run_app(&mut app).map_err(|e| RunError::EventLoop(e.to_string()))
 }
 
@@ -5365,6 +5606,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		gltf_path: cli.gltf,
 		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
+		wardrobe_shortcuts: Vec::new(),
 		animator_action_ids: Vec::new(),
 		animator_action_values: Default::default(),
 		icon_path: cli.icon,
@@ -5805,6 +6047,8 @@ mod tests {
 		time::{Duration, Instant},
 	};
 
+	#[cfg(windows)]
+	use super::parse_windows_hotkey;
 	use super::{
 		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command,
 		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, AvatarOutlineKind,
@@ -7528,5 +7772,15 @@ mod tests {
 	#[test]
 	fn close_hotkey_can_be_disabled() {
 		assert!(CloseHotkey::parse("None").unwrap().is_none());
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn parses_wardrobe_windows_hotkey() {
+		let (mods, key) = parse_windows_hotkey("Ctrl+Alt+1").unwrap();
+		assert_ne!(mods.0, 0);
+		assert_eq!(key, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_1.0));
+		assert!(parse_windows_hotkey("Ctrl+Alt").is_err());
+		assert!(parse_windows_hotkey("Ctrl+Alt+1+2").is_err());
 	}
 }

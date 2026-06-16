@@ -1031,6 +1031,22 @@ impl Default for AnimatorActionSetting {
 	}
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct WardrobeShortcutSetting {
+	set_id: String,
+	shortcut: String,
+}
+
+impl Default for WardrobeShortcutSetting {
+	fn default() -> Self {
+		Self {
+			set_id: String::new(),
+			shortcut: String::new(),
+		}
+	}
+}
+
 #[derive(Clone, Serialize)]
 struct UnavatarAnimatorActionCandidate {
 	id: String,
@@ -1239,6 +1255,7 @@ struct AvatarSetting {
 	manifest_path: String,
 	avatar_path: Option<String>,
 	wardrobe_set: Option<String>,
+	wardrobe_shortcuts: Vec<WardrobeShortcutSetting>,
 	animator_actions: Vec<AnimatorActionSetting>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
@@ -1770,6 +1787,19 @@ struct ManifestAnimatorAction {
 	value: Option<f64>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobe {
+	shortcuts: Option<Vec<ManifestWardrobeShortcut>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeShortcut {
+	set_id: Option<String>,
+	shortcut: Option<String>,
+}
+
 fn manifest_background_color(manifest: &AvatarManifestSummary) -> [f32; 3] {
 	if let Some(color) = manifest.background_color {
 		return clamp_rgb(color);
@@ -2033,6 +2063,7 @@ struct AvatarManifestSummary {
 	title: Option<String>,
 	avatar_path: Option<PathBuf>,
 	wardrobe_set: Option<String>,
+	wardrobe: Option<ManifestWardrobe>,
 	icon_path: Option<PathBuf>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
@@ -2091,6 +2122,25 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 		}
 	}
 	actions
+}
+
+fn manifest_wardrobe_shortcut_settings(wardrobe: Option<&ManifestWardrobe>) -> Vec<WardrobeShortcutSetting> {
+	let Some(wardrobe) = wardrobe else {
+		return Vec::new();
+	};
+	let mut shortcuts = Vec::new();
+	for shortcut in wardrobe.shortcuts.iter().flatten() {
+		let set_id = shortcut.set_id.as_deref().unwrap_or("").trim();
+		let shortcut_value = shortcut.shortcut.as_deref().unwrap_or("").trim();
+		if shortcut_value.is_empty() || shortcuts.iter().any(|existing: &WardrobeShortcutSetting| existing.set_id == set_id) {
+			continue;
+		}
+		shortcuts.push(WardrobeShortcutSetting {
+			set_id: set_id.to_string(),
+			shortcut: shortcut_value.to_string(),
+		});
+	}
+	shortcuts
 }
 
 fn read_manifest_animator_action_settings(path: &Path) -> Result<Vec<AnimatorActionSetting>, String> {
@@ -5188,7 +5238,7 @@ fn apply_avatar_setting_value(
 			)?;
 		}
 		AvatarSettingFieldDomain::WardrobeSet => {
-			set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string())?;
+			apply_wardrobe_setting_value(manifest, field, value)?;
 		}
 		AvatarSettingFieldDomain::IconPath => {
 			let path = json_string(&value, field)?;
@@ -5265,6 +5315,7 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 	match field {
 		"avatar_path" => Some(AvatarSettingFieldDomain::AvatarPath),
 		"wardrobe_set" => Some(AvatarSettingFieldDomain::WardrobeSet),
+		_ if field.starts_with("wardrobe.") => Some(AvatarSettingFieldDomain::WardrobeSet),
 		"icon_path" => Some(AvatarSettingFieldDomain::IconPath),
 		"dynamics_enabled" | "spring_bones" => Some(AvatarSettingFieldDomain::Physics),
 		_ if field.starts_with("profile.") => Some(AvatarSettingFieldDomain::Profile),
@@ -5282,6 +5333,55 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 		_ if field.starts_with("output.") => Some(AvatarSettingFieldDomain::Output),
 		_ if field.starts_with("animator.") => Some(AvatarSettingFieldDomain::Animator),
 		_ => None,
+	}
+}
+
+fn apply_wardrobe_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"wardrobe_set" => set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string()),
+		"wardrobe.shortcuts" => {
+			let shortcuts: Vec<WardrobeShortcutSetting> =
+				serde_json::from_value(value).map_err(|e| format!("wardrobe.shortcuts must be a shortcut array: {e}"))?;
+			let mut out = Vec::new();
+			for shortcut in shortcuts {
+				let set_id = shortcut.set_id.trim();
+				let shortcut_value = shortcut.shortcut.trim();
+				if shortcut_value.is_empty() {
+					continue;
+				}
+				if out.iter().any(|existing: &toml::Value| {
+					existing
+						.as_table()
+						.and_then(|table| table.get("set_id"))
+						.and_then(toml::Value::as_str)
+						== Some(set_id)
+				}) {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("set_id".to_string(), toml::Value::String(set_id.to_string()));
+				table.insert("shortcut".to_string(), toml::Value::String(shortcut_value.to_string()));
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(wardrobe) = root.get_mut("wardrobe").and_then(toml::Value::as_table_mut) {
+					wardrobe.remove("shortcuts");
+					if wardrobe.is_empty() {
+						root.remove("wardrobe");
+					}
+				}
+			} else {
+				let wardrobe = root
+					.entry("wardrobe".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "wardrobe must be a table".to_string())?;
+				wardrobe.insert("shortcuts".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		_ => Err(format!("unsupported wardrobe setting field: {field}")),
 	}
 }
 
@@ -8343,6 +8443,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
 	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
+	let wardrobe_shortcuts = manifest_wardrobe_shortcut_settings(manifest.wardrobe.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
 	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
@@ -8381,6 +8482,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 			let set = set.trim().to_string();
 			(!set.is_empty()).then_some(set)
 		}),
+		wardrobe_shortcuts,
 		animator_actions,
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
@@ -11337,14 +11439,15 @@ mod tests {
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
 		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_crop_webp,
-		encode_profile_icon_thumbnail_webp, migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
-		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, startup_open_profile_manifest_arg,
-		startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension,
-		vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate, AvatarSetting, AvatarSettingFieldDomain,
-		LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
-		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, migrate_avatar_manifest_to_v2, parse_manifest_value,
+		path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
+		read_unavatar_wardrobe_options, read_vrm_metadata, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
+		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
+		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
+		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
+		vrm_expression_is_user_action_candidate, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
+		ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary,
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -13625,6 +13728,72 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn wardrobe_shortcuts_write_profile_bindings_and_empty_removes_them() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.shortcuts",
+			serde_json::json!([
+				{ "set_id": "", "shortcut": "Ctrl+Alt+B" },
+				{ "set_id": "field_drape", "shortcut": "Ctrl+Alt+1" },
+				{ "set_id": "field_drape", "shortcut": "Ctrl+Alt+2" },
+				{ "set_id": "empty", "shortcut": "" }
+			]),
+		)
+		.unwrap();
+
+		let shortcuts = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("shortcuts"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(shortcuts.len(), 2);
+		assert_eq!(
+			shortcuts[0]
+				.as_table()
+				.and_then(|table| table.get("set_id"))
+				.and_then(toml::Value::as_str),
+			Some("")
+		);
+		assert_eq!(
+			shortcuts[0]
+				.as_table()
+				.and_then(|table| table.get("shortcut"))
+				.and_then(toml::Value::as_str),
+			Some("Ctrl+Alt+B")
+		);
+		assert_eq!(
+			shortcuts[1]
+				.as_table()
+				.and_then(|table| table.get("set_id"))
+				.and_then(toml::Value::as_str),
+			Some("field_drape")
+		);
+
+		let manifest_text = toml::to_string(&manifest).unwrap();
+		let parsed: AvatarManifestSummary = toml::from_str(&manifest_text).unwrap();
+		let settings = manifest_wardrobe_shortcut_settings(parsed.wardrobe.as_ref());
+		assert_eq!(settings.len(), 2);
+		assert_eq!(settings[0].set_id, "");
+		assert_eq!(settings[0].shortcut, "Ctrl+Alt+B");
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe.shortcuts", serde_json::json!([])).unwrap();
+		assert!(manifest.get("wardrobe").is_none());
 	}
 
 	#[test]

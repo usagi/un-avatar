@@ -7,6 +7,8 @@
 		UnavatarAnimatorActionCandidate,
 		UnavatarAnimatorActionPage,
 		UnavatarWardrobeOptions,
+		WardrobeShortcutSetting,
+		WardrobeSetOption,
 	} from "./profileTypes";
 	import { _ } from "svelte-i18n";
 	import { ChevronLeft, ChevronRight, FolderOpen, RefreshCw, Search, SlidersHorizontal } from "lucide-svelte";
@@ -39,6 +41,8 @@
 	const animatorPageLimit = 80;
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
+
+	$: wardrobeRows = wardrobeSettingRows(wardrobeOptions);
 
 	$: if (animatorPanelOpen) {
 		const key = `${setting.manifest_path}\n${setting.avatar_path ?? ""}`;
@@ -192,6 +196,28 @@
 	async function updateAnimatorActionValue(id: string, value: number): Promise<void> {
 		await updateAnimatorAction(id, selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id), value);
 	}
+
+	function wardrobeSettingRows(options: UnavatarWardrobeOptions | null): WardrobeSetOption[] {
+		if (!options?.available) return [];
+		return [{ id: "", name: options.base_label || "Base" }, ...options.sets];
+	}
+
+	function wardrobeShortcutFor(setId: string): string {
+		return setting.wardrobe_shortcuts.find((shortcut) => shortcut.set_id === setId)?.shortcut ?? "";
+	}
+
+	async function updateWardrobeDefault(setId: string): Promise<void> {
+		await onUpdateSettingValue("wardrobe_set", setId);
+	}
+
+	async function updateWardrobeShortcut(setId: string, shortcut: string): Promise<void> {
+		const normalized = shortcut.trim();
+		const next: WardrobeShortcutSetting[] = setting.wardrobe_shortcuts.filter((item) => item.set_id !== setId);
+		if (normalized) {
+			next.push({ set_id: setId, shortcut: normalized });
+		}
+		await onUpdateSettingValue("wardrobe.shortcuts", next);
+	}
 </script>
 
 <section
@@ -220,18 +246,41 @@
 		{/if}</label
 	>
 	{#if wardrobeOptions?.available}
-		<label class="select-field"
-			><span>{$_("profiles.editor.wardrobe")}</span><select
-				value={setting.wardrobe_set ?? ""}
-				disabled={busy}
-				onchange={(event) => onUpdateSettingValue("wardrobe_set", (event.currentTarget as HTMLSelectElement).value)}
-			>
-				<option value="">{wardrobeOptions.base_label || "Base"}</option>
-				{#each wardrobeOptions.sets as set}
-					<option value={set.id}>{set.name || set.id}</option>
+		<div class="wardrobe-profile-panel">
+			<div class="wardrobe-profile-header">
+				<span>{$_("profiles.editor.wardrobe")}</span>
+				<small>{$_("profiles.editor.wardrobe_profile_hint")}</small>
+			</div>
+			<div class="wardrobe-set-list">
+				{#each wardrobeRows as set (set.id)}
+					<div class="wardrobe-set-row">
+						<label class="wardrobe-default-choice">
+							<input
+								type="radio"
+								name={`wardrobe-default-${setting.manifest_path}`}
+								checked={(setting.wardrobe_set ?? "") === set.id}
+								disabled={busy}
+								onchange={() => updateWardrobeDefault(set.id)}
+							/>
+							<span>{$_("profiles.editor.wardrobe_default")}</span>
+						</label>
+						<div class="wardrobe-set-label">
+							<strong>{set.name || set.id || "Base"}</strong>
+							{#if set.id}<small>{set.id}</small>{/if}
+						</div>
+						<label class="wardrobe-shortcut-field">
+							<span>{$_("profiles.editor.wardrobe_shortcut")}</span>
+							<input
+								value={wardrobeShortcutFor(set.id)}
+								placeholder={$_("profiles.editor.wardrobe_shortcut_placeholder")}
+								disabled={busy}
+								onchange={(event) => updateWardrobeShortcut(set.id, (event.currentTarget as HTMLInputElement).value)}
+							/>
+						</label>
+					</div>
 				{/each}
-			</select></label
-		>
+			</div>
+		</div>
 	{:else if isUnavatar}
 		<div class="profile-inline-note profile-inline-note-warning">
 			{$_("profiles.editor.wardrobe_unavailable")}{wardrobeOptions?.error ? `: ${wardrobeOptions.error}` : ""}
