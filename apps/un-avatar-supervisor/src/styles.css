@@ -3762,6 +3762,11 @@ dd {
 	gap: 8px;
 }
 
+.animator-selected-panel {
+	display: grid;
+	gap: 6px;
+}
+
 .animator-load-row {
 	display: flex;
 	align-items: center;
@@ -3814,6 +3819,10 @@ dd {
 	max-height: 420px;
 	overflow: auto;
 	padding-right: 2px;
+}
+
+.animator-selected-list {
+	max-height: 220px;
 }
 
 .animator-action-row {

@@ -160,6 +160,20 @@
 		return `${candidate.id}:${animatorOffset + index}`;
 	}
 
+	function animatorCandidateFor(id: string): UnavatarAnimatorActionCandidate | null {
+		return animatorCandidates.find((candidate) => candidate.id === id) ?? null;
+	}
+
+	function animatorSelectedLabel(id: string): string {
+		return animatorCandidateFor(id)?.label ?? id;
+	}
+
+	function animatorSelectedDetails(id: string): string {
+		const candidate = animatorCandidateFor(id);
+		if (!candidate) return $_("profiles.editor.unanimator_selected_unresolved");
+		return `${candidate.controller} / ${candidate.effect_count} effects / ${candidate.condition_count} conditions`;
+	}
+
 	function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 		return new Promise((resolve, reject) => {
 			const timer = window.setTimeout(() => reject(new Error($_("profiles.editor.unanimator_load_timeout"))), timeoutMs);
@@ -311,6 +325,53 @@
 					><SlidersHorizontal size={15} />{$_("profiles.editor.configure")}</button
 				>
 			</div>
+			{#if setting.animator_actions.length > 0}
+				<div class="animator-selected-panel">
+					<div class="animator-result-header">
+						<span>{$_("profiles.editor.unanimator_selected_actions")}</span>
+					</div>
+					<div class="animator-action-list animator-selected-list">
+						{#each setting.animator_actions as action (action.id)}
+							<div class="animator-action-row">
+								<div class="animator-action-label">
+									<strong>{animatorSelectedLabel(action.id)}</strong>
+									<small>{animatorSelectedDetails(action.id)}</small>
+								</div>
+								<select
+									value={selectedModeFor(action.id)}
+									disabled={busy}
+									onchange={(event) =>
+										updateAnimatorAction(action.id, (event.currentTarget as HTMLSelectElement).value as AnimatorActionMode)}
+								>
+									<option value="off">{$_("profiles.editor.unanimator_mode_off")}</option>
+									<option value="toggle">{$_("profiles.editor.unanimator_mode_toggle")}</option>
+									<option value="one_shot">{$_("profiles.editor.unanimator_mode_one_shot")}</option>
+								</select>
+								<div class="animator-action-value">
+									<input
+										type="range"
+										min="0"
+										max="1"
+										step="0.01"
+										value={selectedValueFor(action.id)}
+										disabled={busy || selectedModeFor(action.id) === "off"}
+										oninput={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+									/>
+									<input
+										type="number"
+										min="0"
+										max="1"
+										step="0.01"
+										value={selectedValueFor(action.id).toFixed(2)}
+										disabled={busy || selectedModeFor(action.id) === "off"}
+										onchange={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+									/>
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
 			{#if animatorPanelOpen}
 				<div class="animator-profile-browser">
 					<form
