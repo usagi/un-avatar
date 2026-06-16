@@ -3680,6 +3680,25 @@ dd {
 	gap: 8px;
 }
 
+.animator-search-hints {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.animator-search-hints button {
+	min-height: 24px;
+	padding: 0 8px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--panel);
+	color: var(--text);
+	font-size: 12px;
+}
+
 .animator-action-list {
 	display: grid;
 	gap: 6px;

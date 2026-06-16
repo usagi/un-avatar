@@ -3929,7 +3929,7 @@ fn read_unavatar_animator_action_page(
 			matched_count: 0,
 			selected_count,
 			offset: offset.unwrap_or(0),
-			limit: limit.unwrap_or(80).clamp(1, 120),
+			limit: limit.unwrap_or(80).clamp(1, 2000),
 			candidates: Vec::new(),
 			error: None,
 		});
@@ -3957,7 +3957,7 @@ fn read_unavatar_animator_action_page(
 	});
 	let matched_count = matched.len();
 	let offset = offset.unwrap_or(0).min(matched_count);
-	let limit = limit.unwrap_or(80).clamp(1, 120);
+	let limit = limit.unwrap_or(80).clamp(1, 2000);
 	let candidates = matched.into_iter().skip(offset).take(limit).collect();
 	Ok(UnavatarAnimatorActionPage {
 		available: true,
