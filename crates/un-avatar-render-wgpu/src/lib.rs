@@ -99,9 +99,9 @@ const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
-const WARDROBE_TRANSITION_EXIT_MS: u32 = 1100;
-const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 180;
-const WARDROBE_TRANSITION_ENTER_MS: u32 = 1100;
+const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
+const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 300;
+const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -997,17 +997,17 @@ fn camera_state_patch_from_snapshot(state: gpu::CameraStateSnapshot) -> CameraSt
 fn wardrobe_exit_camera_patch(state: gpu::CameraStateSnapshot) -> CameraStatePatch {
 	let yaw = state.longitude_deg.to_radians();
 	let right = [yaw.cos(), 0.0, -yaw.sin()];
-	let shift = (state.radius * 0.95).clamp(0.45, 2.5);
+	let shift = (state.radius * 1.15).clamp(0.55, 3.0);
 	CameraStatePatch {
 		target: Some([
 			state.target[0] + right[0] * shift,
-			state.target[1] + 0.08,
+			state.target[1] + 0.12,
 			state.target[2] + right[2] * shift,
 		]),
-		longitude_deg: Some(state.longitude_deg + 8.0),
-		latitude_deg: Some((state.latitude_deg + 2.0).clamp(-89.0, 89.0)),
-		radius: Some((state.radius * 0.92).max(0.05)),
-		diagonal_fov_deg: Some((state.diagonal_fov_deg * 0.96).clamp(1.0, 160.0)),
+		longitude_deg: Some(state.longitude_deg + 12.0),
+		latitude_deg: Some((state.latitude_deg + 3.0).clamp(-89.0, 89.0)),
+		radius: Some((state.radius * 0.86).max(0.05)),
+		diagonal_fov_deg: Some((state.diagonal_fov_deg * 0.92).clamp(1.0, 160.0)),
 	}
 }
 

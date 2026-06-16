@@ -41,8 +41,49 @@ fn soft_disc(p: vec2<f32>, radius: f32) -> f32 {
 	return 1.0 - smoothstep(radius - aa, radius + aa, d);
 }
 
+fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32) -> vec4<f32> {
+	let side = smoothstep(0.46, 0.76, abs(ndc.x));
+	let edge_fade = 1.0 - smoothstep(0.96, 1.04, abs(ndc.x));
+	let vertical_fade = 1.0 - smoothstep(0.94, 1.08, abs(ndc.y));
+	let curtain = side * edge_fade * vertical_fade;
+
+	let sweep = fract((ndc.y + ndc.x * 0.38) * 8.0 - t * 1.65);
+	let stripe = curtain * (1.0 - smoothstep(0.018, 0.052, abs(sweep - 0.5)));
+	let shard = curtain * line_mask(ndc.x * 0.72 + ndc.y * 0.34 + sin(t * 2.0) * 0.09, 0.012);
+
+	var gate_x = -0.68;
+	if ndc.x >= 0.0 {
+		gate_x = 0.68;
+	}
+	let local = vec2((ndc.x - gate_x) * aspect, ndc.y * 1.18);
+	let r = length(local);
+	let gate = ring_mask(r, 0.21 + 0.018 * sin(t * 4.2), 0.010);
+	let gate_inner = ring_mask(r, 0.12, 0.004);
+	let core = soft_disc(local, 0.050 + 0.010 * sin(t * 5.4));
+
+	let scan_y = ndc.y + 0.62 - fract(t * 0.42) * 1.24;
+	let scan = curtain * line_mask(scan_y, 0.012);
+	let haze = smoothstep(0.18, 0.90, curtain) * (0.42 + 0.18 * sin(t * 2.7 + ndc.y * 5.0));
+
+	let base = vec3(0.015, 0.020, 0.030);
+	let cyan = vec3(0.18, 0.95, 1.00);
+	let magenta = vec3(1.00, 0.28, 0.72);
+	let gold = vec3(1.00, 0.68, 0.22);
+	let accent = mix(cyan, magenta, 0.42 + 0.28 * sin(t * 1.7));
+	let hot = mix(accent, gold, scan * 0.55 + gate * 0.35);
+	let energy = haze * 0.38 + stripe * 0.46 + shard * 0.65 + gate * 1.25 + gate_inner * 1.05 + core * 1.45 + scan * 0.85;
+	let center_dim = 0.035 * (1.0 - side) * (1.0 - smoothstep(0.88, 1.04, abs(ndc.y)));
+	let color = base * (curtain * 0.55 + center_dim) + hot * energy;
+	let alpha = clamp(curtain * 0.18 + center_dim + energy * 0.58, 0.0, 0.78);
+	return vec4(color, alpha);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+	if splash.phase > 4.5 && splash.phase < 5.5 {
+		return wardrobe_splash_color(in.ndc, splash.aspect, splash.time);
+	}
+
 	let uv = vec2(in.ndc.x * splash.aspect, in.ndc.y);
 	let r = length(uv);
 	let angle = atan2(uv.y, uv.x);
