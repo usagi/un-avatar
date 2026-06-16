@@ -945,6 +945,35 @@
 		return captureRuntimeCameraToProfile(rendererForSetting(setting));
 	}
 
+	function runtimeWindowAvailableForSetting(setting: AvatarSetting | null): boolean {
+		const renderer = rendererForSetting(setting);
+		const status = renderer ? rendererRuntimeStatus(renderer) : null;
+		return Boolean(status?.window_position || status?.window_inner_size);
+	}
+
+	async function captureRuntimeWindowToProfile(renderer: RendererInstance | null): Promise<void> {
+		const status = renderer ? rendererRuntimeStatus(renderer) : null;
+		const updates: ProfilePresetUpdate[] = [];
+		if (status?.window_inner_size) {
+			updates.push(["window.width", status.window_inner_size[0]]);
+			updates.push(["window.height", status.window_inner_size[1]]);
+		}
+		if (status?.window_position) {
+			updates.push(["window.x", status.window_position[0]]);
+			updates.push(["window.y", status.window_position[1]]);
+		}
+		if (updates.length === 0) {
+			message = $_("profiles.messages.runtime_window_unavailable");
+			return;
+		}
+		await applyProfileUpdates(updates);
+		message = $_("profiles.messages.runtime_window_captured");
+	}
+
+	function captureRuntimeWindowForSetting(setting: AvatarSetting | null): Promise<void> {
+		return captureRuntimeWindowToProfile(rendererForSetting(setting));
+	}
+
 	function applySpoutResolutionPreset(kind: SpoutResolutionPreset): Promise<void> {
 		return applyProfileUpdates(SPOUT_RESOLUTION_PRESETS[kind]);
 	}
@@ -3359,11 +3388,13 @@
 
 								<ProfileWindowSection
 									setting={selectedSetting}
+									runtimeWindowAvailable={runtimeWindowAvailableForSetting(selectedSetting)}
 									{busy}
 									{colorDisplayMode}
 									onColorModeChange={setColorDisplayMode}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onBackgroundColorChange={updateBackgroundColorValue}
+									onCaptureRuntimeWindow={() => captureRuntimeWindowForSetting(selectedSetting)}
 									onActivate={() => (activeProfileSection = "window")}
 								/>
 

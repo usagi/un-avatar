@@ -9,11 +9,13 @@
 	import type { ColorDisplayMode } from "./storageState";
 
 	export let setting: WindowSetting;
+	export let runtimeWindowAvailable = false;
 	export let busy = false;
 	export let colorDisplayMode: ColorDisplayMode;
 	export let onColorModeChange: ColorModeChangeHandler;
 	export let onUpdateSettingValue: (field: string, value: ProfileSettingValue) => void | Promise<void>;
 	export let onBackgroundColorChange: (value: [number, number, number]) => void;
+	export let onCaptureRuntimeWindow: () => void | Promise<void>;
 	export let onActivate: () => void;
 </script>
 
@@ -25,6 +27,13 @@
 >
 	<div class="section-title-row">
 		<h3>{$_("profiles.editor.window")}</h3>
+		<button
+			type="button"
+			class="secondary compact"
+			disabled={busy || !runtimeWindowAvailable}
+			title={$_("profiles.editor.capture_runtime_window_title")}
+			onclick={onCaptureRuntimeWindow}>{$_("profiles.editor.capture_runtime_window")}</button
+		>
 	</div>
 	<ProfileWindowAppearanceFields
 		decorations={setting.decorations}
