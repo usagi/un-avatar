@@ -38,6 +38,8 @@ use un_avatar_types::HumanoidProfile;
 /// glTF スキン 1 本あたりの joint 上限（レンダラのボーンパレット上限と揃える）。
 const MAX_SKIN_JOINTS: usize = 512;
 const UN_AVATAR_EXTENSION_NAME: &str = "UN_avatar";
+const MAX_UNANIMATOR_ACTIONS: usize = 96;
+const MAX_UNANIMATOR_EFFECTS_PER_ACTION: usize = 16;
 const GLB_MAGIC: u32 = 0x46546C67;
 const GLB_VERSION_2: u32 = 2;
 const JSON_CHUNK_TYPE: u32 = 0x4E4F534A;
@@ -3882,11 +3884,12 @@ fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension, scene: Option<&U
 }
 
 fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Option<&UnaSceneSnapshot>) -> Option<Vec<UnaRuntimeAction>> {
-	let controllers = unavatar
-		.source
-		.get("animator")
-		.and_then(|animator| animator.get("controllers"))
-		.and_then(Value::as_array)?;
+	let animator = unavatar.source.get("animator")?;
+	let enabled_action_ids = unavatar_animator_enabled_action_ids(animator);
+	if enabled_action_ids.is_empty() {
+		return None;
+	}
+	let controllers = animator.get("controllers").and_then(Value::as_array)?;
 	let mut actions = Vec::new();
 	for (controller_index, controller) in controllers.iter().enumerate() {
 		let layers = controller.get("layers").and_then(Value::as_array);
@@ -3912,6 +3915,9 @@ fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Opt
 				transitions_by_destination.entry(destination).or_default().push(transition);
 			}
 			for state in states {
+				if actions.len() >= MAX_UNANIMATOR_ACTIONS {
+					break;
+				}
 				let Some(state_name) = state.get("name").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
 					continue;
 				};
@@ -3923,6 +3929,9 @@ fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Opt
 					continue;
 				}
 				for (transition_index, transition) in transitions.iter().enumerate() {
+					if actions.len() >= MAX_UNANIMATOR_ACTIONS {
+						break;
+					}
 					let Some((parameter_name, parameter_value, conditions)) = unavatar_animator_transition_parameter_trigger(transition)
 					else {
 						continue;
@@ -3937,6 +3946,9 @@ fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Opt
 						"animator:{controller_index}:{layer_index}:{}:{transition_index}",
 						stable_identifier(state_path)
 					);
+					if !enabled_action_ids.contains(command.as_str()) {
+						continue;
+					}
 					actions.push(UnaRuntimeAction {
 						id: command.clone(),
 						label: unavatar_animator_action_label(&label),
@@ -3948,13 +3960,25 @@ fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Opt
 							},
 						],
 						conditions,
-						effects: effects.clone(),
+						effects: effects.iter().take(MAX_UNANIMATOR_EFFECTS_PER_ACTION).cloned().collect(),
 					});
 				}
 			}
 		}
 	}
 	(!actions.is_empty()).then_some(actions)
+}
+
+fn unavatar_animator_enabled_action_ids<'a>(animator: &'a Value) -> BTreeSet<&'a str> {
+	animator
+		.get("enabledActionIds")
+		.or_else(|| animator.get("enabled_action_ids"))
+		.and_then(Value::as_array)
+		.into_iter()
+		.flatten()
+		.filter_map(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.collect()
 }
 
 fn unavatar_animator_transition_parameter_trigger(transition: &Value) -> Option<(String, f32, Vec<UnaRuntimeActionCondition>)> {
@@ -4003,8 +4027,14 @@ fn unavatar_animator_state_effects(state: &Value, scene: Option<&UnaSceneSnapsho
 }
 
 fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnapshot>, effects: &mut Vec<UnaRuntimeActionEffect>) {
+	if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
+		return;
+	}
 	if let Some(bindings) = motion.get("curveBindings").and_then(Value::as_array) {
 		for binding in bindings {
+			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
+				break;
+			}
 			if let Some(effect) = unavatar_animator_curve_binding_effect(binding, scene) {
 				effects.push(effect);
 			}
@@ -4012,6 +4042,9 @@ fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnaps
 	}
 	if let Some(children) = motion.get("children").and_then(Value::as_array) {
 		for child in children {
+			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
+				break;
+			}
 			unavatar_animator_motion_effects(child, scene, effects);
 		}
 	}
@@ -13527,6 +13560,7 @@ mod tests {
 			spec_version: "0.1-preview".to_string(),
 			source: serde_json::json!({
 				"animator": {
+					"enabledActionIds": ["animator:0:0:hat_off:0"],
 					"controllers": [{
 						"name": "paryi_FX",
 						"source": "rootAnimator",
@@ -13591,6 +13625,45 @@ mod tests {
 				visible: false,
 			}]
 		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_skip_fx_animator_until_profile_enables_action() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"animator": {
+					"controllers": [{
+						"name": "paryi_FX",
+						"layers": [{
+							"name": "Cloth",
+							"states": [{
+								"name": "Hat OFF",
+								"path": "Hat OFF",
+								"motion": {
+									"motionType": "AnimationClip",
+									"curveBindings": [{
+										"path": "HatRoot",
+										"propertyName": "m_IsActive",
+										"constantValue": 0
+									}]
+								}
+							}],
+							"anyStateTransitions": [{
+								"destinationState": "Hat OFF",
+								"conditions": [{
+									"parameter": "Hat",
+									"mode": "IfNot",
+									"threshold": 0
+								}]
+							}]
+						}]
+					}]
+				}
+			}),
+		};
+
+		assert!(unavatar_runtime_action_set(&unavatar, None).is_none());
 	}
 
 	#[test]

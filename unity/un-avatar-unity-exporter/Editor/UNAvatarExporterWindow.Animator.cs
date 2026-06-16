@@ -8,6 +8,11 @@ namespace UNAvatar.UnityExporter
 {
     public sealed partial class UNAvatarExporterWindow
     {
+        private const int MaxAnimatorExportControllers = 8;
+        private const int MaxAnimatorExportLayersPerController = 32;
+        private const int MaxAnimatorExportStatesPerLayer = 192;
+        private const int MaxAnimatorExportBindingsPerClip = 32;
+
         private Dictionary<string, object> BuildAnimatorPayload(GameObject root)
         {
             var controllers = new List<object>();
@@ -34,7 +39,8 @@ namespace UNAvatar.UnityExporter
             {
                 ["schemaVersion"] = "0.1-preview",
                 ["controllerCount"] = controllers.Count,
-                ["controllers"] = controllers
+                ["controllers"] = controllers,
+                ["enabledActionIds"] = new List<object>()
             };
         }
 
@@ -70,6 +76,10 @@ namespace UNAvatar.UnityExporter
             List<object> controllers,
             HashSet<int> seen)
         {
+            if (controllers.Count >= MaxAnimatorExportControllers)
+            {
+                return;
+            }
             if (controller == null || !seen.Add(controller.GetInstanceID()))
             {
                 return;
@@ -91,6 +101,10 @@ namespace UNAvatar.UnityExporter
             var layers = new List<object>();
             foreach (var layer in controller.layers)
             {
+                if (layers.Count >= MaxAnimatorExportLayersPerController)
+                {
+                    break;
+                }
                 layers.Add(AnimatorLayerToJson(root, layer));
             }
 
@@ -111,6 +125,34 @@ namespace UNAvatar.UnityExporter
             if (layer.stateMachine != null)
             {
                 AddAnimatorStateMachineStates(root, layer.stateMachine, "", states, anyStateTransitions);
+            }
+            var anyStateDestinationNames = new HashSet<string>();
+            foreach (var transitionObject in anyStateTransitions)
+            {
+                if (transitionObject is Dictionary<string, object> transition &&
+                    transition.TryGetValue("destinationState", out var destination) &&
+                    destination is string destinationName &&
+                    !string.IsNullOrEmpty(destinationName))
+                {
+                    anyStateDestinationNames.Add(destinationName);
+                }
+            }
+            if (anyStateDestinationNames.Count > 0)
+            {
+                states.RemoveAll(stateObject =>
+                {
+                    if (stateObject is not Dictionary<string, object> state ||
+                        !state.TryGetValue("name", out var name) ||
+                        name is not string stateName)
+                    {
+                        return true;
+                    }
+                    return !anyStateDestinationNames.Contains(stateName);
+                });
+            }
+            if (states.Count > MaxAnimatorExportStatesPerLayer)
+            {
+                states.RemoveRange(MaxAnimatorExportStatesPerLayer, states.Count - MaxAnimatorExportStatesPerLayer);
             }
             return new Dictionary<string, object>
             {
@@ -135,6 +177,10 @@ namespace UNAvatar.UnityExporter
             }
             foreach (var child in stateMachine.states)
             {
+                if (states.Count >= MaxAnimatorExportStatesPerLayer)
+                {
+                    break;
+                }
                 if (child.state == null)
                 {
                     continue;
@@ -144,6 +190,10 @@ namespace UNAvatar.UnityExporter
             }
             foreach (var childMachine in stateMachine.stateMachines)
             {
+                if (states.Count >= MaxAnimatorExportStatesPerLayer)
+                {
+                    break;
+                }
                 if (childMachine.stateMachine == null)
                 {
                     continue;
@@ -206,6 +256,10 @@ namespace UNAvatar.UnityExporter
             var curveBindings = new List<object>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
+                if (curveBindings.Count >= MaxAnimatorExportBindingsPerClip)
+                {
+                    break;
+                }
                 if (!IsAnimatorActionCurveBinding(binding))
                 {
                     continue;
@@ -217,6 +271,10 @@ namespace UNAvatar.UnityExporter
             var objectBindings = new List<object>();
             foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
             {
+                if (objectBindings.Count >= MaxAnimatorExportBindingsPerClip)
+                {
+                    break;
+                }
                 if (!IsAnimatorActionObjectReferenceBinding(binding))
                 {
                     continue;
