@@ -4,6 +4,7 @@
 	import {
 		animatorCandidateVisible,
 		animatorFallbackActionVisible,
+		animatorInactiveParameterValue,
 		animatorNormalizedToggleLabel,
 		animatorToggleStateLabel,
 	} from "./rendererAnimator";
@@ -19,12 +20,15 @@
 	export let onActivateRuntimeAction: (rendererId: number, actionId: string, label: string) => void | Promise<void>;
 
 	$: hasRunningRenderer = rendererId != null && rendererPid != null;
-	$: candidates = menuActionCandidates.filter(animatorCandidateVisible);
-	$: fallbackActions = candidates.length ? [] : runtimeActions.filter(animatorFallbackActionVisible);
-	$: actionCount = candidates.length || fallbackActions.length;
 	$: activeActionIds = new Set(
 		runtimeActions.filter((action) => action.current_condition_state === "active").map((action) => action.action_id)
 	);
+	$: candidates = dedupeCandidates(menuActionCandidates.filter(animatorCandidateVisible));
+	$: candidateActionIds = new Set(candidates.map((candidate) => candidate.action_id));
+	$: fallbackActions = dedupeFallbackActions(
+		runtimeActions.filter(animatorFallbackActionVisible).filter((action) => !candidateActionIds.has(action.action_id))
+	);
+	$: actionCount = candidates.length + fallbackActions.length;
 
 	function candidateActive(candidate: RendererRuntimeMenuActionCandidateStatus): boolean {
 		if (candidate.match_kind !== "metadata") return activeActionIds.has(candidate.action_id);
@@ -45,6 +49,39 @@
 		return animatorToggleStateLabel(candidateActive(candidate), normalized.polarity);
 	}
 
+	function candidateGroupKey(candidate: RendererRuntimeMenuActionCandidateStatus): string {
+		const raw = candidate.menu_path?.at(-1) ?? candidate.menu_label ?? candidate.action_label ?? candidate.action_id;
+		const normalized = animatorNormalizedToggleLabel(raw);
+		return `${candidate.parameter_name}:${normalized.label.toLowerCase()}`;
+	}
+
+	function candidatePreferred(
+		current: RendererRuntimeMenuActionCandidateStatus,
+		next: RendererRuntimeMenuActionCandidateStatus
+	): RendererRuntimeMenuActionCandidateStatus {
+		const currentPolarity = animatorNormalizedToggleLabel(
+			current.menu_path?.at(-1) ?? current.menu_label ?? current.action_label ?? current.action_id
+		).polarity;
+		const nextPolarity = animatorNormalizedToggleLabel(
+			next.menu_path?.at(-1) ?? next.menu_label ?? next.action_label ?? next.action_id
+		).polarity;
+		if (candidateActive(next) && !candidateActive(current)) return next;
+		if (nextPolarity === "off" && currentPolarity !== "off") return next;
+		return current;
+	}
+
+	function dedupeCandidates(
+		items: RendererRuntimeMenuActionCandidateStatus[]
+	): RendererRuntimeMenuActionCandidateStatus[] {
+		const grouped = new Map<string, RendererRuntimeMenuActionCandidateStatus>();
+		for (const item of items) {
+			const key = candidateGroupKey(item);
+			const current = grouped.get(key);
+			grouped.set(key, current ? candidatePreferred(current, item) : item);
+		}
+		return [...grouped.values()];
+	}
+
 	function candidateTitle(candidate: RendererRuntimeMenuActionCandidateStatus): string {
 		const dispatch = `${candidate.parameter_name}=${candidate.parameter_value}`;
 		const source = candidate.menu_label || candidate.action_label || candidate.action_id;
@@ -57,7 +94,11 @@
 
 	function activate(candidate: RendererRuntimeMenuActionCandidateStatus): void {
 		if (rendererId == null) return;
-		const value = candidateActive(candidate) ? 0 : candidate.parameter_value;
+		const raw = candidate.menu_path?.at(-1) ?? candidate.menu_label ?? candidate.action_label ?? candidate.action_id;
+		const normalized = animatorNormalizedToggleLabel(raw);
+		const value = candidateActive(candidate)
+			? animatorInactiveParameterValue(candidate.parameter_value, normalized.polarity)
+			: candidate.parameter_value;
 		void onSetRuntimeParameter(rendererId, candidate.parameter_name, value, candidateLabel(candidate));
 	}
 
@@ -76,6 +117,32 @@
 		return animatorToggleStateLabel(action.current_condition_state === "active", normalized.polarity);
 	}
 
+	function fallbackActionGroupKey(action: RendererRuntimeActionStatus): string {
+		const raw = action.expression_menu_path?.split("/").at(-1)?.trim() || action.label || action.action_id;
+		const normalized = animatorNormalizedToggleLabel(raw);
+		return `${action.parameter_name ?? action.supervisor_command ?? action.action_id}:${normalized.label.toLowerCase()}`;
+	}
+
+	function fallbackActionPreferred(current: RendererRuntimeActionStatus, next: RendererRuntimeActionStatus): RendererRuntimeActionStatus {
+		const currentRaw = current.expression_menu_path?.split("/").at(-1)?.trim() || current.label || current.action_id;
+		const nextRaw = next.expression_menu_path?.split("/").at(-1)?.trim() || next.label || next.action_id;
+		const currentPolarity = animatorNormalizedToggleLabel(currentRaw).polarity;
+		const nextPolarity = animatorNormalizedToggleLabel(nextRaw).polarity;
+		if (next.current_condition_state === "active" && current.current_condition_state !== "active") return next;
+		if (nextPolarity === "off" && currentPolarity !== "off") return next;
+		return current;
+	}
+
+	function dedupeFallbackActions(items: RendererRuntimeActionStatus[]): RendererRuntimeActionStatus[] {
+		const grouped = new Map<string, RendererRuntimeActionStatus>();
+		for (const item of items) {
+			const key = fallbackActionGroupKey(item);
+			const current = grouped.get(key);
+			grouped.set(key, current ? fallbackActionPreferred(current, item) : item);
+		}
+		return [...grouped.values()];
+	}
+
 	function fallbackActionTitle(action: RendererRuntimeActionStatus): string {
 		if (action.parameter_name && action.parameter_value != null) return `${action.parameter_name}=${action.parameter_value}`;
 		return action.action_id;
@@ -85,7 +152,12 @@
 		if (rendererId == null) return;
 		const label = fallbackActionLabel(action);
 		if (action.parameter_name && action.parameter_value != null) {
-			const value = action.current_condition_state === "active" ? 0 : action.parameter_value;
+			const raw = action.expression_menu_path?.split("/").at(-1)?.trim() || action.label || action.action_id;
+			const normalized = animatorNormalizedToggleLabel(raw);
+			const value =
+				action.current_condition_state === "active"
+					? animatorInactiveParameterValue(action.parameter_value, normalized.polarity)
+					: action.parameter_value;
 			void onSetRuntimeParameter(rendererId, action.parameter_name, value, label);
 			return;
 		}
@@ -114,7 +186,8 @@
 						<small>{candidateStateLabel(candidate)}</small>
 					</button>
 				{/each}
-			{:else}
+			{/if}
+			{#if fallbackActions.length}
 				{#each fallbackActions as action}
 					<button
 						type="button"

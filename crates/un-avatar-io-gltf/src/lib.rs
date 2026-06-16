@@ -3870,7 +3870,236 @@ fn unavatar_runtime_action_set(unavatar: &UnaUnavatarExtension, scene: Option<&U
 			actions.push(action);
 		}
 	}
+	if let Some(animator_actions) = unavatar_animator_runtime_actions(unavatar, scene) {
+		for action in animator_actions {
+			if actions.iter().any(|existing| existing.id == action.id) {
+				continue;
+			}
+			actions.push(action);
+		}
+	}
 	(!actions.is_empty()).then_some(UnaRuntimeActionSet { actions })
+}
+
+fn unavatar_animator_runtime_actions(unavatar: &UnaUnavatarExtension, scene: Option<&UnaSceneSnapshot>) -> Option<Vec<UnaRuntimeAction>> {
+	let controllers = unavatar
+		.source
+		.get("animator")
+		.and_then(|animator| animator.get("controllers"))
+		.and_then(Value::as_array)?;
+	let mut actions = Vec::new();
+	for (controller_index, controller) in controllers.iter().enumerate() {
+		let layers = controller.get("layers").and_then(Value::as_array);
+		let Some(layers) = layers else {
+			continue;
+		};
+		for (layer_index, layer) in layers.iter().enumerate() {
+			let layer_name = layer.get("name").and_then(Value::as_str).unwrap_or("");
+			let states = layer.get("states").and_then(Value::as_array);
+			let any_state_transitions = layer.get("anyStateTransitions").and_then(Value::as_array);
+			let (Some(states), Some(any_state_transitions)) = (states, any_state_transitions) else {
+				continue;
+			};
+			let mut transitions_by_destination: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+			for transition in any_state_transitions {
+				let Some(destination) = transition
+					.get("destinationState")
+					.and_then(Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				transitions_by_destination.entry(destination).or_default().push(transition);
+			}
+			for state in states {
+				let Some(state_name) = state.get("name").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+					continue;
+				};
+				let Some(transitions) = transitions_by_destination.get(state_name) else {
+					continue;
+				};
+				let effects = unavatar_animator_state_effects(state, scene);
+				if effects.is_empty() {
+					continue;
+				}
+				for (transition_index, transition) in transitions.iter().enumerate() {
+					let Some((parameter_name, parameter_value, conditions)) = unavatar_animator_transition_parameter_trigger(transition)
+					else {
+						continue;
+					};
+					let state_path = state.get("path").and_then(Value::as_str).unwrap_or(state_name);
+					let label = if layer_name.is_empty() {
+						state_path.to_string()
+					} else {
+						format!("{layer_name} / {state_path}")
+					};
+					let command = format!(
+						"animator:{controller_index}:{layer_index}:{}:{transition_index}",
+						stable_identifier(state_path)
+					);
+					actions.push(UnaRuntimeAction {
+						id: command.clone(),
+						label: unavatar_animator_action_label(&label),
+						triggers: vec![
+							UnaRuntimeActionTrigger::SupervisorCommand { command },
+							UnaRuntimeActionTrigger::ParameterValue {
+								name: parameter_name,
+								value: parameter_value,
+							},
+						],
+						conditions,
+						effects: effects.clone(),
+					});
+				}
+			}
+		}
+	}
+	(!actions.is_empty()).then_some(actions)
+}
+
+fn unavatar_animator_transition_parameter_trigger(transition: &Value) -> Option<(String, f32, Vec<UnaRuntimeActionCondition>)> {
+	let conditions = transition.get("conditions").and_then(Value::as_array)?;
+	let mut out = Vec::new();
+	let mut trigger = None;
+	for condition in conditions {
+		let Some(name) = condition.get("parameter").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+			continue;
+		};
+		let mode = condition.get("mode").and_then(Value::as_str).unwrap_or("");
+		let threshold = condition
+			.get("threshold")
+			.and_then(Value::as_f64)
+			.map(|value| value as f32)
+			.unwrap_or(0.0);
+		let (value, inverted) = match mode {
+			"If" => (1.0, false),
+			"IfNot" => (0.0, false),
+			"Equals" => (threshold, false),
+			"NotEqual" => (threshold, true),
+			"Greater" => (threshold, false),
+			"Less" => (threshold, true),
+			_ => (threshold, false),
+		};
+		if trigger.is_none() {
+			trigger = Some((name.to_string(), value));
+		}
+		out.push(UnaRuntimeActionCondition {
+			parameter_name: Some(name.to_string()),
+			parameter_value: Some(value),
+			inverted,
+			..Default::default()
+		});
+	}
+	let (name, value) = trigger?;
+	Some((name, value, out))
+}
+
+fn unavatar_animator_state_effects(state: &Value, scene: Option<&UnaSceneSnapshot>) -> Vec<UnaRuntimeActionEffect> {
+	let mut effects = Vec::new();
+	if let Some(motion) = state.get("motion") {
+		unavatar_animator_motion_effects(motion, scene, &mut effects);
+	}
+	effects
+}
+
+fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnapshot>, effects: &mut Vec<UnaRuntimeActionEffect>) {
+	if let Some(bindings) = motion.get("curveBindings").and_then(Value::as_array) {
+		for binding in bindings {
+			if let Some(effect) = unavatar_animator_curve_binding_effect(binding, scene) {
+				effects.push(effect);
+			}
+		}
+	}
+	if let Some(children) = motion.get("children").and_then(Value::as_array) {
+		for child in children {
+			unavatar_animator_motion_effects(child, scene, effects);
+		}
+	}
+}
+
+fn unavatar_animator_curve_binding_effect(binding: &Value, scene: Option<&UnaSceneSnapshot>) -> Option<UnaRuntimeActionEffect> {
+	let property = binding.get("propertyName").and_then(Value::as_str)?;
+	let value = unavatar_animator_binding_value(binding)?;
+	match property {
+		"m_IsActive" | "m_Enabled" => {
+			let target = unavatar_animator_binding_node_target(binding, scene)?;
+			Some(UnaRuntimeActionEffect::NodeVisibility {
+				target,
+				visible: value > 0.5,
+			})
+		}
+		_ if property.starts_with("blendShape.") => {
+			let name = property.trim_start_matches("blendShape.").trim();
+			if name.is_empty() {
+				return None;
+			}
+			let weight = if value > 1.0 { value / 100.0 } else { value };
+			Some(UnaRuntimeActionEffect::ExpressionWeight {
+				name: name.to_string(),
+				weight,
+			})
+		}
+		_ => None,
+	}
+}
+
+fn unavatar_animator_binding_value(binding: &Value) -> Option<f32> {
+	binding
+		.get("constantValue")
+		.or_else(|| binding.get("lastValue"))
+		.or_else(|| binding.get("firstValue"))
+		.and_then(Value::as_f64)
+		.map(|value| value as f32)
+}
+
+fn unavatar_animator_binding_node_target(binding: &Value, scene: Option<&UnaSceneSnapshot>) -> Option<UnaRuntimeNodeTarget> {
+	let path = binding
+		.get("path")
+		.and_then(Value::as_str)
+		.filter(|value| !value.is_empty())
+		.map(str::to_string);
+	if let (Some(scene), Some(path)) = (scene, path.as_deref()) {
+		if let Some((_, node)) = scene.nodes.iter().enumerate().find(|(index, _)| {
+			scene_node_path_for_index(scene, *index)
+				.as_deref()
+				.is_some_and(|scene_path| scene_path == path || scene_path.ends_with(&format!("/{path}")))
+		}) {
+			return Some(UnaRuntimeNodeTarget {
+				node_index: None,
+				source_node_id: node.source_node_id.clone(),
+				resolved_node_id: node.resolved_node_id.clone(),
+				path: Some(path.to_string()),
+			});
+		}
+	}
+	path.map(|path| UnaRuntimeNodeTarget {
+		node_index: None,
+		source_node_id: None,
+		resolved_node_id: None,
+		path: Some(path),
+	})
+}
+
+fn unavatar_animator_action_label(label: &str) -> String {
+	label
+		.replace(" / ", "/")
+		.split('/')
+		.filter(|segment| !segment.trim().is_empty())
+		.map(str::trim)
+		.collect::<Vec<_>>()
+		.join(" / ")
+}
+
+fn stable_identifier(value: &str) -> String {
+	let mut out = String::with_capacity(value.len());
+	for ch in value.chars() {
+		if ch.is_ascii_alphanumeric() {
+			out.push(ch.to_ascii_lowercase());
+		} else if !out.ends_with('_') {
+			out.push('_');
+		}
+	}
+	out.trim_matches('_').to_string()
 }
 
 fn unavatar_variant_runtime_action(variant: &Value) -> Option<UnaRuntimeAction> {
@@ -13272,6 +13501,95 @@ mod tests {
 					enabled: false,
 				},
 			]
+		);
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_import_fx_animator_object_toggle() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("HatRoot".to_string()),
+					source_node_id: Some("node_hat".to_string()),
+					resolved_node_id: Some("resolved_hat".to_string()),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"animator": {
+					"controllers": [{
+						"name": "paryi_FX",
+						"source": "rootAnimator",
+						"layers": [{
+							"name": "Cloth",
+							"states": [{
+								"name": "Hat OFF",
+								"path": "Hat OFF",
+								"motion": {
+									"motionType": "AnimationClip",
+									"name": "Hat_OFF",
+									"curveBindings": [{
+										"path": "HatRoot",
+										"propertyName": "m_IsActive",
+										"type": "UnityEngine.GameObject",
+										"constantValue": 0
+									}]
+								}
+							}],
+							"anyStateTransitions": [{
+								"destinationState": "Hat OFF",
+								"conditions": [{
+									"parameter": "Hat",
+									"mode": "IfNot",
+									"threshold": 0
+								}]
+							}]
+						}]
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene)).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "animator:0:0:hat_off:0");
+		assert_eq!(actions.actions[0].label, "Cloth / Hat OFF");
+		assert_eq!(
+			actions.actions[0].triggers,
+			vec![
+				UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "animator:0:0:hat_off:0".to_string()
+				},
+				UnaRuntimeActionTrigger::ParameterValue {
+					name: "Hat".to_string(),
+					value: 0.0
+				}
+			]
+		);
+		assert_eq!(actions.actions[0].conditions[0].parameter_name.as_deref(), Some("Hat"));
+		assert_eq!(actions.actions[0].conditions[0].parameter_value, Some(0.0));
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::NodeVisibility {
+				target: UnaRuntimeNodeTarget {
+					node_index: None,
+					source_node_id: Some("node_hat".to_string()),
+					resolved_node_id: Some("resolved_hat".to_string()),
+					path: Some("HatRoot".to_string()),
+				},
+				visible: false,
+			}]
 		);
 	}
 

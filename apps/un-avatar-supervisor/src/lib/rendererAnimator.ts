@@ -5,7 +5,7 @@ export type AnimatorTogglePolarity = "on" | "off" | null;
 export function animatorCandidateVisible(candidate: RendererRuntimeMenuActionCandidateStatus): boolean {
 	if (candidate.available === false) return false;
 	if (candidate.wardrobe_set_ids?.length) return false;
-	if (candidate.match_kind === "metadata" || candidate.effect_count <= 0) return false;
+	if (candidate.effect_count <= 0) return false;
 	if (candidate.match_kind !== "metadata") return true;
 	if (candidate.control_type === "Button") return false;
 	const path = candidate.menu_path ?? [];
@@ -17,7 +17,9 @@ export function animatorCandidateVisible(candidate: RendererRuntimeMenuActionCan
 }
 
 export function animatorFallbackActionVisible(action: RendererRuntimeActionStatus): boolean {
-	return !action.wardrobe_set_id && Boolean(action.expression_menu_path?.trim());
+	if (action.available === false) return false;
+	if (action.wardrobe_set_id) return false;
+	return (action.effect_count ?? 0) > 0;
 }
 
 export function animatorNormalizedToggleLabel(label: string): { label: string; polarity: AnimatorTogglePolarity } {
@@ -36,6 +38,12 @@ export function animatorToggleStateLabel(active: boolean, polarity: AnimatorTogg
 	if (polarity === "off") return active ? "OFF" : "ON";
 	if (polarity === "on") return active ? "ON" : "OFF";
 	return active ? "ON" : "OFF";
+}
+
+export function animatorInactiveParameterValue(parameterValue: number, polarity: AnimatorTogglePolarity): number {
+	if (polarity === "off") return 1;
+	if (Math.abs(parameterValue) <= 0.005) return 1;
+	return 0;
 }
 
 export function animatorItemCount(

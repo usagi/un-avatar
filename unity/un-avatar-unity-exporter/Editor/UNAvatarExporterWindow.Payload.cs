@@ -45,6 +45,7 @@ namespace UNAvatar.UnityExporter
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets, dynamicsPayload),
+                ["animator"] = BuildAnimatorPayload(registryRoot),
                 ["modularAvatar"] = BuildModularAvatarPayload(registryRoot, textureAssets),
                 ["provenance"] = new Dictionary<string, object>
                 {
