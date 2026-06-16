@@ -100,12 +100,13 @@ const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
+const WARDROBE_TRANSITION_PRE_APPLY_SPLASH_MS: u32 = 900;
 const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
 const SPLASH_FULL_RECT_CENTER: [f32; 2] = [0.0, 0.0];
 const SPLASH_FULL_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
-const WARDROBE_SPLASH_RECT_CENTER: [f32; 2] = [0.0, -0.02];
-const WARDROBE_SPLASH_RECT_HALF_SIZE: [f32; 2] = [0.58, 0.72];
+const WARDROBE_SPLASH_RECT_CENTER: [f32; 2] = [0.50, 0.05];
+const WARDROBE_SPLASH_RECT_HALF_SIZE: [f32; 2] = [0.30, 0.30];
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -2276,6 +2277,9 @@ impl AvatarApp {
 					},
 				);
 			}
+			WardrobeTransitionPhase::SplashPrimed => {
+				self.request_redraw();
+			}
 			_ => {}
 		}
 	}
@@ -2297,7 +2301,10 @@ impl AvatarApp {
 
 	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then(|| transition.set_id.clone())
+		(matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed)
+			&& Instant::now().saturating_duration_since(transition.phase_started_at)
+				>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_PRE_APPLY_SPLASH_MS)))
+		.then(|| transition.set_id.clone())
 	}
 
 	fn finish_wardrobe_apply_after_render(&mut self, result: WardrobeApplyFrameResult) {

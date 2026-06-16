@@ -83,7 +83,7 @@ impl SpoutCapture {
 		unreachable!("Spout スタブ")
 	}
 
-	pub fn send_mapped_rgba(&mut self, _device: &wgpu::Device) {
+	pub fn send_mapped_rgba(&mut self, _device: &wgpu::Device) -> bool {
 		unreachable!("Spout スタブ")
 	}
 

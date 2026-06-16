@@ -7431,12 +7431,31 @@ impl GpuState {
 			let t_spout0 = Instant::now();
 			let sp = self.spout.as_mut().expect("spout is initialized while active");
 			// 1) 前フレーム以降に map が完了したスロットがあれば Spout2 に送る（非ブロッキング）。
-			sp.send_mapped_rgba(&self.device);
+			let _ = sp.send_mapped_rgba(&self.device);
+			if flush_spout_splash_before_blocking_apply {
+				self.device
+					.poll(wgpu::PollType::Wait {
+						submission_index: None,
+						timeout: Some(Duration::from_millis(250)),
+					})
+					.ok();
+				let _ = sp.send_mapped_rgba(&self.device);
+			}
 			// 2) 今フレームの swizzle + readback を encode。リングが空いていれば map を要求する。
 			let mut enc2 = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
 				label: Some("spout-staging"),
 			});
-			let staged_slot = sp.copy_to_staging(&mut enc2);
+			let mut staged_slot = sp.copy_to_staging(&mut enc2);
+			if flush_spout_splash_before_blocking_apply && staged_slot.is_none() {
+				self.device
+					.poll(wgpu::PollType::Wait {
+						submission_index: None,
+						timeout: Some(Duration::from_millis(250)),
+					})
+					.ok();
+				let _ = sp.send_mapped_rgba(&self.device);
+				staged_slot = sp.copy_to_staging(&mut enc2);
+			}
 			self.queue.submit(std::iter::once(enc2.finish()));
 			if let Some(idx) = staged_slot {
 				sp.after_submit_request_map(idx);
@@ -7447,7 +7466,16 @@ impl GpuState {
 							timeout: Some(Duration::from_millis(250)),
 						})
 						.ok();
-					sp.send_mapped_rgba(&self.device);
+					let sent = sp.send_mapped_rgba(&self.device);
+					if !sent {
+						self.device
+							.poll(wgpu::PollType::Wait {
+								submission_index: None,
+								timeout: Some(Duration::from_millis(250)),
+							})
+							.ok();
+						let _ = sp.send_mapped_rgba(&self.device);
+					}
 				}
 			}
 			// 3) swap chain が取れている時だけプレビュー用にコピー。最小化 / occluded 中でも Spout 送信は続ける。

@@ -447,7 +447,7 @@ impl SpoutCapture {
 	}
 
 	/// Ready 状態のリングスロットを 1 つドレインして Spout2 に送る。`device.poll(Poll)` でコールバックを進めるのは呼び出し側に任せる。
-	pub fn send_mapped_rgba(&mut self, device: &wgpu::Device) {
+	pub fn send_mapped_rgba(&mut self, device: &wgpu::Device) -> bool {
 		// map_async コールバックの完了を進める（非ブロッキング）。
 		device.poll(wgpu::PollType::Poll).ok();
 
@@ -461,7 +461,7 @@ impl SpoutCapture {
 			}
 		});
 		let Some(idx) = ready_idx else {
-			return;
+			return false;
 		};
 
 		let total_start = Instant::now();
@@ -508,6 +508,7 @@ impl SpoutCapture {
 		self.stats.sender_initialized = Some(sender_initialized);
 		self.stats.sender_width = Some(sender_width);
 		self.stats.sender_height = Some(sender_height);
+		send_ok
 	}
 
 	pub fn stats(&self) -> SpoutFrameStats {
