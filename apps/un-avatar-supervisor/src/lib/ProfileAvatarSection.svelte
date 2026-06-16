@@ -11,6 +11,7 @@
 	import { _ } from "svelte-i18n";
 	import { ChevronLeft, ChevronRight, FolderOpen, RefreshCw, Search, SlidersHorizontal } from "lucide-svelte";
 	import { hasTauriRuntime } from "./environment";
+	import { traceAsync, traceFrontendEvent } from "./frontendTrace";
 
 	export let setting: AvatarFileSetting;
 	export let wardrobeOptions: UnavatarWardrobeOptions | null = null;
@@ -51,6 +52,7 @@
 	}
 
 	function setAnimatorPanelOpen(open: boolean): void {
+		traceFrontendEvent("unanimator:panel", { open, avatarPath: setting.avatar_path ?? "" });
 		if (animatorPanelOpen === open) return;
 		animatorPanelOpen = open;
 		animatorOffset = 0;
@@ -69,6 +71,10 @@
 	}
 
 	async function refreshAnimatorPage(): Promise<void> {
+		traceFrontendEvent("unanimator:refresh:enter", {
+			avatarPath: setting.avatar_path ?? "",
+			manifestPath: setting.manifest_path,
+		});
 		if (!supportsUnanimator || !setting.avatar_path || !hasTauriRuntime()) {
 			animatorPage = null;
 			animatorCandidates = [];
@@ -79,13 +85,18 @@
 		animatorError = "";
 		try {
 			const page = await withTimeout(
-				invoke<UnavatarAnimatorActionPage>("read_unavatar_animator_action_page", {
-					path: setting.avatar_path,
-					manifestPath: setting.manifest_path,
-					query: "",
-					offset: 0,
-					limit: animatorLoadLimit,
-				}),
+				traceAsync(
+					"invoke:read_unavatar_animator_action_page",
+					() =>
+						invoke<UnavatarAnimatorActionPage>("read_unavatar_animator_action_page", {
+							path: setting.avatar_path,
+							manifestPath: setting.manifest_path,
+							query: "",
+							offset: 0,
+							limit: animatorLoadLimit,
+						}),
+					{ manifestPath: setting.manifest_path }
+				),
 				animatorLoadTimeoutMs
 			);
 			if (requestId !== animatorRequestId) return;
@@ -97,19 +108,26 @@
 				limit: animatorPageLimit,
 				candidates: [],
 			};
+			traceFrontendEvent("unanimator:refresh:ok", {
+				total: page.total_count,
+				candidates: page.candidates.length,
+			});
 		} catch (error) {
 			if (requestId !== animatorRequestId) return;
 			animatorError = String(error);
 			animatorPage = null;
 			animatorCandidates = [];
+			traceFrontendEvent("unanimator:refresh:error", { error: String(error) });
 		} finally {
 			if (requestId === animatorRequestId) {
 				animatorBusy = false;
+				traceFrontendEvent("unanimator:refresh:finally", { busy: animatorBusy });
 			}
 		}
 	}
 
 	function setAnimatorQuery(value: string): void {
+		traceFrontendEvent("unanimator:query", { value });
 		animatorQuery = value;
 		animatorOffset = 0;
 	}

@@ -98,6 +98,7 @@
 		rendererLogText as rendererLogTextFromLines,
 		type RendererLogFilter,
 	} from "./lib/rendererLogs";
+	import { traceAsync, traceFrontendEvent } from "./lib/frontendTrace";
 	import {
 		rendererAvatarOutlinePayload,
 		rendererBloomPayload,
@@ -281,6 +282,7 @@
 	let deleteHoldStartedAt = 0;
 	let runtimeRefreshBusy = false;
 	let runtimeRefreshPending = false;
+	let runtimeRefreshTraceSeq = 0;
 	let startupAutoLaunchAttempted = false;
 
 	const deleteHoldDurationMs = 1200;
@@ -704,6 +706,11 @@
 		saveColorDisplayMode(COLOR_DISPLAY_MODE_KEY, mode);
 	}
 
+	function setActiveTab(tab: typeof activeTab, source: string): void {
+		traceFrontendEvent("activeTab:set", { from: activeTab, to: tab, source });
+		activeTab = tab;
+	}
+
 	async function syncAppSettingsToBackend(settings: AppSettings): Promise<void> {
 		if (!hasTauriRuntime()) return;
 		if (!backendAppSettingsReady) return;
@@ -940,7 +947,7 @@
 		logsRendererFilter = renderer.id;
 		logsTextFilter = "";
 		rendererLogsLayout = "unified";
-		activeTab = "logs";
+		setActiveTab("logs", "jumpToRendererLog");
 		queueMicrotask(scrollLogsToBottom);
 	}
 
@@ -1117,6 +1124,7 @@
 	}
 
 	async function refreshAll(): Promise<void> {
+		traceFrontendEvent("refreshAll:enter", { activeTab });
 		if (!hasTauriRuntime()) {
 			renderers = [];
 			runtimeStatuses = {};
@@ -1133,11 +1141,17 @@
 			return;
 		}
 		try {
-			const instances = await invoke<RendererInstance[]>("list_renderers");
+			const instances = await traceAsync("invoke:list_renderers", () => invoke<RendererInstance[]>("list_renderers"), {
+				source: "refreshAll",
+			});
 			const [settings, appNotifications, nativeNotifications] = await Promise.all([
-				invoke<AvatarSetting[]>("list_avatar_settings"),
-				invoke<AppNotification[]>("list_app_notifications"),
-				invoke<NativeNotificationStatus>("get_native_notification_status"),
+				traceAsync("invoke:list_avatar_settings", () => invoke<AvatarSetting[]>("list_avatar_settings"), { source: "refreshAll" }),
+				traceAsync("invoke:list_app_notifications", () => invoke<AppNotification[]>("list_app_notifications"), {
+					source: "refreshAll",
+				}),
+				traceAsync("invoke:get_native_notification_status", () => invoke<NativeNotificationStatus>("get_native_notification_status"), {
+					source: "refreshAll",
+				}),
 			]);
 			renderers = instances;
 			avatarSettings = settings;
@@ -1147,19 +1161,24 @@
 			reconcileSelectedRendererId(instances);
 			selectedSettingId = pickInitialSelectedSettingId(selectedSettingId, appSettings.last_selected_setting_id, settings);
 			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, settings);
+			traceFrontendEvent("refreshAll:ok", { renderers: instances.length, settings: settings.length });
 		} catch (error) {
 			message = String(error);
+			traceFrontendEvent("refreshAll:error", { error: String(error) });
 		}
 	}
 
 	async function refreshRendererRuntimeStatuses(instances: RendererInstance[] = renderers): Promise<void> {
 		if (!hasTauriRuntime()) return;
+		traceFrontendEvent("runtimeStatuses:enter", { count: instances.length });
 		if (instances.length === 0) {
 			runtimeStatuses = {};
 			runtimeStatusSamples.clear();
 			rendererActivationSeq.clear();
+			traceFrontendEvent("runtimeStatuses:empty");
 			return;
 		}
+		const runtimeStatusStarted = performance.now();
 		const statuses = await Promise.all(
 			instances.map((renderer) =>
 				invoke<RendererRuntimeStatus>("get_renderer_runtime_status", {
@@ -1167,6 +1186,13 @@
 				})
 			)
 		);
+		const runtimeStatusElapsedMs = Math.round(performance.now() - runtimeStatusStarted);
+		if (runtimeStatusElapsedMs >= 150) {
+			traceFrontendEvent("invoke:get_renderer_runtime_status_batch:ok", {
+				count: instances.length,
+				elapsedMs: runtimeStatusElapsedMs,
+			});
+		}
 		const now = performance.now();
 		const liveIds = new Set<number>();
 		for (const renderer of instances) {
@@ -1197,24 +1223,34 @@
 		}
 		runtimeStatuses = nextRuntimeStatuses;
 		syncSelectionFromRendererActivation(statuses, instances);
+		traceFrontendEvent("runtimeStatuses:ok", { count: statuses.length });
 	}
 
 	async function refreshRendererRuntimeView(): Promise<void> {
 		if (!hasTauriRuntime()) return;
 		if (runtimeRefreshBusy) {
 			runtimeRefreshPending = true;
+			traceFrontendEvent("runtimeView:pending", { activeTab });
 			return;
 		}
 		runtimeRefreshBusy = true;
 		try {
 			runtimeRefreshPending = false;
-			const instances = await invoke<RendererInstance[]>("list_renderers");
+			const traceThisRefresh = ++runtimeRefreshTraceSeq % 20 === 1;
+			if (traceThisRefresh) traceFrontendEvent("runtimeView:enter", { activeTab });
+			const instances = await traceAsync("invoke:list_renderers", () => invoke<RendererInstance[]>("list_renderers"), {
+				source: "runtimeView",
+			});
 			renderers = instances;
 			await refreshRendererRuntimeStatuses(instances);
-			notifications = await invoke<AppNotification[]>("list_app_notifications");
+			notifications = await traceAsync("invoke:list_app_notifications", () => invoke<AppNotification[]>("list_app_notifications"), {
+				source: "runtimeView",
+			});
 			reconcileSelectedRendererId(instances);
+			if (traceThisRefresh) traceFrontendEvent("runtimeView:ok", { renderers: instances.length });
 		} catch (error) {
 			message = String(error);
+			traceFrontendEvent("runtimeView:error", { error: String(error) });
 		} finally {
 			runtimeRefreshBusy = false;
 			if (runtimeRefreshPending) {
@@ -1296,7 +1332,7 @@
 				message = $_("profiles.messages.opened_renderers", { values: { count: launchGroupSettings.length } });
 				await refreshAll();
 				if (appSettings.jump_to_renderers_on_quick_run) {
-					activeTab = "renderers";
+					setActiveTab("renderers", "launchSetting:group");
 				}
 				return;
 			}
@@ -1308,7 +1344,7 @@
 			message = $_("profiles.messages.opened_renderer", { values: { name: instance.name } });
 			await refreshAll();
 			if (appSettings.jump_to_renderers_on_quick_run) {
-				activeTab = "renderers";
+				setActiveTab("renderers", "launchSetting:single");
 			}
 		} catch (error) {
 			message = String(error);
@@ -1407,7 +1443,7 @@
 		if (!appSettings.auto_launch_selected_on_startup) return;
 		if (!isValidLaunchTarget(launchTargetId, avatarSettings)) return;
 		if (visibleRenderers.length > 0) return;
-		activeTab = "renderers";
+		setActiveTab("renderers", "autoLaunch");
 		await launchSetting(launchTargetSetting?.id ?? null);
 	}
 
@@ -1425,7 +1461,7 @@
 			message = $_("profiles.messages.duplicated", { values: { name: setting.name } });
 			await refreshAll();
 			selectedSettingId = setting.id;
-			activeTab = "settings";
+			setActiveTab("settings", "duplicateSetting");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1444,7 +1480,7 @@
 			message = $_("profiles.messages.created", { values: { name: setting.name } });
 			await refreshAll();
 			selectedSettingId = setting.id;
-			activeTab = "settings";
+			setActiveTab("settings", "newSetting");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -2761,6 +2797,10 @@
 	}
 
 	$effect(() => {
+		traceFrontendEvent("activeTab:committed", { activeTab });
+	});
+
+	$effect(() => {
 		let cancelled = false;
 		void (async () => {
 			await loadBackendAppSettings();
@@ -2791,7 +2831,7 @@
 			if (!avatarSettings.some((setting) => setting.id === profileId)) return;
 			selectedSettingId = profileId;
 			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, avatarSettings);
-			activeTab = "settings";
+			setActiveTab("settings", "profile-open-requested");
 		})
 			.then((handler) => {
 				if (cancelled) {
@@ -2902,16 +2942,16 @@
 
 	<div class="workspace">
 		<aside class="side-rail" aria-label={$_("sidebar.aria")}>
-			<button class:active={activeTab === "renderers"} onclick={() => (activeTab = "renderers")}
+			<button class:active={activeTab === "renderers"} onclick={() => setActiveTab("renderers", "side-rail")}
 				><Monitor size={17} />{$_("sidebar.renderers")}</button
 			>
-			<button class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}
+			<button class:active={activeTab === "settings"} onclick={() => setActiveTab("settings", "side-rail")}
 				><FileCog size={17} />{$_("sidebar.profiles")}</button
 			>
-			<button class:active={activeTab === "logs"} onclick={() => (activeTab = "logs")}
+			<button class:active={activeTab === "logs"} onclick={() => setActiveTab("logs", "side-rail")}
 				><TerminalSquare size={17} />{$_("sidebar.logs")}</button
 			>
-			<button class:active={activeTab === "app"} onclick={() => (activeTab = "app")}
+			<button class:active={activeTab === "app"} onclick={() => setActiveTab("app", "side-rail")}
 				><Settings size={17} />{$_("sidebar.settings")}</button
 			>
 			<div class="rail-footer">
@@ -2961,7 +3001,7 @@
 						rendererStateLabel={(state) => rendererStateLabel(state as RendererState)}
 						onViewProfile={(profileId) => {
 							selectedSettingId = profileId;
-							activeTab = "settings";
+							setActiveTab("settings", "rendererStage:viewProfile");
 						}}
 						onActivateRenderer={(rendererId) => {
 							const renderer = selectedRendererById(rendererId);
@@ -3111,7 +3151,7 @@
 						onOpenProfile={() => {
 							if (!launchTargetSetting) return;
 							selectedSettingId = launchGroupSettings[0]?.id ?? launchTargetSetting.id;
-							activeTab = "settings";
+							setActiveTab("settings", "rendererDetails:openProfile");
 						}}
 						onRevealProfilesDir={() => revealProfilesDir()}
 					/>
@@ -3155,7 +3195,7 @@
 						onRestartPending={() => restartPendingRenderer()}
 						onViewRenderer={(rendererId) => {
 							selectedRendererId = rendererId;
-							activeTab = "renderers";
+							setActiveTab("renderers", "profileStage:viewRenderer");
 						}}
 						onActivateRenderer={(rendererId) => {
 							const renderer = selectedRendererById(rendererId);

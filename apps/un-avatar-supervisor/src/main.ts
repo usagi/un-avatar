@@ -4,6 +4,7 @@ import { mount } from "svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { waitLocale } from "svelte-i18n";
 import { setupI18n } from "@usagi.network/un-i18n-svelte";
+import { installFrontendTrace, traceFrontendEvent } from "./lib/frontendTrace";
 
 function stringifyFrontendError(value: unknown): string {
 	if (value instanceof Error) return `${value.name}: ${value.message}\n${value.stack ?? ""}`.trim();
@@ -22,6 +23,8 @@ function reportFrontendError(kind: string, value: unknown): void {
 	}).catch(() => undefined);
 }
 
+installFrontendTrace();
+
 window.addEventListener("error", (event) => {
 	reportFrontendError("error", event.error ?? event.message);
 });
@@ -39,9 +42,11 @@ if (import.meta.env.DEV) {
 }
 await setupI18n();
 await waitLocale();
+traceFrontendEvent("mount:start");
 
 const app = mount(App, {
 	target: document.getElementById("app") as HTMLElement,
 });
+traceFrontendEvent("mount:ok");
 
 export default app;
