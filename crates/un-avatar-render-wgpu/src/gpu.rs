@@ -5567,6 +5567,22 @@ impl GpuState {
 			.unwrap_or_default()
 	}
 
+	pub(crate) fn runtime_action_wardrobe_set_id(&self, action_id: &str) -> Option<String> {
+		let doc_arc = self.document.as_ref()?;
+		let doc = doc_arc.read().ok()?;
+		let actions = doc.runtime_model().runtime_actions()?;
+		actions
+			.actions
+			.iter()
+			.find(|action| action.id == action_id)?
+			.effects
+			.iter()
+			.find_map(|effect| match effect {
+				un_avatar_core::UnaRuntimeActionEffect::WardrobeSet { set_id } => Some(set_id.clone()),
+				_ => None,
+			})
+	}
+
 	pub(crate) fn runtime_action_target_write_collisions(&self) -> Vec<un_avatar_core::UnaEvaluationTargetWriteCollision> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();

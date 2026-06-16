@@ -100,6 +100,7 @@ const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1100;
+const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 180;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1100;
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
@@ -229,6 +230,7 @@ struct ActiveAnimatorTransition {
 enum WardrobeTransitionPhase {
 	Exit,
 	SplashPrimed,
+	SplashHold,
 	Enter,
 }
 
@@ -1831,6 +1833,7 @@ impl AvatarApp {
 			.and_then(load_window_icon)
 			.or_else(load_default_window_icon)
 		{
+			window.set_window_icon(None);
 			window.set_window_icon(Some(icon));
 		}
 	}
@@ -2121,13 +2124,33 @@ impl AvatarApp {
 				self.wardrobe_transition = None;
 				self.request_redraw();
 			}
+			WardrobeTransitionPhase::SplashHold
+				if now.saturating_duration_since(transition.phase_started_at)
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_SPLASH_HOLD_MS)) =>
+			{
+				transition.phase = WardrobeTransitionPhase::Enter;
+				transition.phase_started_at = now;
+				let saved_camera = transition.saved_camera;
+				self.enqueue_camera_transition(
+					camera_state_patch_from_snapshot(saved_camera),
+					CameraTransitionOptions {
+						duration_ms: WARDROBE_TRANSITION_ENTER_MS,
+						easing: CameraTransitionEasing::EaseOutCubic,
+						mode: CameraTransitionMode::Replace,
+					},
+				);
+			}
 			_ => {}
 		}
 	}
 
 	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then_some(gpu::StartupSplashFrame {
+		matches!(
+			transition.phase,
+			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::SplashHold
+		)
+		.then_some(gpu::StartupSplashFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
 			progress: -1.0,
 			phase: 5.0,
@@ -2153,19 +2176,11 @@ impl AvatarApp {
 			self.update_runtime_wardrobe_asset_upload(result.asset_upload_plan);
 			self.update_runtime_resolver_cache_key_deferred();
 		}
-		if let Some(saved_camera) = saved_camera {
+		if saved_camera.is_some() {
 			if let Some(transition) = self.wardrobe_transition.as_mut() {
-				transition.phase = WardrobeTransitionPhase::Enter;
+				transition.phase = WardrobeTransitionPhase::SplashHold;
 				transition.phase_started_at = Instant::now();
 			}
-			self.enqueue_camera_transition(
-				camera_state_patch_from_snapshot(saved_camera),
-				CameraTransitionOptions {
-					duration_ms: WARDROBE_TRANSITION_ENTER_MS,
-					easing: CameraTransitionEasing::EaseOutCubic,
-					mode: CameraTransitionMode::Replace,
-				},
-			);
 		} else {
 			self.wardrobe_transition = None;
 		}
@@ -3594,6 +3609,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				win.set_minimized(true);
 			}
 			win.set_visible(true);
+			self.apply_configured_window_icon();
 		} else {
 			win.set_visible(false);
 		}
@@ -3923,6 +3939,13 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							return;
 						}
 					};
+				if let Some(set_id) = resolved_action_id
+					.as_deref()
+					.and_then(|action_id| self.gpu.as_ref().and_then(|gpu| gpu.runtime_action_wardrobe_set_id(action_id)))
+				{
+					self.start_wardrobe_transition(set_id, result);
+					return;
+				}
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.activate_runtime_action(
 						resolved_action_id.as_deref(),
@@ -4814,7 +4837,7 @@ fn push_global_hotkey_registration(
 	if kind != WardrobeBindingKind::Keyboard || binding_text.is_empty() {
 		return;
 	}
-	if matches!(&action, InputBindingAction::AnimatorAction(id) | InputBindingAction::WardrobeSet(id) if id.trim().is_empty()) {
+	if matches!(&action, InputBindingAction::AnimatorAction(id) if id.trim().is_empty()) {
 		return;
 	}
 	match parse_windows_hotkey(binding_text) {
@@ -4899,6 +4922,18 @@ fn parse_windows_hotkey(text: &str) -> Result<(windows::Win32::UI::Input::Keyboa
 					"f10" => VK_F10.0,
 					"f11" => VK_F11.0,
 					"f12" => VK_F12.0,
+					"f13" => VK_F13.0,
+					"f14" => VK_F14.0,
+					"f15" => VK_F15.0,
+					"f16" => VK_F16.0,
+					"f17" => VK_F17.0,
+					"f18" => VK_F18.0,
+					"f19" => VK_F19.0,
+					"f20" => VK_F20.0,
+					"f21" => VK_F21.0,
+					"f22" => VK_F22.0,
+					"f23" => VK_F23.0,
+					"f24" => VK_F24.0,
 					"escape" => VK_ESCAPE.0,
 					"enter" => VK_RETURN.0,
 					"space" => VK_SPACE.0,
@@ -6002,10 +6037,7 @@ fn dispatch_set_animator_profile_command(
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
-	let set_id = match model_loader::require_wardrobe_set_id(&set_id) {
-		Ok(set_id) => set_id.to_string(),
-		Err(e) => return format!("err {e}"),
-	};
+	let set_id = set_id.trim().to_string();
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::SetWardrobe {
 		set_id,
@@ -6959,13 +6991,15 @@ mod tests {
 	};
 
 	#[cfg(windows)]
+	use super::global_hotkey_registrations;
+	#[cfg(windows)]
 	use super::parse_windows_hotkey;
 	use super::{
 		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
 		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, resolve_activate_action_from_menu_path,
 		runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch, AvatarOutlineKind, AvatarOutlinePolicy,
 		AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent,
-		WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -8741,8 +8775,31 @@ mod tests {
 		let (mods, key) = parse_windows_hotkey("Ctrl+Alt+1").unwrap();
 		assert_ne!(mods.0, 0);
 		assert_eq!(key, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_1.0));
+		let (_, f24) = parse_windows_hotkey("F24").unwrap();
+		assert_eq!(f24, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F24.0));
 		assert!(parse_windows_hotkey("Ctrl+Alt").is_err());
 		assert!(parse_windows_hotkey("Ctrl+Alt+1+2").is_err());
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn wardrobe_hotkey_registration_keeps_base_set_binding() {
+		let registrations = global_hotkey_registrations(
+			&[WardrobeBindingOptions {
+				set_id: String::new(),
+				kind: WardrobeBindingKind::Keyboard,
+				binding: "F21".to_string(),
+				device: None,
+				channel: None,
+				note: None,
+			}],
+			&[],
+		);
+		assert_eq!(registrations.len(), 1);
+		assert_eq!(
+			registrations[0].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F21.0)
+		);
 	}
 
 	#[test]
