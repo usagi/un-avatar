@@ -39,11 +39,6 @@
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
 
-	$: if (!animatorPanelOpen) {
-		animatorBusy = false;
-		animatorRequestId += 1;
-	}
-
 	$: if (animatorPanelOpen) {
 		const key = `${setting.manifest_path}\n${setting.avatar_path ?? ""}`;
 		if (key !== animatorLoadKey) {
@@ -52,6 +47,16 @@
 			animatorCandidates = [];
 			animatorPage = null;
 			animatorError = "";
+		}
+	}
+
+	function setAnimatorPanelOpen(open: boolean): void {
+		if (animatorPanelOpen === open) return;
+		animatorPanelOpen = open;
+		animatorOffset = 0;
+		if (!open) {
+			animatorBusy = false;
+			animatorRequestId = animatorRequestId + 1;
 		}
 	}
 
@@ -221,11 +226,9 @@
 				<button
 					type="button"
 					class="field-button"
-				disabled={busy}
-					onclick={() => {
-						animatorPanelOpen = !animatorPanelOpen;
-						animatorOffset = 0;
-					}}><SlidersHorizontal size={15} />{$_("profiles.editor.configure")}</button
+					disabled={busy}
+					onclick={() => setAnimatorPanelOpen(!animatorPanelOpen)}
+					><SlidersHorizontal size={15} />{$_("profiles.editor.configure")}</button
 				>
 			</div>
 			{#if animatorPanelOpen}

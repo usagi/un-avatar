@@ -13300,6 +13300,27 @@ mod tests {
 	}
 
 	#[test]
+	fn static_unanimator_profile_browser_does_not_invalidate_requests_reactively() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileAvatarSection.svelte"),
+		)
+		.expect("ProfileAvatarSection.svelte should be readable");
+		assert!(
+			source.contains("function setAnimatorPanelOpen(open: boolean)"),
+			"UNAnimator profile browser should invalidate pending loads from explicit panel open/close handling"
+		);
+		assert!(
+			!source.contains("$: if (!animatorPanelOpen)") && !source.contains("animatorRequestId +="),
+			"UNAnimator profile browser must not update animatorRequestId from a self-dependent reactive statement"
+		);
+	}
+
+	#[test]
 	fn static_profile_section_nav_and_body_order_match() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");
