@@ -90,7 +90,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 		right = vec3<f32>(1.0, 0.0, 0.0);
 	}
 	let up = normalize(cross(to_camera, right));
-	let world = center + right * local.x * size * 0.92 + up * local.y * size * 0.54;
+	let world = center + right * local.x * size * 0.62 + up * local.y * size * 0.50;
 	var out: VsOut;
 	out.clip = billboard.view_proj * vec4<f32>(world, 1.0);
 	out.local = local;
@@ -101,42 +101,50 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 	let p = in.local;
 	let t = billboard.time_params.x;
-	let card = rounded_rect_fill(p, vec2<f32>(0.96, 0.82), 0.20);
-	let edge = rounded_rect_line(p, vec2<f32>(0.96, 0.82), 0.20, 0.030);
-	let inner = rounded_rect_line(p, vec2<f32>(0.76, 0.56), 0.16, 0.010);
-	let spin = cos(t * 3.1);
-	let spin_width = mix(0.22, 1.0, abs(spin));
-	let hp = vec2<f32>(p.x / spin_width, p.y);
-	let hanger_hook = ring_mask(length((hp - vec2<f32>(0.0, 0.34)) * vec2<f32>(1.0, 1.45)), 0.12, 0.014)
-		* smoothstep(-0.02, 0.18, hp.y - 0.34);
-	let hanger_top = segment_mask(hp, vec2<f32>(0.0, 0.28), vec2<f32>(0.0, 0.16), 0.018);
-	let hanger_l = segment_mask(hp, vec2<f32>(0.0, 0.16), vec2<f32>(-0.40, 0.00), 0.024);
-	let hanger_r = segment_mask(hp, vec2<f32>(0.0, 0.16), vec2<f32>(0.40, 0.00), 0.024);
-	let body = rounded_rect_fill(hp - vec2<f32>(0.0, -0.14), vec2<f32>(0.30, 0.27), 0.065)
-		* (1.0 - rounded_rect_fill(hp - vec2<f32>(0.0, 0.09), vec2<f32>(0.11, 0.070), 0.030));
-	let sleeve_l = segment_mask(hp, vec2<f32>(-0.25, 0.04), vec2<f32>(-0.46, -0.12), 0.080);
-	let sleeve_r = segment_mask(hp, vec2<f32>(0.25, 0.04), vec2<f32>(0.46, -0.12), 0.080);
+	let float_y = sin(t * 2.1) * 0.035;
+	let q = p - vec2<f32>(0.0, float_y);
+	let card = rounded_rect_fill(q, vec2<f32>(0.76, 0.62), 0.28);
+	let edge = rounded_rect_line(q, vec2<f32>(0.76, 0.62), 0.28, 0.026);
+	let inner = rounded_rect_line(q, vec2<f32>(0.58, 0.44), 0.21, 0.010);
+	let aura = soft_disc(q * vec2<f32>(0.82, 1.10), 0.86);
+	let stitch_a = sparkle(q - vec2<f32>(-0.58, 0.39 + sin(t * 1.4) * 0.025), 0.040);
+	let stitch_b = sparkle(q - vec2<f32>(0.60, 0.38 + sin(t * 1.1 + 1.8) * 0.025), 0.038);
+	let stitch_c = sparkle(q - vec2<f32>(-0.50, -0.42 + sin(t * 1.3 + 0.8) * 0.025), 0.032);
+	let spin = cos(t * 3.4);
+	let spin_width = mix(0.18, 1.0, abs(spin));
+	let hp = vec2<f32>(q.x / spin_width, q.y);
+	let hanger_hook = ring_mask(length((hp - vec2<f32>(0.0, 0.30)) * vec2<f32>(1.0, 1.42)), 0.105, 0.014)
+		* smoothstep(-0.02, 0.18, hp.y - 0.30);
+	let hanger_top = segment_mask(hp, vec2<f32>(0.0, 0.24), vec2<f32>(0.0, 0.12), 0.018);
+	let hanger_l = segment_mask(hp, vec2<f32>(0.0, 0.12), vec2<f32>(-0.34, -0.05), 0.022);
+	let hanger_r = segment_mask(hp, vec2<f32>(0.0, 0.12), vec2<f32>(0.34, -0.05), 0.022);
+	let body = rounded_rect_fill(hp - vec2<f32>(0.0, -0.20), vec2<f32>(0.25, 0.26), 0.070)
+		* (1.0 - rounded_rect_fill(hp - vec2<f32>(0.0, 0.02), vec2<f32>(0.095, 0.070), 0.030));
+	let sleeve_l = segment_mask(hp, vec2<f32>(-0.20, -0.05), vec2<f32>(-0.39, -0.19), 0.070);
+	let sleeve_r = segment_mask(hp, vec2<f32>(0.20, -0.05), vec2<f32>(0.39, -0.19), 0.070);
 	let garment = clamp(hanger_hook + hanger_top + hanger_l + hanger_r + body + sleeve_l + sleeve_r, 0.0, 1.0) * card;
-	let shine = line_mask(hp.x * 0.72 + hp.y * 0.18 - 0.48 + fract(t * 0.58) * 0.96, 0.040)
-		* smoothstep(0.42, 0.05, abs(hp.x))
-		* smoothstep(0.38, 0.02, abs(hp.y + 0.09))
+	let flip_glow = smoothstep(0.08, 0.40, 1.0 - abs(spin)) * card;
+	let sweep = line_mask(q.y + q.x * 0.16 - 0.56 + fract(t * 0.42) * 1.12, 0.018) * card;
+	let shine = line_mask(hp.x * 0.70 + hp.y * 0.18 - 0.40 + fract(t * 0.64) * 0.80, 0.035)
+		* smoothstep(0.34, 0.05, abs(hp.x))
+		* smoothstep(0.32, 0.02, abs(hp.y + 0.14))
 		* card;
-	let flip_glow = smoothstep(0.10, 0.42, 1.0 - abs(spin)) * card;
-	let sweep = line_mask(p.y + p.x * 0.18 - 0.72 + fract(t * 0.36) * 1.44, 0.020) * card;
-	let dot_wave = 0.5 + 0.5 * sin(t * 5.4);
-	let dots = soft_disc(p - vec2<f32>(0.46, -0.58 + dot_wave * 0.045), 0.033)
-		+ soft_disc(p - vec2<f32>(0.56, -0.58 + (0.5 + 0.5 * sin(t * 5.4 + 1.7)) * 0.045), 0.033)
-		+ soft_disc(p - vec2<f32>(0.66, -0.58 + (0.5 + 0.5 * sin(t * 5.4 + 3.4)) * 0.045), 0.033);
-	let sparkles = sparkle(p - vec2<f32>(-0.66, 0.42 + sin(t * 1.7) * 0.040), 0.060)
-		+ sparkle(p - vec2<f32>(0.72, 0.36 + sin(t * 1.3 + 1.2) * 0.040), 0.052);
-	let base = vec3<f32>(0.055, 0.080, 0.110) * card;
-	let mint = vec3<f32>(0.45, 1.00, 0.90);
-	let peach = vec3<f32>(1.00, 0.56, 0.78);
-	let sky = vec3<f32>(0.46, 0.86, 1.00);
-	let glow = edge * 1.0 + inner * 0.22 + garment * 1.30 + shine * 1.45 + flip_glow * 0.95 + sweep * 0.45 + dots * 1.10 + sparkles * 0.8;
-	let color = base + mint * (edge * 0.60 + garment * 0.75 + shine * 0.90 + dots * 0.90)
-		+ peach * (sparkles * 0.85 + flip_glow * 0.45)
-		+ sky * (inner * 0.45 + sweep * 0.65);
-	let alpha = clamp(card * 0.86 + glow * 0.14, 0.0, 1.0);
+	let dot_wave = 0.5 + 0.5 * sin(t * 5.6);
+	let dots = soft_disc(q - vec2<f32>(0.35, -0.43 + dot_wave * 0.038), 0.030)
+		+ soft_disc(q - vec2<f32>(0.44, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 1.8)) * 0.038), 0.030)
+		+ soft_disc(q - vec2<f32>(0.53, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 3.6)) * 0.038), 0.030);
+	let cloth_shadow = rounded_rect_fill(hp - vec2<f32>(0.0, -0.30), vec2<f32>(0.34, 0.08), 0.08) * card;
+	let base = vec3<f32>(0.15, 0.11, 0.16) * card;
+	let cream = vec3<f32>(1.00, 0.93, 0.86);
+	let mint = vec3<f32>(0.62, 1.00, 0.91);
+	let peach = vec3<f32>(1.00, 0.58, 0.74);
+	let lavender = vec3<f32>(0.72, 0.62, 0.82);
+	let glow = aura * 0.26 + edge * 0.70 + inner * 0.16 + garment * 1.05 + shine * 0.95 + flip_glow * 0.60 + sweep * 0.34 + dots * 0.85 + (stitch_a + stitch_b + stitch_c) * 0.65;
+	let color = base
+		+ lavender * card * 0.28
+		+ cream * (garment * 0.72 + cloth_shadow * 0.10)
+		+ mint * (edge * 0.42 + shine * 0.70 + dots * 0.70 + sweep * 0.40)
+		+ peach * ((stitch_a + stitch_b + stitch_c) * 0.58 + flip_glow * 0.35);
+	let alpha = clamp(aura * 0.10 + card * 0.54 + glow * 0.12, 0.0, 0.78);
 	return vec4<f32>(color, alpha);
 }

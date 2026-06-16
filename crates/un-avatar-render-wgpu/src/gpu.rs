@@ -3746,7 +3746,7 @@ impl CameraStateSnapshot {
 		let fovy = vertical_fov_from_diagonal(self.diagonal_fov_deg.to_radians(), aspect);
 		let view_proj =
 			Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * Mat4::look_at_rh(camera_pos, target, Vec3::Y);
-		let size = (radius * 0.16).clamp(0.22, 0.48);
+		let size = (radius * 0.12).clamp(0.16, 0.34);
 		WardrobeBillboardCamera {
 			center,
 			size,
