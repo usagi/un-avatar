@@ -87,11 +87,7 @@
 	import { DEFAULT_PROFILE_ICON_SRC, profileIconSrc } from "./lib/profileIcons";
 	import { localizedSettingSummary } from "./lib/profileStageSummary";
 	import { diagonalFovFromLensMm } from "./lib/profileDiagrams";
-	import {
-		countErrorNotifications,
-		countRendererStates,
-		rendererStateLabel as localizedRendererStateLabel,
-	} from "./lib/runtimeState";
+	import { countErrorNotifications, countRendererStates, rendererStateLabel as localizedRendererStateLabel } from "./lib/runtimeState";
 	import {
 		defaultRendererLogExpanded,
 		filteredRendererLogLines as filterRendererLogLines,
@@ -834,7 +830,10 @@
 		}
 	}
 
-	async function readUnavatarMetadataForPath(path: string, setting: AvatarSetting | null = selectedSetting): Promise<UnavatarMetadataInfo | null> {
+	async function readUnavatarMetadataForPath(
+		path: string,
+		setting: AvatarSetting | null = selectedSetting
+	): Promise<UnavatarMetadataInfo | null> {
 		if (!setting) return null;
 		return await invoke<UnavatarMetadataInfo | null>("read_unavatar_metadata", {
 			path,
@@ -917,6 +916,33 @@
 
 	function applyCameraLensPreset(focalLengthMm: CameraLensPreset): Promise<void> {
 		return applyProfileUpdates([["camera.diagonal_fov_deg", diagonalFovFromLensMm(focalLengthMm)]]);
+	}
+
+	async function captureRuntimeCameraToProfile(renderer: RendererInstance | null): Promise<void> {
+		const camera = renderer ? rendererRuntimeStatus(renderer)?.camera : null;
+		if (!camera) {
+			message = $_("profiles.messages.runtime_camera_unavailable");
+			return;
+		}
+		await applyProfileUpdates([
+			["camera.target_x", camera.target[0]],
+			["camera.target_y", camera.target[1]],
+			["camera.target_z", camera.target[2]],
+			["camera.longitude_deg", camera.longitude_deg],
+			["camera.latitude_deg", camera.latitude_deg],
+			["camera.radius", camera.radius],
+			["camera.diagonal_fov_deg", camera.diagonal_fov_deg],
+		]);
+		message = $_("profiles.messages.runtime_camera_captured");
+	}
+
+	function runtimeCameraForSetting(setting: AvatarSetting | null): RendererCameraSnapshot | null {
+		const renderer = rendererForSetting(setting);
+		return renderer ? (rendererRuntimeStatus(renderer)?.camera ?? null) : null;
+	}
+
+	function captureRuntimeCameraForSetting(setting: AvatarSetting | null): Promise<void> {
+		return captureRuntimeCameraToProfile(rendererForSetting(setting));
 	}
 
 	function applySpoutResolutionPreset(kind: SpoutResolutionPreset): Promise<void> {
@@ -1054,7 +1080,9 @@
 
 	function avatarSettingByIdOrManifestPath(idOrPath: string | null | undefined): AvatarSetting | null {
 		if (!idOrPath) return null;
-		return avatarSettingById.get(idOrPath) ?? avatarSettings.find((setting) => sameNormalizedPath(setting.manifest_path, idOrPath)) ?? null;
+		return (
+			avatarSettingById.get(idOrPath) ?? avatarSettings.find((setting) => sameNormalizedPath(setting.manifest_path, idOrPath)) ?? null
+		);
 	}
 
 	function isLiveRenderer(renderer: RendererInstance): boolean {
@@ -1155,9 +1183,13 @@
 				traceAsync("invoke:list_app_notifications", () => invoke<AppNotification[]>("list_app_notifications"), {
 					source: "refreshAll",
 				}),
-				traceAsync("invoke:get_native_notification_status", () => invoke<NativeNotificationStatus>("get_native_notification_status"), {
-					source: "refreshAll",
-				}),
+				traceAsync(
+					"invoke:get_native_notification_status",
+					() => invoke<NativeNotificationStatus>("get_native_notification_status"),
+					{
+						source: "refreshAll",
+					}
+				),
 			]);
 			renderers = instances;
 			avatarSettings = settings;
@@ -1415,9 +1447,7 @@
 		try {
 			appSettings = await invoke<AppSettings>("set_taskbar_profile_pinned", { settingId, pinned });
 			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
-			message = pinned
-				? $_("profiles.messages.taskbar_profile_pinned")
-				: $_("profiles.messages.taskbar_profile_unpinned");
+			message = pinned ? $_("profiles.messages.taskbar_profile_pinned") : $_("profiles.messages.taskbar_profile_unpinned");
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1810,7 +1840,10 @@
 			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
 			let savedProfileIcon = false;
 			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
-				await saveUnavatarProfileIconCrop(savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId, modal.rendererToRestart);
+				await saveUnavatarProfileIconCrop(
+					savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
+					modal.rendererToRestart
+				);
 				savedProfileIcon = true;
 			}
 			message = savedProfileIcon
@@ -2492,7 +2525,12 @@
 		}
 	}
 
-	async function setRendererRuntimeParameter(renderer: RendererInstance | null, name: string, value: number, label: string): Promise<void> {
+	async function setRendererRuntimeParameter(
+		renderer: RendererInstance | null,
+		name: string,
+		value: number,
+		label: string
+	): Promise<void> {
 		if (!renderer || !hasTauriRuntime()) return;
 		try {
 			await invoke("set_renderer_runtime_parameter", {
@@ -2915,9 +2953,7 @@
 		</div>
 		<div class="status-strip" aria-label={$_("app.status_aria")}>
 			<span><Activity size={14} />{$_("app.running_count", { values: { count: runningCount } })}</span>
-			<span class:warn={issueCount > 0}
-				><AlertTriangle size={14} />{$_("app.issue_count", { values: { count: issueCount } })}</span
-			>
+			<span class:warn={issueCount > 0}><AlertTriangle size={14} />{$_("app.issue_count", { values: { count: issueCount } })}</span>
 			<span>{message}</span>
 			{#if screenshotNoticePath}
 				<button class="screenshot-notice" title={screenshotNoticePath} onclick={() => void revealScreenshotFolder()}>
@@ -3311,11 +3347,13 @@
 
 								<ProfileCameraSection
 									setting={selectedSetting}
+									runtimeCamera={runtimeCameraForSetting(selectedSetting)}
 									{busy}
 									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
 									onApplyTargetPreset={(preset) => applyCameraTargetPreset(preset)}
 									onApplyOrbitPreset={(preset) => applyCameraOrbitPreset(preset)}
 									onApplyLensPreset={(preset) => applyCameraLensPreset(preset)}
+									onCaptureRuntimeCamera={() => captureRuntimeCameraForSetting(selectedSetting)}
 									onActivate={() => (activeProfileSection = "camera")}
 								/>
 
