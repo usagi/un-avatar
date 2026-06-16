@@ -49,6 +49,7 @@ const SHADER_SKY: &str = include_str!("../shaders/sky.wgsl");
 const SHADER_AXES: &str = include_str!("../shaders/axes.wgsl");
 const SHADER_BONE_COLLIDERS: &str = include_str!("../shaders/bone_colliders.wgsl");
 const SHADER_STARTUP_SPLASH: &str = include_str!("../shaders/startup_splash.wgsl");
+const SHADER_WARDROBE_BILLBOARD: &str = include_str!("../shaders/wardrobe_billboard.wgsl");
 const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl");
 
 pub(crate) const BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE: u32 = 16;
@@ -2239,6 +2240,13 @@ struct StartupSplashGpu {
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct WardrobeBillboardGpu {
+	center_size: [f32; 4],
+	time_params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct ContactShadowGpu {
 	params: [f32; 4],
 }
@@ -2256,6 +2264,8 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) phase: f32,
 	pub(crate) rect_center: [f32; 2],
 	pub(crate) rect_half_size: [f32; 2],
+	pub(crate) billboard_center: [f32; 3],
+	pub(crate) billboard_size: f32,
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -3691,25 +3701,12 @@ pub struct CameraStateSnapshot {
 }
 
 impl CameraStateSnapshot {
-	pub(crate) fn wardrobe_billboard_rect(self, aspect_wh: f32) -> ([f32; 2], [f32; 2]) {
-		let aspect = aspect_wh.max(0.01);
+	pub(crate) fn wardrobe_billboard_world(self) -> ([f32; 3], f32) {
 		let target = Vec3::from_array(self.target);
-		let lon = self.longitude_deg.to_radians();
-		let lat = self.latitude_deg.to_radians();
-		let cos_lat = lat.cos();
 		let radius = self.radius.max(0.05);
-		let cam_pos = target + Vec3::new(radius * cos_lat * lon.sin(), radius * lat.sin(), -radius * cos_lat * lon.cos());
-		let fovy = vertical_fov_from_diagonal(self.diagonal_fov_deg.to_radians(), aspect);
-		let view_proj =
-			Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * Mat4::look_at_rh(cam_pos, target, Vec3::Y);
-		let face_world = target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36);
-		let clip = view_proj * face_world.extend(1.0);
-		if clip.w.abs() <= 0.0001 {
-			return ([0.0, 0.0], [0.34, 0.34]);
-		}
-		let ndc = clip.truncate() / clip.w;
-		let half = (0.34 / radius.sqrt()).clamp(0.18, 0.34);
-		([ndc.x.clamp(-0.72, 0.72), ndc.y.clamp(-0.62, 0.72)], [half, half])
+		let center = target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36);
+		let size = (radius * 0.16).clamp(0.22, 0.48);
+		(center.to_array(), size)
 	}
 }
 
@@ -3788,6 +3785,9 @@ pub(crate) struct GpuState {
 	startup_splash_pipeline: wgpu::RenderPipeline,
 	startup_splash_buffer: wgpu::Buffer,
 	startup_splash_bind_group: wgpu::BindGroup,
+	wardrobe_billboard_pipeline: wgpu::RenderPipeline,
+	wardrobe_billboard_buffer: wgpu::Buffer,
+	wardrobe_billboard_bind_group: wgpu::BindGroup,
 	contact_shadow_resources: Option<ContactShadowResources>,
 	contact_shadow_pipeline: Option<wgpu::RenderPipeline>,
 	document: Option<Arc<RwLock<UnaDocument>>>,
@@ -4069,6 +4069,40 @@ impl GpuState {
 				resource: startup_splash_buffer.as_entire_binding(),
 			}],
 		});
+		let wardrobe_billboard_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("wardrobe_billboard"),
+			entries: &[wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+				ty: wgpu::BindingType::Buffer {
+					ty: wgpu::BufferBindingType::Uniform,
+					has_dynamic_offset: false,
+					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<WardrobeBillboardGpu>() as u64),
+				},
+				count: None,
+			}],
+		});
+		let wardrobe_billboard_pipeline = create_wardrobe_billboard_pipeline(
+			&device,
+			&bind_group_layout,
+			&wardrobe_billboard_bind_group_layout,
+			format,
+			aa_sample_count,
+		);
+		let wardrobe_billboard_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("wardrobe_billboard"),
+			size: std::mem::size_of::<WardrobeBillboardGpu>() as u64,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let wardrobe_billboard_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("wardrobe_billboard"),
+			layout: &wardrobe_billboard_bind_group_layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: wardrobe_billboard_buffer.as_entire_binding(),
+			}],
+		});
 		let texture_summary = None;
 		let avatar_outline = mesh_diagnostics.avatar_outline;
 		let scene_meshes = None;
@@ -4133,6 +4167,9 @@ impl GpuState {
 			startup_splash_pipeline,
 			startup_splash_buffer,
 			startup_splash_bind_group,
+			wardrobe_billboard_pipeline,
+			wardrobe_billboard_buffer,
+			wardrobe_billboard_bind_group,
 			contact_shadow_resources: None,
 			contact_shadow_pipeline,
 			document: None,
@@ -6827,6 +6864,26 @@ impl GpuState {
 		)
 	}
 
+	fn write_wardrobe_billboard_uniform(&self, splash: StartupSplashFrame) {
+		let center = Vec3::from_array(splash.billboard_center);
+		self.queue.write_buffer(
+			&self.wardrobe_billboard_buffer,
+			0,
+			bytemuck::bytes_of(&WardrobeBillboardGpu {
+				center_size: [center.x, center.y, center.z, splash.billboard_size.max(0.01)],
+				time_params: [splash.time_secs, 0.0, 0.0, 0.0],
+			}),
+		);
+	}
+
+	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: StartupSplashFrame) {
+		self.write_wardrobe_billboard_uniform(splash);
+		pass.set_pipeline(&self.wardrobe_billboard_pipeline);
+		pass.set_bind_group(0, &self.bind_group, &[]);
+		pass.set_bind_group(1, &self.wardrobe_billboard_bind_group, &[]);
+		pass.draw(0..6, 0..1);
+	}
+
 	fn avatar_outline_width_px_for(&self, width: u32, height: u32) -> f32 {
 		let outline_m = self.avatar_outline.width.unwrap_or(0.003).clamp(0.0, 0.05);
 		let aspect = width.max(1) as f32 / height.max(1) as f32;
@@ -7258,22 +7315,26 @@ impl GpuState {
 				}
 			}
 			if let Some(splash) = startup_splash {
-				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-				self.queue.write_buffer(
-					&self.startup_splash_buffer,
-					0,
-					bytemuck::bytes_of(&StartupSplashGpu {
-						time: splash.time_secs,
-						progress: splash.progress,
-						aspect,
-						phase: splash.phase,
-						rect_center: splash.rect_center,
-						rect_half_size: splash.rect_half_size,
-					}),
-				);
-				pass.set_pipeline(&self.startup_splash_pipeline);
-				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-				pass.draw(0..3, 0..1);
+				if splash.phase > 4.5 && splash.phase < 5.5 {
+					self.draw_wardrobe_billboard(&mut pass, splash);
+				} else {
+					let aspect = gw.max(1) as f32 / gh.max(1) as f32;
+					self.queue.write_buffer(
+						&self.startup_splash_buffer,
+						0,
+						bytemuck::bytes_of(&StartupSplashGpu {
+							time: splash.time_secs,
+							progress: splash.progress,
+							aspect,
+							phase: splash.phase,
+							rect_center: splash.rect_center,
+							rect_half_size: splash.rect_half_size,
+						}),
+					);
+					pass.set_pipeline(&self.startup_splash_pipeline);
+					pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+					pass.draw(0..3, 0..1);
+				}
 			}
 		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -7328,22 +7389,26 @@ impl GpuState {
 				}
 			}
 			if let Some(splash) = startup_splash {
-				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-				self.queue.write_buffer(
-					&self.startup_splash_buffer,
-					0,
-					bytemuck::bytes_of(&StartupSplashGpu {
-						time: splash.time_secs,
-						progress: splash.progress,
-						aspect,
-						phase: splash.phase,
-						rect_center: splash.rect_center,
-						rect_half_size: splash.rect_half_size,
-					}),
-				);
-				pass.set_pipeline(&self.startup_splash_pipeline);
-				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-				pass.draw(0..3, 0..1);
+				if splash.phase > 4.5 && splash.phase < 5.5 {
+					self.draw_wardrobe_billboard(&mut pass, splash);
+				} else {
+					let aspect = gw.max(1) as f32 / gh.max(1) as f32;
+					self.queue.write_buffer(
+						&self.startup_splash_buffer,
+						0,
+						bytemuck::bytes_of(&StartupSplashGpu {
+							time: splash.time_secs,
+							progress: splash.progress,
+							aspect,
+							phase: splash.phase,
+							rect_center: splash.rect_center,
+							rect_half_size: splash.rect_half_size,
+						}),
+					);
+					pass.set_pipeline(&self.startup_splash_pipeline);
+					pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+					pass.draw(0..3, 0..1);
+				}
 			}
 		}
 
@@ -7953,6 +8018,61 @@ fn create_startup_splash_pipeline(
 
 	device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 		label: Some("startup_splash"),
+		layout: Some(&layout),
+		cache: None,
+		vertex: wgpu::VertexState {
+			module: &shader,
+			entry_point: Some("vs_main"),
+			compilation_options: Default::default(),
+			buffers: &[],
+		},
+		fragment: Some(wgpu::FragmentState {
+			module: &shader,
+			entry_point: Some("fs_main"),
+			compilation_options: Default::default(),
+			targets: &[Some(wgpu::ColorTargetState {
+				format: surface_format,
+				blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+				write_mask: wgpu::ColorWrites::ALL,
+			})],
+		}),
+		primitive: wgpu::PrimitiveState {
+			topology: wgpu::PrimitiveTopology::TriangleList,
+			..Default::default()
+		},
+		depth_stencil: Some(wgpu::DepthStencilState {
+			format: wgpu::TextureFormat::Depth24Plus,
+			depth_write_enabled: Some(false),
+			depth_compare: Some(wgpu::CompareFunction::Always),
+			stencil: wgpu::StencilState::default(),
+			bias: wgpu::DepthBiasState::default(),
+		}),
+		multisample: wgpu::MultisampleState {
+			count: sample_count,
+			..Default::default()
+		},
+		multiview_mask: None,
+	})
+}
+
+fn create_wardrobe_billboard_pipeline(
+	device: &wgpu::Device,
+	globals_layout: &wgpu::BindGroupLayout,
+	billboard_layout: &wgpu::BindGroupLayout,
+	surface_format: wgpu::TextureFormat,
+	sample_count: u32,
+) -> wgpu::RenderPipeline {
+	let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+		label: Some("wardrobe_billboard"),
+		source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_WARDROBE_BILLBOARD)),
+	});
+	let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+		label: Some("wardrobe_billboard"),
+		bind_group_layouts: &[Some(globals_layout), Some(billboard_layout)],
+		immediate_size: 0,
+	});
+	device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+		label: Some("wardrobe_billboard"),
 		layout: Some(&layout),
 		cache: None,
 		vertex: wgpu::VertexState {

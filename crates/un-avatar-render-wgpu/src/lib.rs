@@ -2283,7 +2283,7 @@ impl AvatarApp {
 
 	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		let (rect_center, rect_half_size) = transition.saved_camera.wardrobe_billboard_rect(self.output_aspect_wh());
+		let (billboard_center, billboard_size) = transition.saved_camera.wardrobe_billboard_world();
 		matches!(
 			transition.phase,
 			WardrobeTransitionPhase::Exit | WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::SplashHold
@@ -2292,8 +2292,10 @@ impl AvatarApp {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
 			progress: -1.0,
 			phase: 5.0,
-			rect_center,
-			rect_half_size,
+			rect_center: SPLASH_FULL_RECT_CENTER,
+			rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
+			billboard_center,
+			billboard_size,
 		})
 	}
 
@@ -3304,11 +3306,6 @@ impl AvatarApp {
 		}
 	}
 
-	fn output_aspect_wh(&self) -> f32 {
-		let (width, height) = self.startup_texture_target_size();
-		width.max(1) as f32 / height.max(1) as f32
-	}
-
 	fn document_attach_options(&self) -> DocumentAttachOptions {
 		let (target_width, target_height) = self.startup_texture_target_size();
 		let texture_max_dimension = self.opts.texture_resolution_limit.max_dimension(target_width, target_height);
@@ -3492,6 +3489,8 @@ impl AvatarApp {
 				phase: progress.phase.splash_code(),
 				rect_center: SPLASH_FULL_RECT_CENTER,
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
+				billboard_center: [0.0, 0.0, 0.0],
+				billboard_size: 1.0,
 			})
 		} else {
 			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
@@ -3500,6 +3499,8 @@ impl AvatarApp {
 				phase: 9.0,
 				rect_center: SPLASH_FULL_RECT_CENTER,
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
+				billboard_center: [0.0, 0.0, 0.0],
+				billboard_size: 1.0,
 			})
 		}
 		.or_else(|| self.wardrobe_splash_frame(now));

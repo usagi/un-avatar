@@ -15,6 +15,7 @@ mod tests {
 		validate_wgsl("axes.wgsl", include_str!("../shaders/axes.wgsl"));
 		validate_wgsl("bone_colliders.wgsl", include_str!("../shaders/bone_colliders.wgsl"));
 		validate_wgsl("startup_splash.wgsl", include_str!("../shaders/startup_splash.wgsl"));
+		validate_wgsl("wardrobe_billboard.wgsl", include_str!("../shaders/wardrobe_billboard.wgsl"));
 		validate_wgsl("contact_shadow.wgsl", include_str!("../shaders/contact_shadow.wgsl"));
 		validate_wgsl("avatar_outline.wgsl", include_str!("../shaders/avatar_outline.wgsl"));
 		validate_wgsl("bloom.wgsl", include_str!("../shaders/bloom.wgsl"));
