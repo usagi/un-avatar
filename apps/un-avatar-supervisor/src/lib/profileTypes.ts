@@ -4,7 +4,7 @@ import type { CameraDiagramSource } from "./profileDiagrams";
 import type { PrimaryMotionSource } from "./rendererTypes";
 import type { DynamicsCategoryOverrideSetting } from "./dynamicsPresets";
 
-export type ProfileSettingValue = boolean | string | number | string[] | number[] | null;
+export type ProfileSettingValue = boolean | string | number | string[] | number[] | Record<string, unknown>[] | null;
 
 export type TextureCompressionPreference = "source" | "auto" | "high_quality" | "small" | "gpu_native";
 
@@ -101,6 +101,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	storage: "seed" | "user";
 	manifest_path: string;
 	wardrobe_set: string | null;
+	animator_actions: AnimatorActionSetting[];
 	motion_vmc_enabled: boolean;
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
@@ -207,6 +208,35 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	scene_cache_prewarmed_at: string | null;
 };
 
+export type AnimatorActionMode = "off" | "toggle" | "one_shot";
+
+export type AnimatorActionSetting = {
+	id: string;
+	mode: AnimatorActionMode;
+};
+
+export type UnavatarAnimatorActionCandidate = {
+	id: string;
+	label: string;
+	controller: string;
+	layer: string;
+	state_path: string;
+	effect_count: number;
+	condition_count: number;
+	selected_mode: AnimatorActionMode;
+};
+
+export type UnavatarAnimatorActionPage = {
+	available: boolean;
+	total_count: number;
+	matched_count: number;
+	selected_count: number;
+	offset: number;
+	limit: number;
+	candidates: UnavatarAnimatorActionCandidate[];
+	error?: string | null;
+};
+
 export type SpoutOutputSetting = Pick<
 	AvatarSetting,
 	"spout_enabled" | "spout_name" | "spout_width" | "spout_height" | "minimized" | "window_width" | "window_height"
@@ -226,7 +256,7 @@ export type UnavatarWardrobeOptions = {
 	error?: string | null;
 };
 
-export type AvatarFileSetting = Pick<AvatarSetting, "avatar_path" | "wardrobe_set">;
+export type AvatarFileSetting = Pick<AvatarSetting, "avatar_path" | "manifest_path" | "wardrobe_set" | "animator_actions">;
 
 export type WindowSetting = Pick<
 	AvatarSetting,

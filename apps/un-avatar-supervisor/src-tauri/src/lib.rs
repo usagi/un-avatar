@@ -1012,6 +1012,46 @@ struct AvatarSettingValueUpdate {
 	value: serde_json::Value,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct AnimatorActionSetting {
+	id: String,
+	mode: String,
+}
+
+impl Default for AnimatorActionSetting {
+	fn default() -> Self {
+		Self {
+			id: String::new(),
+			mode: "off".to_string(),
+		}
+	}
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarAnimatorActionCandidate {
+	id: String,
+	label: String,
+	controller: String,
+	layer: String,
+	state_path: String,
+	effect_count: usize,
+	condition_count: usize,
+	selected_mode: String,
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarAnimatorActionPage {
+	available: bool,
+	total_count: usize,
+	matched_count: usize,
+	selected_count: usize,
+	offset: usize,
+	limit: usize,
+	candidates: Vec<UnavatarAnimatorActionCandidate>,
+	error: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum RendererControlCommand {
@@ -1196,6 +1236,7 @@ struct AvatarSetting {
 	manifest_path: String,
 	avatar_path: Option<String>,
 	wardrobe_set: Option<String>,
+	animator_actions: Vec<AnimatorActionSetting>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion_vmc_enabled: bool,
@@ -1711,6 +1752,20 @@ struct ManifestWindow {
 	minimized: Option<bool>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimator {
+	action_ids: Option<Vec<String>>,
+	actions: Option<Vec<ManifestAnimatorAction>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimatorAction {
+	id: Option<String>,
+	mode: Option<String>,
+}
+
 fn manifest_background_color(manifest: &AvatarManifestSummary) -> [f32; 3] {
 	if let Some(color) = manifest.background_color {
 		return clamp_rgb(color);
@@ -1991,10 +2046,59 @@ struct AvatarManifestSummary {
 	profile: Option<ManifestProfile>,
 	spout: Option<ManifestSpout>,
 	window: Option<ManifestWindow>,
+	animator: Option<ManifestAnimator>,
 	debug: Option<ManifestDebug>,
 	camera: Option<ManifestCameraSetting>,
 	environment: Option<ManifestEnvironment>,
 	effects: Option<ManifestEffects>,
+}
+
+fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec<AnimatorActionSetting> {
+	let Some(animator) = animator else {
+		return Vec::new();
+	};
+	let mut actions = Vec::new();
+	for id in animator.action_ids.iter().flatten() {
+		let id = id.trim();
+		if id.is_empty() || actions.iter().any(|action: &AnimatorActionSetting| action.id == id) {
+			continue;
+		}
+		actions.push(AnimatorActionSetting {
+			id: id.to_string(),
+			mode: "toggle".to_string(),
+		});
+	}
+	for action in animator.actions.iter().flatten() {
+		let id = action.id.as_deref().unwrap_or("").trim();
+		let mode = normalize_animator_action_mode(action.mode.as_deref().unwrap_or("off"));
+		if id.is_empty() || !animator_action_mode_is_enabled(&mode) {
+			continue;
+		}
+		if let Some(existing) = actions.iter_mut().find(|existing| existing.id == id) {
+			existing.mode = mode;
+		} else {
+			actions.push(AnimatorActionSetting { id: id.to_string(), mode });
+		}
+	}
+	actions
+}
+
+fn read_manifest_animator_action_settings(path: &Path) -> Result<Vec<AnimatorActionSetting>, String> {
+	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+	Ok(manifest_animator_action_settings(manifest.animator.as_ref()))
+}
+
+fn normalize_animator_action_mode(mode: &str) -> String {
+	match mode.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"toggle" => "toggle".to_string(),
+		"one_shot" | "oneshot" | "one shot" => "one_shot".to_string(),
+		_ => "off".to_string(),
+	}
+}
+
+fn animator_action_mode_is_enabled(mode: &str) -> bool {
+	matches!(normalize_animator_action_mode(mode).as_str(), "toggle" | "one_shot")
 }
 
 pub fn run() {
@@ -2151,6 +2255,7 @@ pub fn run() {
 			stop_all_renderers,
 			sync_app_settings,
 			read_unavatar_wardrobe_options,
+			read_unavatar_animator_action_page,
 			set_last_selected_setting_id,
 			update_avatar_setting_path,
 			update_avatar_setting_value,
@@ -3783,6 +3888,224 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 	})
 }
 
+#[tauri::command]
+fn read_unavatar_animator_action_page(
+	path: String,
+	manifest_path: Option<String>,
+	query: Option<String>,
+	offset: Option<usize>,
+	limit: Option<usize>,
+) -> Result<UnavatarAnimatorActionPage, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let selected_actions = manifest_path
+		.as_deref()
+		.and_then(|path| read_manifest_animator_action_settings(Path::new(path)).ok())
+		.unwrap_or_default();
+	let selected_modes = selected_actions
+		.iter()
+		.filter(|action| animator_action_mode_is_enabled(&action.mode))
+		.map(|action| (action.id.as_str(), action.mode.as_str()))
+		.collect::<BTreeMap<_, _>>();
+	let selected_count = selected_modes.len();
+	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let Some(animator) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("source"))
+		.and_then(|source| source.get("animator"))
+	else {
+		return Ok(UnavatarAnimatorActionPage {
+			available: false,
+			total_count: 0,
+			matched_count: 0,
+			selected_count,
+			offset: offset.unwrap_or(0),
+			limit: limit.unwrap_or(80).clamp(1, 120),
+			candidates: Vec::new(),
+			error: None,
+		});
+	};
+	let candidates = unavatar_animator_action_candidates(animator, &selected_modes);
+	let total_count = candidates.len();
+	let query = query.unwrap_or_default().trim().to_ascii_lowercase();
+	let mut matched = candidates
+		.into_iter()
+		.filter(|candidate| {
+			query.is_empty()
+				|| candidate.label.to_ascii_lowercase().contains(&query)
+				|| candidate.controller.to_ascii_lowercase().contains(&query)
+				|| candidate.layer.to_ascii_lowercase().contains(&query)
+				|| candidate.state_path.to_ascii_lowercase().contains(&query)
+		})
+		.collect::<Vec<_>>();
+	matched.sort_by(|a, b| {
+		let a_enabled = animator_action_mode_is_enabled(&a.selected_mode);
+		let b_enabled = animator_action_mode_is_enabled(&b.selected_mode);
+		b_enabled
+			.cmp(&a_enabled)
+			.then_with(|| a.controller.cmp(&b.controller))
+			.then_with(|| a.layer.cmp(&b.layer))
+			.then_with(|| a.label.cmp(&b.label))
+	});
+	let matched_count = matched.len();
+	let offset = offset.unwrap_or(0).min(matched_count);
+	let limit = limit.unwrap_or(80).clamp(1, 120);
+	let candidates = matched.into_iter().skip(offset).take(limit).collect();
+	Ok(UnavatarAnimatorActionPage {
+		available: true,
+		total_count,
+		matched_count,
+		selected_count,
+		offset,
+		limit,
+		candidates,
+		error: None,
+	})
+}
+
+fn unavatar_animator_action_candidates(
+	animator: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(controllers) = animator.get("controllers").and_then(serde_json::Value::as_array) else {
+		return Vec::new();
+	};
+	let mut candidates = Vec::new();
+	for (controller_index, controller) in controllers.iter().enumerate() {
+		let controller_name = controller
+			.get("name")
+			.and_then(serde_json::Value::as_str)
+			.filter(|value| !value.is_empty())
+			.unwrap_or("Animator");
+		let Some(layers) = controller.get("layers").and_then(serde_json::Value::as_array) else {
+			continue;
+		};
+		for (layer_index, layer) in layers.iter().enumerate() {
+			let layer_name = layer
+				.get("name")
+				.and_then(serde_json::Value::as_str)
+				.filter(|value| !value.is_empty())
+				.unwrap_or("Layer");
+			let Some(states) = layer.get("states").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			let Some(transitions) = layer.get("anyStateTransitions").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			let mut transitions_by_destination: BTreeMap<&str, Vec<(usize, &serde_json::Value)>> = BTreeMap::new();
+			for (transition_index, transition) in transitions.iter().enumerate() {
+				let Some(destination) = transition
+					.get("destinationState")
+					.and_then(serde_json::Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				transitions_by_destination
+					.entry(destination)
+					.or_default()
+					.push((transition_index, transition));
+			}
+			for state in states {
+				let Some(state_name) = state
+					.get("name")
+					.and_then(serde_json::Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				let Some(state_transitions) = transitions_by_destination.get(state_name) else {
+					continue;
+				};
+				let effect_count = unavatar_animator_motion_effect_count(state.get("motion")).min(64);
+				if effect_count == 0 {
+					continue;
+				}
+				let state_path = state.get("path").and_then(serde_json::Value::as_str).unwrap_or(state_name);
+				for (transition_index, transition) in state_transitions {
+					let condition_count = transition
+						.get("conditions")
+						.and_then(serde_json::Value::as_array)
+						.map(|conditions| {
+							conditions
+								.iter()
+								.filter(|condition| unavatar_animator_condition_has_parameter(condition))
+								.count()
+						})
+						.unwrap_or(0);
+					if condition_count == 0 {
+						continue;
+					}
+					let id = format!(
+						"animator:{controller_index}:{layer_index}:{}:{transition_index}",
+						stable_identifier(state_path)
+					);
+					let selected_mode = selected_modes.get(id.as_str()).copied().unwrap_or("off").to_string();
+					candidates.push(UnavatarAnimatorActionCandidate {
+						id,
+						label: if layer_name.is_empty() {
+							state_path.to_string()
+						} else {
+							format!("{layer_name} / {state_path}")
+						},
+						controller: controller_name.to_string(),
+						layer: layer_name.to_string(),
+						state_path: state_path.to_string(),
+						effect_count,
+						condition_count,
+						selected_mode,
+					});
+				}
+			}
+		}
+	}
+	candidates
+}
+
+fn unavatar_animator_motion_effect_count(motion: Option<&serde_json::Value>) -> usize {
+	let Some(motion) = motion else {
+		return 0;
+	};
+	let bindings = motion
+		.get("curveBindings")
+		.and_then(serde_json::Value::as_array)
+		.map(|bindings| bindings.len())
+		.unwrap_or(0);
+	let children = motion
+		.get("children")
+		.and_then(serde_json::Value::as_array)
+		.map(|children| {
+			children
+				.iter()
+				.map(|child| unavatar_animator_motion_effect_count(Some(child)))
+				.sum()
+		})
+		.unwrap_or(0);
+	bindings.saturating_add(children)
+}
+
+fn unavatar_animator_condition_has_parameter(condition: &serde_json::Value) -> bool {
+	condition
+		.get("parameter")
+		.and_then(serde_json::Value::as_str)
+		.is_some_and(|value| !value.is_empty())
+}
+
+fn stable_identifier(value: &str) -> String {
+	let mut out = String::with_capacity(value.len());
+	for ch in value.chars() {
+		if ch.is_ascii_alphanumeric() {
+			out.push(ch.to_ascii_lowercase());
+		} else if !out.ends_with('_') {
+			out.push('_');
+		}
+	}
+	out.trim_matches('_').to_string()
+}
+
 fn resolve_avatar_metadata_path(path: &str, manifest_path: Option<&str>) -> PathBuf {
 	let trimmed = path.trim();
 	let path = PathBuf::from(trimmed);
@@ -4736,6 +5059,9 @@ fn apply_avatar_setting_value(
 		AvatarSettingFieldDomain::Output => {
 			apply_output_setting_value(manifest, field, value)?;
 		}
+		AvatarSettingFieldDomain::Animator => {
+			apply_animator_setting_value(manifest, field, value)?;
+		}
 	}
 	Ok(())
 }
@@ -4758,6 +5084,7 @@ enum AvatarSettingFieldDomain {
 	Debug,
 	Camera,
 	Output,
+	Animator,
 }
 
 fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> {
@@ -4779,7 +5106,54 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 		_ if field.starts_with("debug.") => Some(AvatarSettingFieldDomain::Debug),
 		_ if field.starts_with("camera.") => Some(AvatarSettingFieldDomain::Camera),
 		_ if field.starts_with("output.") => Some(AvatarSettingFieldDomain::Output),
+		_ if field.starts_with("animator.") => Some(AvatarSettingFieldDomain::Animator),
 		_ => None,
+	}
+}
+
+fn apply_animator_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"animator.actions" => {
+			let actions: Vec<AnimatorActionSetting> =
+				serde_json::from_value(value).map_err(|e| format!("animator.actions must be an action array: {e}"))?;
+			let mut out = Vec::new();
+			for action in actions {
+				let id = action.id.trim();
+				let mode = normalize_animator_action_mode(&action.mode);
+				if id.is_empty() || !animator_action_mode_is_enabled(&mode) {
+					continue;
+				}
+				if out.iter().any(|existing: &toml::Value| {
+					existing.as_table().and_then(|table| table.get("id")).and_then(toml::Value::as_str) == Some(id)
+				}) {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("id".to_string(), toml::Value::String(id.to_string()));
+				table.insert("mode".to_string(), toml::Value::String(mode));
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(animator) = root.get_mut("animator").and_then(toml::Value::as_table_mut) {
+					animator.remove("actions");
+					animator.remove("action_ids");
+					if animator.is_empty() {
+						root.remove("animator");
+					}
+				}
+			} else {
+				let animator = root
+					.entry("animator".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "animator must be a table".to_string())?;
+				animator.remove("action_ids");
+				animator.insert("actions".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		_ => Err(format!("unsupported animator setting field: {field}")),
 	}
 }
 
@@ -7791,6 +8165,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let scene_cache_fingerprint = scene_cache_manifest_fingerprint(&manifest_value);
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
+	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
 	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
@@ -7829,6 +8204,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 			let set = set.trim().to_string();
 			(!set.is_empty()).then_some(set)
 		}),
+		animator_actions,
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
 		motion_vmc_enabled: motion.motion_vmc_enabled,
@@ -12581,6 +12957,7 @@ mod tests {
 			"read_vrm_metadata",
 			"read_unavatar_metadata",
 			"read_unavatar_wardrobe_options",
+			"read_unavatar_animator_action_page",
 			"save_avatar_thumbnail_icon",
 			"save_profile_icon_from_data_url",
 			"update_avatar_setting_value",
@@ -12913,7 +13290,60 @@ display_name = "New Avatar"
 			Some(AvatarSettingFieldDomain::Physics)
 		);
 		assert_eq!(avatar_setting_field_domain("spring_bones"), Some(AvatarSettingFieldDomain::Physics));
+		assert_eq!(
+			avatar_setting_field_domain("animator.actions"),
+			Some(AvatarSettingFieldDomain::Animator)
+		);
 		assert_eq!(avatar_setting_field_domain("unknown.setting"), None);
+	}
+
+	#[test]
+	fn animator_action_setting_writes_only_enabled_actions() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[animator]
+action_ids = ["animator:old"]
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"animator.actions",
+			serde_json::json!([
+				{ "id": " animator:0:0:hat_off:0 ", "mode": "toggle" },
+				{ "id": "animator:0:0:beam:0", "mode": "one-shot" },
+				{ "id": "animator:0:0:hidden:0", "mode": "off" },
+				{ "id": "animator:0:0:hat_off:0", "mode": "toggle" }
+			]),
+		)
+		.unwrap();
+
+		let animator = manifest.get("animator").and_then(toml::Value::as_table).unwrap();
+		assert!(animator.get("action_ids").is_none());
+		let actions = animator.get("actions").and_then(toml::Value::as_array).unwrap();
+		assert_eq!(actions.len(), 2);
+		assert_eq!(
+			actions[0]
+				.as_table()
+				.and_then(|table| table.get("id"))
+				.and_then(toml::Value::as_str),
+			Some("animator:0:0:hat_off:0")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("mode"))
+				.and_then(toml::Value::as_str),
+			Some("one_shot")
+		);
 	}
 
 	#[test]
