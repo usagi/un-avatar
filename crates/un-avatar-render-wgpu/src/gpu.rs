@@ -2283,10 +2283,18 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) phase: f32,
 	pub(crate) rect_center: [f32; 2],
 	pub(crate) rect_half_size: [f32; 2],
+}
+
+pub(crate) struct WardrobeSplashFrame {
+	pub(crate) time_secs: f32,
 	pub(crate) billboard_center: [f32; 3],
 	pub(crate) billboard_size: f32,
 	pub(crate) billboard_view_proj: [[f32; 4]; 4],
 	pub(crate) billboard_camera_pos: [f32; 3],
+}
+
+fn frame_spout_output_enabled(spout_available: bool, startup_splash_active: bool) -> bool {
+	spout_available && !startup_splash_active
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -6963,7 +6971,7 @@ impl GpuState {
 		)
 	}
 
-	fn write_wardrobe_billboard_uniform(&self, splash: StartupSplashFrame) {
+	fn write_wardrobe_billboard_uniform(&self, splash: &WardrobeSplashFrame) {
 		let center = Vec3::from_array(splash.billboard_center);
 		self.queue.write_buffer(
 			&self.wardrobe_billboard_buffer,
@@ -6982,7 +6990,7 @@ impl GpuState {
 		);
 	}
 
-	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: StartupSplashFrame) {
+	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: &WardrobeSplashFrame) {
 		self.write_wardrobe_billboard_uniform(splash);
 		pass.set_pipeline(&self.wardrobe_billboard_pipeline);
 		pass.set_bind_group(0, &self.bind_group, &[]);
@@ -7007,6 +7015,7 @@ impl GpuState {
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
 		startup_splash: Option<StartupSplashFrame>,
+		wardrobe_splash: Option<WardrobeSplashFrame>,
 		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
 		let t_cpu0 = Instant::now();
@@ -7019,9 +7028,7 @@ impl GpuState {
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
-		let wardrobe_transition_only = startup_splash
-			.as_ref()
-			.is_some_and(|splash| splash.phase > 4.5 && splash.phase < 5.5);
+		let wardrobe_transition_only = wardrobe_splash.is_some();
 		if let (Some(doc_arc), true) = (
 			&self.document,
 			!wardrobe_transition_only && self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
@@ -7102,7 +7109,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				self.spout.is_some()
+				frame_spout_output_enabled(self.spout.is_some(), startup_splash.is_some())
 			}
 			#[cfg(not(windows))]
 			{
@@ -7430,27 +7437,25 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(splash) = startup_splash {
-				if splash.phase > 4.5 && splash.phase < 5.5 {
-					self.draw_wardrobe_billboard(&mut pass, splash);
-				} else {
-					let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-					self.queue.write_buffer(
-						&self.startup_splash_buffer,
-						0,
-						bytemuck::bytes_of(&StartupSplashGpu {
-							time: splash.time_secs,
-							progress: splash.progress,
-							aspect,
-							phase: splash.phase,
-							rect_center: splash.rect_center,
-							rect_half_size: splash.rect_half_size,
-						}),
-					);
-					pass.set_pipeline(&self.startup_splash_pipeline);
-					pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-					pass.draw(0..3, 0..1);
-				}
+			if let Some(splash) = wardrobe_splash.as_ref() {
+				self.draw_wardrobe_billboard(&mut pass, splash);
+			} else if let Some(splash) = startup_splash.as_ref() {
+				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
+				self.queue.write_buffer(
+					&self.startup_splash_buffer,
+					0,
+					bytemuck::bytes_of(&StartupSplashGpu {
+						time: splash.time_secs,
+						progress: splash.progress,
+						aspect,
+						phase: splash.phase,
+						rect_center: splash.rect_center,
+						rect_half_size: splash.rect_half_size,
+					}),
+				);
+				pass.set_pipeline(&self.startup_splash_pipeline);
+				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+				pass.draw(0..3, 0..1);
 			}
 		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -7504,27 +7509,25 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(splash) = startup_splash {
-				if splash.phase > 4.5 && splash.phase < 5.5 {
-					self.draw_wardrobe_billboard(&mut pass, splash);
-				} else {
-					let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-					self.queue.write_buffer(
-						&self.startup_splash_buffer,
-						0,
-						bytemuck::bytes_of(&StartupSplashGpu {
-							time: splash.time_secs,
-							progress: splash.progress,
-							aspect,
-							phase: splash.phase,
-							rect_center: splash.rect_center,
-							rect_half_size: splash.rect_half_size,
-						}),
-					);
-					pass.set_pipeline(&self.startup_splash_pipeline);
-					pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-					pass.draw(0..3, 0..1);
-				}
+			if let Some(splash) = wardrobe_splash.as_ref() {
+				self.draw_wardrobe_billboard(&mut pass, splash);
+			} else if let Some(splash) = startup_splash.as_ref() {
+				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
+				self.queue.write_buffer(
+					&self.startup_splash_buffer,
+					0,
+					bytemuck::bytes_of(&StartupSplashGpu {
+						time: splash.time_secs,
+						progress: splash.progress,
+						aspect,
+						phase: splash.phase,
+						rect_center: splash.rect_center,
+						rect_half_size: splash.rect_half_size,
+					}),
+				);
+				pass.set_pipeline(&self.startup_splash_pipeline);
+				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+				pass.draw(0..3, 0..1);
 			}
 		}
 
@@ -8231,12 +8234,12 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		effective_window_backend, menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
-		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
-		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode,
-		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		effective_window_backend, frame_spout_output_enabled, menu_action_candidates_from_runtime, menu_graph_node_path,
+		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, modular_avatar_menu_components,
+		restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
+		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		RuntimeMenuGraphNode, WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
@@ -9098,6 +9101,13 @@ mod tests {
 		assert_eq!(nodes[0].transform, rest_nodes[0].transform);
 		assert_eq!(nodes[1].transform, rest_nodes[1].transform);
 		assert!(!nodes[1].visible);
+	}
+
+	#[test]
+	fn frame_spout_output_is_disabled_only_for_startup_splash() {
+		assert!(!frame_spout_output_enabled(false, false));
+		assert!(frame_spout_output_enabled(true, false));
+		assert!(!frame_spout_output_enabled(true, true));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

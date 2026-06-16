@@ -2308,7 +2308,7 @@ impl AvatarApp {
 		}
 	}
 
-	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
+	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::WardrobeSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
 		let billboard = transition
 			.saved_camera
@@ -2317,12 +2317,8 @@ impl AvatarApp {
 			transition.phase,
 			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::SplashHold
 		)
-		.then_some(gpu::StartupSplashFrame {
+		.then_some(gpu::WardrobeSplashFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
-			progress: -1.0,
-			phase: 5.0,
-			rect_center: SPLASH_FULL_RECT_CENTER,
-			rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			billboard_center: billboard.center,
 			billboard_size: billboard.size,
 			billboard_view_proj: billboard.view_proj,
@@ -3626,10 +3622,6 @@ impl AvatarApp {
 				phase: progress.phase.splash_code(),
 				rect_center: SPLASH_FULL_RECT_CENTER,
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
-				billboard_center: [0.0, 0.0, 0.0],
-				billboard_size: 1.0,
-				billboard_view_proj: [[0.0; 4]; 4],
-				billboard_camera_pos: [0.0, 0.0, 0.0],
 			})
 		} else {
 			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
@@ -3638,13 +3630,9 @@ impl AvatarApp {
 				phase: 9.0,
 				rect_center: SPLASH_FULL_RECT_CENTER,
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
-				billboard_center: [0.0, 0.0, 0.0],
-				billboard_size: 1.0,
-				billboard_view_proj: [[0.0; 4]; 4],
-				billboard_camera_pos: [0.0, 0.0, 0.0],
 			})
-		}
-		.or_else(|| self.wardrobe_splash_frame(now));
+		};
+		let wardrobe_splash = self.wardrobe_splash_frame(now);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -3655,6 +3643,7 @@ impl AvatarApp {
 				self.opts.clear_color,
 				wall_clamped,
 				startup_splash,
+				wardrobe_splash,
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();
