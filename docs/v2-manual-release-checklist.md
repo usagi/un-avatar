@@ -56,6 +56,7 @@ Use one live Renderer and check both Supervisor runtime controls and Renderer tr
 - Window Preview: preview visible, Spout2 disabled, local preview restored if it had been minimized.
 - Spout2 + Preview: Spout2 enabled, preview visible, Spout2 resolution unchanged unless an explicit resolution button is pressed.
 - Spout2 Only: Spout2 enabled, preview minimized / hidden for local desktop use, rendering continues in OBS / Spout receiver.
+- Startup splash: local preview may show startup progress, but Spout2 receiver must not receive startup splash frames before the avatar is ready.
 - Returning from Spout2 Only to Window Preview restores preview before disabling Spout2, so the user is not left with Spout2 off and preview still minimized.
 - 720p / 1080p buttons change Spout2 output resolution only; they do not implicitly restore or minimize preview.
 
@@ -96,8 +97,10 @@ For each start set, switch through Base and representative noble / field sets fr
 - No black materials.
 - No missing hair / clothing.
 - No stale inactive outfit meshes.
+- No rest-pose corruption after return: neck, hands, and mirrored / Z-axis-looking transforms remain correct after switching.
 - Wardrobe blendshape operation is reflected.
 - UNDynamics still moves after switching.
+- Wardrobe-changing billboard is visible in OBS / Spout2 during the switch, while startup splash remains preview-local.
 - Runtime status reports no scoped missing active groups.
 - Hot-switch refresh metrics are present in diagnostics / status: `active_wardrobe_set`,
   `wardrobe_asset_upload.active_asset_groups`, scoped resident counts, pending upload counts, and last scoped load / unload counts.

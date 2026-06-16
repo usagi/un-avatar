@@ -202,7 +202,12 @@
 	function animatorSelectedDetails(id: string): string {
 		const candidate = animatorCandidateFor(id);
 		if (!candidate) {
-			return `${selectedModeFor(id)} / ${selectedValueFor(id).toFixed(2)}`;
+			return $_("profiles.editor.unanimator_saved_action_details", {
+				values: {
+					mode: selectedModeFor(id),
+					value: selectedValueFor(id).toFixed(2),
+				},
+			});
 		}
 		return `${candidate.controller} / ${candidate.effect_count} effects / ${candidate.condition_count} conditions`;
 	}

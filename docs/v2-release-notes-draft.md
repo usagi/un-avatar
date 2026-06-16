@@ -13,7 +13,7 @@ This is the working release-note source for the first v2 beta. It records what c
 
 ## Current Verification Evidence
 
-These commands passed in the current release-prep workspace after the latest source changes:
+These commands passed in the release-prep workspace for the recorded candidate package:
 
 ```sh
 npm run check
@@ -39,6 +39,8 @@ Generated artifact evidence from the latest successful local packaging run:
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
+Post-candidate source fixes after the recorded package require a fresh `cargo xtask release-package --version 2.0.0-beta-2` and `cargo xtask release-audit --version 2.0.0-beta-2` before publishing. These include wardrobe transition rest-pose preparation, startup-vs-wardrobe splash separation for Spout2 output, and Supervisor UNAnimator profile-setting copy polish.
+
 ## Known Limitations
 
 - U.N. Avatar v2 is not a complete VRChat client or full Animator Controller emulator.
@@ -53,7 +55,7 @@ The release tooling verifies required portable zip entries, Spout2 payload entri
 ## Manual Release Checks Still Required
 
 - Real GUI `mizuki-split` wardrobe hot switch from `noble1` and `field_drape` to Base / noble sets, including no black materials, no missing hair / clothing, and UNDynamics still moving after switching.
-- Spout2 Only, Spout2 + Preview, Window Preview, minimized preview, preview restore order, and OBS / Spout receiver behavior.
+- Spout2 Only, Spout2 + Preview, Window Preview, minimized preview, preview restore order, OBS / Spout receiver behavior, and startup splash not being published to Spout2 while wardrobe-changing billboard still is.
 - Renderer tray operation from the actual Windows tray UI: output modes, Wardrobe, VRC Menu action toggles, Open Supervisor, and Quit this Renderer.
 - Supervisor `.unavatar` review flow with bounded metadata and real preview imagery.
 - Supervisor profile icon / cache warmup / shortcut / launcher workflow as one user-facing profile preparation path.
