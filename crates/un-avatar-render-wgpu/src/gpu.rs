@@ -6914,6 +6914,10 @@ impl GpuState {
 				false
 			}
 		};
+		let flush_spout_splash_before_blocking_apply = use_spout
+			&& startup_splash
+				.as_ref()
+				.is_some_and(|splash| splash.phase > 4.5 && splash.phase < 5.5);
 		if !window_output_enabled && !use_spout {
 			return None;
 		}
@@ -7436,6 +7440,15 @@ impl GpuState {
 			self.queue.submit(std::iter::once(enc2.finish()));
 			if let Some(idx) = staged_slot {
 				sp.after_submit_request_map(idx);
+				if flush_spout_splash_before_blocking_apply {
+					self.device
+						.poll(wgpu::PollType::Wait {
+							submission_index: None,
+							timeout: Some(Duration::from_millis(250)),
+						})
+						.ok();
+					sp.send_mapped_rgba(&self.device);
+				}
 			}
 			// 3) swap chain が取れている時だけプレビュー用にコピー。最小化 / occluded 中でも Spout 送信は続ける。
 			if let Some(swap_view) = swap_view.as_ref() {
