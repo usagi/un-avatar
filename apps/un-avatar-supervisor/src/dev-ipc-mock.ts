@@ -33,6 +33,7 @@ let appSettings = {
 	auto_launch_selected_on_startup: false,
 	show_developer_controls: false,
 	last_selected_setting_id: null,
+	pinned_taskbar_profile_ids: [],
 	console_window_x: null,
 	console_window_y: null,
 	console_window_width: null,
@@ -50,6 +51,7 @@ let avatarSettings = [
 		manifest_path: "profiles/main.toml",
 		avatar_path: "assets/example/main.vrm",
 		wardrobe_set: null,
+		animator_actions: [],
 		vmc_address: "0.0.0.0:39539",
 		vmc_port: 39539,
 		motion_vmc_enabled: true,
@@ -163,6 +165,7 @@ let avatarSettings = [
 		manifest_path: "profiles/debug.toml",
 		avatar_path: "assets/example/debug.vrm",
 		wardrobe_set: null,
+		animator_actions: [],
 		vmc_address: "0.0.0.0:39540",
 		vmc_port: 39540,
 		motion_vmc_enabled: true,
@@ -395,6 +398,39 @@ export function installDevIpcMock(): void {
 						{ id: "noble13", name: "Noble 13" },
 					],
 				};
+			case "read_unavatar_animator_action_page": {
+				const candidates = [
+					"Expression / Joy",
+					"Expression / Angry",
+					"Expression / Fun",
+					"Cloth / Cloth1",
+					"Cloth / Cloth2",
+					"Object / hat",
+					"Object / shoes",
+					"Object / outer",
+				].map((label, index) => ({
+					id: label.startsWith("Expression")
+						? `expression:${label.split(" / ")[1]?.toLowerCase()}`
+						: `animator:0:0:${label.split(" / ")[1]?.toLowerCase()}:${index}`,
+					label,
+					controller: label.startsWith("Expression") ? "VRM Expression" : "Preview FX",
+					layer: label.split(" / ")[0] ?? "Action",
+					state_path: label.split(" / ")[1] ?? label,
+					effect_count: 1,
+					condition_count: label.startsWith("Expression") ? 0 : 1,
+					selected_mode: "off",
+				}));
+				return {
+					available: true,
+					total_count: 62,
+					matched_count: candidates.length,
+					selected_count: 0,
+					offset: 0,
+					limit: candidates.length,
+					candidates,
+					error: null,
+				};
+			}
 			case "save_avatar_thumbnail_icon": {
 				const id = String(args.settingId ?? "");
 				const setting = avatarSettings.find((item) => item.id === id) ?? avatarSettings[0];
@@ -411,6 +447,9 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "wardrobe_set") {
 					(setting as { wardrobe_set: string | null }).wardrobe_set = String(args.value ?? "") || null;
+				}
+				if (setting && field === "animator.actions") {
+					(setting as unknown as { animator_actions: unknown[] }).animator_actions = (args.value as unknown[]) ?? [];
 				}
 				if (setting && field === "environment.color.exposure") {
 					setting.color_exposure = Number(args.value ?? 0);
