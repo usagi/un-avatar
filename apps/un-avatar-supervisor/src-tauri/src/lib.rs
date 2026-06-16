@@ -3889,7 +3889,19 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 }
 
 #[tauri::command]
-fn read_unavatar_animator_action_page(
+async fn read_unavatar_animator_action_page(
+	path: String,
+	manifest_path: Option<String>,
+	query: Option<String>,
+	offset: Option<usize>,
+	limit: Option<usize>,
+) -> Result<UnavatarAnimatorActionPage, String> {
+	tauri::async_runtime::spawn_blocking(move || read_unavatar_animator_action_page_blocking(path, manifest_path, query, offset, limit))
+		.await
+		.map_err(|e| format!("read UNAnimator candidates task failed: {e}"))?
+}
+
+fn read_unavatar_animator_action_page_blocking(
 	path: String,
 	manifest_path: Option<String>,
 	query: Option<String>,

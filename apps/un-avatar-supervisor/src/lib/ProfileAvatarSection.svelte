@@ -9,7 +9,7 @@
 		UnavatarWardrobeOptions,
 	} from "./profileTypes";
 	import { _ } from "svelte-i18n";
-	import { ChevronLeft, ChevronRight, FolderOpen, Search, SlidersHorizontal } from "lucide-svelte";
+	import { ChevronLeft, ChevronRight, FolderOpen, RefreshCw, Search, SlidersHorizontal } from "lucide-svelte";
 	import { hasTauriRuntime } from "./environment";
 
 	export let setting: AvatarFileSetting;
@@ -39,12 +39,19 @@
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
 
+	$: if (!animatorPanelOpen) {
+		animatorBusy = false;
+		animatorRequestId += 1;
+	}
+
 	$: if (animatorPanelOpen) {
 		const key = `${setting.manifest_path}\n${setting.avatar_path ?? ""}`;
 		if (key !== animatorLoadKey) {
 			animatorLoadKey = key;
 			animatorOffset = 0;
-			void refreshAnimatorPage();
+			animatorCandidates = [];
+			animatorPage = null;
+			animatorError = "";
 		}
 	}
 
@@ -223,6 +230,12 @@
 			</div>
 			{#if animatorPanelOpen}
 				<div class="animator-profile-browser">
+					<div class="animator-load-row">
+						<button type="button" class="field-button" disabled={busy || animatorBusy} onclick={() => refreshAnimatorPage()}
+							><RefreshCw size={15} />{$_("profiles.editor.unanimator_load_candidates")}</button
+						>
+						<span>{$_("profiles.editor.unanimator_load_hint")}</span>
+					</div>
 					<label class="animator-search-field"
 						><Search size={15} /><input
 							value={animatorQuery}
@@ -241,6 +254,8 @@
 						<div class="profile-inline-note profile-inline-note-warning">{animatorError}</div>
 					{:else if animatorBusy}
 						<div class="profile-inline-note">{$_("profiles.editor.loading")}</div>
+					{:else if !animatorPage}
+						<div class="profile-inline-note">{$_("profiles.editor.unanimator_not_loaded")}</div>
 					{:else if animatorPage && !animatorPage.available}
 						<div class="profile-inline-note">{$_("profiles.editor.unanimator_unavailable")}</div>
 					{:else if animatorPage}

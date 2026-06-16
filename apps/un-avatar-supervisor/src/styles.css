@@ -3673,6 +3673,15 @@ dd {
 	gap: 8px;
 }
 
+.animator-load-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
 .animator-search-field {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr);
