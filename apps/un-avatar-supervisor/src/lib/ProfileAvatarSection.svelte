@@ -195,8 +195,24 @@
 		return animatorCandidates.find((candidate) => candidate.id === id) ?? null;
 	}
 
+	function animatorModeLabel(mode: AnimatorActionMode): string {
+		if (mode === "toggle") return $_("profiles.editor.unanimator_mode_toggle");
+		if (mode === "one_shot") return $_("profiles.editor.unanimator_mode_one_shot");
+		return $_("profiles.editor.unanimator_mode_off");
+	}
+
 	function animatorSelectedLabel(id: string): string {
 		return animatorCandidateFor(id)?.label ?? id;
+	}
+
+	function animatorCandidateDetails(candidate: UnavatarAnimatorActionCandidate): string {
+		return $_("profiles.editor.unanimator_candidate_details", {
+			values: {
+				controller: candidate.controller,
+				effects: candidate.effect_count,
+				conditions: candidate.condition_count,
+			},
+		});
 	}
 
 	function animatorSelectedDetails(id: string): string {
@@ -204,12 +220,12 @@
 		if (!candidate) {
 			return $_("profiles.editor.unanimator_saved_action_details", {
 				values: {
-					mode: selectedModeFor(id),
+					mode: animatorModeLabel(selectedModeFor(id)),
 					value: selectedValueFor(id).toFixed(2),
 				},
 			});
 		}
-		return `${candidate.controller} / ${candidate.effect_count} effects / ${candidate.condition_count} conditions`;
+		return animatorCandidateDetails(candidate);
 	}
 
 	function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -868,7 +884,7 @@
 								<div class="animator-action-row">
 									<div class="animator-action-label">
 										<strong>{candidate.label}</strong>
-										<small>{candidate.controller} / {candidate.effect_count} effects / {candidate.condition_count} conditions</small>
+										<small>{animatorCandidateDetails(candidate)}</small>
 									</div>
 									<select
 										value={selectedModeFor(candidate.id)}
