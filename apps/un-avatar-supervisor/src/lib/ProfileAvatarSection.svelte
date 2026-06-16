@@ -43,6 +43,8 @@
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
 	const animatorTransitionDefaultMs = 250;
+	let animatorValueDrafts: Record<string, number> = {};
+	let animatorTransitionMsDrafts: Record<string, number> = {};
 	let keyboardCaptureSetId: string | null = null;
 	let keyboardCaptureActionId: string | null = null;
 	let midiCaptureSetId: string | null = null;
@@ -66,6 +68,8 @@
 			animatorCandidates = [];
 			animatorPage = null;
 			animatorError = "";
+			animatorValueDrafts = {};
+			animatorTransitionMsDrafts = {};
 		}
 	}
 
@@ -89,6 +93,8 @@
 	}
 
 	function selectedValueFor(id: string): number {
+		const draft = animatorValueDrafts[id];
+		if (typeof draft === "number" && Number.isFinite(draft)) return Math.min(1, Math.max(0, draft));
 		const value = setting.animator_actions.find((action) => action.id === id)?.value;
 		return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
 	}
@@ -98,6 +104,8 @@
 	}
 
 	function selectedTransitionMsFor(id: string): number {
+		const draft = animatorTransitionMsDrafts[id];
+		if (typeof draft === "number" && Number.isFinite(draft)) return Math.min(3000, Math.max(0, Math.round(draft)));
 		const value = setting.animator_actions.find((action) => action.id === id)?.transition_ms;
 		return typeof value === "number" && Number.isFinite(value) ? Math.min(3000, Math.max(0, Math.round(value))) : 0;
 	}
@@ -240,7 +248,19 @@
 	}
 
 	async function updateAnimatorActionValue(id: string, value: number): Promise<void> {
-		await updateAnimatorAction(id, selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id), value);
+		const nextValue = Math.min(1, Math.max(0, value));
+		animatorValueDrafts = { ...animatorValueDrafts, [id]: nextValue };
+		try {
+			await updateAnimatorAction(id, selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id), nextValue);
+		} finally {
+			const nextDrafts = { ...animatorValueDrafts };
+			delete nextDrafts[id];
+			animatorValueDrafts = nextDrafts;
+		}
+	}
+
+	function draftAnimatorActionValue(id: string, value: number): void {
+		animatorValueDrafts = { ...animatorValueDrafts, [id]: Math.min(1, Math.max(0, value)) };
 	}
 
 	async function updateAnimatorTransition(id: string, curve: string, durationMs = selectedTransitionMsFor(id)): Promise<void> {
@@ -256,7 +276,20 @@
 			transition_curve: normalizedCurve,
 			transition_ms: normalizedMs && normalizedMs > 0 ? normalizedMs : null,
 		});
-		await onUpdateSettingValue("animator.actions", next);
+		if (normalizedCurve) {
+			animatorTransitionMsDrafts = { ...animatorTransitionMsDrafts, [id]: normalizedMs ?? requestedMs };
+		}
+		try {
+			await onUpdateSettingValue("animator.actions", next);
+		} finally {
+			const nextDrafts = { ...animatorTransitionMsDrafts };
+			delete nextDrafts[id];
+			animatorTransitionMsDrafts = nextDrafts;
+		}
+	}
+
+	function draftAnimatorTransitionMs(id: string, value: number): void {
+		animatorTransitionMsDrafts = { ...animatorTransitionMsDrafts, [id]: Math.min(3000, Math.max(0, Math.round(value))) };
 	}
 
 	function wardrobeSettingRows(options: UnavatarWardrobeOptions | null): WardrobeSetOption[] {
@@ -627,7 +660,8 @@
 										step="0.01"
 										value={selectedValueFor(action.id)}
 										disabled={busy || selectedModeFor(action.id) === "off"}
-										oninput={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+										oninput={(event) => draftAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+										onchange={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
 									/>
 									<input
 										type="number"
@@ -658,7 +692,8 @@
 										step="10"
 										value={selectedTransitionMsFor(action.id)}
 										disabled={busy || selectedTransitionCurveFor(action.id) === "none"}
-										oninput={(event) =>
+										oninput={(event) => draftAnimatorTransitionMs(action.id, Number((event.currentTarget as HTMLInputElement).value))}
+										onchange={(event) =>
 											updateAnimatorTransition(action.id, selectedTransitionCurveFor(action.id), Number((event.currentTarget as HTMLInputElement).value))}
 									/>
 									<input
@@ -817,7 +852,8 @@
 											step="0.01"
 											value={selectedValueFor(candidate.id)}
 											disabled={busy || selectedModeFor(candidate.id) === "off"}
-											oninput={(event) => updateAnimatorActionValue(candidate.id, Number((event.currentTarget as HTMLInputElement).value))}
+											oninput={(event) => draftAnimatorActionValue(candidate.id, Number((event.currentTarget as HTMLInputElement).value))}
+											onchange={(event) => updateAnimatorActionValue(candidate.id, Number((event.currentTarget as HTMLInputElement).value))}
 										/>
 										<input
 											type="number"

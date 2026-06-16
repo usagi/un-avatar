@@ -1250,6 +1250,10 @@ enum RendererControlCommand {
 		source_id: String,
 		enabled: bool,
 	},
+	SetAnimatorProfile {
+		actions: Vec<AnimatorActionSetting>,
+		bindings: Vec<AnimatorBindingSetting>,
+	},
 	SetAvatarOutline {
 		policy: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -5510,6 +5514,11 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply contact shadow to running renderers",
 			apply_contact_shadow_to_matching_renderers,
 		),
+		(
+			"animator.",
+			"apply UNAnimator profile to running renderers",
+			apply_animator_profile_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -8513,6 +8522,17 @@ fn apply_contact_shadow_to_matching_renderers(setting: &AvatarSetting, state: &M
 			radius: Some(setting.contact_shadow_radius),
 			softness: Some(setting.contact_shadow_softness),
 			height: Some(setting.contact_shadow_height),
+		},
+	)
+}
+
+fn apply_animator_profile_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetAnimatorProfile {
+			actions: setting.animator_actions.clone(),
+			bindings: setting.animator_bindings.clone(),
 		},
 	)
 }
