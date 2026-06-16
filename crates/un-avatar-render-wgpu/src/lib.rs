@@ -258,7 +258,7 @@ struct WardrobeApplyFrameResult {
 
 struct WardrobeAsyncApplyResult {
 	set_id: String,
-	document: Result<un_avatar_core::UnaDocument, String>,
+	scene: Result<(PreparedDocumentScene, DocumentAttachOptions), String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2339,7 +2339,16 @@ impl AvatarApp {
 		if self.wardrobe_apply_rx.is_some() {
 			return;
 		}
-		let Some(doc_arc) = self.gpu.as_ref().and_then(GpuState::document_arc) else {
+		let Some(gpu) = self.gpu.as_ref() else {
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err("renderer is not initialized".to_string()),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+			return;
+		};
+		let Some(doc_arc) = gpu.document_arc() else {
 			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
 				outcome: Err("document is not attached".to_string()),
 				active_set_id: None,
@@ -2348,6 +2357,8 @@ impl AvatarApp {
 			});
 			return;
 		};
+		let context = gpu.scene_build_context();
+		let options = self.document_attach_options();
 		if let Some(transition) = self.wardrobe_transition.as_mut() {
 			transition.phase = WardrobeTransitionPhase::Applying;
 			transition.phase_started_at = Instant::now();
@@ -2356,16 +2367,17 @@ impl AvatarApp {
 		self.wardrobe_apply_rx = Some(rx);
 		let thread_set_id = set_id.clone();
 		let spawn_result = thread::Builder::new().name("un-avatar-wardrobe-apply".to_string()).spawn(move || {
-			let document = (|| {
+			let scene = (|| {
 				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 				let mut cloned = (*doc).clone();
 				drop(doc);
 				crate::model_loader::apply_required_wardrobe_set(&mut cloned, &thread_set_id)?;
-				Ok(cloned)
+				let prepared = context.prepare_document_scene(Arc::new(cloned), &options, |_| {})?;
+				Ok((prepared, options))
 			})();
 			let _ = tx.send(WardrobeAsyncApplyResult {
 				set_id: thread_set_id,
-				document,
+				scene,
 			});
 		});
 		if let Err(err) = spawn_result {
@@ -2387,9 +2399,9 @@ impl AvatarApp {
 			return;
 		};
 		self.wardrobe_apply_rx = None;
-		let outcome = match result.document {
-			Ok(document) => match self.gpu.as_mut() {
-				Some(gpu) => gpu.commit_wardrobe_document(document),
+		let outcome = match result.scene {
+			Ok((prepared, options)) => match self.gpu.as_mut() {
+				Some(gpu) => gpu.attach_prepared_document(prepared, options),
 				None => Err("renderer is not initialized".to_string()),
 			},
 			Err(err) => Err(err),

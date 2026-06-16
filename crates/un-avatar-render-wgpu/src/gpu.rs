@@ -6088,19 +6088,6 @@ impl GpuState {
 		Ok(())
 	}
 
-	pub(crate) fn commit_wardrobe_document(&mut self, document: UnaDocument) -> Result<(), String> {
-		let Some(doc_arc) = self.document.as_ref() else {
-			return Err("document is not attached".to_string());
-		};
-		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		*doc = document;
-		drop(doc);
-		self.reset_dynamics_nodes_to_rest();
-		self.rebuild_runtime_dynamics();
-		self.invalidate_applied_document_state();
-		Ok(())
-	}
-
 	pub(crate) fn set_runtime_dynamics_enabled(&mut self, source_id: &str, enabled: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -7010,9 +6997,12 @@ impl GpuState {
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
+		let wardrobe_transition_only = startup_splash
+			.as_ref()
+			.is_some_and(|splash| splash.phase > 4.5 && splash.phase < 5.5);
 		if let (Some(doc_arc), true) = (
 			&self.document,
-			self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
+			!wardrobe_transition_only && self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
 		) {
 			if let Ok(g) = doc_arc.read() {
 				let runtime_model = g.runtime_model();
@@ -7032,7 +7022,7 @@ impl GpuState {
 		}
 		if let (Some(doc_arc), true) = (
 			&self.document,
-			self.debug_morph && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
+			!wardrobe_transition_only && self.debug_morph && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
 		) {
 			if let Ok(g) = doc_arc.read() {
 				let runtime_model = g.runtime_model();
@@ -7059,17 +7049,21 @@ impl GpuState {
 		}
 		let dt = wall_since_last.as_secs_f32();
 		let t_motion0 = Instant::now();
-		self.apply_pending_motion_frames();
+		if !wardrobe_transition_only {
+			self.apply_pending_motion_frames();
+		}
 		let motion_apply_ms = t_motion0.elapsed().as_secs_f32() * 1000.0;
 		let t_dynamics0 = Instant::now();
 		let mut dynamics_profile = DynamicsStepProfile::default();
-		if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
-			if let Ok(mut doc) = doc_arc.write() {
-				if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
-					if self.dynamics_profile_enabled {
-						dynamics_profile = sim.step_runtime_dynamics_profiled(runtime.scene, runtime.dynamics.as_readonly(), dt);
-					} else {
-						sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
+		if !wardrobe_transition_only {
+			if let (Some(doc_arc), Some(sim)) = (&self.document, &mut self.dynamics_sim) {
+				if let Ok(mut doc) = doc_arc.write() {
+					if let Some(runtime) = doc.runtime_scene_and_dynamics_mut() {
+						if self.dynamics_profile_enabled {
+							dynamics_profile = sim.step_runtime_dynamics_profiled(runtime.scene, runtime.dynamics.as_readonly(), dt);
+						} else {
+							sim.step_runtime_dynamics(runtime.scene, runtime.dynamics.as_readonly(), dt);
+						}
 					}
 				}
 			}
@@ -7077,10 +7071,12 @@ impl GpuState {
 		let dynamics_step_ms = t_dynamics0.elapsed().as_secs_f32() * 1000.0;
 		let (gw, gh) = self.render_pixel_dims();
 		let t_globals0 = Instant::now();
-		self.write_frame_globals(gw, gh, true);
+		if !wardrobe_transition_only {
+			self.write_frame_globals(gw, gh, true);
+		}
 		let frame_globals_ms = t_globals0.elapsed().as_secs_f32() * 1000.0;
 
-		let draw_scene = self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
+		let draw_scene = !wardrobe_transition_only && self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
 		let use_spout = {
 			#[cfg(windows)]
 			{
@@ -7091,10 +7087,9 @@ impl GpuState {
 				false
 			}
 		};
-		let flush_spout_splash_before_blocking_apply = use_spout
-			&& startup_splash
-				.as_ref()
-				.is_some_and(|splash| splash.phase > 4.5 && splash.phase < 5.5);
+		// Wardrobe GPU scene preparation is done on the worker now. A blocking Spout flush here would
+		// throttle the transition billboard exactly while it should keep animating.
+		let flush_spout_splash_before_blocking_apply = false;
 		if !window_output_enabled && !use_spout {
 			return None;
 		}
@@ -7159,8 +7154,10 @@ impl GpuState {
 		let use_color_adjust = !self.environment_color.is_identity();
 		let use_bloom = self.bloom.is_enabled();
 		let use_ssao = self.ssao.is_enabled();
-		let needs_screen_refraction = self.scene_meshes.as_ref().is_some_and(SceneMeshes::needs_screen_refraction);
-		let use_post = use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction;
+		let needs_screen_refraction =
+			!wardrobe_transition_only && self.scene_meshes.as_ref().is_some_and(SceneMeshes::needs_screen_refraction);
+		let use_post = !wardrobe_transition_only
+			&& (use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction);
 		let use_msaa = matches!(self.aa, AaMode::Msaa);
 		let t_target0 = Instant::now();
 		if use_post {
@@ -7467,7 +7464,7 @@ impl GpuState {
 					sm.draw_toon_outlines(&mut pass);
 					sm.draw_blended(&mut pass);
 				}
-			} else {
+			} else if !wardrobe_transition_only {
 				pass.set_pipeline(&self.pipeline);
 				pass.set_bind_group(0, &self.bind_group, &[]);
 				pass.draw(0..3, 0..1);
