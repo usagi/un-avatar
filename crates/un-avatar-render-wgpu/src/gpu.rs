@@ -2459,6 +2459,24 @@ fn reset_runtime_dynamics_nodes_to_rest(
 	changed
 }
 
+pub(crate) fn restore_runtime_scene_transforms_to_rest(document: &mut UnaDocument, rest_nodes: &[UnaSceneNode]) -> Result<(), String> {
+	let mut runtime_model = document.runtime_model_mut();
+	let Some((scene, _profile)) = runtime_model.humanoid_scene_mut() else {
+		return Ok(());
+	};
+	if scene.nodes.len() != rest_nodes.len() {
+		return Err(format!(
+			"rest node count mismatch while preparing wardrobe scene: scene={} rest={}",
+			scene.nodes.len(),
+			rest_nodes.len()
+		));
+	}
+	for (dst, src) in scene.nodes.iter_mut().zip(rest_nodes.iter()) {
+		dst.transform = src.transform;
+	}
+	Ok(())
+}
+
 fn reset_runtime_dynamics_nodes_to_rest_for_source_id(
 	scene: &mut un_avatar_core::UnaSceneSnapshot,
 	dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
@@ -6348,6 +6366,10 @@ impl GpuState {
 		}
 	}
 
+	pub(crate) fn rest_nodes_for_scene_prepare(&self) -> Option<Arc<Vec<UnaSceneNode>>> {
+		self.rest_nodes.as_ref().map(Arc::clone)
+	}
+
 	pub(crate) fn attach_prepared_document(
 		&mut self,
 		prepared: PreparedDocumentScene,
@@ -8210,17 +8232,19 @@ mod tests {
 
 	use super::{
 		effective_window_backend, menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
-		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, runtime_action_id_for_parameter,
-		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode,
-		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode, WardrobeAssetUploadPlan,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
+		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
+		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RuntimeMenuGraphNode,
+		WardrobeAssetUploadPlan, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
 	use serde_json::json;
+	use un_avatar_core::{UnaDocument, UnaSceneSnapshot};
+	use un_avatar_skeleton::HumanoidProfile;
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
 
 	#[test]
@@ -9047,6 +9071,33 @@ mod tests {
 		assert_eq!(work.active_draws_using_inactive_image_texture_count, 4);
 		assert_eq!(work.active_draws_using_inactive_cube_texture_count, 3);
 		assert_eq!(work.active_draws_using_inactive_material_slot_count, 5);
+	}
+
+	#[test]
+	fn restore_runtime_scene_transforms_to_rest_resets_pose_without_visibility() {
+		let mut rest_nodes = vec![test_scene_node(vec![1]), test_scene_node(Vec::new())];
+		rest_nodes[0].transform[12] = 1.0;
+		rest_nodes[1].transform[13] = 2.0;
+		let mut posed_nodes = rest_nodes.clone();
+		posed_nodes[0].transform[12] = 10.0;
+		posed_nodes[1].transform[13] = 20.0;
+		posed_nodes[1].visible = false;
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: posed_nodes,
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile::default()),
+			..Default::default()
+		};
+
+		restore_runtime_scene_transforms_to_rest(&mut document, &rest_nodes).expect("restore rest pose");
+
+		let nodes = document.runtime_model().scene_nodes().expect("scene nodes");
+		assert_eq!(nodes[0].transform, rest_nodes[0].transform);
+		assert_eq!(nodes[1].transform, rest_nodes[1].transform);
+		assert!(!nodes[1].visible);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

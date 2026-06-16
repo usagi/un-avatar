@@ -2358,6 +2358,7 @@ impl AvatarApp {
 			return;
 		};
 		let context = gpu.scene_build_context();
+		let rest_nodes = gpu.rest_nodes_for_scene_prepare();
 		let options = self.document_attach_options();
 		if let Some(transition) = self.wardrobe_transition.as_mut() {
 			transition.phase = WardrobeTransitionPhase::Applying;
@@ -2371,6 +2372,9 @@ impl AvatarApp {
 				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 				let mut cloned = (*doc).clone();
 				drop(doc);
+				if let Some(rest_nodes) = rest_nodes.as_ref() {
+					gpu::restore_runtime_scene_transforms_to_rest(&mut cloned, rest_nodes.as_slice())?;
+				}
 				crate::model_loader::apply_required_wardrobe_set(&mut cloned, &thread_set_id)?;
 				let prepared = context.prepare_document_scene(Arc::new(cloned), &options, |_| {})?;
 				Ok((prepared, options))
