@@ -8,7 +8,7 @@ This is the working release-note source for the first v2 beta. It records what c
 - Supervisor Console manages profiles, launch actions, renderer controls, profile icon crop, cache warmup, diagnostics, and packaged profile workflows.
 - Renderer supports VRM / glTF / `.unavatar`, UNMF/Z and VMC/UDP motion input, GPU skinning / morph, UNPhysics / UNDynamics, UNToon material semantics, window preview, screenshots, and Spout2 output.
 - `.unavatar` v2 covers Wardrobe set import, runtime wardrobe hot switch, VRC Expression Menu derived runtime actions, Modular Avatar derived visibility / material / dynamics operations where they can be lowered to renderer actions, and scoped asset residency for heavy wardrobe models.
-- Renderer tray exposes runtime output modes plus Wardrobe and VRC Menu action surfaces from normalized renderer status. Supervisor uses the same renderer control path for matching actions.
+- Renderer tray exposes runtime output modes plus Wardrobe and UNAnimator action surfaces from normalized renderer status. Supervisor uses the same renderer control path for matching actions.
 - Unity Exporter can be packaged as a VCC / VPM package from this repository and published beside the portable zip release asset.
 
 ## Current Verification Evidence
@@ -56,7 +56,7 @@ Post-candidate source fixes after the recorded package require a fresh `cargo xt
 
 - Real GUI `mizuki-split` wardrobe hot switch from `noble1` and `field_drape` to Base / noble sets, including no black materials, no missing hair / clothing, and UNDynamics still moving after switching.
 - Spout2 Only, Spout2 + Preview, Window Preview, minimized preview, preview restore order, OBS / Spout receiver behavior, and startup splash not being published to Spout2 while wardrobe-changing billboard still is.
-- Renderer tray operation from the actual Windows tray UI: output modes, Wardrobe, VRC Menu action toggles, Open Supervisor, and Quit this Renderer.
+- Renderer tray operation from the actual Windows tray UI: output modes, Wardrobe, UNAnimator action toggles, Open Supervisor, and Quit this Renderer.
 - Supervisor `.unavatar` review flow with bounded metadata and real preview imagery.
 - Supervisor profile icon / cache warmup / shortcut / launcher workflow as one user-facing profile preparation path.
 - v1 to v2 migration through actual save / duplicate / thumbnail / path updates, confirming legacy root keys normalize to v2 sections.

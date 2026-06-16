@@ -72,7 +72,7 @@ Confirm the Windows tray icon operates the running Renderer directly.
 - Tray header identifies the profile / avatar and process.
 - Window Preview, Spout2 + Preview, and Spout2 Only map to the same behavior as Supervisor runtime buttons.
 - Wardrobe menu lists all normalized wardrobe candidates needed for the test model, with no fixed app-side cap.
-- VRC Menu lists non-wardrobe menu action candidates, uses resolved menu path labels where available, falls back to expression-menu runtime actions when normalized candidates are absent, and toggles active parameter actions back to `0`.
+- UNAnimator lists non-wardrobe menu action candidates, uses resolved menu path labels where available, falls back to expression-menu runtime actions when normalized candidates are absent, and toggles active parameter actions back to `0`.
 - Open Supervisor focuses or starts Supervisor and selects the relevant profile when possible.
 - Quit this Renderer stops only the Renderer represented by that tray icon.
 
