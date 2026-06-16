@@ -35,6 +35,7 @@ use std::{
 	path::{Path, PathBuf},
 	sync::{
 		atomic::{AtomicBool, AtomicU64, Ordering},
+		mpsc::{self, Receiver},
 		Arc, Mutex,
 	},
 	thread,
@@ -233,6 +234,7 @@ struct ActiveAnimatorTransition {
 enum WardrobeTransitionPhase {
 	Exit,
 	SplashPrimed,
+	Applying,
 	SplashHold,
 	Enter,
 }
@@ -251,6 +253,11 @@ struct WardrobeApplyFrameResult {
 	active_set_id: Option<String>,
 	active_asset_groups: Vec<String>,
 	asset_upload_plan: WardrobeAssetUploadPlan,
+}
+
+struct WardrobeAsyncApplyResult {
+	set_id: String,
+	document: Result<un_avatar_core::UnaDocument, String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1514,6 +1521,7 @@ struct AvatarApp {
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
 	wardrobe_transition: Option<WardrobeTransitionState>,
+	wardrobe_apply_rx: Option<Receiver<WardrobeAsyncApplyResult>>,
 	#[cfg(windows)]
 	renderer_tray: Option<renderer_tray::RendererTray>,
 	#[cfg(windows)]
@@ -1831,6 +1839,7 @@ impl AvatarApp {
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
 			wardrobe_transition: None,
+			wardrobe_apply_rx: None,
 			#[cfg(windows)]
 			renderer_tray: None,
 			#[cfg(windows)]
@@ -2239,6 +2248,7 @@ impl AvatarApp {
 	}
 
 	fn update_wardrobe_transition_before_frame(&mut self, now: Instant) {
+		self.poll_wardrobe_apply_worker();
 		let Some(transition) = self.wardrobe_transition.as_mut() else {
 			return;
 		};
@@ -2274,7 +2284,7 @@ impl AvatarApp {
 					},
 				);
 			}
-			WardrobeTransitionPhase::SplashPrimed => {
+			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying => {
 				self.request_redraw();
 			}
 			_ => {}
@@ -2283,10 +2293,10 @@ impl AvatarApp {
 
 	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		let (billboard_center, billboard_size) = transition.saved_camera.wardrobe_billboard_world();
+		let billboard = transition.saved_camera.wardrobe_billboard_camera(self.output_aspect_wh());
 		matches!(
 			transition.phase,
-			WardrobeTransitionPhase::Exit | WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::SplashHold
+			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::SplashHold
 		)
 		.then_some(gpu::StartupSplashFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
@@ -2294,14 +2304,97 @@ impl AvatarApp {
 			phase: 5.0,
 			rect_center: SPLASH_FULL_RECT_CENTER,
 			rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
-			billboard_center,
-			billboard_size,
+			billboard_center: billboard.center,
+			billboard_size: billboard.size,
+			billboard_view_proj: billboard.view_proj,
+			billboard_camera_pos: billboard.camera_pos,
 		})
 	}
 
 	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
 		let transition = self.wardrobe_transition.as_ref()?;
 		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then(|| transition.set_id.clone())
+	}
+
+	fn start_wardrobe_apply_worker_after_render(&mut self, set_id: String) {
+		if self.wardrobe_apply_rx.is_some() {
+			return;
+		}
+		let Some(doc_arc) = self.gpu.as_ref().and_then(GpuState::document_arc) else {
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err("document is not attached".to_string()),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+			return;
+		};
+		if let Some(transition) = self.wardrobe_transition.as_mut() {
+			transition.phase = WardrobeTransitionPhase::Applying;
+			transition.phase_started_at = Instant::now();
+		}
+		let (tx, rx) = mpsc::channel();
+		self.wardrobe_apply_rx = Some(rx);
+		let thread_set_id = set_id.clone();
+		let spawn_result = thread::Builder::new().name("un-avatar-wardrobe-apply".to_string()).spawn(move || {
+			let document = (|| {
+				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+				let mut cloned = (*doc).clone();
+				drop(doc);
+				crate::model_loader::apply_required_wardrobe_set(&mut cloned, &thread_set_id)?;
+				Ok(cloned)
+			})();
+			let _ = tx.send(WardrobeAsyncApplyResult {
+				set_id: thread_set_id,
+				document,
+			});
+		});
+		if let Err(err) = spawn_result {
+			self.wardrobe_apply_rx = None;
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err(format!("spawn wardrobe apply worker failed: {err}")),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+		}
+	}
+
+	fn poll_wardrobe_apply_worker(&mut self) {
+		let Some(rx) = self.wardrobe_apply_rx.as_ref() else {
+			return;
+		};
+		let Ok(result) = rx.try_recv() else {
+			return;
+		};
+		self.wardrobe_apply_rx = None;
+		let outcome = match result.document {
+			Ok(document) => match self.gpu.as_mut() {
+				Some(gpu) => gpu.commit_wardrobe_document(document),
+				None => Err("renderer is not initialized".to_string()),
+			},
+			Err(err) => Err(err),
+		};
+		let (active_set_id, active_asset_groups, asset_upload_plan) = if outcome.is_ok() {
+			if let Some(gpu) = self.gpu.as_ref() {
+				(
+					gpu.active_wardrobe_set(),
+					gpu.active_asset_groups(),
+					gpu.wardrobe_asset_upload_plan(),
+				)
+			} else {
+				(None, Vec::new(), WardrobeAssetUploadPlan::default())
+			}
+		} else {
+			(None, Vec::new(), WardrobeAssetUploadPlan::default())
+		};
+		let _ = result.set_id;
+		self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+			outcome,
+			active_set_id,
+			active_asset_groups,
+			asset_upload_plan,
+		});
 	}
 
 	fn finish_wardrobe_apply_after_render(&mut self, result: WardrobeApplyFrameResult) {
@@ -3306,6 +3399,11 @@ impl AvatarApp {
 		}
 	}
 
+	fn output_aspect_wh(&self) -> f32 {
+		let (width, height) = self.startup_texture_target_size();
+		width.max(1) as f32 / height.max(1) as f32
+	}
+
 	fn document_attach_options(&self) -> DocumentAttachOptions {
 		let (target_width, target_height) = self.startup_texture_target_size();
 		let texture_max_dimension = self.opts.texture_resolution_limit.max_dimension(target_width, target_height);
@@ -3491,6 +3589,8 @@ impl AvatarApp {
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 				billboard_center: [0.0, 0.0, 0.0],
 				billboard_size: 1.0,
+				billboard_view_proj: [[0.0; 4]; 4],
+				billboard_camera_pos: [0.0, 0.0, 0.0],
 			})
 		} else {
 			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
@@ -3501,6 +3601,8 @@ impl AvatarApp {
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 				billboard_center: [0.0, 0.0, 0.0],
 				billboard_size: 1.0,
+				billboard_view_proj: [[0.0; 4]; 4],
+				billboard_camera_pos: [0.0, 0.0, 0.0],
 			})
 		}
 		.or_else(|| self.wardrobe_splash_frame(now));
@@ -3519,19 +3621,6 @@ impl AvatarApp {
 				win.request_redraw();
 				return false;
 			};
-			let wardrobe_apply_result = wardrobe_apply_after_render_set_id.map(|set_id| {
-				let outcome = gpu.apply_wardrobe_set(&set_id);
-				WardrobeApplyFrameResult {
-					active_set_id: outcome.as_ref().ok().and_then(|_| gpu.active_wardrobe_set()),
-					active_asset_groups: if outcome.is_ok() { gpu.active_asset_groups() } else { Vec::new() },
-					asset_upload_plan: if outcome.is_ok() {
-						gpu.wardrobe_asset_upload_plan()
-					} else {
-						WardrobeAssetUploadPlan::default()
-					},
-					outcome,
-				}
-			});
 			let (parameter_updates, runtime_parameter_activations) = {
 				let t_contact0 = Instant::now();
 				let parameter_updates = match gpu.apply_contact_parameter_emissions() {
@@ -3553,12 +3642,17 @@ impl AvatarApp {
 				timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
 				(parameter_updates, activations)
 			};
-			(timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_result)
+			(
+				timings,
+				parameter_updates,
+				runtime_parameter_activations,
+				wardrobe_apply_after_render_set_id,
+			)
 		};
-		let (mut timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_result) = render_work;
+		let (mut timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_after_render_set_id) = render_work;
 		timings.cpu_total_ms = now.elapsed().as_secs_f32() * 1000.0;
-		if let Some(result) = wardrobe_apply_result {
-			self.finish_wardrobe_apply_after_render(result);
+		if let Some(set_id) = wardrobe_apply_after_render_set_id {
+			self.start_wardrobe_apply_worker_after_render(set_id);
 		}
 		if !parameter_updates.is_empty() {
 			self.update_runtime_parameters(parameter_updates);
@@ -3615,6 +3709,13 @@ impl AvatarApp {
 		}
 
 		if self.preview_window_enabled {
+			win.request_redraw();
+		}
+		if self
+			.wardrobe_transition
+			.as_ref()
+			.is_some_and(|transition| matches!(transition.phase, WardrobeTransitionPhase::Applying))
+		{
 			win.request_redraw();
 		}
 		false

@@ -6,6 +6,8 @@ struct Globals {
 }
 
 struct WardrobeBillboard {
+	view_proj: mat4x4<f32>,
+	camera_pos: vec4<f32>,
 	center_size: vec4<f32>,
 	time_params: vec4<f32>,
 }
@@ -82,7 +84,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 	let local = corners[vi];
 	let center = billboard.center_size.xyz;
 	let size = max(billboard.center_size.w, 0.01);
-	let to_camera = normalize(globals.camera_pos.xyz - center);
+	let to_camera = normalize(billboard.camera_pos.xyz - center);
 	var right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), to_camera));
 	if dot(right, right) < 0.0001 {
 		right = vec3<f32>(1.0, 0.0, 0.0);
@@ -90,7 +92,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 	let up = normalize(cross(to_camera, right));
 	let world = center + right * local.x * size * 0.92 + up * local.y * size * 0.54;
 	var out: VsOut;
-	out.clip = globals.view_proj * vec4<f32>(world, 1.0);
+	out.clip = billboard.view_proj * vec4<f32>(world, 1.0);
 	out.local = local;
 	return out;
 }

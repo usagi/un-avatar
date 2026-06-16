@@ -2241,6 +2241,8 @@ struct StartupSplashGpu {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct WardrobeBillboardGpu {
+	view_proj: [[f32; 4]; 4],
+	camera_pos: [f32; 4],
 	center_size: [f32; 4],
 	time_params: [f32; 4],
 }
@@ -2266,6 +2268,8 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) rect_half_size: [f32; 2],
 	pub(crate) billboard_center: [f32; 3],
 	pub(crate) billboard_size: f32,
+	pub(crate) billboard_view_proj: [[f32; 4]; 4],
+	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -3700,13 +3704,33 @@ pub struct CameraStateSnapshot {
 	pub diagonal_fov_deg: f32,
 }
 
+pub(crate) struct WardrobeBillboardCamera {
+	pub(crate) center: [f32; 3],
+	pub(crate) size: f32,
+	pub(crate) view_proj: [[f32; 4]; 4],
+	pub(crate) camera_pos: [f32; 3],
+}
+
 impl CameraStateSnapshot {
-	pub(crate) fn wardrobe_billboard_world(self) -> ([f32; 3], f32) {
+	pub(crate) fn wardrobe_billboard_camera(self, aspect_wh: f32) -> WardrobeBillboardCamera {
 		let target = Vec3::from_array(self.target);
+		let lon = self.longitude_deg.to_radians();
+		let lat = self.latitude_deg.to_radians();
+		let cos_lat = lat.cos();
 		let radius = self.radius.max(0.05);
+		let camera_pos = target + Vec3::new(radius * cos_lat * lon.sin(), radius * lat.sin(), -radius * cos_lat * lon.cos());
+		let aspect = aspect_wh.max(0.01);
+		let fovy = vertical_fov_from_diagonal(self.diagonal_fov_deg.to_radians(), aspect);
+		let view_proj =
+			Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * Mat4::look_at_rh(camera_pos, target, Vec3::Y);
 		let center = target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36);
 		let size = (radius * 0.16).clamp(0.22, 0.48);
-		(center.to_array(), size)
+		WardrobeBillboardCamera {
+			center: center.to_array(),
+			size,
+			view_proj: view_proj.to_cols_array_2d(),
+			camera_pos: camera_pos.to_array(),
+		}
 	}
 }
 
@@ -6011,6 +6035,19 @@ impl GpuState {
 		Ok(())
 	}
 
+	pub(crate) fn commit_wardrobe_document(&mut self, document: UnaDocument) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		*doc = document;
+		drop(doc);
+		self.reset_dynamics_nodes_to_rest();
+		self.rebuild_runtime_dynamics();
+		self.invalidate_applied_document_state();
+		Ok(())
+	}
+
 	pub(crate) fn set_runtime_dynamics_enabled(&mut self, source_id: &str, enabled: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
@@ -6870,6 +6907,13 @@ impl GpuState {
 			&self.wardrobe_billboard_buffer,
 			0,
 			bytemuck::bytes_of(&WardrobeBillboardGpu {
+				view_proj: splash.billboard_view_proj,
+				camera_pos: [
+					splash.billboard_camera_pos[0],
+					splash.billboard_camera_pos[1],
+					splash.billboard_camera_pos[2],
+					1.0,
+				],
 				center_size: [center.x, center.y, center.z, splash.billboard_size.max(0.01)],
 				time_params: [splash.time_secs, 0.0, 0.0, 0.0],
 			}),
