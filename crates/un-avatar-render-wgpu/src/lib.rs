@@ -2103,6 +2103,9 @@ impl AvatarApp {
 		self.opts.animator_action_values = action_values;
 		self.opts.animator_action_transitions = action_transitions;
 		self.opts.animator_bindings = next_bindings;
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.refresh_profile_expression_runtime_actions(&self.opts.animator_action_ids, &self.opts.animator_action_values)?;
+		}
 		self.restart_input_binding_runtimes();
 		self.update_runtime_profile_animator_actions();
 		#[cfg(windows)]
@@ -2353,6 +2356,11 @@ impl AvatarApp {
 		};
 		if let Ok(mut status) = status.lock() {
 			status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+			if let Some(gpu) = self.gpu.as_ref() {
+				status.runtime_actions = gpu.runtime_actions();
+				status.menu_action_candidates = gpu.menu_action_candidates();
+				status.menu_wardrobe_candidates = gpu.menu_wardrobe_candidates();
+			}
 		}
 	}
 

@@ -5508,6 +5508,19 @@ impl GpuState {
 			.unwrap_or_default()
 	}
 
+	pub(crate) fn refresh_profile_expression_runtime_actions(
+		&mut self,
+		enabled_animator_action_ids: &[String],
+		animator_action_values: &std::collections::BTreeMap<String, f32>,
+	) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Ok(());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		crate::model_loader::add_enabled_expression_runtime_actions(&mut doc, enabled_animator_action_ids, animator_action_values);
+		Ok(())
+	}
+
 	pub(crate) fn runtime_parameter_definitions(&self) -> Vec<un_avatar_core::UnaRuntimeParameterDefinition> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();

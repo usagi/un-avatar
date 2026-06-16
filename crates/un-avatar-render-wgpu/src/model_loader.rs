@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Instant};
 
 use un_avatar_core::{
 	ImportReport, ReportSeverity, UnaDocument, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
@@ -328,7 +328,7 @@ fn load_document_inner(
 			}
 			let step_started = Instant::now();
 			let mut document = res.document;
-			add_enabled_expression_runtime_actions(&mut document, enabled_animator_action_ids);
+			add_enabled_expression_runtime_actions(&mut document, enabled_animator_action_ids, animator_action_values);
 			apply_requested_wardrobe_set(&mut document, wardrobe_set);
 			if profile {
 				log_import_profile_step(path, "apply_wardrobe_set", step_started);
@@ -346,7 +346,11 @@ fn load_document_inner(
 	}
 }
 
-fn add_enabled_expression_runtime_actions(document: &mut UnaDocument, enabled_animator_action_ids: &[String]) {
+pub(crate) fn add_enabled_expression_runtime_actions(
+	document: &mut UnaDocument,
+	enabled_animator_action_ids: &[String],
+	animator_action_values: &BTreeMap<String, f32>,
+) {
 	let Some(catalog) = document.expression_catalog.as_ref() else {
 		return;
 	};
@@ -361,7 +365,18 @@ fn add_enabled_expression_runtime_actions(document: &mut UnaDocument, enabled_an
 	let mut actions = document.runtime_actions.take().unwrap_or_default().actions;
 	for preset in &catalog.presets {
 		let id = format!("expression:{}", stable_identifier(&preset.name));
-		if !enabled.contains(id.as_str()) || actions.iter().any(|action| action.id == id) {
+		if !enabled.contains(id.as_str()) {
+			continue;
+		}
+		let weight = animator_action_values.get(&id).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+		if let Some(action) = actions.iter_mut().find(|action| action.id == id) {
+			for effect in &mut action.effects {
+				if let UnaRuntimeActionEffect::ExpressionWeight { name, weight: existing } = effect {
+					if name == &preset.name {
+						*existing = weight;
+					}
+				}
+			}
 			continue;
 		}
 		actions.push(UnaRuntimeAction {
@@ -376,7 +391,7 @@ fn add_enabled_expression_runtime_actions(document: &mut UnaDocument, enabled_an
 			conditions: Vec::new(),
 			effects: vec![UnaRuntimeActionEffect::ExpressionWeight {
 				name: preset.name.clone(),
-				weight: 1.0,
+				weight,
 			}],
 		});
 	}
@@ -442,7 +457,8 @@ mod tests {
 			..Default::default()
 		};
 
-		add_enabled_expression_runtime_actions(&mut document, &["expression:happy".to_string()]);
+		let values = BTreeMap::from([("expression:happy".to_string(), 0.45)]);
+		add_enabled_expression_runtime_actions(&mut document, &["expression:happy".to_string()], &values);
 
 		let actions = document.runtime_actions.as_ref().expect("runtime actions");
 		assert_eq!(actions.actions.len(), 1);
@@ -452,7 +468,45 @@ mod tests {
 			actions.actions[0].effects,
 			vec![UnaRuntimeActionEffect::ExpressionWeight {
 				name: "Happy".to_string(),
-				weight: 1.0,
+				weight: 0.45,
+			}]
+		);
+	}
+
+	#[test]
+	fn enabled_expression_actions_update_existing_runtime_action_weights() {
+		let mut document = UnaDocument {
+			expression_catalog: Some(un_avatar_core::UnaExpressionCatalog {
+				presets: vec![un_avatar_core::UnaExpressionPreset {
+					name: "Happy".to_string(),
+					binds: Vec::new(),
+				}],
+			}),
+			runtime_actions: Some(UnaRuntimeActionSet {
+				actions: vec![UnaRuntimeAction {
+					id: "expression:happy".to_string(),
+					label: "Expression / Happy".to_string(),
+					triggers: Vec::new(),
+					conditions: Vec::new(),
+					effects: vec![UnaRuntimeActionEffect::ExpressionWeight {
+						name: "Happy".to_string(),
+						weight: 1.0,
+					}],
+				}],
+			}),
+			..Default::default()
+		};
+
+		let values = BTreeMap::from([("expression:happy".to_string(), 0.25)]);
+		add_enabled_expression_runtime_actions(&mut document, &["expression:happy".to_string()], &values);
+
+		let actions = document.runtime_actions.as_ref().expect("runtime actions");
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::ExpressionWeight {
+				name: "Happy".to_string(),
+				weight: 0.25,
 			}]
 		);
 	}
