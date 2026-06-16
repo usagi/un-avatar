@@ -243,6 +243,7 @@ struct WardrobeTransitionState {
 	set_id: String,
 	result: CommandResultSlot,
 	saved_camera: gpu::CameraStateSnapshot,
+	billboard_center: [f32; 3],
 	phase: WardrobeTransitionPhase,
 	phase_started_at: Instant,
 	started_at: Instant,
@@ -2227,11 +2228,13 @@ impl AvatarApp {
 			return;
 		}
 		let saved_camera = gpu.camera_state_snapshot();
+		let billboard_center = gpu.wardrobe_billboard_anchor_world(saved_camera);
 		let now = Instant::now();
 		self.wardrobe_transition = Some(WardrobeTransitionState {
 			set_id,
 			result,
 			saved_camera,
+			billboard_center,
 			phase: WardrobeTransitionPhase::Exit,
 			phase_started_at: now,
 			started_at: now,
@@ -2293,7 +2296,9 @@ impl AvatarApp {
 
 	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		let billboard = transition.saved_camera.wardrobe_billboard_camera(self.output_aspect_wh());
+		let billboard = transition
+			.saved_camera
+			.wardrobe_billboard_camera(self.output_aspect_wh(), transition.billboard_center);
 		matches!(
 			transition.phase,
 			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::SplashHold

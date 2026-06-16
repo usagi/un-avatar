@@ -2204,6 +2204,23 @@ fn profile_has_key(profile: &un_avatar_skeleton::HumanoidProfile, key: &str) -> 
 	}
 }
 
+fn humanoid_node_index(profile: &un_avatar_skeleton::HumanoidProfile, keys: &[&str]) -> Option<usize> {
+	for key in keys {
+		if let Some(index) = profile.bone_node_indices.get(*key).copied() {
+			return Some(index);
+		}
+		let target = normalize_profile_match_key(key);
+		if let Some((_, index)) = profile
+			.bone_node_indices
+			.iter()
+			.find(|(candidate, _)| normalize_profile_match_key(candidate) == target)
+		{
+			return Some(*index);
+		}
+	}
+	None
+}
+
 fn normalize_profile_match_key(name: &str) -> String {
 	let mut normalized = String::with_capacity(name.len());
 	normalized.extend(
@@ -3712,7 +3729,13 @@ pub(crate) struct WardrobeBillboardCamera {
 }
 
 impl CameraStateSnapshot {
-	pub(crate) fn wardrobe_billboard_camera(self, aspect_wh: f32) -> WardrobeBillboardCamera {
+	pub(crate) fn fallback_wardrobe_billboard_center(self) -> [f32; 3] {
+		let target = Vec3::from_array(self.target);
+		let radius = self.radius.max(0.05);
+		(target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36)).to_array()
+	}
+
+	pub(crate) fn wardrobe_billboard_camera(self, aspect_wh: f32, center: [f32; 3]) -> WardrobeBillboardCamera {
 		let target = Vec3::from_array(self.target);
 		let lon = self.longitude_deg.to_radians();
 		let lat = self.latitude_deg.to_radians();
@@ -3723,10 +3746,9 @@ impl CameraStateSnapshot {
 		let fovy = vertical_fov_from_diagonal(self.diagonal_fov_deg.to_radians(), aspect);
 		let view_proj =
 			Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * Mat4::look_at_rh(camera_pos, target, Vec3::Y);
-		let center = target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36);
 		let size = (radius * 0.16).clamp(0.22, 0.48);
 		WardrobeBillboardCamera {
-			center: center.to_array(),
+			center,
 			size,
 			view_proj: view_proj.to_cols_array_2d(),
 			camera_pos: camera_pos.to_array(),
@@ -5551,6 +5573,33 @@ impl GpuState {
 
 	pub(crate) fn document_arc(&self) -> Option<Arc<RwLock<UnaDocument>>> {
 		self.document.clone()
+	}
+
+	pub(crate) fn wardrobe_billboard_anchor_world(&self, saved_camera: CameraStateSnapshot) -> [f32; 3] {
+		let fallback = saved_camera.fallback_wardrobe_billboard_center();
+		let Some(doc_arc) = self.document.as_ref() else {
+			return fallback;
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return fallback;
+		};
+		let (Some(scene), Some(profile)) = (doc.scene.as_ref(), doc.humanoid_profile.as_ref()) else {
+			return fallback;
+		};
+		let Some(head_node) = humanoid_node_index(profile, &["head", "neck", "upperchest", "chest"]) else {
+			return fallback;
+		};
+		let world = crate::scene_transform::scene_world_matrices(scene);
+		let Some(head_world) = world.get(head_node) else {
+			return fallback;
+		};
+		let head = head_world.transform_point3(Vec3::ZERO);
+		if !head.is_finite() {
+			return fallback;
+		}
+		let up = head_world.transform_vector3(Vec3::Y).try_normalize().unwrap_or(Vec3::Y);
+		let offset = (saved_camera.radius.max(0.05) * 0.045).clamp(0.06, 0.18);
+		(head + up * offset).to_array()
 	}
 
 	pub(crate) fn last_action_id(&self) -> Option<String> {
