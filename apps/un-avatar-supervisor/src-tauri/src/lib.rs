@@ -548,6 +548,13 @@ struct UnavatarWardrobeSetOption {
 	name: String,
 }
 
+#[derive(Clone, Serialize)]
+struct MidiNoteCaptureResult {
+	device: String,
+	channel: u8,
+	note: u8,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct RendererCameraSnapshot {
 	target: [f32; 3],
@@ -1047,6 +1054,34 @@ impl Default for WardrobeShortcutSetting {
 	}
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct WardrobeBindingSetting {
+	set_id: String,
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	binding: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	device: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	channel: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	note: Option<u8>,
+}
+
+impl Default for WardrobeBindingSetting {
+	fn default() -> Self {
+		Self {
+			set_id: String::new(),
+			kind: "keyboard".to_string(),
+			binding: None,
+			device: None,
+			channel: None,
+			note: None,
+		}
+	}
+}
+
 #[derive(Clone, Serialize)]
 struct UnavatarAnimatorActionCandidate {
 	id: String,
@@ -1256,6 +1291,7 @@ struct AvatarSetting {
 	avatar_path: Option<String>,
 	wardrobe_set: Option<String>,
 	wardrobe_shortcuts: Vec<WardrobeShortcutSetting>,
+	wardrobe_bindings: Vec<WardrobeBindingSetting>,
 	animator_actions: Vec<AnimatorActionSetting>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
@@ -1791,6 +1827,7 @@ struct ManifestAnimatorAction {
 #[serde(default)]
 struct ManifestWardrobe {
 	shortcuts: Option<Vec<ManifestWardrobeShortcut>>,
+	bindings: Option<Vec<ManifestWardrobeBinding>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1798,6 +1835,17 @@ struct ManifestWardrobe {
 struct ManifestWardrobeShortcut {
 	set_id: Option<String>,
 	shortcut: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeBinding {
+	set_id: Option<String>,
+	kind: Option<String>,
+	binding: Option<String>,
+	device: Option<String>,
+	channel: Option<u8>,
+	note: Option<u8>,
 }
 
 fn manifest_background_color(manifest: &AvatarManifestSummary) -> [f32; 3] {
@@ -2143,6 +2191,72 @@ fn manifest_wardrobe_shortcut_settings(wardrobe: Option<&ManifestWardrobe>) -> V
 	shortcuts
 }
 
+fn manifest_wardrobe_binding_settings(wardrobe: Option<&ManifestWardrobe>) -> Vec<WardrobeBindingSetting> {
+	let Some(wardrobe) = wardrobe else {
+		return Vec::new();
+	};
+	let mut bindings = Vec::new();
+	for shortcut in wardrobe.shortcuts.iter().flatten() {
+		let set_id = shortcut.set_id.as_deref().unwrap_or("").trim();
+		let shortcut_value = shortcut.shortcut.as_deref().unwrap_or("").trim();
+		if shortcut_value.is_empty() {
+			continue;
+		}
+		bindings.push(WardrobeBindingSetting {
+			set_id: set_id.to_string(),
+			kind: "keyboard".to_string(),
+			binding: Some(shortcut_value.to_string()),
+			device: None,
+			channel: None,
+			note: None,
+		});
+	}
+	for binding in wardrobe.bindings.iter().flatten() {
+		let set_id = binding.set_id.as_deref().unwrap_or("").trim();
+		let kind = normalize_wardrobe_binding_kind(binding.kind.as_deref().unwrap_or("keyboard"));
+		if kind == "keyboard" {
+			let value = binding.binding.as_deref().unwrap_or("").trim();
+			if value.is_empty() {
+				continue;
+			}
+			bindings.push(WardrobeBindingSetting {
+				set_id: set_id.to_string(),
+				kind,
+				binding: Some(value.to_string()),
+				device: None,
+				channel: None,
+				note: None,
+			});
+		} else if kind == "midi_note" {
+			let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+			let note = binding.note.filter(|note| *note <= 127);
+			if channel.is_none() || note.is_none() {
+				continue;
+			}
+			bindings.push(WardrobeBindingSetting {
+				set_id: set_id.to_string(),
+				kind,
+				binding: None,
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			});
+		}
+	}
+	bindings
+}
+
+fn normalize_wardrobe_binding_kind(kind: &str) -> String {
+	match kind.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"midi_note" | "midinote" | "midi note" => "midi_note".to_string(),
+		_ => "keyboard".to_string(),
+	}
+}
+
 fn read_manifest_animator_action_settings(path: &Path) -> Result<Vec<AnimatorActionSetting>, String> {
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
@@ -2266,6 +2380,7 @@ pub fn run() {
 			set_taskbar_profile_pinned,
 			clear_taskbar_profile_pins,
 			pick_file_path,
+			capture_midi_note_binding,
 			read_vrm_metadata,
 			read_unavatar_metadata,
 			save_avatar_thumbnail_icon,
@@ -3949,6 +4064,72 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 }
 
 #[tauri::command]
+fn capture_midi_note_binding(timeout_ms: Option<u64>) -> Result<MidiNoteCaptureResult, String> {
+	let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(500, 30_000));
+	let discovery = midir::MidiInput::new("un-avatar-supervisor-midi-discovery").map_err(|e| format!("MIDI input unavailable: {e}"))?;
+	let ports = discovery.ports();
+	if ports.is_empty() {
+		return Err("no MIDI input ports available".to_string());
+	}
+	let port_names = ports
+		.iter()
+		.enumerate()
+		.map(|(index, port)| {
+			(
+				index,
+				discovery.port_name(port).unwrap_or_else(|_| format!("unknown MIDI input {index}")),
+			)
+		})
+		.collect::<Vec<_>>();
+	let (tx, rx) = std::sync::mpsc::channel();
+	let mut connections = Vec::new();
+	for (port_index, port_name) in port_names {
+		let mut input = midir::MidiInput::new(&format!("un-avatar-supervisor-midi-{port_index}"))
+			.map_err(|e| format!("create MIDI input for {port_name}: {e}"))?;
+		input.ignore(midir::Ignore::None);
+		let ports = input.ports();
+		let Some(port) = ports.get(port_index).cloned() else {
+			continue;
+		};
+		let tx = tx.clone();
+		let device = port_name.clone();
+		match input.connect(
+			&port,
+			&format!("un-avatar-supervisor-learn-{port_index}"),
+			move |_timestamp, message, _| {
+				if let Some((channel, note)) = midi_note_on_event(message) {
+					let _ = tx.send(MidiNoteCaptureResult {
+						device: device.clone(),
+						channel,
+						note,
+					});
+				}
+			},
+			(),
+		) {
+			Ok(connection) => connections.push(connection),
+			Err(error) => eprintln!("failed to open MIDI input {port_name}: {error}"),
+		}
+	}
+	drop(tx);
+	if connections.is_empty() {
+		return Err("no MIDI input ports could be opened".to_string());
+	}
+	rx.recv_timeout(timeout).map_err(|_| "MIDI note capture timed out".to_string())
+}
+
+fn midi_note_on_event(message: &[u8]) -> Option<(u8, u8)> {
+	if message.len() < 3 {
+		return None;
+	}
+	let status = message[0];
+	if status & 0xF0 != 0x90 || message[2] == 0 {
+		return None;
+	}
+	Some(((status & 0x0F) + 1, message[1]))
+}
+
+#[tauri::command]
 async fn read_unavatar_animator_action_page(
 	path: String,
 	manifest_path: Option<String>,
@@ -5378,6 +5559,55 @@ fn apply_wardrobe_setting_value(manifest: &mut toml::Value, field: &str, value: 
 					.as_table_mut()
 					.ok_or_else(|| "wardrobe must be a table".to_string())?;
 				wardrobe.insert("shortcuts".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		"wardrobe.bindings" => {
+			let bindings: Vec<WardrobeBindingSetting> =
+				serde_json::from_value(value).map_err(|e| format!("wardrobe.bindings must be a binding array: {e}"))?;
+			let mut out = Vec::new();
+			for binding in bindings {
+				let set_id = binding.set_id.trim();
+				let kind = normalize_wardrobe_binding_kind(&binding.kind);
+				let mut table = toml::map::Map::new();
+				table.insert("set_id".to_string(), toml::Value::String(set_id.to_string()));
+				table.insert("kind".to_string(), toml::Value::String(kind.clone()));
+				if kind == "keyboard" {
+					let binding_value = binding.binding.as_deref().unwrap_or("").trim();
+					if binding_value.is_empty() {
+						continue;
+					}
+					table.insert("binding".to_string(), toml::Value::String(binding_value.to_string()));
+				} else if kind == "midi_note" {
+					let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+					let note = binding.note.filter(|note| *note <= 127);
+					let (Some(channel), Some(note)) = (channel, note) else {
+						continue;
+					};
+					if let Some(device) = binding.device.as_deref().map(str::trim).filter(|device| !device.is_empty()) {
+						table.insert("device".to_string(), toml::Value::String(device.to_string()));
+					}
+					table.insert("channel".to_string(), toml::Value::Integer(i64::from(channel)));
+					table.insert("note".to_string(), toml::Value::Integer(i64::from(note)));
+				}
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(wardrobe) = root.get_mut("wardrobe").and_then(toml::Value::as_table_mut) {
+					wardrobe.remove("bindings");
+					if wardrobe.is_empty() {
+						root.remove("wardrobe");
+					}
+				}
+			} else {
+				let wardrobe = root
+					.entry("wardrobe".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "wardrobe must be a table".to_string())?;
+				wardrobe.remove("shortcuts");
+				wardrobe.insert("bindings".to_string(), toml::Value::Array(out));
 			}
 			Ok(())
 		}
@@ -8444,6 +8674,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let background_color = manifest_background_color(&manifest);
 	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
 	let wardrobe_shortcuts = manifest_wardrobe_shortcut_settings(manifest.wardrobe.as_ref());
+	let wardrobe_bindings = manifest_wardrobe_binding_settings(manifest.wardrobe.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
 	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
@@ -8483,6 +8714,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 			(!set.is_empty()).then_some(set)
 		}),
 		wardrobe_shortcuts,
+		wardrobe_bindings,
 		animator_actions,
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
@@ -11439,8 +11671,8 @@ mod tests {
 	use super::{
 		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
 		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_crop_webp,
-		encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, migrate_avatar_manifest_to_v2, parse_manifest_value,
-		path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
+		encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, midi_note_on_event, migrate_avatar_manifest_to_v2,
+		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
 		read_unavatar_wardrobe_options, read_vrm_metadata, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
 		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
@@ -13081,6 +13313,16 @@ mod tests {
 	}
 
 	#[test]
+	fn parses_midi_note_on_for_binding_capture() {
+		assert_eq!(midi_note_on_event(&[0x90, 60, 127]), Some((1, 60)));
+		assert_eq!(midi_note_on_event(&[0x9F, 64, 1]), Some((16, 64)));
+		assert_eq!(midi_note_on_event(&[0x90, 60, 0]), None);
+		assert_eq!(midi_note_on_event(&[0x80, 60, 64]), None);
+		assert_eq!(midi_note_on_event(&[0xB0, 1, 127]), None);
+		assert_eq!(midi_note_on_event(&[0x90, 60]), None);
+	}
+
+	#[test]
 	fn perfect_sync_detection_uses_arkit_52_names() {
 		let names = [
 			"browdownleft",
@@ -13794,6 +14036,75 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe.shortcuts", serde_json::json!([])).unwrap();
 		assert!(manifest.get("wardrobe").is_none());
+	}
+
+	#[test]
+	fn wardrobe_bindings_write_keyboard_and_midi_note_entries() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.bindings",
+			serde_json::json!([
+				{ "set_id": "", "kind": "keyboard", "binding": "F12" },
+				{ "set_id": "field_drape", "kind": "midi_note", "device": "Launchkey", "channel": 1, "note": 60 },
+				{ "set_id": "broken", "kind": "midi_note", "channel": 17, "note": 60 }
+			]),
+		)
+		.unwrap();
+
+		let bindings = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("bindings"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(bindings.len(), 2);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("keyboard")
+		);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("binding"))
+				.and_then(toml::Value::as_str),
+			Some("F12")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("midi_note")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("channel"))
+				.and_then(toml::Value::as_integer),
+			Some(1)
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("note"))
+				.and_then(toml::Value::as_integer),
+			Some(60)
+		);
 	}
 
 	#[test]

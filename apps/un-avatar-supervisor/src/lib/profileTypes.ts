@@ -102,6 +102,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	manifest_path: string;
 	wardrobe_set: string | null;
 	wardrobe_shortcuts: WardrobeShortcutSetting[];
+	wardrobe_bindings: WardrobeBindingSetting[];
 	animator_actions: AnimatorActionSetting[];
 	motion_vmc_enabled: boolean;
 	motion_unmotion_enabled: boolean;
@@ -222,6 +223,17 @@ export type WardrobeShortcutSetting = {
 	shortcut: string;
 };
 
+export type WardrobeBindingKind = "keyboard" | "midi_note";
+
+export type WardrobeBindingSetting = {
+	set_id: string;
+	kind: WardrobeBindingKind;
+	binding?: string | null;
+	device?: string | null;
+	channel?: number | null;
+	note?: number | null;
+};
+
 export type UnavatarAnimatorActionCandidate = {
 	id: string;
 	label: string;
@@ -265,7 +277,7 @@ export type UnavatarWardrobeOptions = {
 
 export type AvatarFileSetting = Pick<
 	AvatarSetting,
-	"avatar_path" | "manifest_path" | "wardrobe_set" | "wardrobe_shortcuts" | "animator_actions"
+	"avatar_path" | "manifest_path" | "wardrobe_set" | "wardrobe_shortcuts" | "wardrobe_bindings" | "animator_actions"
 >;
 
 export type WindowSetting = Pick<

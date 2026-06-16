@@ -6,7 +6,7 @@ use crate::{
 	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
 		AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
-		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions, WardrobeShortcutOptions,
+		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions, WardrobeBindingKind, WardrobeBindingOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -55,6 +55,7 @@ pub(crate) struct RendererManifest {
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct WardrobeManifest {
 	pub shortcuts: Option<Vec<WardrobeShortcutManifest>>,
+	pub bindings: Option<Vec<WardrobeBindingManifest>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -62,6 +63,69 @@ pub(crate) struct WardrobeManifest {
 pub(crate) struct WardrobeShortcutManifest {
 	pub set_id: Option<String>,
 	pub shortcut: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeBindingManifest {
+	pub set_id: Option<String>,
+	pub kind: Option<String>,
+	pub binding: Option<String>,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
+fn wardrobe_bindings_from_manifest(wardrobe: WardrobeManifest) -> Vec<WardrobeBindingOptions> {
+	let mut out = Vec::new();
+	for shortcut in wardrobe.shortcuts.unwrap_or_default() {
+		let binding = shortcut.shortcut.unwrap_or_default().trim().to_string();
+		if binding.is_empty() {
+			continue;
+		}
+		out.push(WardrobeBindingOptions {
+			set_id: shortcut.set_id.unwrap_or_default().trim().to_string(),
+			kind: WardrobeBindingKind::Keyboard,
+			binding,
+			device: None,
+			channel: None,
+			note: None,
+		});
+	}
+	for binding in wardrobe.bindings.unwrap_or_default() {
+		let kind = match binding
+			.kind
+			.unwrap_or_else(|| "keyboard".to_string())
+			.trim()
+			.to_ascii_lowercase()
+			.as_str()
+		{
+			"keyboard" => WardrobeBindingKind::Keyboard,
+			"midi_note" | "midinote" | "midi note" => WardrobeBindingKind::MidiNote,
+			_ => continue,
+		};
+		let binding_text = binding.binding.unwrap_or_default().trim().to_string();
+		let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+		let note = binding.note.filter(|note| *note <= 127);
+		if kind == WardrobeBindingKind::Keyboard && binding_text.is_empty() {
+			continue;
+		}
+		if kind == WardrobeBindingKind::MidiNote && (channel.is_none() || note.is_none()) {
+			continue;
+		}
+		out.push(WardrobeBindingOptions {
+			set_id: binding.set_id.unwrap_or_default().trim().to_string(),
+			kind,
+			binding: binding_text,
+			device: binding
+				.device
+				.map(|device| device.trim().to_string())
+				.filter(|device| !device.is_empty()),
+			channel,
+			note,
+		});
+	}
+	out
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -473,21 +537,7 @@ impl RendererManifest {
 			opts.wardrobe_set = Some(set_id);
 		}
 		if let Some(wardrobe) = self.wardrobe {
-			opts.wardrobe_shortcuts = wardrobe
-				.shortcuts
-				.unwrap_or_default()
-				.into_iter()
-				.filter_map(|shortcut| {
-					let shortcut_value = shortcut.shortcut.unwrap_or_default().trim().to_string();
-					if shortcut_value.is_empty() {
-						return None;
-					}
-					Some(WardrobeShortcutOptions {
-						set_id: shortcut.set_id.unwrap_or_default().trim().to_string(),
-						shortcut: shortcut_value,
-					})
-				})
-				.collect();
+			opts.wardrobe_bindings = wardrobe_bindings_from_manifest(wardrobe);
 		}
 		if let Some(path) = self.icon_path {
 			opts.icon_path = Some(path);
@@ -1302,7 +1352,10 @@ clear_color = [0.0, 0.0, 0.0, 0.0]
 [wardrobe]
 shortcuts = [
   { set_id = "", shortcut = "Ctrl+Alt+B" },
-  { set_id = "noble1", shortcut = "Ctrl+Alt+1" },
+]
+bindings = [
+  { set_id = "noble1", kind = "keyboard", binding = "Ctrl+Alt+1" },
+  { set_id = "noble2", kind = "midi_note", device = "Launchkey Mini", channel = 1, note = 60 },
 ]
 
 [profile]
@@ -1460,11 +1513,18 @@ constraint_iterations = 6
 		assert_eq!(opts.title, "Manifest Title");
 		assert_eq!(opts.gltf_path.as_deref(), Some(std::path::Path::new("target/tmp/model1.vrm")));
 		assert_eq!(opts.wardrobe_set.as_deref(), Some("noble1"));
-		assert_eq!(opts.wardrobe_shortcuts.len(), 2);
-		assert_eq!(opts.wardrobe_shortcuts[0].set_id, "");
-		assert_eq!(opts.wardrobe_shortcuts[0].shortcut, "Ctrl+Alt+B");
-		assert_eq!(opts.wardrobe_shortcuts[1].set_id, "noble1");
-		assert_eq!(opts.wardrobe_shortcuts[1].shortcut, "Ctrl+Alt+1");
+		assert_eq!(opts.wardrobe_bindings.len(), 3);
+		assert_eq!(opts.wardrobe_bindings[0].set_id, "");
+		assert_eq!(opts.wardrobe_bindings[0].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.wardrobe_bindings[0].binding, "Ctrl+Alt+B");
+		assert_eq!(opts.wardrobe_bindings[1].set_id, "noble1");
+		assert_eq!(opts.wardrobe_bindings[1].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.wardrobe_bindings[1].binding, "Ctrl+Alt+1");
+		assert_eq!(opts.wardrobe_bindings[2].set_id, "noble2");
+		assert_eq!(opts.wardrobe_bindings[2].kind, WardrobeBindingKind::MidiNote);
+		assert_eq!(opts.wardrobe_bindings[2].device.as_deref(), Some("Launchkey Mini"));
+		assert_eq!(opts.wardrobe_bindings[2].channel, Some(1));
+		assert_eq!(opts.wardrobe_bindings[2].note, Some(60));
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))

@@ -7,11 +7,11 @@
 		UnavatarAnimatorActionCandidate,
 		UnavatarAnimatorActionPage,
 		UnavatarWardrobeOptions,
-		WardrobeShortcutSetting,
+		WardrobeBindingSetting,
 		WardrobeSetOption,
 	} from "./profileTypes";
 	import { _ } from "svelte-i18n";
-	import { ChevronLeft, ChevronRight, FolderOpen, RefreshCw, Search, SlidersHorizontal } from "lucide-svelte";
+	import { ChevronLeft, ChevronRight, FolderOpen, Keyboard, RefreshCw, Search, SlidersHorizontal } from "lucide-svelte";
 	import { hasTauriRuntime } from "./environment";
 	import { traceAsync, traceFrontendEvent } from "./frontendTrace";
 
@@ -41,6 +41,16 @@
 	const animatorPageLimit = 80;
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
+	let keyboardCaptureSetId: string | null = null;
+	let midiCaptureSetId: string | null = null;
+	let midiCaptureError = "";
+	let midiCaptureRequestId = 0;
+
+	type MidiNoteCaptureResult = {
+		device: string;
+		channel: number;
+		note: number;
+	};
 
 	$: wardrobeRows = wardrobeSettingRows(wardrobeOptions);
 
@@ -217,7 +227,23 @@
 	}
 
 	function wardrobeShortcutFor(setId: string): string {
-		return setting.wardrobe_shortcuts.find((shortcut) => shortcut.set_id === setId)?.shortcut ?? "";
+		return (
+			setting.wardrobe_bindings.find((binding) => binding.set_id === setId && binding.kind === "keyboard")?.binding ??
+			setting.wardrobe_shortcuts.find((shortcut) => shortcut.set_id === setId)?.shortcut ??
+			""
+		);
+	}
+
+	function wardrobeMidiBindingFor(setId: string): WardrobeBindingSetting {
+		return (
+			setting.wardrobe_bindings.find((binding) => binding.set_id === setId && binding.kind === "midi_note") ?? {
+				set_id: setId,
+				kind: "midi_note",
+				device: "",
+				channel: 1,
+				note: null,
+			}
+		);
 	}
 
 	async function updateWardrobeDefault(setId: string): Promise<void> {
@@ -226,13 +252,95 @@
 
 	async function updateWardrobeShortcut(setId: string, shortcut: string): Promise<void> {
 		const normalized = shortcut.trim();
-		const next: WardrobeShortcutSetting[] = setting.wardrobe_shortcuts.filter((item) => item.set_id !== setId);
+		const next: WardrobeBindingSetting[] = setting.wardrobe_bindings.filter(
+			(item) => !(item.set_id === setId && item.kind === "keyboard")
+		);
 		if (normalized) {
-			next.push({ set_id: setId, shortcut: normalized });
+			next.push({ set_id: setId, kind: "keyboard", binding: normalized });
 		}
-		await onUpdateSettingValue("wardrobe.shortcuts", next);
+		await onUpdateSettingValue("wardrobe.bindings", next);
+	}
+
+	async function updateWardrobeMidi(setId: string, patch: Partial<WardrobeBindingSetting>): Promise<void> {
+		const current = wardrobeMidiBindingFor(setId);
+		const nextBinding: WardrobeBindingSetting = {
+			...current,
+			...patch,
+			set_id: setId,
+			kind: "midi_note",
+		};
+		const next = setting.wardrobe_bindings.filter((item) => !(item.set_id === setId && item.kind === "midi_note"));
+		const channel = Number(nextBinding.channel ?? 0);
+		const note = Number(nextBinding.note ?? -1);
+		if (channel >= 1 && channel <= 16 && note >= 0 && note <= 127) {
+			next.push({
+				...nextBinding,
+				device: nextBinding.device?.trim() || null,
+				channel,
+				note,
+			});
+		}
+		await onUpdateSettingValue("wardrobe.bindings", next);
+	}
+
+	async function captureWardrobeMidi(setId: string): Promise<void> {
+		if (!hasTauriRuntime()) return;
+		const requestId = ++midiCaptureRequestId;
+		midiCaptureSetId = setId;
+		midiCaptureError = "";
+		try {
+			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000 });
+			if (requestId !== midiCaptureRequestId) return;
+			await updateWardrobeMidi(setId, {
+				device: result.device,
+				channel: result.channel,
+				note: result.note,
+			});
+		} catch (error) {
+			if (requestId !== midiCaptureRequestId) return;
+			midiCaptureError = String(error);
+		} finally {
+			if (requestId === midiCaptureRequestId) {
+				midiCaptureSetId = null;
+			}
+		}
+	}
+
+	function cancelWardrobeMidiCapture(): void {
+		midiCaptureRequestId += 1;
+		midiCaptureSetId = null;
+	}
+
+	function formatCapturedKeyboardEvent(event: KeyboardEvent): string {
+		const parts: string[] = [];
+		if (event.ctrlKey) parts.push("Ctrl");
+		if (event.altKey) parts.push("Alt");
+		if (event.shiftKey) parts.push("Shift");
+		if (event.metaKey) parts.push("Win");
+		const key = event.key.length === 1 ? event.key.toUpperCase() : event.key;
+		if (!["Control", "Alt", "Shift", "Meta"].includes(key)) {
+			parts.push(key === " " ? "Space" : key);
+		}
+		return parts.length > 0 ? parts.join("+") : "";
+	}
+
+	async function captureKeyboard(event: KeyboardEvent): Promise<void> {
+		if (keyboardCaptureSetId === null) return;
+		event.preventDefault();
+		event.stopPropagation();
+		if (event.key === "Escape") {
+			keyboardCaptureSetId = null;
+			return;
+		}
+		const binding = formatCapturedKeyboardEvent(event);
+		if (!binding || ["Ctrl", "Alt", "Shift", "Win"].includes(binding)) return;
+		const setId = keyboardCaptureSetId;
+		keyboardCaptureSetId = null;
+		await updateWardrobeShortcut(setId, binding);
 	}
 </script>
+
+<svelte:window onkeydown={captureKeyboard} />
 
 <section
 	class="editor-section section-grid profile-avatar-section"
@@ -284,13 +392,57 @@
 						</div>
 						<label class="wardrobe-shortcut-field">
 							<span>{$_("profiles.editor.wardrobe_shortcut")}</span>
-							<input
-								value={wardrobeShortcutFor(set.id)}
-								placeholder={$_("profiles.editor.wardrobe_shortcut_placeholder")}
-								disabled={busy}
-								onchange={(event) => updateWardrobeShortcut(set.id, (event.currentTarget as HTMLInputElement).value)}
-							/>
+							<div class="binding-input-row">
+								<input
+									value={wardrobeShortcutFor(set.id)}
+									placeholder={$_("profiles.editor.wardrobe_shortcut_placeholder")}
+									disabled={busy}
+									onchange={(event) => updateWardrobeShortcut(set.id, (event.currentTarget as HTMLInputElement).value)}
+								/>
+								<button
+									type="button"
+									class="icon-button binding-capture-button"
+									disabled={busy}
+									title={$_("profiles.editor.binding_capture")}
+									onclick={() => (keyboardCaptureSetId = set.id)}><Keyboard size={15} /></button
+								>
+							</div>
 						</label>
+						<div class="wardrobe-midi-binding">
+							<span>{$_("profiles.editor.wardrobe_midi_note")}</span>
+							<input
+								value={wardrobeMidiBindingFor(set.id).device ?? ""}
+								placeholder={$_("profiles.editor.wardrobe_midi_device")}
+								disabled={busy}
+								onchange={(event) => updateWardrobeMidi(set.id, { device: (event.currentTarget as HTMLInputElement).value })}
+							/>
+							<input
+								type="number"
+								min="1"
+								max="16"
+								value={wardrobeMidiBindingFor(set.id).channel ?? 1}
+								disabled={busy}
+								aria-label={$_("profiles.editor.wardrobe_midi_channel")}
+								onchange={(event) => updateWardrobeMidi(set.id, { channel: Number((event.currentTarget as HTMLInputElement).value) })}
+							/>
+							<input
+								type="number"
+								min="0"
+								max="127"
+								value={wardrobeMidiBindingFor(set.id).note ?? ""}
+								placeholder={$_("profiles.editor.wardrobe_midi_note_number")}
+								disabled={busy}
+								aria-label={$_("profiles.editor.wardrobe_midi_note_number")}
+								onchange={(event) => updateWardrobeMidi(set.id, { note: Number((event.currentTarget as HTMLInputElement).value) })}
+							/>
+							<button
+								type="button"
+								class="icon-button binding-capture-button"
+								disabled={busy || midiCaptureSetId !== null}
+								title={$_("profiles.editor.midi_capture")}
+								onclick={() => captureWardrobeMidi(set.id)}><SlidersHorizontal size={15} /></button
+							>
+						</div>
 					</div>
 				{/each}
 			</div>
@@ -480,3 +632,31 @@
 		</div>
 	{/if}
 </section>
+
+{#if keyboardCaptureSetId !== null}
+	<div class="binding-capture-backdrop" role="presentation">
+		<div class="binding-capture-modal" role="dialog" aria-modal="true">
+			<Keyboard size={24} />
+			<strong>{$_("profiles.editor.binding_capture_title")}</strong>
+			<span>{$_("profiles.editor.binding_capture_hint")}</span>
+			<button type="button" class="field-button" onclick={() => (keyboardCaptureSetId = null)}
+				>{$_("profiles.editor.cancel")}</button
+			>
+		</div>
+	</div>
+{/if}
+
+{#if midiCaptureError}
+	<div class="profile-inline-note profile-inline-note-warning">{midiCaptureError}</div>
+{/if}
+
+{#if midiCaptureSetId !== null}
+	<div class="binding-capture-backdrop" role="presentation">
+		<div class="binding-capture-modal" role="dialog" aria-modal="true">
+			<SlidersHorizontal size={24} />
+			<strong>{$_("profiles.editor.midi_capture_title")}</strong>
+			<span>{$_("profiles.editor.midi_capture_hint")}</span>
+			<button type="button" class="field-button" onclick={cancelWardrobeMidiCapture}>{$_("profiles.editor.cancel")}</button>
+		</div>
+	</div>
+{/if}

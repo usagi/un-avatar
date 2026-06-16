@@ -25,6 +25,7 @@ commands.allow = [
 	"set_taskbar_profile_pinned",
 	"clear_taskbar_profile_pins",
 	"pick_file_path",
+	"capture_midi_note_binding",
 	"read_unavatar_wardrobe_options",
 	"read_unavatar_animator_action_page",
 	"read_unavatar_metadata",

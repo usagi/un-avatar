@@ -525,8 +525,8 @@ pub struct AvatarWindowOptions {
 	pub manifest_path: Option<PathBuf>,
 	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
 	pub wardrobe_set: Option<String>,
-	/// Renderer-global wardrobe set hotkeys. Active only while this renderer process is running.
-	pub wardrobe_shortcuts: Vec<WardrobeShortcutOptions>,
+	/// Renderer-global wardrobe set input bindings. Active only while this renderer process is running.
+	pub wardrobe_bindings: Vec<WardrobeBindingOptions>,
 	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
 	pub animator_action_ids: Vec<String>,
 	/// Optional per-action parameter value used when a profile wants ON to mean e.g. 0.45 instead of the exported value.
@@ -666,9 +666,19 @@ pub struct AvatarWindowOptions {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WardrobeShortcutOptions {
+pub enum WardrobeBindingKind {
+	Keyboard,
+	MidiNote,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WardrobeBindingOptions {
 	pub set_id: String,
-	pub shortcut: String,
+	pub kind: WardrobeBindingKind,
+	pub binding: String,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
 }
 
 impl Default for AvatarWindowOptions {
@@ -692,7 +702,7 @@ impl Default for AvatarWindowOptions {
 			gltf_path: None,
 			manifest_path: None,
 			wardrobe_set: None,
-			wardrobe_shortcuts: Vec::new(),
+			wardrobe_bindings: Vec::new(),
 			animator_action_ids: Vec::new(),
 			animator_action_values: BTreeMap::new(),
 			icon_path: None,

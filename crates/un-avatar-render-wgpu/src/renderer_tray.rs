@@ -961,10 +961,11 @@ fn append_wardrobe_menu(
 
 fn wardrobe_label_with_shortcut(label: String, opts: &AvatarWindowOptions, set_id: &str) -> String {
 	let Some(shortcut) = opts
-		.wardrobe_shortcuts
+		.wardrobe_bindings
 		.iter()
+		.filter(|binding| binding.kind == crate::WardrobeBindingKind::Keyboard)
 		.find(|shortcut| shortcut.set_id.trim() == set_id)
-		.map(|shortcut| shortcut.shortcut.trim())
+		.map(|shortcut| shortcut.binding.trim())
 		.filter(|shortcut| !shortcut.is_empty())
 	else {
 		return label;
@@ -1392,12 +1393,22 @@ fn menu_key(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> S
 }
 
 fn wardrobe_shortcut_signature(opts: &AvatarWindowOptions) -> String {
-	let mut signature = format!("shortcuts:{}", opts.wardrobe_shortcuts.len());
-	for shortcut in &opts.wardrobe_shortcuts {
+	let mut signature = format!("bindings:{}", opts.wardrobe_bindings.len());
+	for shortcut in &opts.wardrobe_bindings {
 		signature.push('|');
 		signature.push_str(&signature_field(shortcut.set_id.trim()));
 		signature.push(':');
-		signature.push_str(&signature_field(shortcut.shortcut.trim()));
+		signature.push_str(&signature_field(&format!("{:?}", shortcut.kind)));
+		signature.push(':');
+		signature.push_str(&signature_field(shortcut.binding.trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(shortcut.device.as_deref().unwrap_or("").trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(
+			&shortcut.channel.map(|value| value.to_string()).unwrap_or_default(),
+		));
+		signature.push(':');
+		signature.push_str(&signature_field(&shortcut.note.map(|value| value.to_string()).unwrap_or_default()));
 	}
 	signature
 }
@@ -1747,12 +1758,16 @@ mod tests {
 	fn menu_key_tracks_wardrobe_shortcut_changes() {
 		let snapshot = snapshot();
 		let mut before = AvatarWindowOptions::default();
-		before.wardrobe_shortcuts = vec![crate::WardrobeShortcutOptions {
+		before.wardrobe_bindings = vec![crate::WardrobeBindingOptions {
 			set_id: "field_drape".to_string(),
-			shortcut: "F12".to_string(),
+			kind: crate::WardrobeBindingKind::Keyboard,
+			binding: "F12".to_string(),
+			device: None,
+			channel: None,
+			note: None,
 		}];
 		let mut after = before.clone();
-		after.wardrobe_shortcuts[0].shortcut = "Ctrl+Alt+1".to_string();
+		after.wardrobe_bindings[0].binding = "Ctrl+Alt+1".to_string();
 
 		assert_ne!(menu_key(&before, &snapshot), menu_key(&after, &snapshot));
 	}
@@ -1760,9 +1775,13 @@ mod tests {
 	#[test]
 	fn wardrobe_label_includes_key_binding_when_configured() {
 		let mut opts = AvatarWindowOptions::default();
-		opts.wardrobe_shortcuts = vec![crate::WardrobeShortcutOptions {
+		opts.wardrobe_bindings = vec![crate::WardrobeBindingOptions {
 			set_id: "field_drape".to_string(),
-			shortcut: "F12".to_string(),
+			kind: crate::WardrobeBindingKind::Keyboard,
+			binding: "F12".to_string(),
+			device: None,
+			channel: None,
+			note: None,
 		}];
 
 		assert_eq!(

@@ -3672,7 +3672,7 @@ dd {
 
 .wardrobe-set-row {
 	display: grid;
-	grid-template-columns: minmax(84px, auto) minmax(0, 1fr) minmax(180px, 260px);
+	grid-template-columns: minmax(84px, auto) minmax(0, 1fr) minmax(180px, 260px) minmax(260px, 340px);
 	align-items: center;
 	gap: 10px;
 	min-height: 44px;
@@ -3724,6 +3724,62 @@ dd {
 
 .wardrobe-shortcut-field input {
 	min-width: 0;
+}
+
+.binding-input-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 32px;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.binding-capture-button {
+	width: 32px;
+	height: 32px;
+	color: var(--danger);
+}
+
+.wardrobe-midi-binding {
+	display: grid;
+	grid-template-columns: auto minmax(86px, 1fr) 56px 64px 32px;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.wardrobe-midi-binding input {
+	min-width: 0;
+}
+
+.binding-capture-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	display: grid;
+	place-items: center;
+	background: color-mix(in srgb, #000 52%, transparent);
+}
+
+.binding-capture-modal {
+	display: grid;
+	justify-items: center;
+	gap: 10px;
+	width: min(360px, calc(100vw - 32px));
+	padding: 22px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--panel);
+	color: var(--text);
+	box-shadow: 0 18px 60px color-mix(in srgb, #000 44%, transparent);
+	text-align: center;
+}
+
+.binding-capture-modal span {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
 }
 
 .animator-profile-summary,

@@ -49,7 +49,7 @@ pub use options::{
 	AaMode, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions,
 	DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend, SpoutWindowOptions,
 	SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
-	TextureResolutionLimit, WardrobeShortcutOptions,
+	TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
 };
 use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
@@ -1221,6 +1221,7 @@ struct AvatarApp {
 	last_renderer_tray_refresh_at: Option<Instant>,
 	#[cfg(windows)]
 	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
+	wardrobe_midi: Option<WardrobeMidiRuntime>,
 }
 
 #[derive(Clone, Debug)]
@@ -1534,6 +1535,7 @@ impl AvatarApp {
 			last_renderer_tray_refresh_at: None,
 			#[cfg(windows)]
 			wardrobe_hotkeys: None,
+			wardrobe_midi: None,
 		}
 	}
 
@@ -3874,6 +3876,170 @@ fn normalize_key_name(name: &str) -> String {
 	}
 }
 
+struct WardrobeMidiRuntime {
+	_connections: Vec<midir::MidiInputConnection<()>>,
+}
+
+impl WardrobeMidiRuntime {
+	fn start(bindings: &[WardrobeBindingOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
+		let bindings = wardrobe_midi_note_bindings(bindings);
+		if bindings.is_empty() {
+			return None;
+		}
+		let discovery = match midir::MidiInput::new("un-avatar-renderer-midi-discovery") {
+			Ok(input) => input,
+			Err(error) => {
+				eprintln!("un-avatar-renderer: MIDI input unavailable: {error}");
+				return None;
+			}
+		};
+		let ports = discovery.ports();
+		if ports.is_empty() {
+			eprintln!("un-avatar-renderer: no MIDI input ports available");
+			return None;
+		}
+		let port_names = ports
+			.iter()
+			.enumerate()
+			.map(|(index, port)| {
+				(
+					index,
+					discovery.port_name(port).unwrap_or_else(|_| format!("unknown MIDI input {index}")),
+				)
+			})
+			.collect::<Vec<_>>();
+		let mut connections = Vec::new();
+		for (port_index, port_name) in port_names {
+			let port_bindings = bindings
+				.iter()
+				.filter(|binding| midi_device_matches(binding.device.as_deref(), &port_name))
+				.cloned()
+				.collect::<Vec<_>>();
+			if port_bindings.is_empty() {
+				continue;
+			}
+			let proxy = proxy.clone();
+			let port_name_for_callback = port_name.clone();
+			let mut input = match midir::MidiInput::new(&format!("un-avatar-renderer-midi-{port_index}")) {
+				Ok(input) => input,
+				Err(error) => {
+					eprintln!("un-avatar-renderer: create MIDI input for `{port_name}` failed: {error}");
+					continue;
+				}
+			};
+			input.ignore(midir::Ignore::None);
+			let ports = input.ports();
+			let Some(port) = ports.get(port_index).cloned() else {
+				eprintln!("un-avatar-renderer: MIDI input `{port_name}` disappeared before connect");
+				continue;
+			};
+			match input.connect(
+				&port,
+				&format!("un-avatar-renderer-{port_name}"),
+				move |_timestamp, message, _| {
+					if let Some(note_event) = parse_midi_note_event(message) {
+						if !note_event.down {
+							return;
+						}
+						for binding in &port_bindings {
+							if binding.channel == note_event.channel && binding.note == note_event.note {
+								let result = Arc::new(Mutex::new(None));
+								let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+									set_id: binding.set_id.clone(),
+									result,
+								});
+							}
+						}
+					}
+				},
+				(),
+			) {
+				Ok(connection) => {
+					eprintln!("un-avatar-renderer: listening for wardrobe MIDI bindings on `{port_name_for_callback}`");
+					connections.push(connection);
+				}
+				Err(error) => eprintln!("un-avatar-renderer: connect MIDI input `{port_name}` failed: {error}"),
+			}
+		}
+		if connections.is_empty() {
+			return None;
+		}
+		Some(Self { _connections: connections })
+	}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WardrobeMidiNoteBinding {
+	set_id: String,
+	device: Option<String>,
+	channel: u8,
+	note: u8,
+}
+
+fn wardrobe_midi_note_bindings(bindings: &[WardrobeBindingOptions]) -> Vec<WardrobeMidiNoteBinding> {
+	bindings
+		.iter()
+		.filter(|binding| binding.kind == WardrobeBindingKind::MidiNote)
+		.filter_map(|binding| {
+			let channel = binding.channel?;
+			let note = binding.note?;
+			if !(1..=16).contains(&channel) || note > 127 {
+				return None;
+			}
+			Some(WardrobeMidiNoteBinding {
+				set_id: binding.set_id.trim().to_string(),
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			})
+		})
+		.collect()
+}
+
+fn midi_device_matches(expected: Option<&str>, port_name: &str) -> bool {
+	let Some(expected) = expected.map(str::trim).filter(|expected| !expected.is_empty()) else {
+		return true;
+	};
+	port_name.to_ascii_lowercase().contains(&expected.to_ascii_lowercase())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MidiNoteEvent {
+	channel: u8,
+	note: u8,
+	down: bool,
+}
+
+fn parse_midi_note_event(message: &[u8]) -> Option<MidiNoteEvent> {
+	if message.len() < 3 {
+		return None;
+	}
+	let status = message[0];
+	let command = status & 0xF0;
+	let channel = (status & 0x0F) + 1;
+	let note = message[1];
+	if note > 127 {
+		return None;
+	}
+	match command {
+		0x90 => Some(MidiNoteEvent {
+			channel,
+			note,
+			down: message[2] > 0,
+		}),
+		0x80 => Some(MidiNoteEvent {
+			channel,
+			note,
+			down: false,
+		}),
+		_ => None,
+	}
+}
+
 #[cfg(windows)]
 struct WardrobeHotkeyRuntime {
 	thread_id: u32,
@@ -3882,8 +4048,8 @@ struct WardrobeHotkeyRuntime {
 
 #[cfg(windows)]
 impl WardrobeHotkeyRuntime {
-	fn start(shortcuts: &[WardrobeShortcutOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
-		let registrations = wardrobe_hotkey_registrations(shortcuts);
+	fn start(bindings: &[WardrobeBindingOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
+		let registrations = wardrobe_hotkey_registrations(bindings);
 		if registrations.is_empty() {
 			return None;
 		}
@@ -3932,31 +4098,34 @@ struct WardrobeHotkeyRegistration {
 }
 
 #[cfg(windows)]
-fn wardrobe_hotkey_registrations(shortcuts: &[WardrobeShortcutOptions]) -> Vec<WardrobeHotkeyRegistration> {
+fn wardrobe_hotkey_registrations(bindings: &[WardrobeBindingOptions]) -> Vec<WardrobeHotkeyRegistration> {
 	let mut out = Vec::new();
-	for shortcut in shortcuts {
-		let shortcut_text = shortcut.shortcut.trim();
-		if shortcut_text.is_empty() {
+	for binding in bindings {
+		if binding.kind != WardrobeBindingKind::Keyboard {
 			continue;
 		}
-		match parse_windows_hotkey(shortcut_text) {
+		let binding_text = binding.binding.trim();
+		if binding_text.is_empty() {
+			continue;
+		}
+		match parse_windows_hotkey(binding_text) {
 			Ok((modifiers, virtual_key)) => {
 				if out
 					.iter()
 					.any(|existing: &WardrobeHotkeyRegistration| existing.modifiers.0 == modifiers.0 && existing.virtual_key == virtual_key)
 				{
-					eprintln!("un-avatar-renderer: duplicate wardrobe global hotkey ignored: {shortcut_text}");
+					eprintln!("un-avatar-renderer: duplicate wardrobe global hotkey ignored: {binding_text}");
 					continue;
 				}
 				out.push(WardrobeHotkeyRegistration {
 					id: 0x554E_5700_i32.saturating_add(out.len() as i32),
-					set_id: shortcut.set_id.trim().to_string(),
-					shortcut: shortcut_text.to_string(),
+					set_id: binding.set_id.trim().to_string(),
+					shortcut: binding_text.to_string(),
 					modifiers,
 					virtual_key,
 				});
 			}
-			Err(error) => eprintln!("un-avatar-renderer: invalid wardrobe global hotkey `{shortcut_text}`: {error}"),
+			Err(error) => eprintln!("un-avatar-renderer: invalid wardrobe global hotkey `{binding_text}`: {error}"),
 		}
 	}
 	out
@@ -5305,7 +5474,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
 	renderer_tray::install_event_handlers(event_proxy.clone());
 	#[cfg(windows)]
-	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_shortcuts, event_proxy.clone());
+	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, event_proxy.clone());
+	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, event_proxy.clone());
 	if opts.runtime_bus_key.is_none() {
 		if let Some(address) = opts.runtime_control_address {
 			start_runtime_control_server(address, event_proxy.clone());
@@ -5317,6 +5487,7 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	{
 		app.wardrobe_hotkeys = wardrobe_hotkeys;
 	}
+	app.wardrobe_midi = wardrobe_midi;
 	event_loop.run_app(&mut app).map_err(|e| RunError::EventLoop(e.to_string()))
 }
 
@@ -5606,7 +5777,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		gltf_path: cli.gltf,
 		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
-		wardrobe_shortcuts: Vec::new(),
+		wardrobe_bindings: Vec::new(),
 		animator_action_ids: Vec::new(),
 		animator_action_values: Default::default(),
 		icon_path: cli.icon,
@@ -6050,10 +6221,10 @@ mod tests {
 	#[cfg(windows)]
 	use super::parse_windows_hotkey;
 	use super::{
-		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_renderer_control_command,
-		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, AvatarOutlineKind,
-		AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand,
-		RendererControlEvent, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_midi_note_event,
+		parse_renderer_control_command, resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server,
+		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
+		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -7782,5 +7953,25 @@ mod tests {
 		assert_eq!(key, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_1.0));
 		assert!(parse_windows_hotkey("Ctrl+Alt").is_err());
 		assert!(parse_windows_hotkey("Ctrl+Alt+1+2").is_err());
+	}
+
+	#[test]
+	fn parses_midi_note_down_and_up_events() {
+		let down = parse_midi_note_event(&[0x90, 60, 100]).unwrap();
+		assert_eq!(down.channel, 1);
+		assert_eq!(down.note, 60);
+		assert!(down.down);
+
+		let up_from_note_on_zero = parse_midi_note_event(&[0x90, 60, 0]).unwrap();
+		assert_eq!(up_from_note_on_zero.channel, 1);
+		assert_eq!(up_from_note_on_zero.note, 60);
+		assert!(!up_from_note_on_zero.down);
+
+		let up = parse_midi_note_event(&[0x81, 61, 64]).unwrap();
+		assert_eq!(up.channel, 2);
+		assert_eq!(up.note, 61);
+		assert!(!up.down);
+
+		assert!(parse_midi_note_event(&[0xB0, 1, 127]).is_none());
 	}
 }

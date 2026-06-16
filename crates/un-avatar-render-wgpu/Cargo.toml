@@ -70,6 +70,7 @@ block_compression = { version = "0.9", default-features = false, features = [
 winit = "0.30"
 memory-stats = "1.2"
 un-i18n = { git = "https://github.com/usagi/un-common.git", branch = "main", package = "un-i18n" }
+midir = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 spout-rs = { version = "0.1.3", optional = true }
