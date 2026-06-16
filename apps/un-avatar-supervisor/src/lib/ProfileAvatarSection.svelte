@@ -42,6 +42,7 @@
 	const animatorPageLimit = 80;
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
+	const animatorTransitionDefaultMs = 250;
 	let keyboardCaptureSetId: string | null = null;
 	let keyboardCaptureActionId: string | null = null;
 	let midiCaptureSetId: string | null = null;
@@ -246,7 +247,8 @@
 		const mode = selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id);
 		const next = setting.animator_actions.filter((action) => action.id !== id);
 		const normalizedCurve = curve === "none" ? null : curve;
-		const normalizedMs = normalizedCurve ? Math.min(3000, Math.max(0, Math.round(durationMs))) : null;
+		const requestedMs = Math.min(3000, Math.max(0, Math.round(durationMs)));
+		const normalizedMs = normalizedCurve ? requestedMs || animatorTransitionDefaultMs : null;
 		next.push({
 			id,
 			mode,
