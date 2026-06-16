@@ -17,6 +17,8 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`
 
+Post-candidate source fixes have landed after this recorded package. Before publishing, rebuild the candidate package and refresh this section, release notes hashes, and release audit evidence from the new commit.
+
 ## Clean Package Smoke
 
 Use a clean unpack directory outside the repository.
