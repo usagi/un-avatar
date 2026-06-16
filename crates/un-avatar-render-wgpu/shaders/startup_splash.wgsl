@@ -41,40 +41,74 @@ fn soft_disc(p: vec2<f32>, radius: f32) -> f32 {
 	return 1.0 - smoothstep(radius - aa, radius + aa, d);
 }
 
+fn rounded_rect_distance(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+	let q = abs(p) - half_size + vec2(radius);
+	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+fn rounded_rect_fill(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+	let d = rounded_rect_distance(p, half_size, radius);
+	let aa = fwidth(d) + 0.001;
+	return 1.0 - smoothstep(0.0 - aa, 0.0 + aa, d);
+}
+
+fn rounded_rect_line(p: vec2<f32>, half_size: vec2<f32>, radius: f32, width: f32) -> f32 {
+	return line_mask(rounded_rect_distance(p, half_size, radius), width);
+}
+
+fn sparkle(p: vec2<f32>, size: f32) -> f32 {
+	let d = abs(p.x) + abs(p.y);
+	let aa = fwidth(d) + 0.001;
+	let diamond = 1.0 - smoothstep(size - aa, size + aa, d);
+	let cross = line_mask(p.x, size * 0.030) * (1.0 - smoothstep(size * 0.25, size, abs(p.y)))
+		+ line_mask(p.y, size * 0.030) * (1.0 - smoothstep(size * 0.25, size, abs(p.x)));
+	return clamp(diamond + cross * 0.45, 0.0, 1.0);
+}
+
 fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32) -> vec4<f32> {
-	let side = smoothstep(0.46, 0.76, abs(ndc.x));
-	let edge_fade = 1.0 - smoothstep(0.96, 1.04, abs(ndc.x));
-	let vertical_fade = 1.0 - smoothstep(0.94, 1.08, abs(ndc.y));
-	let curtain = side * edge_fade * vertical_fade;
+	let p = vec2(ndc.x * aspect, ndc.y);
+	let y01 = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
+	let vignette = 1.0 - smoothstep(0.45, 1.55, length(p));
 
-	let sweep = fract((ndc.y + ndc.x * 0.38) * 8.0 - t * 1.65);
-	let stripe = curtain * (1.0 - smoothstep(0.018, 0.052, abs(sweep - 0.5)));
-	let shard = curtain * line_mask(ndc.x * 0.72 + ndc.y * 0.34 + sin(t * 2.0) * 0.09, 0.012);
+	let ink = vec3(0.025, 0.035, 0.060);
+	let twilight = vec3(0.105, 0.065, 0.165);
+	let base = mix(ink, twilight, y01);
+	let peach = vec3(1.00, 0.54, 0.70);
+	let mint = vec3(0.38, 1.00, 0.83);
+	let sky = vec3(0.36, 0.78, 1.00);
+	let cream = vec3(1.00, 0.86, 0.58);
 
-	var gate_x = -0.68;
-	if ndc.x >= 0.0 {
-		gate_x = 0.68;
-	}
-	let local = vec2((ndc.x - gate_x) * aspect, ndc.y * 1.18);
-	let r = length(local);
-	let gate = ring_mask(r, 0.21 + 0.018 * sin(t * 4.2), 0.010);
-	let gate_inner = ring_mask(r, 0.12, 0.004);
-	let core = soft_disc(local, 0.050 + 0.010 * sin(t * 5.4));
+	let booth = rounded_rect_fill(p, vec2(0.70 * aspect, 0.70), 0.18);
+	let booth_edge = rounded_rect_line(p, vec2(0.72 * aspect, 0.72), 0.20, 0.010);
+	let booth_inner = rounded_rect_line(p, vec2(0.54 * aspect, 0.52), 0.16, 0.006);
+	let stage = soft_disc(vec2(p.x * 0.72, p.y * 1.35 + 0.58), 0.38);
 
-	let scan_y = ndc.y + 0.62 - fract(t * 0.42) * 1.24;
-	let scan = curtain * line_mask(scan_y, 0.012);
-	let haze = smoothstep(0.18, 0.90, curtain) * (0.42 + 0.18 * sin(t * 2.7 + ndc.y * 5.0));
+	let sweep_a = p.y - sin(p.x * 1.50 + t * 1.65) * 0.070 - 0.22 + fract(t * 0.16) * 0.54;
+	let sweep_b = p.y + p.x * 0.33 + 0.42 - fract(t * 0.20) * 1.05;
+	let ribbon_a = line_mask(sweep_a, 0.025) * (1.0 - smoothstep(0.62, 1.15, abs(p.x)));
+	let ribbon_b = line_mask(sweep_b, 0.018) * (1.0 - smoothstep(0.72 * aspect, 1.02 * aspect, abs(p.x)));
+	let curtain_wave = 0.5 + 0.5 * sin((ndc.x + ndc.y * 0.33) * 14.0 + t * 2.2);
+	let curtain = smoothstep(0.62, 0.98, abs(ndc.x)) * (0.22 + curtain_wave * 0.18);
 
-	let base = vec3(0.015, 0.020, 0.030);
-	let cyan = vec3(0.18, 0.95, 1.00);
-	let magenta = vec3(1.00, 0.28, 0.72);
-	let gold = vec3(1.00, 0.68, 0.22);
-	let accent = mix(cyan, magenta, 0.42 + 0.28 * sin(t * 1.7));
-	let hot = mix(accent, gold, scan * 0.55 + gate * 0.35);
-	let energy = haze * 0.38 + stripe * 0.46 + shard * 0.65 + gate * 1.25 + gate_inner * 1.05 + core * 1.45 + scan * 0.85;
-	let center_dim = 0.035 * (1.0 - side) * (1.0 - smoothstep(0.88, 1.04, abs(ndc.y)));
-	let color = base * (curtain * 0.55 + center_dim) + hot * energy;
-	let alpha = clamp(curtain * 0.18 + center_dim + energy * 0.58, 0.0, 0.78);
+	let sparkle_a = sparkle(p - vec2(-0.42 * aspect, 0.36 + sin(t * 1.7) * 0.035), 0.055);
+	let sparkle_b = sparkle(p - vec2(0.48 * aspect, 0.30 + sin(t * 1.3 + 1.2) * 0.035), 0.047);
+	let sparkle_c = sparkle(p - vec2(-0.30 * aspect, -0.34 + sin(t * 1.9 + 2.1) * 0.030), 0.040);
+	let sparkle_d = sparkle(p - vec2(0.32 * aspect, -0.39 + sin(t * 1.5 + 0.8) * 0.030), 0.045);
+	let sparkle_e = sparkle(p - vec2(0.02 * aspect, 0.48 + sin(t * 1.1) * 0.025), 0.033);
+	let sparkles = sparkle_a + sparkle_b + sparkle_c + sparkle_d + sparkle_e;
+
+	let pulse = 0.5 + 0.5 * sin(t * 3.0);
+	let halo = soft_disc(vec2(p.x * 0.80, p.y * 1.10), 0.42 + pulse * 0.035);
+	let ring = ring_mask(length(vec2(p.x * 0.80, p.y * 1.10)), 0.34 + pulse * 0.020, 0.006);
+	let lace = line_mask(fract((p.x * 0.52 - p.y * 0.36) * 9.0 + t * 0.30) - 0.5, 0.020) * booth * 0.30;
+
+	let glow = stage * 0.23 + halo * 0.20 + ring * 0.88 + booth_edge * 0.72 + booth_inner * 0.36 + ribbon_a * 1.05 + ribbon_b * 0.78 + sparkles * 1.20 + lace * 0.30;
+	let pastel = mint * (booth_edge * 0.60 + ribbon_b * 0.80 + sparkle_b * 0.90 + sparkle_d * 0.65)
+		+ peach * (ribbon_a * 0.95 + sparkle_a * 0.90 + sparkle_c * 0.80)
+		+ sky * (ring * 0.75 + booth_inner * 0.55 + lace * 0.45)
+		+ cream * (sparkle_e * 1.05 + stage * 0.13);
+	let color = base * (0.72 + vignette * 0.42) + vec3(0.040, 0.020, 0.060) * booth + pastel + vec3(0.18, 0.08, 0.18) * curtain + vec3(0.05, 0.08, 0.12) * glow;
+	let alpha = clamp(0.70 + booth * 0.12 + glow * 0.16 + curtain * 0.10, 0.0, 0.96);
 	return vec4(color, alpha);
 }
 

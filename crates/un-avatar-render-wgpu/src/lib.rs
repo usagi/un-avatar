@@ -1011,6 +1011,13 @@ fn wardrobe_exit_camera_patch(state: gpu::CameraStateSnapshot) -> CameraStatePat
 	}
 }
 
+fn wardrobe_set_request_matches_active(active_set: Option<&str>, base_set: Option<&str>, requested_set: &str) -> bool {
+	let base_set = model_loader::normalize_wardrobe_set_id(base_set);
+	let requested_set = model_loader::normalize_wardrobe_set_id(Some(requested_set)).or(base_set);
+	let active_set = model_loader::normalize_wardrobe_set_id(active_set).or(base_set);
+	requested_set.is_some() && active_set == requested_set
+}
+
 fn ease_camera_transition(t: f32, easing: CameraTransitionEasing) -> f32 {
 	let t = t.clamp(0.0, 1.0);
 	match easing {
@@ -2196,12 +2203,19 @@ impl AvatarApp {
 			}
 			return;
 		}
-		let Some(saved_camera) = self.gpu.as_ref().map(GpuState::camera_state_snapshot) else {
+		let Some(gpu) = self.gpu.as_ref() else {
 			if let Ok(mut guard) = result.lock() {
 				*guard = Some(Err("renderer is not initialized".to_string()));
 			}
 			return;
 		};
+		if wardrobe_set_request_matches_active(gpu.active_wardrobe_set().as_deref(), gpu.base_wardrobe_set().as_deref(), &set_id) {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Ok(()));
+			}
+			return;
+		}
+		let saved_camera = gpu.camera_state_snapshot();
 		let now = Instant::now();
 		self.wardrobe_transition = Some(WardrobeTransitionState {
 			set_id,
@@ -7120,9 +7134,10 @@ mod tests {
 	use super::{
 		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
 		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, resolve_activate_action_from_menu_path,
-		runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch, AvatarOutlineKind, AvatarOutlinePolicy,
-		AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent,
-		WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active,
+		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
+		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
+		SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -8353,6 +8368,19 @@ mod tests {
 		assert_eq!(restored.latitude_deg, state.latitude_deg);
 		assert_eq!(restored.radius, state.radius);
 		assert_eq!(restored.diagonal_fov_deg, state.diagonal_fov_deg);
+	}
+
+	#[test]
+	fn wardrobe_set_request_match_treats_empty_as_base() {
+		assert!(wardrobe_set_request_matches_active(Some("base"), Some("base"), ""));
+		assert!(wardrobe_set_request_matches_active(Some("base"), Some("base"), " \t "));
+		assert!(wardrobe_set_request_matches_active(
+			Some("field_drape"),
+			Some("base"),
+			" field_drape "
+		));
+		assert!(!wardrobe_set_request_matches_active(Some("field_drape"), Some("base"), ""));
+		assert!(!wardrobe_set_request_matches_active(None, None, ""));
 	}
 
 	#[test]
