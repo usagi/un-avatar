@@ -147,6 +147,10 @@
 		});
 	}
 
+	function animatorCandidateRowKey(candidate: UnavatarAnimatorActionCandidate, index: number): string {
+		return `${candidate.id}:${animatorOffset + index}`;
+	}
+
 	function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 		return new Promise((resolve, reject) => {
 			const timer = window.setTimeout(() => reject(new Error($_("profiles.editor.unanimator_load_timeout"))), timeoutMs);
@@ -304,7 +308,7 @@
 							</div>
 						</div>
 						<div class="animator-action-list">
-							{#each animatorVisibleCandidates as candidate (candidate.id)}
+							{#each animatorVisibleCandidates as candidate, candidateIndex (animatorCandidateRowKey(candidate, candidateIndex))}
 								<div class="animator-action-row">
 									<div class="animator-action-label">
 										<strong>{candidate.label}</strong>

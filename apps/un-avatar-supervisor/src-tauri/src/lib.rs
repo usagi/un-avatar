@@ -4097,21 +4097,44 @@ fn vrm0_expression_action_candidates(
 	groups
 		.iter()
 		.filter_map(|group| {
-			let name = group
+			let preset_name = group
 				.get("presetName")
 				.or_else(|| group.get("preset_name"))
 				.and_then(serde_json::Value::as_str)
-				.filter(|value| !value.is_empty())
-				.or_else(|| {
-					group
-						.get("name")
-						.and_then(serde_json::Value::as_str)
-						.filter(|value| !value.is_empty())
-				})?;
+				.unwrap_or("")
+				.trim();
+			let group_name = group.get("name").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+			let name = vrm0_expression_action_name(preset_name, group_name)?;
+			let id_name = vrm0_expression_action_id_name(preset_name, group_name, name);
 			let bind_count = group.get("binds").and_then(serde_json::Value::as_array).map(Vec::len).unwrap_or(0);
-			vrm_expression_action_candidate(name, bind_count, selected_modes)
+			vrm_expression_action_candidate_with_id_name(name, id_name.as_str(), bind_count, selected_modes)
 		})
 		.collect()
+}
+
+fn vrm0_expression_action_name<'a>(preset_name: &'a str, group_name: &'a str) -> Option<&'a str> {
+	let preset_name = preset_name.trim();
+	let group_name = group_name.trim();
+	if !group_name.is_empty() && (preset_name.is_empty() || preset_name.eq_ignore_ascii_case("unknown")) {
+		return Some(group_name);
+	}
+	if !preset_name.is_empty() {
+		return Some(preset_name);
+	}
+	if !group_name.is_empty() {
+		return Some(group_name);
+	}
+	None
+}
+
+fn vrm0_expression_action_id_name(preset_name: &str, group_name: &str, display_name: &str) -> String {
+	let preset_name = preset_name.trim();
+	let group_name = group_name.trim();
+	if !group_name.is_empty() && !preset_name.is_empty() && !preset_name.eq_ignore_ascii_case(group_name) {
+		format!("{preset_name}:{group_name}")
+	} else {
+		display_name.to_string()
+	}
 }
 
 fn vrm1_expression_action_candidates(
@@ -4146,11 +4169,21 @@ fn vrm_expression_action_candidate(
 	bind_count: usize,
 	selected_modes: &BTreeMap<&str, &str>,
 ) -> Option<UnavatarAnimatorActionCandidate> {
+	vrm_expression_action_candidate_with_id_name(name, name, bind_count, selected_modes)
+}
+
+fn vrm_expression_action_candidate_with_id_name(
+	name: &str,
+	id_name: &str,
+	bind_count: usize,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Option<UnavatarAnimatorActionCandidate> {
 	let name = name.trim();
 	if name.is_empty() || !vrm_expression_is_user_action_candidate(name) {
 		return None;
 	}
-	let id = format!("expression:{}", stable_identifier(name));
+	let id_name = id_name.trim();
+	let id = format!("expression:{}", stable_identifier(if id_name.is_empty() { name } else { id_name }));
 	Some(UnavatarAnimatorActionCandidate {
 		id: id.clone(),
 		label: format!("Expression / {name}"),
@@ -13525,6 +13558,32 @@ action_ids = ["animator:old"]
 		assert_eq!(candidates.len(), 1);
 		assert_eq!(candidates[0].id, "expression:joy");
 		assert_eq!(candidates[0].selected_mode, "toggle");
+	}
+
+	#[test]
+	fn vrm0_expression_candidates_keep_unknown_preset_groups_unique() {
+		let vrm = serde_json::json!({
+			"blendShapeMaster": {
+				"blendShapeGroups": [
+					{ "presetName": "unknown", "name": "Joy", "binds": [{}] },
+					{ "presetName": "unknown", "name": "Fun", "binds": [{}] },
+					{ "presetName": "unknown", "name": "Angry", "binds": [{}] }
+				]
+			}
+		});
+		let selected_modes = BTreeMap::new();
+		let candidates = vrm0_expression_action_candidates(&vrm, &selected_modes);
+		let ids = candidates.iter().map(|candidate| candidate.id.as_str()).collect::<BTreeSet<_>>();
+
+		assert_eq!(candidates.len(), 3);
+		assert_eq!(ids.len(), candidates.len());
+		assert!(ids.contains("expression:unknown_joy"));
+		assert!(ids.contains("expression:unknown_fun"));
+		assert!(ids.contains("expression:unknown_angry"));
+		assert_eq!(
+			candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(),
+			vec!["Expression / Joy", "Expression / Fun", "Expression / Angry"]
+		);
 	}
 
 	#[test]
