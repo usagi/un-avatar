@@ -405,7 +405,7 @@
 	}
 
 	async function captureKeyboard(event: KeyboardEvent): Promise<void> {
-		if (keyboardCaptureSetId === null) return;
+		if (keyboardCaptureSetId === null && keyboardCaptureActionId === null) return;
 		event.preventDefault();
 		event.stopPropagation();
 		if (event.key === "Escape") {
