@@ -100,8 +100,12 @@ const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
-const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 300;
+const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
+const SPLASH_FULL_RECT_CENTER: [f32; 2] = [0.0, 0.0];
+const SPLASH_FULL_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
+const WARDROBE_SPLASH_RECT_CENTER: [f32; 2] = [0.0, -0.02];
+const WARDROBE_SPLASH_RECT_HALF_SIZE: [f32; 2] = [0.58, 0.72];
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -2286,6 +2290,8 @@ impl AvatarApp {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
 			progress: -1.0,
 			phase: 5.0,
+			rect_center: WARDROBE_SPLASH_RECT_CENTER,
+			rect_half_size: WARDROBE_SPLASH_RECT_HALF_SIZE,
 		})
 	}
 
@@ -3477,12 +3483,16 @@ impl AvatarApp {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
 				phase: progress.phase.splash_code(),
+				rect_center: SPLASH_FULL_RECT_CENTER,
+				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
 		} else {
 			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: -1.0,
 				phase: 9.0,
+				rect_center: SPLASH_FULL_RECT_CENTER,
+				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
 		}
 		.or_else(|| self.wardrobe_splash_frame(now));

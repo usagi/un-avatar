@@ -3,6 +3,8 @@ struct StartupSplash {
 	progress: f32,
 	aspect: f32,
 	phase: f32,
+	rect_center: vec2<f32>,
+	rect_half_size: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> splash: StartupSplash;
@@ -65,10 +67,17 @@ fn sparkle(p: vec2<f32>, size: f32) -> f32 {
 	return clamp(diamond + cross * 0.45, 0.0, 1.0);
 }
 
-fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32) -> vec4<f32> {
-	let p = vec2(ndc.x * aspect, ndc.y);
-	let y01 = clamp(ndc.y * 0.5 + 0.5, 0.0, 1.0);
-	let vignette = 1.0 - smoothstep(0.45, 1.55, length(p));
+fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<f32>, rect_half_size: vec2<f32>) -> vec4<f32> {
+	let rect_half = max(rect_half_size, vec2(0.18, 0.24));
+	let local_ndc = (ndc - rect_center) / rect_half;
+	let p = vec2(local_ndc.x * aspect * rect_half.x, local_ndc.y * rect_half.y);
+	let rect_p = vec2((ndc.x - rect_center.x) * aspect, ndc.y - rect_center.y);
+	let rect_half_p = vec2(rect_half.x * aspect, rect_half.y);
+	let rect_dist = rounded_rect_distance(rect_p, rect_half_p, 0.14);
+	let rect_mask = 1.0 - smoothstep(0.0, 0.055, rect_dist);
+	let feather = 1.0 - smoothstep(0.06, 0.22, rect_dist);
+	let y01 = clamp(local_ndc.y * 0.5 + 0.5, 0.0, 1.0);
+	let vignette = 1.0 - smoothstep(0.35, 1.25, length(p));
 
 	let ink = vec3(0.025, 0.035, 0.060);
 	let twilight = vec3(0.105, 0.065, 0.165);
@@ -78,17 +87,17 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32) -> vec4<f32> {
 	let sky = vec3(0.36, 0.78, 1.00);
 	let cream = vec3(1.00, 0.86, 0.58);
 
-	let booth = rounded_rect_fill(p, vec2(0.70 * aspect, 0.70), 0.18);
-	let booth_edge = rounded_rect_line(p, vec2(0.72 * aspect, 0.72), 0.20, 0.010);
-	let booth_inner = rounded_rect_line(p, vec2(0.54 * aspect, 0.52), 0.16, 0.006);
+	let booth = rounded_rect_fill(rect_p, rect_half_p * 0.96, 0.16) * rect_mask;
+	let booth_edge = rounded_rect_line(rect_p, rect_half_p * 0.98, 0.17, 0.010);
+	let booth_inner = rounded_rect_line(rect_p, rect_half_p * 0.72, 0.13, 0.006) * rect_mask;
 	let stage = soft_disc(vec2(p.x * 0.72, p.y * 1.35 + 0.58), 0.38);
 
 	let sweep_a = p.y - sin(p.x * 1.50 + t * 1.65) * 0.070 - 0.22 + fract(t * 0.16) * 0.54;
 	let sweep_b = p.y + p.x * 0.33 + 0.42 - fract(t * 0.20) * 1.05;
-	let ribbon_a = line_mask(sweep_a, 0.025) * (1.0 - smoothstep(0.62, 1.15, abs(p.x)));
-	let ribbon_b = line_mask(sweep_b, 0.018) * (1.0 - smoothstep(0.72 * aspect, 1.02 * aspect, abs(p.x)));
+	let ribbon_a = line_mask(sweep_a, 0.025) * (1.0 - smoothstep(0.62, 1.15, abs(local_ndc.x))) * feather;
+	let ribbon_b = line_mask(sweep_b, 0.018) * (1.0 - smoothstep(0.72, 1.02, abs(local_ndc.x))) * feather;
 	let curtain_wave = 0.5 + 0.5 * sin((ndc.x + ndc.y * 0.33) * 14.0 + t * 2.2);
-	let curtain = smoothstep(0.62, 0.98, abs(ndc.x)) * (0.22 + curtain_wave * 0.18);
+	let curtain = smoothstep(0.58, 0.98, abs(local_ndc.x)) * (0.18 + curtain_wave * 0.14) * rect_mask;
 
 	let sparkle_a = sparkle(p - vec2(-0.42 * aspect, 0.36 + sin(t * 1.7) * 0.035), 0.055);
 	let sparkle_b = sparkle(p - vec2(0.48 * aspect, 0.30 + sin(t * 1.3 + 1.2) * 0.035), 0.047);
@@ -100,22 +109,22 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32) -> vec4<f32> {
 	let pulse = 0.5 + 0.5 * sin(t * 3.0);
 	let halo = soft_disc(vec2(p.x * 0.80, p.y * 1.10), 0.42 + pulse * 0.035);
 	let ring = ring_mask(length(vec2(p.x * 0.80, p.y * 1.10)), 0.34 + pulse * 0.020, 0.006);
-	let lace = line_mask(fract((p.x * 0.52 - p.y * 0.36) * 9.0 + t * 0.30) - 0.5, 0.020) * booth * 0.30;
+	let lace = line_mask(fract((p.x * 0.52 - p.y * 0.36) * 9.0 + t * 0.30) - 0.5, 0.020) * booth * 0.22;
 
 	let glow = stage * 0.23 + halo * 0.20 + ring * 0.88 + booth_edge * 0.72 + booth_inner * 0.36 + ribbon_a * 1.05 + ribbon_b * 0.78 + sparkles * 1.20 + lace * 0.30;
 	let pastel = mint * (booth_edge * 0.60 + ribbon_b * 0.80 + sparkle_b * 0.90 + sparkle_d * 0.65)
 		+ peach * (ribbon_a * 0.95 + sparkle_a * 0.90 + sparkle_c * 0.80)
 		+ sky * (ring * 0.75 + booth_inner * 0.55 + lace * 0.45)
 		+ cream * (sparkle_e * 1.05 + stage * 0.13);
-	let color = base * (0.72 + vignette * 0.42) + vec3(0.040, 0.020, 0.060) * booth + pastel + vec3(0.18, 0.08, 0.18) * curtain + vec3(0.05, 0.08, 0.12) * glow;
-	let alpha = clamp(0.70 + booth * 0.12 + glow * 0.16 + curtain * 0.10, 0.0, 0.96);
+	let color = base * (0.42 + vignette * 0.24) * rect_mask + vec3(0.040, 0.020, 0.060) * booth + pastel + vec3(0.18, 0.08, 0.18) * curtain + vec3(0.05, 0.08, 0.12) * glow;
+	let alpha = clamp((0.52 * rect_mask + glow * 0.30 + curtain * 0.12) * feather, 0.0, 0.92);
 	return vec4(color, alpha);
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 	if splash.phase > 4.5 && splash.phase < 5.5 {
-		return wardrobe_splash_color(in.ndc, splash.aspect, splash.time);
+		return wardrobe_splash_color(in.ndc, splash.aspect, splash.time, splash.rect_center, splash.rect_half_size);
 	}
 
 	let uv = vec2(in.ndc.x * splash.aspect, in.ndc.y);

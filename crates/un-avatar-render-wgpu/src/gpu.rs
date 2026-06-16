@@ -2233,6 +2233,8 @@ struct StartupSplashGpu {
 	progress: f32,
 	aspect: f32,
 	phase: f32,
+	rect_center: [f32; 2],
+	rect_half_size: [f32; 2],
 }
 
 #[repr(C)]
@@ -2252,6 +2254,8 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) time_secs: f32,
 	pub(crate) progress: f32,
 	pub(crate) phase: f32,
+	pub(crate) rect_center: [f32; 2],
+	pub(crate) rect_half_size: [f32; 2],
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -7236,6 +7240,8 @@ impl GpuState {
 						progress: splash.progress,
 						aspect,
 						phase: splash.phase,
+						rect_center: splash.rect_center,
+						rect_half_size: splash.rect_half_size,
 					}),
 				);
 				pass.set_pipeline(&self.startup_splash_pipeline);
@@ -7304,6 +7310,8 @@ impl GpuState {
 						progress: splash.progress,
 						aspect,
 						phase: splash.phase,
+						rect_center: splash.rect_center,
+						rect_half_size: splash.rect_half_size,
 					}),
 				);
 				pass.set_pipeline(&self.startup_splash_pipeline);
