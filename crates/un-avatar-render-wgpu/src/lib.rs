@@ -2451,6 +2451,7 @@ impl AvatarApp {
 			return;
 		};
 		let wardrobe_set = self.opts.wardrobe_set.clone();
+		let enabled_animator_action_ids = self.opts.animator_action_ids.clone();
 		let contact_parameter_emission = self.opts.contact_parameter_emission;
 		let defer_initial_image_decode = self.opts.processed_texture_cache;
 		let profile_import = self.opts.bench_frames.is_some() || std::env::var_os("UN_AVATAR_IMPORT_PROFILE").is_some();
@@ -2490,6 +2491,7 @@ impl AvatarApp {
 				model_loader::load_document_profiled(
 					&path,
 					wardrobe_set.as_deref(),
+					&enabled_animator_action_ids,
 					contact_parameter_emission,
 					defer_initial_image_decode,
 				)
@@ -2497,6 +2499,7 @@ impl AvatarApp {
 				model_loader::load_document(
 					&path,
 					wardrobe_set.as_deref(),
+					&enabled_animator_action_ids,
 					contact_parameter_emission,
 					defer_initial_image_decode,
 				)
@@ -5359,6 +5362,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		gltf_path: cli.gltf,
 		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
+		animator_action_ids: Vec::new(),
 		icon_path: cli.icon,
 		app_user_model_id: None,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
@@ -5528,6 +5532,7 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		model_loader::load_document(
 			path,
 			opts.wardrobe_set.as_deref(),
+			&opts.animator_action_ids,
 			opts.contact_parameter_emission,
 			opts.processed_texture_cache,
 		)
@@ -5545,6 +5550,7 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let document = model_loader::load_document(
 		path,
 		opts.wardrobe_set.as_deref(),
+		&opts.animator_action_ids,
 		opts.contact_parameter_emission,
 		opts.processed_texture_cache,
 	)

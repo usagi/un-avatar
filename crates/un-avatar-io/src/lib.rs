@@ -136,6 +136,7 @@ pub struct ImportContext {
 	pub asset_root: PathBuf,
 	pub temp_dir: PathBuf,
 	pub initial_wardrobe_set: Option<String>,
+	pub enabled_animator_action_ids: Vec<String>,
 	pub defer_initial_image_decode: bool,
 	pub profile: bool,
 }
@@ -146,6 +147,7 @@ impl ImportContext {
 			asset_root: PathBuf::from("."),
 			temp_dir: PathBuf::from("."),
 			initial_wardrobe_set: None,
+			enabled_animator_action_ids: Vec::new(),
 			defer_initial_image_decode: false,
 			profile: false,
 		}

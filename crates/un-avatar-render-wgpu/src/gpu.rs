@@ -2606,6 +2606,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 	let document = model_loader::load_document_profiled(
 		path,
 		opts.wardrobe_set.as_deref(),
+		&opts.animator_action_ids,
 		opts.contact_parameter_emission,
 		opts.processed_texture_cache,
 	)

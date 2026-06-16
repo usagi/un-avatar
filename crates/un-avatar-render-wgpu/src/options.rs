@@ -525,6 +525,8 @@ pub struct AvatarWindowOptions {
 	pub manifest_path: Option<PathBuf>,
 	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
 	pub wardrobe_set: Option<String>,
+	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
+	pub animator_action_ids: Vec<String>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
 	pub icon_path: Option<PathBuf>,
 	/// Windows taskbar grouping identity. Manifest profiles set this per profile so Windows does not
@@ -680,6 +682,7 @@ impl Default for AvatarWindowOptions {
 			gltf_path: None,
 			manifest_path: None,
 			wardrobe_set: None,
+			animator_action_ids: Vec::new(),
 			icon_path: None,
 			app_user_model_id: None,
 			show_fps_in_title: true,

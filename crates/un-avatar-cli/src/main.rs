@@ -1674,6 +1674,7 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: None,
+		enabled_animator_action_ids: Vec::new(),
 		defer_initial_image_decode: false,
 		profile: false,
 	};
@@ -1756,6 +1757,7 @@ fn run_inspect(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Result<(),
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: None,
+		enabled_animator_action_ids: Vec::new(),
 		defer_initial_image_decode: false,
 		profile: false,
 	};
@@ -5341,6 +5343,7 @@ fn run_diagnose(
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: None,
+		enabled_animator_action_ids: Vec::new(),
 		defer_initial_image_decode: false,
 		profile: false,
 	};
@@ -6385,6 +6388,7 @@ fn run_convert(
 		asset_root: input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: None,
+		enabled_animator_action_ids: Vec::new(),
 		defer_initial_image_decode: false,
 		profile: false,
 	};

@@ -44,9 +44,25 @@ pub(crate) struct RendererManifest {
 	pub debug: Option<DebugManifest>,
 	pub diagnostics: Option<MeshDiagnosticsManifest>,
 	pub effects: Option<EffectsManifest>,
+	pub animator: Option<AnimatorManifest>,
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
 	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorManifest {
+	pub action_ids: Option<Vec<String>>,
+	pub actions: Option<Vec<AnimatorActionManifest>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorActionManifest {
+	pub id: Option<String>,
+	/// off | toggle | one_shot. Unknown values are treated as off.
+	pub mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -471,6 +487,9 @@ impl RendererManifest {
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
 		}
+		if let Some(animator) = self.animator {
+			animator.apply_to(opts);
+		}
 		if let Some(aa) = self.aa {
 			opts.aa = aa;
 		}
@@ -536,6 +555,31 @@ impl RendererManifest {
 		if let Some(window) = self.window {
 			window.apply_to(opts);
 		}
+	}
+}
+
+impl AnimatorManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		let mut ids = self
+			.action_ids
+			.unwrap_or_default()
+			.into_iter()
+			.map(|id| id.trim().to_string())
+			.filter(|id| !id.is_empty())
+			.collect::<Vec<_>>();
+		for action in self.actions.unwrap_or_default() {
+			let mode = action.mode.unwrap_or_else(|| "off".to_string()).to_ascii_lowercase();
+			if mode != "toggle" && mode != "one_shot" {
+				continue;
+			}
+			let Some(id) = action.id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty()) else {
+				continue;
+			};
+			if !ids.iter().any(|existing| existing == &id) {
+				ids.push(id);
+			}
+		}
+		opts.animator_action_ids = ids;
 	}
 }
 
@@ -1262,6 +1306,17 @@ name = "UN Avatar Spout2"
 width = 1920
 height = 1080
 
+[animator]
+action_ids = ["animator:0:0:hat_off:0"]
+
+[[animator.actions]]
+id = "animator:0:0:beam:0"
+mode = "one_shot"
+
+[[animator.actions]]
+id = "animator:0:0:debug_hidden:0"
+mode = "off"
+
 [window]
 width = 640
 height = 360
@@ -1391,6 +1446,10 @@ constraint_iterations = 6
 		);
 		assert!(!opts.processed_texture_cache);
 		assert!(opts.skin_tone_matching);
+		assert_eq!(
+			opts.animator_action_ids,
+			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]
+		);
 		assert!(opts.spout.enabled);
 		assert_eq!(opts.spout.name, "UN Avatar Spout2");
 		assert_eq!(opts.spout.width, Some(1920));
