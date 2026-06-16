@@ -1017,6 +1017,8 @@ struct AvatarSettingValueUpdate {
 struct AnimatorActionSetting {
 	id: String,
 	mode: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	value: Option<f64>,
 }
 
 impl Default for AnimatorActionSetting {
@@ -1024,6 +1026,7 @@ impl Default for AnimatorActionSetting {
 		Self {
 			id: String::new(),
 			mode: "off".to_string(),
+			value: None,
 		}
 	}
 }
@@ -1764,6 +1767,7 @@ struct ManifestAnimator {
 struct ManifestAnimatorAction {
 	id: Option<String>,
 	mode: Option<String>,
+	value: Option<f64>,
 }
 
 fn manifest_background_color(manifest: &AvatarManifestSummary) -> [f32; 3] {
@@ -2066,6 +2070,7 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 		actions.push(AnimatorActionSetting {
 			id: id.to_string(),
 			mode: "toggle".to_string(),
+			value: None,
 		});
 	}
 	for action in animator.actions.iter().flatten() {
@@ -2076,8 +2081,13 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 		}
 		if let Some(existing) = actions.iter_mut().find(|existing| existing.id == id) {
 			existing.mode = mode;
+			existing.value = action.value.filter(|value| value.is_finite());
 		} else {
-			actions.push(AnimatorActionSetting { id: id.to_string(), mode });
+			actions.push(AnimatorActionSetting {
+				id: id.to_string(),
+				mode,
+				value: action.value.filter(|value| value.is_finite()),
+			});
 		}
 	}
 	actions
@@ -5295,6 +5305,9 @@ fn apply_animator_setting_value(manifest: &mut toml::Value, field: &str, value: 
 				let mut table = toml::map::Map::new();
 				table.insert("id".to_string(), toml::Value::String(id.to_string()));
 				table.insert("mode".to_string(), toml::Value::String(mode));
+				if let Some(value) = action.value.filter(|value| value.is_finite()) {
+					table.insert("value".to_string(), toml::Value::Float(value));
+				}
 				out.push(toml::Value::Table(table));
 			}
 			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
@@ -13505,7 +13518,7 @@ action_ids = ["animator:old"]
 			"animator.actions",
 			serde_json::json!([
 				{ "id": " animator:0:0:hat_off:0 ", "mode": "toggle" },
-				{ "id": "animator:0:0:beam:0", "mode": "one-shot" },
+				{ "id": "animator:0:0:beam:0", "mode": "one-shot", "value": 0.45 },
 				{ "id": "animator:0:0:hidden:0", "mode": "off" },
 				{ "id": "animator:0:0:hat_off:0", "mode": "toggle" }
 			]),
@@ -13529,6 +13542,13 @@ action_ids = ["animator:old"]
 				.and_then(|table| table.get("mode"))
 				.and_then(toml::Value::as_str),
 			Some("one_shot")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("value"))
+				.and_then(toml::Value::as_float),
+			Some(0.45)
 		);
 	}
 

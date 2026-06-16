@@ -704,22 +704,20 @@ fn append_vrc_menu_actions(
 	snapshot: &RendererRuntimeSnapshot,
 	text: &TrayText,
 ) {
-	let has_menu_candidates = !snapshot.menu_action_candidates.is_empty();
-	let entries: Vec<_> = snapshot
-		.menu_action_candidates
-		.iter()
-		.filter(|candidate| candidate.available)
-		.filter(|candidate| candidate.wardrobe_set_ids.is_empty())
-		.filter(|candidate| candidate.match_kind != "metadata" && candidate.effect_count > 0)
-		.collect();
-	let fallback_entries = if entries.is_empty() && !has_menu_candidates {
+	let entries = dedupe_menu_action_candidates(
+		snapshot,
 		snapshot
-			.runtime_actions
+			.menu_action_candidates
 			.iter()
-			.filter(|action| action.available)
-			.filter(|action| action.wardrobe_set_id.is_none())
-			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
-			.collect::<Vec<_>>()
+			.filter(|candidate| animator_menu_candidate_visible(candidate)),
+	);
+	let fallback_entries = if entries.is_empty() {
+		dedupe_fallback_runtime_actions(
+			snapshot
+				.runtime_actions
+				.iter()
+				.filter(|action| animator_fallback_action_visible(action)),
+		)
 	} else {
 		Vec::new()
 	};
@@ -730,11 +728,17 @@ fn append_vrc_menu_actions(
 	if entries.is_empty() {
 		for (index, action) in fallback_entries.into_iter().enumerate() {
 			let active = action.current_condition_state.as_deref() == Some("active");
-			let label = action.expression_menu_path.as_deref().unwrap_or(&action.label).replace('/', " / ");
+			let label = fallback_action_label(action);
 			let action = if let (Some(name), Some(value)) = (&action.parameter_name, action.parameter_value) {
+				let raw = fallback_action_last_label(action);
+				let polarity = animator_toggle_polarity(&raw);
 				RendererTrayAction::SetParameter {
 					name: name.clone(),
-					value: if active { 0.0 } else { value },
+					value: if active {
+						animator_inactive_parameter_value(value, polarity)
+					} else {
+						value
+					},
 				}
 			} else {
 				RendererTrayAction::ActivateAction(action.action_id.clone())
@@ -751,6 +755,8 @@ fn append_vrc_menu_actions(
 	} else {
 		for (index, candidate) in entries.into_iter().enumerate() {
 			let active = menu_candidate_active(snapshot, candidate);
+			let raw = menu_candidate_last_label(candidate);
+			let polarity = animator_toggle_polarity(&raw);
 			append_menu_item(
 				&vrc_menu,
 				actions,
@@ -759,12 +765,123 @@ fn append_vrc_menu_actions(
 				true,
 				RendererTrayAction::SetParameter {
 					name: candidate.parameter_name.clone(),
-					value: if active { 0.0 } else { candidate.parameter_value },
+					value: if active {
+						animator_inactive_parameter_value(candidate.parameter_value, polarity)
+					} else {
+						candidate.parameter_value
+					},
 				},
 			);
 		}
 	}
 	append_submenu(menu, &vrc_menu);
+}
+
+fn animator_menu_candidate_visible(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> bool {
+	if !candidate.available || !candidate.wardrobe_set_ids.is_empty() || candidate.effect_count == 0 {
+		return false;
+	}
+	if candidate.match_kind != "metadata" {
+		return true;
+	}
+	if candidate.control_type.as_deref() == Some("Button") {
+		return false;
+	}
+	if candidate.menu_path.len() > 2 {
+		return false;
+	}
+	let label = candidate.menu_label.as_deref().unwrap_or("");
+	!label.contains('<')
+		&& !label.contains("VRCFT")
+		&& candidate
+			.menu_path
+			.iter()
+			.all(|segment| segment != "Face_Tracking" && !segment.contains("VRCFT") && !segment.contains('<'))
+}
+
+fn animator_fallback_action_visible(action: &gpu::RuntimeActionStatus) -> bool {
+	action.available && action.wardrobe_set_id.is_none() && action.effect_count > 0
+}
+
+fn dedupe_menu_action_candidates<'a>(
+	snapshot: &RendererRuntimeSnapshot,
+	candidates: impl Iterator<Item = &'a gpu::RuntimeMenuActionCandidateStatus>,
+) -> Vec<&'a gpu::RuntimeMenuActionCandidateStatus> {
+	let mut entries: Vec<&gpu::RuntimeMenuActionCandidateStatus> = Vec::new();
+	let mut keys: HashMap<String, usize> = HashMap::new();
+	for candidate in candidates {
+		let key = menu_candidate_group_key(candidate);
+		if let Some(index) = keys.get(&key).copied() {
+			if menu_candidate_preferred(snapshot, entries[index], candidate) {
+				entries[index] = candidate;
+			}
+		} else {
+			keys.insert(key, entries.len());
+			entries.push(candidate);
+		}
+	}
+	entries
+}
+
+fn dedupe_fallback_runtime_actions<'a>(actions: impl Iterator<Item = &'a gpu::RuntimeActionStatus>) -> Vec<&'a gpu::RuntimeActionStatus> {
+	let mut entries: Vec<&gpu::RuntimeActionStatus> = Vec::new();
+	let mut keys: HashMap<String, usize> = HashMap::new();
+	for action in actions {
+		let key = fallback_action_group_key(action);
+		if let Some(index) = keys.get(&key).copied() {
+			if fallback_action_preferred(entries[index], action) {
+				entries[index] = action;
+			}
+		} else {
+			keys.insert(key, entries.len());
+			entries.push(action);
+		}
+	}
+	entries
+}
+
+fn menu_candidate_group_key(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> String {
+	let label = animator_normalized_toggle_label(&menu_candidate_last_label(candidate)).0;
+	format!("{}:{}", candidate.parameter_name, label.to_ascii_lowercase())
+}
+
+fn fallback_action_group_key(action: &gpu::RuntimeActionStatus) -> String {
+	let label = animator_normalized_toggle_label(&fallback_action_last_label(action)).0;
+	format!(
+		"{}:{}",
+		action
+			.parameter_name
+			.as_deref()
+			.or(action.supervisor_command.as_deref())
+			.unwrap_or(&action.action_id),
+		label.to_ascii_lowercase()
+	)
+}
+
+fn menu_candidate_preferred(
+	snapshot: &RendererRuntimeSnapshot,
+	current: &gpu::RuntimeMenuActionCandidateStatus,
+	next: &gpu::RuntimeMenuActionCandidateStatus,
+) -> bool {
+	let current_active = menu_candidate_active(snapshot, current);
+	let next_active = menu_candidate_active(snapshot, next);
+	if next_active && !current_active {
+		return true;
+	}
+	let current_polarity = animator_toggle_polarity(&menu_candidate_last_label(current));
+	let next_polarity = animator_toggle_polarity(&menu_candidate_last_label(next));
+	next_polarity == Some(AnimatorTogglePolarity::On) && current_polarity != Some(AnimatorTogglePolarity::On)
+}
+
+fn fallback_action_preferred(current: &gpu::RuntimeActionStatus, next: &gpu::RuntimeActionStatus) -> bool {
+	let current_active = current.current_condition_state.as_deref() == Some("active");
+	let next_active = next.current_condition_state.as_deref() == Some("active");
+	if next_active && !current_active {
+		return true;
+	}
+	let current_polarity = animator_toggle_polarity(&fallback_action_last_label(current));
+	let next_polarity = animator_toggle_polarity(&fallback_action_last_label(next));
+	next_polarity == Some(AnimatorTogglePolarity::On) && current_polarity != Some(AnimatorTogglePolarity::On)
 }
 
 fn runtime_action_active(snapshot: &RendererRuntimeSnapshot, action_id: &str) -> bool {
@@ -845,16 +962,111 @@ fn wardrobe_set_active(active_set: &str, base_set: &str, set_id: &str) -> bool {
 }
 
 fn menu_action_label(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> String {
-	if !candidate.menu_path.is_empty() {
-		return candidate.menu_path.join(" / ");
-	}
-	match (candidate.menu_label.as_deref(), candidate.action_label.as_str()) {
-		(Some(menu_label), action_label) if !action_label.is_empty() && menu_label != action_label => {
-			format!("{menu_label} / {action_label}")
+	let path = if !candidate.menu_path.is_empty() {
+		candidate.menu_path.clone()
+	} else {
+		match (candidate.menu_label.as_deref(), candidate.action_label.as_str()) {
+			(Some(menu_label), action_label) if !action_label.is_empty() && menu_label != action_label => {
+				vec![menu_label.to_string(), action_label.to_string()]
+			}
+			(Some(menu_label), _) if !menu_label.is_empty() => vec![menu_label.to_string()],
+			(_, action_label) if !action_label.is_empty() => vec![action_label.to_string()],
+			_ => vec![format!("{} = {}", candidate.parameter_name, candidate.parameter_value)],
 		}
-		(Some(menu_label), _) if !menu_label.is_empty() => menu_label.to_string(),
-		(_, action_label) if !action_label.is_empty() => action_label.to_string(),
-		_ => format!("{} = {}", candidate.parameter_name, candidate.parameter_value),
+	};
+	normalize_animator_path_label(path)
+}
+
+fn menu_candidate_last_label(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> String {
+	candidate
+		.menu_path
+		.last()
+		.cloned()
+		.or_else(|| candidate.menu_label.clone())
+		.filter(|label| !label.is_empty())
+		.unwrap_or_else(|| {
+			if candidate.action_label.is_empty() {
+				candidate.action_id.clone()
+			} else {
+				candidate.action_label.clone()
+			}
+		})
+}
+
+fn fallback_action_label(action: &gpu::RuntimeActionStatus) -> String {
+	let path = action
+		.expression_menu_path
+		.as_deref()
+		.filter(|path| !path.trim().is_empty())
+		.map(|path| path.split('/').map(|segment| segment.trim().to_string()).collect::<Vec<_>>())
+		.unwrap_or_else(|| vec![fallback_action_last_label(action)]);
+	normalize_animator_path_label(path)
+}
+
+fn fallback_action_last_label(action: &gpu::RuntimeActionStatus) -> String {
+	action
+		.expression_menu_path
+		.as_deref()
+		.and_then(|path| path.split('/').next_back())
+		.map(str::trim)
+		.filter(|label| !label.is_empty())
+		.unwrap_or_else(|| {
+			if action.label.is_empty() {
+				action.action_id.as_str()
+			} else {
+				action.label.as_str()
+			}
+		})
+		.to_string()
+}
+
+fn normalize_animator_path_label(mut path: Vec<String>) -> String {
+	if let Some(last) = path.pop() {
+		let (label, _) = animator_normalized_toggle_label(&last);
+		path.push(label);
+	}
+	path.join(" / ")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AnimatorTogglePolarity {
+	On,
+	Off,
+}
+
+fn animator_toggle_polarity(label: &str) -> Option<AnimatorTogglePolarity> {
+	animator_normalized_toggle_label(label).1
+}
+
+fn animator_normalized_toggle_label(label: &str) -> (String, Option<AnimatorTogglePolarity>) {
+	let trimmed = label.trim();
+	let upper = trimmed.to_ascii_uppercase();
+	for suffix in ["OFF", "ON"] {
+		if !upper.ends_with(suffix) {
+			continue;
+		}
+		let base = trimmed[..trimmed.len() - suffix.len()]
+			.trim_end_matches(|ch: char| ch.is_whitespace() || ch == '_' || ch == ':' || ch == '/' || ch == '-')
+			.trim();
+		if base.is_empty() {
+			continue;
+		}
+		let polarity = if suffix == "OFF" {
+			AnimatorTogglePolarity::Off
+		} else {
+			AnimatorTogglePolarity::On
+		};
+		return (base.to_string(), Some(polarity));
+	}
+	(trimmed.to_string(), None)
+}
+
+fn animator_inactive_parameter_value(value: f32, polarity: Option<AnimatorTogglePolarity>) -> f32 {
+	let _ = polarity;
+	if value.abs() <= 0.005 {
+		1.0
+	} else {
+		0.0
 	}
 }
 
@@ -1165,6 +1377,11 @@ fn menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 
 fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 	let mut signature = format!("actions:{}", snapshot.menu_action_candidates.len());
+	let visible_menu_candidate_count = snapshot
+		.menu_action_candidates
+		.iter()
+		.filter(|candidate| animator_menu_candidate_visible(candidate))
+		.count();
 	for candidate in &snapshot.menu_action_candidates {
 		signature.push('|');
 		signature.push_str(&signature_field(&candidate.action_id));
@@ -1193,13 +1410,11 @@ fn menu_action_signature(snapshot: &RendererRuntimeSnapshot) -> String {
 			"inactive"
 		});
 	}
-	if snapshot.menu_action_candidates.is_empty() {
+	if visible_menu_candidate_count == 0 {
 		let fallback_actions = snapshot
 			.runtime_actions
 			.iter()
-			.filter(|action| action.available)
-			.filter(|action| action.wardrobe_set_id.is_none())
-			.filter(|action| action.expression_menu_path.as_deref().is_some_and(|path| !path.trim().is_empty()))
+			.filter(|action| animator_fallback_action_visible(action))
 			.collect::<Vec<_>>();
 		signature.push_str(&format!("|fallback:{}", fallback_actions.len()));
 		for action in fallback_actions {
@@ -1427,7 +1642,7 @@ mod tests {
 	}
 
 	#[test]
-	fn menu_key_does_not_fallback_when_menu_candidates_exist() {
+	fn menu_key_falls_back_when_menu_candidates_are_not_unanimator_visible() {
 		let mut before = snapshot();
 		before.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
 			action_id: "wardrobe:field_drape".to_string(),
@@ -1442,16 +1657,18 @@ mod tests {
 		before.runtime_actions = vec![gpu::RuntimeActionStatus {
 			action_id: "action:smile".to_string(),
 			label: "Smile".to_string(),
+			effect_count: 1,
 			expression_menu_path: Some("Expressions/Smile".to_string()),
 			parameter_name: Some("Smile".to_string()),
 			parameter_value: Some(1.0),
+			available: true,
 			..Default::default()
 		}];
 
 		let mut after = before.clone();
 		after.runtime_actions[0].expression_menu_path = Some("Expressions/Big Smile".to_string());
 
-		assert_eq!(menu_key(&before), menu_key(&after));
+		assert_ne!(menu_key(&before), menu_key(&after));
 	}
 
 	#[test]
@@ -1635,6 +1852,7 @@ mod tests {
 		status.runtime_actions = vec![gpu::RuntimeActionStatus {
 			action_id: "action:hat".to_string(),
 			label: "Hat".to_string(),
+			effect_count: 1,
 			expression_menu_path: Some("Wardrobe/Hat".to_string()),
 			available: true,
 			..Default::default()
@@ -1656,6 +1874,7 @@ mod tests {
 			gpu::RuntimeActionStatus {
 				action_id: "action:smile".to_string(),
 				label: "Smile".to_string(),
+				effect_count: 1,
 				expression_menu_path: Some("Expressions/Smile".to_string()),
 				available: true,
 				..Default::default()
@@ -1663,6 +1882,7 @@ mod tests {
 			gpu::RuntimeActionStatus {
 				action_id: "action:field_drape".to_string(),
 				label: "Field Drape".to_string(),
+				effect_count: 1,
 				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
 				wardrobe_set_id: Some("field_drape".to_string()),
 				available: true,
@@ -1686,6 +1906,7 @@ mod tests {
 		status.runtime_actions = vec![gpu::RuntimeActionStatus {
 			action_id: "action:hat_off".to_string(),
 			label: "Hat OFF".to_string(),
+			effect_count: 1,
 			expression_menu_path: Some("Wardrobe/Hat OFF".to_string()),
 			parameter_name: Some("HatOff".to_string()),
 			parameter_value: Some(1.0),
@@ -1705,6 +1926,56 @@ mod tests {
 		assert!(matches!(
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "HatOff" && value.abs() < f32::EPSILON
+		));
+	}
+
+	#[test]
+	fn vrc_menu_metadata_on_off_pair_is_single_toggle_action() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.menu_action_candidates = vec![
+			gpu::RuntimeMenuActionCandidateStatus {
+				action_id: "action:hat_on".to_string(),
+				action_label: "Hat ON".to_string(),
+				menu_key: "hat/on".to_string(),
+				menu_path: vec!["Object".to_string(), "Hat ON".to_string()],
+				control_type: Some("Toggle".to_string()),
+				parameter_name: "Hat".to_string(),
+				parameter_value: 1.0,
+				match_kind: "metadata".to_string(),
+				available: true,
+				effect_count: 1,
+				..Default::default()
+			},
+			gpu::RuntimeMenuActionCandidateStatus {
+				action_id: "action:hat_off".to_string(),
+				action_label: "Hat OFF".to_string(),
+				menu_key: "hat/off".to_string(),
+				menu_path: vec!["Object".to_string(), "Hat OFF".to_string()],
+				control_type: Some("Toggle".to_string()),
+				parameter_name: "Hat".to_string(),
+				parameter_value: 0.0,
+				match_kind: "metadata".to_string(),
+				available: true,
+				effect_count: 1,
+				..Default::default()
+			},
+		];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && (*value - 1.0).abs() < f32::EPSILON
+		));
+		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+		assert_eq!(menu_action_label(&status.menu_action_candidates[1]), "Object / Hat");
+
+		status.runtime_parameter_values.insert("Hat".to_string(), 0.0);
+		let (_menu, actions) = build_menu(&opts, &status);
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && (*value - 1.0).abs() < f32::EPSILON
 		));
 	}
 

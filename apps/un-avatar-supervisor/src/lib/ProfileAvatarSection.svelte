@@ -70,6 +70,11 @@
 		return setting.animator_actions.find((action) => action.id === id)?.mode ?? "off";
 	}
 
+	function selectedValueFor(id: string): number {
+		const value = setting.animator_actions.find((action) => action.id === id)?.value;
+		return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+	}
+
 	async function refreshAnimatorPage(): Promise<void> {
 		traceFrontendEvent("unanimator:refresh:enter", {
 			avatarPath: setting.avatar_path ?? "",
@@ -167,10 +172,10 @@
 		});
 	}
 
-	async function updateAnimatorAction(id: string, mode: AnimatorActionMode): Promise<void> {
+	async function updateAnimatorAction(id: string, mode: AnimatorActionMode, value = selectedValueFor(id)): Promise<void> {
 		const next = setting.animator_actions.filter((action) => action.id !== id);
 		if (mode !== "off") {
-			next.push({ id, mode });
+			next.push({ id, mode, value: Math.min(1, Math.max(0, value)) });
 		}
 		if (animatorPage) {
 			animatorCandidates = animatorCandidates.map((candidate) =>
@@ -182,6 +187,10 @@
 			};
 		}
 		await onUpdateSettingValue("animator.actions", next);
+	}
+
+	async function updateAnimatorActionValue(id: string, value: number): Promise<void> {
+		await updateAnimatorAction(id, selectedModeFor(id) === "off" ? "toggle" : selectedModeFor(id), value);
 	}
 </script>
 
@@ -332,6 +341,26 @@
 										<option value="toggle">{$_("profiles.editor.unanimator_mode_toggle")}</option>
 										<option value="one_shot">{$_("profiles.editor.unanimator_mode_one_shot")}</option>
 									</select>
+									<div class="animator-action-value">
+										<input
+											type="range"
+											min="0"
+											max="1"
+											step="0.01"
+											value={selectedValueFor(candidate.id)}
+											disabled={busy || selectedModeFor(candidate.id) === "off"}
+											oninput={(event) => updateAnimatorActionValue(candidate.id, Number((event.currentTarget as HTMLInputElement).value))}
+										/>
+										<input
+											type="number"
+											min="0"
+											max="1"
+											step="0.01"
+											value={selectedValueFor(candidate.id).toFixed(2)}
+											disabled={busy || selectedModeFor(candidate.id) === "off"}
+											onchange={(event) => updateAnimatorActionValue(candidate.id, Number((event.currentTarget as HTMLInputElement).value))}
+										/>
+									</div>
 								</div>
 							{/each}
 						</div>

@@ -63,6 +63,8 @@ pub(crate) struct AnimatorActionManifest {
 	pub id: Option<String>,
 	/// off | toggle | one_shot. Unknown values are treated as off.
 	pub mode: Option<String>,
+	/// Optional parameter value to send when activating this action.
+	pub value: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -576,7 +578,10 @@ impl AnimatorManifest {
 				continue;
 			};
 			if !ids.iter().any(|existing| existing == &id) {
-				ids.push(id);
+				ids.push(id.clone());
+			}
+			if let Some(value) = action.value.filter(|value| value.is_finite()) {
+				opts.animator_action_values.insert(id, value);
 			}
 		}
 		opts.animator_action_ids = ids;
@@ -1312,6 +1317,7 @@ action_ids = ["animator:0:0:hat_off:0"]
 [[animator.actions]]
 id = "animator:0:0:beam:0"
 mode = "one_shot"
+value = 0.45
 
 [[animator.actions]]
 id = "animator:0:0:debug_hidden:0"
@@ -1450,6 +1456,7 @@ constraint_iterations = 6
 			opts.animator_action_ids,
 			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]
 		);
+		assert_eq!(opts.animator_action_values.get("animator:0:0:beam:0").copied(), Some(0.45));
 		assert!(opts.spout.enabled);
 		assert_eq!(opts.spout.name, "UN Avatar Spout2");
 		assert_eq!(opts.spout.width, Some(1920));

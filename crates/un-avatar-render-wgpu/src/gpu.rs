@@ -2607,6 +2607,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		path,
 		opts.wardrobe_set.as_deref(),
 		&opts.animator_action_ids,
+		&opts.animator_action_values,
 		opts.contact_parameter_emission,
 		opts.processed_texture_cache,
 	)

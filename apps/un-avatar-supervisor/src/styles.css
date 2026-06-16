@@ -3728,6 +3728,10 @@ dd {
 }
 
 .animator-action-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(150px, 220px);
+	align-items: center;
+	gap: 8px;
 	min-height: 44px;
 	padding: 6px 8px;
 	border: 1px solid var(--border);
@@ -3738,6 +3742,17 @@ dd {
 .animator-action-row select {
 	width: 112px;
 	flex: 0 0 auto;
+}
+
+.animator-action-value {
+	display: grid;
+	grid-template-columns: minmax(96px, 1fr) 58px;
+	align-items: center;
+	gap: 6px;
+}
+
+.animator-action-value input[type="number"] {
+	min-width: 0;
 }
 
 .animator-page-controls {

@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+	collections::BTreeMap,
 	path::{Path, PathBuf},
 	sync::Arc,
 };
@@ -137,6 +138,7 @@ pub struct ImportContext {
 	pub temp_dir: PathBuf,
 	pub initial_wardrobe_set: Option<String>,
 	pub enabled_animator_action_ids: Vec<String>,
+	pub animator_action_values: BTreeMap<String, f32>,
 	pub defer_initial_image_decode: bool,
 	pub profile: bool,
 }
@@ -148,6 +150,7 @@ impl ImportContext {
 			temp_dir: PathBuf::from("."),
 			initial_wardrobe_set: None,
 			enabled_animator_action_ids: Vec::new(),
+			animator_action_values: BTreeMap::new(),
 			defer_initial_image_decode: false,
 			profile: false,
 		}

@@ -3818,6 +3818,7 @@ fn unavatar_runtime_action_set(
 	unavatar: &UnaUnavatarExtension,
 	scene: Option<&UnaSceneSnapshot>,
 	enabled_animator_action_ids: &[String],
+	animator_action_values: &BTreeMap<String, f32>,
 ) -> Option<UnaRuntimeActionSet> {
 	let mut actions = Vec::new();
 	if let Some(wardrobe) = unavatar.source.get("wardrobe").and_then(|v| v.as_object()) {
@@ -3876,7 +3877,8 @@ fn unavatar_runtime_action_set(
 			actions.push(action);
 		}
 	}
-	if let Some(animator_actions) = unavatar_animator_runtime_actions(unavatar, scene, enabled_animator_action_ids) {
+	if let Some(animator_actions) = unavatar_animator_runtime_actions(unavatar, scene, enabled_animator_action_ids, animator_action_values)
+	{
 		for action in animator_actions {
 			if actions.iter().any(|existing| existing.id == action.id) {
 				continue;
@@ -3891,6 +3893,7 @@ fn unavatar_animator_runtime_actions(
 	unavatar: &UnaUnavatarExtension,
 	scene: Option<&UnaSceneSnapshot>,
 	profile_enabled_action_ids: &[String],
+	profile_action_values: &BTreeMap<String, f32>,
 ) -> Option<Vec<UnaRuntimeAction>> {
 	let animator = unavatar.source.get("animator")?;
 	let enabled_action_ids = unavatar_animator_enabled_action_ids(animator, profile_enabled_action_ids);
@@ -3957,6 +3960,11 @@ fn unavatar_animator_runtime_actions(
 					if !enabled_action_ids.contains(command.as_str()) {
 						continue;
 					}
+					let parameter_value = profile_action_values
+						.get(command.as_str())
+						.copied()
+						.filter(|value| value.is_finite())
+						.unwrap_or(parameter_value);
 					actions.push(UnaRuntimeAction {
 						id: command.clone(),
 						label: unavatar_animator_action_label(&label),
@@ -11491,9 +11499,14 @@ impl AvatarImporter for GltfImporter {
 			record_gltf_import_profile_step(&mut report, "base_wardrobe", step_started);
 		}
 		let step_started = Instant::now();
-		let runtime_actions = unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar_runtime_action_set(unavatar, Some(&scene), &ctx.enabled_animator_action_ids));
+		let runtime_actions = unavatar.as_ref().and_then(|unavatar| {
+			unavatar_runtime_action_set(
+				unavatar,
+				Some(&scene),
+				&ctx.enabled_animator_action_ids,
+				&ctx.animator_action_values,
+			)
+		});
 		record_gltf_import_profile_step(&mut report, "runtime_actions", step_started);
 		let step_started = Instant::now();
 		let runtime_expression_names = expression_weight_names_from_runtime_actions(runtime_actions.as_ref());
@@ -13609,7 +13622,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "animator:0:0:hat_off:0");
@@ -13640,6 +13653,14 @@ mod tests {
 				visible: false,
 			}]
 		);
+
+		let mut action_values = BTreeMap::new();
+		action_values.insert("animator:0:0:hat_off:0".to_string(), 0.45);
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &action_values).expect("runtime actions");
+		assert!(actions.actions[0].triggers.iter().any(|trigger| matches!(
+			trigger,
+			UnaRuntimeActionTrigger::ParameterValue { name, value } if name == "Hat" && (*value - 0.45).abs() < f32::EPSILON
+		)));
 	}
 
 	#[test]
@@ -13678,8 +13699,8 @@ mod tests {
 			}),
 		};
 
-		assert!(unavatar_runtime_action_set(&unavatar, None, &[]).is_none());
-		assert!(unavatar_runtime_action_set(&unavatar, None, &["animator:0:0:hat_off:0".to_string()]).is_some());
+		assert!(unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).is_none());
+		assert!(unavatar_runtime_action_set(&unavatar, None, &["animator:0:0:hat_off:0".to_string()], &BTreeMap::new()).is_some());
 	}
 
 	#[test]
@@ -13718,7 +13739,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, None, &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:material_setter:mat-setter");
@@ -13816,7 +13837,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:object_toggle:hat-toggle");
@@ -13898,7 +13919,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(
@@ -13951,7 +13972,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, None, &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].label, "Jacket Red");
@@ -13993,7 +14014,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, None, &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].label, "Jacket Crimson");
@@ -14046,7 +14067,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, None, &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].label, "Jacket Red");
@@ -14091,7 +14112,7 @@ mod tests {
 			}),
 		};
 
-		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).is_none());
+		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).is_none());
 	}
 
 	#[test]
@@ -14187,7 +14208,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].id, "ma:material_swap:mat-swap");
@@ -14283,7 +14304,7 @@ mod tests {
 			}),
 		};
 
-		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).expect("runtime actions");
+		let actions = unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).expect("runtime actions");
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(
@@ -14390,7 +14411,7 @@ mod tests {
 			}),
 		};
 
-		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene), &[]).is_none());
+		assert!(unavatar_runtime_action_set(&unavatar, Some(&scene), &[], &BTreeMap::new()).is_none());
 	}
 
 	#[test]

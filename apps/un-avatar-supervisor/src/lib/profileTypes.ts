@@ -213,6 +213,7 @@ export type AnimatorActionMode = "off" | "toggle" | "one_shot";
 export type AnimatorActionSetting = {
 	id: string;
 	mode: AnimatorActionMode;
+	value?: number | null;
 };
 
 export type UnavatarAnimatorActionCandidate = {

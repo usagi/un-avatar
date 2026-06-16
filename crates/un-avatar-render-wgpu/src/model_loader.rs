@@ -179,6 +179,7 @@ pub(crate) fn load_document(
 	path: &Path,
 	wardrobe_set: Option<&str>,
 	enabled_animator_action_ids: &[String],
+	animator_action_values: &std::collections::BTreeMap<String, f32>,
 	contact_parameter_emission: bool,
 	defer_initial_image_decode: bool,
 ) -> Result<Arc<UnaDocument>, String> {
@@ -186,6 +187,7 @@ pub(crate) fn load_document(
 		path,
 		wardrobe_set,
 		enabled_animator_action_ids,
+		animator_action_values,
 		contact_parameter_emission,
 		defer_initial_image_decode,
 		false,
@@ -196,6 +198,7 @@ pub(crate) fn load_document_profiled(
 	path: &Path,
 	wardrobe_set: Option<&str>,
 	enabled_animator_action_ids: &[String],
+	animator_action_values: &std::collections::BTreeMap<String, f32>,
 	contact_parameter_emission: bool,
 	defer_initial_image_decode: bool,
 ) -> Result<Arc<UnaDocument>, String> {
@@ -203,6 +206,7 @@ pub(crate) fn load_document_profiled(
 		path,
 		wardrobe_set,
 		enabled_animator_action_ids,
+		animator_action_values,
 		contact_parameter_emission,
 		defer_initial_image_decode,
 		true,
@@ -221,6 +225,7 @@ fn load_document_inner(
 	path: &Path,
 	wardrobe_set: Option<&str>,
 	enabled_animator_action_ids: &[String],
+	animator_action_values: &std::collections::BTreeMap<String, f32>,
 	contact_parameter_emission: bool,
 	defer_initial_image_decode: bool,
 	profile: bool,
@@ -230,6 +235,7 @@ fn load_document_inner(
 		temp_dir: std::env::temp_dir(),
 		initial_wardrobe_set: normalize_wardrobe_set_id(wardrobe_set).map(str::to_string),
 		enabled_animator_action_ids: enabled_animator_action_ids.to_vec(),
+		animator_action_values: animator_action_values.clone(),
 		defer_initial_image_decode,
 		profile,
 	};
