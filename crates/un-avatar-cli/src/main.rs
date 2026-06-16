@@ -1673,10 +1673,7 @@ fn run_validate(plugin_dirs: &[PathBuf], path: PathBuf, input_format: Option<Str
 	let mut ictx = ImportContext {
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
-		initial_wardrobe_set: None,
-		enabled_animator_action_ids: Vec::new(),
-		defer_initial_image_decode: false,
-		profile: false,
+		..ImportContext::dummy()
 	};
 	let path_display = path.display().to_string();
 	let import_input = import_input_for_path(&path, &desc.id, cached_bytes);
@@ -1756,10 +1753,7 @@ fn run_inspect(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Result<(),
 	let mut ictx = ImportContext {
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
-		initial_wardrobe_set: None,
-		enabled_animator_action_ids: Vec::new(),
-		defer_initial_image_decode: false,
-		profile: false,
+		..ImportContext::dummy()
 	};
 	let imported = importer
 		.import(&mut ictx, import_input_for_path(&path, &desc.id, cached_bytes), ImportOptions)
@@ -5342,10 +5336,7 @@ fn run_diagnose(
 	let mut ictx = ImportContext {
 		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
-		initial_wardrobe_set: None,
-		enabled_animator_action_ids: Vec::new(),
-		defer_initial_image_decode: false,
-		profile: false,
+		..ImportContext::dummy()
 	};
 	let import_started = Instant::now();
 	let mut imported = importer
@@ -6387,10 +6378,7 @@ fn run_convert(
 	let mut ictx = ImportContext {
 		asset_root: input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
 		temp_dir: std::env::temp_dir(),
-		initial_wardrobe_set: None,
-		enabled_animator_action_ids: Vec::new(),
-		defer_initial_image_decode: false,
-		profile: false,
+		..ImportContext::dummy()
 	};
 	let import_desc = importer.descriptor();
 	let imported = importer
