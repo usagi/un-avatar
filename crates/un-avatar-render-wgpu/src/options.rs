@@ -525,6 +525,10 @@ pub struct AvatarWindowOptions {
 	pub manifest_path: Option<PathBuf>,
 	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
 	pub wardrobe_set: Option<String>,
+	/// Wardrobe transition billboard anchor bone. Supported values: head / neck / spine.
+	pub wardrobe_billboard_anchor: String,
+	/// Wardrobe transition billboard vertical offset from the anchor, in meters.
+	pub wardrobe_billboard_y_offset_m: f32,
 	/// Renderer-global wardrobe set input bindings. Active only while this renderer process is running.
 	pub wardrobe_bindings: Vec<WardrobeBindingOptions>,
 	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
@@ -733,6 +737,8 @@ impl Default for AvatarWindowOptions {
 			gltf_path: None,
 			manifest_path: None,
 			wardrobe_set: None,
+			wardrobe_billboard_anchor: "neck".to_string(),
+			wardrobe_billboard_y_offset_m: 0.0,
 			wardrobe_bindings: Vec::new(),
 			animator_action_ids: Vec::new(),
 			animator_action_modes: BTreeMap::new(),

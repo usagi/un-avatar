@@ -8,6 +8,7 @@ export function isLaunchTimeRendererField(field: string): boolean {
 	return (
 		field === "avatar_path" ||
 		field === "wardrobe_set" ||
+		field.startsWith("wardrobe.transition.") ||
 		field === "icon_path" ||
 		field === "profile.display_name" ||
 		field.startsWith("render_quality.") ||
@@ -43,6 +44,7 @@ export function canApplyWithoutRestart(field: string): boolean {
 export function profileFieldLabel(field: string, translate: (key: string) => string): string {
 	if (field === "avatar_path") return translate("profiles.fields.avatar_file");
 	if (field === "wardrobe_set") return translate("profiles.fields.wardrobe");
+	if (field.startsWith("wardrobe.transition.")) return translate("profiles.fields.wardrobe");
 	if (field === "icon_path") return translate("profiles.fields.icon");
 	if (field === "profile.display_name") return translate("profiles.fields.name");
 	if (field === "profile.group") return translate("profiles.fields.group");

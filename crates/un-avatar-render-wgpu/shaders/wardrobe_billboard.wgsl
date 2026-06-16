@@ -103,10 +103,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 	let t = billboard.time_params.x;
 	let float_y = sin(t * 2.1) * 0.035;
 	let q = p - vec2<f32>(0.0, float_y);
-	let card = rounded_rect_fill(q, vec2<f32>(0.76, 0.62), 0.28);
-	let edge = rounded_rect_line(q, vec2<f32>(0.76, 0.62), 0.28, 0.026);
-	let inner = rounded_rect_line(q, vec2<f32>(0.58, 0.44), 0.21, 0.010);
-	let aura = soft_disc(q * vec2<f32>(0.82, 1.10), 0.86);
+	let card = rounded_rect_fill(q, vec2<f32>(0.76, 0.62), 0.24);
+	let edge = rounded_rect_line(q, vec2<f32>(0.76, 0.62), 0.24, 0.030);
+	let inner = rounded_rect_line(q, vec2<f32>(0.57, 0.43), 0.18, 0.012);
+	let aura = soft_disc(q * vec2<f32>(0.88, 1.16), 0.86);
 	let stitch_a = sparkle(q - vec2<f32>(-0.58, 0.39 + sin(t * 1.4) * 0.025), 0.040);
 	let stitch_b = sparkle(q - vec2<f32>(0.60, 0.38 + sin(t * 1.1 + 1.8) * 0.025), 0.038);
 	let stitch_c = sparkle(q - vec2<f32>(-0.50, -0.42 + sin(t * 1.3 + 0.8) * 0.025), 0.032);
@@ -134,17 +134,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 		+ soft_disc(q - vec2<f32>(0.44, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 1.8)) * 0.038), 0.030)
 		+ soft_disc(q - vec2<f32>(0.53, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 3.6)) * 0.038), 0.030);
 	let cloth_shadow = rounded_rect_fill(hp - vec2<f32>(0.0, -0.30), vec2<f32>(0.34, 0.08), 0.08) * card;
-	let base = vec3<f32>(0.15, 0.11, 0.16) * card;
-	let cream = vec3<f32>(1.00, 0.93, 0.86);
-	let mint = vec3<f32>(0.62, 1.00, 0.91);
-	let peach = vec3<f32>(1.00, 0.58, 0.74);
-	let lavender = vec3<f32>(0.72, 0.62, 0.82);
-	let glow = aura * 0.26 + edge * 0.70 + inner * 0.16 + garment * 1.05 + shine * 0.95 + flip_glow * 0.60 + sweep * 0.34 + dots * 0.85 + (stitch_a + stitch_b + stitch_c) * 0.65;
+	let grid = line_mask(fract((q.x + q.y * 0.22 + t * 0.045) * 9.0) - 0.5, 0.010) * card * 0.16;
+	let base = vec3<f32>(0.018, 0.026, 0.042) * card;
+	let glass = vec3<f32>(0.070, 0.095, 0.155);
+	let white = vec3<f32>(0.92, 1.00, 0.98);
+	let cyan = vec3<f32>(0.28, 1.00, 0.96);
+	let magenta = vec3<f32>(1.00, 0.34, 0.78);
+	let violet = vec3<f32>(0.50, 0.40, 0.92);
+	let glow = aura * 0.22 + edge * 0.95 + inner * 0.24 + garment * 1.30 + shine * 1.05 + flip_glow * 0.68 + sweep * 0.50 + dots * 0.95 + (stitch_a + stitch_b + stitch_c) * 0.82;
 	let color = base
-		+ lavender * card * 0.28
-		+ cream * (garment * 0.72 + cloth_shadow * 0.10)
-		+ mint * (edge * 0.42 + shine * 0.70 + dots * 0.70 + sweep * 0.40)
-		+ peach * ((stitch_a + stitch_b + stitch_c) * 0.58 + flip_glow * 0.35);
-	let alpha = clamp(aura * 0.10 + card * 0.54 + glow * 0.12, 0.0, 0.78);
+		+ glass * card * 0.92
+		+ violet * grid
+		+ white * (garment * 0.88 + cloth_shadow * 0.08)
+		+ cyan * (edge * 0.62 + inner * 0.34 + shine * 0.76 + dots * 0.78 + sweep * 0.44)
+		+ magenta * ((stitch_a + stitch_b + stitch_c) * 0.66 + flip_glow * 0.42)
+		+ cyan * aura * 0.055;
+	let alpha = clamp(aura * 0.08 + card * 0.76 + glow * 0.11, 0.0, 0.92);
 	return vec4<f32>(color, alpha);
 }

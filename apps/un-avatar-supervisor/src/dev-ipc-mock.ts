@@ -51,6 +51,8 @@ let avatarSettings = [
 		manifest_path: "profiles/main.toml",
 		avatar_path: "assets/example/main.vrm",
 		wardrobe_set: null,
+		wardrobe_billboard_anchor: "neck",
+		wardrobe_billboard_y_offset_mm: 0,
 		wardrobe_shortcuts: [],
 		wardrobe_bindings: [],
 		animator_actions: [],
@@ -168,6 +170,8 @@ let avatarSettings = [
 		manifest_path: "profiles/debug.toml",
 		avatar_path: "assets/example/debug.vrm",
 		wardrobe_set: null,
+		wardrobe_billboard_anchor: "neck",
+		wardrobe_billboard_y_offset_mm: 0,
 		wardrobe_shortcuts: [],
 		wardrobe_bindings: [],
 		animator_actions: [],
@@ -453,6 +457,12 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "wardrobe_set") {
 					(setting as { wardrobe_set: string | null }).wardrobe_set = String(args.value ?? "") || null;
+				}
+				if (setting && field === "wardrobe.transition.billboard_anchor") {
+					(setting as { wardrobe_billboard_anchor: string }).wardrobe_billboard_anchor = String(args.value ?? "neck");
+				}
+				if (setting && field === "wardrobe.transition.billboard_y_offset_mm") {
+					(setting as { wardrobe_billboard_y_offset_mm: number }).wardrobe_billboard_y_offset_mm = Number(args.value ?? 0);
 				}
 				if (setting && field === "wardrobe.shortcuts") {
 					(setting as { wardrobe_shortcuts: unknown[] }).wardrobe_shortcuts = (args.value as unknown[]) ?? [];

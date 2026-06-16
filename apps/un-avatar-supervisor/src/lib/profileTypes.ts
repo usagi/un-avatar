@@ -101,6 +101,8 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	storage: "seed" | "user";
 	manifest_path: string;
 	wardrobe_set: string | null;
+	wardrobe_billboard_anchor: "head" | "neck" | "spine" | string;
+	wardrobe_billboard_y_offset_mm: number;
 	wardrobe_shortcuts: WardrobeShortcutSetting[];
 	wardrobe_bindings: WardrobeBindingSetting[];
 	animator_actions: AnimatorActionSetting[];
@@ -289,7 +291,14 @@ export type UnavatarWardrobeOptions = {
 
 export type AvatarFileSetting = Pick<
 	AvatarSetting,
-	"avatar_path" | "manifest_path" | "wardrobe_set" | "wardrobe_shortcuts" | "wardrobe_bindings" | "animator_actions"
+	| "avatar_path"
+	| "manifest_path"
+	| "wardrobe_set"
+	| "wardrobe_billboard_anchor"
+	| "wardrobe_billboard_y_offset_mm"
+	| "wardrobe_shortcuts"
+	| "wardrobe_bindings"
+	| "animator_actions"
 	| "animator_bindings"
 >;
 

@@ -2046,11 +2046,6 @@ impl AvatarApp {
 					eprintln!("un-avatar-renderer: {error}");
 				}
 			}
-			RendererTrayAction::RestoreOutputFromProfile => {
-				if let Err(error) = self.restore_tray_output_from_profile() {
-					eprintln!("un-avatar-renderer: {error}");
-				}
-			}
 			RendererTrayAction::SaveWindowToProfile => {
 				if let Err(error) = self.save_tray_window_to_profile() {
 					eprintln!("un-avatar-renderer: {error}");
@@ -2058,6 +2053,21 @@ impl AvatarApp {
 			}
 			RendererTrayAction::RestoreWindowFromProfile => {
 				if let Err(error) = self.restore_tray_window_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveCameraToProfile => {
+				if let Err(error) = self.save_tray_camera_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::RestoreCameraFromProfile => {
+				if let Err(error) = self.restore_tray_camera_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveWardrobeToProfile => {
+				if let Err(error) = self.save_tray_wardrobe_to_profile() {
 					eprintln!("un-avatar-renderer: {error}");
 				}
 			}
@@ -2228,7 +2238,11 @@ impl AvatarApp {
 			return;
 		}
 		let saved_camera = gpu.camera_state_snapshot();
-		let billboard_center = gpu.wardrobe_billboard_anchor_world(saved_camera);
+		let billboard_center = gpu.wardrobe_billboard_anchor_world(
+			saved_camera,
+			&self.opts.wardrobe_billboard_anchor,
+			self.opts.wardrobe_billboard_y_offset_m,
+		);
 		let now = Instant::now();
 		self.wardrobe_transition = Some(WardrobeTransitionState {
 			set_id,
@@ -2677,35 +2691,6 @@ impl AvatarApp {
 	}
 
 	#[cfg(windows)]
-	fn restore_tray_output_from_profile(&self) -> Result<(), String> {
-		let output = renderer_tray::read_output_state_from_profile(self.tray_manifest_path()?)?;
-		if output.spout_enabled {
-			let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-				enabled: true,
-				name: output.spout_name.clone(),
-				width: output.spout_width,
-				height: output.spout_height,
-			});
-			let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
-				enabled: !output.minimized,
-				activate: !output.minimized,
-			});
-		} else {
-			let _ = self.event_proxy.send_event(RendererControlEvent::SetPreviewWindow {
-				enabled: !output.minimized,
-				activate: !output.minimized,
-			});
-			let _ = self.event_proxy.send_event(RendererControlEvent::SetSpoutOutput {
-				enabled: false,
-				name: output.spout_name,
-				width: output.spout_width,
-				height: output.spout_height,
-			});
-		}
-		Ok(())
-	}
-
-	#[cfg(windows)]
 	fn restore_tray_window_from_profile(&self) -> Result<(), String> {
 		let window = renderer_tray::read_window_state_from_profile(self.tray_manifest_path()?)?;
 		if let Some([x, y]) = window.position {
@@ -2725,6 +2710,39 @@ impl AvatarApp {
 			});
 		}
 		Ok(())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_camera_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let camera = snapshot.camera.ok_or_else(|| "renderer has not reported camera yet".to_string())?;
+		renderer_tray::save_camera_state_to_profile(manifest_path, &camera)
+	}
+
+	#[cfg(windows)]
+	fn restore_tray_camera_from_profile(&self) -> Result<(), String> {
+		let camera = renderer_tray::read_camera_state_from_profile(self.tray_manifest_path()?)?;
+		let _ = self.event_proxy.send_event(RendererControlEvent::SetCameraState {
+			target: camera.target,
+			longitude_deg: camera.longitude_deg,
+			latitude_deg: camera.latitude_deg,
+			radius: camera.radius,
+			diagonal_fov_deg: camera.diagonal_fov_deg,
+			transition: None,
+		});
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_wardrobe_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		renderer_tray::save_wardrobe_state_to_profile(
+			manifest_path,
+			snapshot.active_wardrobe_set.as_deref(),
+			snapshot.base_wardrobe_set.as_deref(),
+		)
 	}
 
 	fn update_runtime_focus_status(&self) {
@@ -6807,6 +6825,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		gltf_path: cli.gltf,
 		manifest_path: None,
 		wardrobe_set: cli.wardrobe_set,
+		wardrobe_billboard_anchor: AvatarWindowOptions::default().wardrobe_billboard_anchor,
+		wardrobe_billboard_y_offset_m: AvatarWindowOptions::default().wardrobe_billboard_y_offset_m,
 		wardrobe_bindings: Vec::new(),
 		animator_action_ids: Vec::new(),
 		animator_action_modes: Default::default(),

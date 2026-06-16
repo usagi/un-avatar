@@ -1332,6 +1332,8 @@ struct AvatarSetting {
 	manifest_path: String,
 	avatar_path: Option<String>,
 	wardrobe_set: Option<String>,
+	wardrobe_billboard_anchor: String,
+	wardrobe_billboard_y_offset_mm: f32,
 	wardrobe_shortcuts: Vec<WardrobeShortcutSetting>,
 	wardrobe_bindings: Vec<WardrobeBindingSetting>,
 	animator_actions: Vec<AnimatorActionSetting>,
@@ -1885,6 +1887,14 @@ struct ManifestAnimatorBinding {
 struct ManifestWardrobe {
 	shortcuts: Option<Vec<ManifestWardrobeShortcut>>,
 	bindings: Option<Vec<ManifestWardrobeBinding>>,
+	transition: Option<ManifestWardrobeTransition>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeTransition {
+	billboard_anchor: Option<String>,
+	billboard_y_offset_mm: Option<f32>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2363,6 +2373,28 @@ fn manifest_wardrobe_binding_settings(wardrobe: Option<&ManifestWardrobe>) -> Ve
 		}
 	}
 	bindings
+}
+
+fn manifest_wardrobe_billboard_anchor(wardrobe: Option<&ManifestWardrobe>) -> String {
+	let value = wardrobe
+		.and_then(|wardrobe| wardrobe.transition.as_ref())
+		.and_then(|transition| transition.billboard_anchor.as_deref())
+		.unwrap_or("neck")
+		.trim()
+		.to_ascii_lowercase();
+	match value.as_str() {
+		"head" | "neck" | "spine" => value,
+		_ => "neck".to_string(),
+	}
+}
+
+fn manifest_wardrobe_billboard_y_offset_mm(wardrobe: Option<&ManifestWardrobe>) -> f32 {
+	wardrobe
+		.and_then(|wardrobe| wardrobe.transition.as_ref())
+		.and_then(|transition| transition.billboard_y_offset_mm)
+		.filter(|value| value.is_finite())
+		.unwrap_or(0.0)
+		.clamp(-1000.0, 1000.0)
 }
 
 fn normalize_wardrobe_binding_kind(kind: &str) -> String {
@@ -5656,6 +5688,42 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 fn apply_wardrobe_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
 	match field {
 		"wardrobe_set" => set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string()),
+		"wardrobe.transition.billboard_anchor" => {
+			let anchor = json_string(&value, field)?.trim().to_ascii_lowercase();
+			let anchor = match anchor.as_str() {
+				"head" | "neck" | "spine" => anchor,
+				_ => "neck".to_string(),
+			};
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			let wardrobe = root
+				.entry("wardrobe".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe must be a table".to_string())?;
+			let transition = wardrobe
+				.entry("transition".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe.transition must be a table".to_string())?;
+			transition.insert("billboard_anchor".to_string(), toml::Value::String(anchor));
+			Ok(())
+		}
+		"wardrobe.transition.billboard_y_offset_mm" => {
+			let offset = json_f32(&value, field)?.clamp(-1000.0, 1000.0);
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			let wardrobe = root
+				.entry("wardrobe".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe must be a table".to_string())?;
+			let transition = wardrobe
+				.entry("transition".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe.transition must be a table".to_string())?;
+			transition.insert("billboard_y_offset_mm".to_string(), toml::Value::Float(f64::from(offset)));
+			Ok(())
+		}
 		"wardrobe.shortcuts" => {
 			let shortcuts: Vec<WardrobeShortcutSetting> =
 				serde_json::from_value(value).map_err(|e| format!("wardrobe.shortcuts must be a shortcut array: {e}"))?;
@@ -8892,6 +8960,8 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let animator_bindings = manifest_animator_binding_settings(manifest.animator.as_ref());
 	let wardrobe_shortcuts = manifest_wardrobe_shortcut_settings(manifest.wardrobe.as_ref());
 	let wardrobe_bindings = manifest_wardrobe_binding_settings(manifest.wardrobe.as_ref());
+	let wardrobe_billboard_anchor = manifest_wardrobe_billboard_anchor(manifest.wardrobe.as_ref());
+	let wardrobe_billboard_y_offset_mm = manifest_wardrobe_billboard_y_offset_mm(manifest.wardrobe.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
 	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
@@ -8930,6 +9000,8 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 			let set = set.trim().to_string();
 			(!set.is_empty()).then_some(set)
 		}),
+		wardrobe_billboard_anchor,
+		wardrobe_billboard_y_offset_mm,
 		wardrobe_shortcuts,
 		wardrobe_bindings,
 		animator_actions,
@@ -14202,6 +14274,44 @@ id = "test"
 
 		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
 		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn wardrobe_transition_settings_write_billboard_anchor_and_offset() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.transition.billboard_anchor",
+			serde_json::json!("spine"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.transition.billboard_y_offset_mm",
+			serde_json::json!(42.0),
+		)
+		.unwrap();
+
+		let transition = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("transition"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(transition.get("billboard_anchor").and_then(toml::Value::as_str), Some("spine"));
+		assert_eq!(transition.get("billboard_y_offset_mm").and_then(toml::Value::as_float), Some(42.0));
 	}
 
 	#[test]

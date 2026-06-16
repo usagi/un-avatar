@@ -3732,7 +3732,7 @@ impl CameraStateSnapshot {
 	pub(crate) fn fallback_wardrobe_billboard_center(self) -> [f32; 3] {
 		let target = Vec3::from_array(self.target);
 		let radius = self.radius.max(0.05);
-		(target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36)).to_array()
+		(target + Vec3::Y * (radius * 0.04).clamp(0.04, 0.14)).to_array()
 	}
 
 	pub(crate) fn wardrobe_billboard_camera(self, aspect_wh: f32, center: [f32; 3]) -> WardrobeBillboardCamera {
@@ -5575,7 +5575,7 @@ impl GpuState {
 		self.document.clone()
 	}
 
-	pub(crate) fn wardrobe_billboard_anchor_world(&self, saved_camera: CameraStateSnapshot) -> [f32; 3] {
+	pub(crate) fn wardrobe_billboard_anchor_world(&self, saved_camera: CameraStateSnapshot, anchor: &str, y_offset_m: f32) -> [f32; 3] {
 		let fallback = saved_camera.fallback_wardrobe_billboard_center();
 		let Some(doc_arc) = self.document.as_ref() else {
 			return fallback;
@@ -5586,20 +5586,24 @@ impl GpuState {
 		let (Some(scene), Some(profile)) = (doc.scene.as_ref(), doc.humanoid_profile.as_ref()) else {
 			return fallback;
 		};
-		let Some(head_node) = humanoid_node_index(profile, &["head", "neck", "upperchest", "chest"]) else {
+		let keys = match anchor.trim().to_ascii_lowercase().as_str() {
+			"head" => &["head", "neck", "upperchest", "chest"][..],
+			"spine" => &["upperchest", "chest", "spine", "hips", "neck"][..],
+			_ => &["neck", "upperchest", "chest", "spine", "head"][..],
+		};
+		let Some(anchor_node) = humanoid_node_index(profile, keys) else {
 			return fallback;
 		};
 		let world = crate::scene_transform::scene_world_matrices(scene);
-		let Some(head_world) = world.get(head_node) else {
+		let Some(anchor_world) = world.get(anchor_node) else {
 			return fallback;
 		};
-		let head = head_world.transform_point3(Vec3::ZERO);
-		if !head.is_finite() {
+		let position = anchor_world.transform_point3(Vec3::ZERO);
+		if !position.is_finite() {
 			return fallback;
 		}
-		let up = head_world.transform_vector3(Vec3::Y).try_normalize().unwrap_or(Vec3::Y);
-		let offset = (saved_camera.radius.max(0.05) * 0.045).clamp(0.06, 0.18);
-		(head + up * offset).to_array()
+		let up = anchor_world.transform_vector3(Vec3::Y).try_normalize().unwrap_or(Vec3::Y);
+		(position + up * y_offset_m.clamp(-1.0, 1.0)).to_array()
 	}
 
 	pub(crate) fn last_action_id(&self) -> Option<String> {

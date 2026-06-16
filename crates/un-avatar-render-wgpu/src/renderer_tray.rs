@@ -29,18 +29,20 @@ static RENDERER_TRAY_I18N: LazyLock<un_i18n::UnI18nStore> = LazyLock::new(|| {
 		"ja-JP",
 		r#"
 show_focus_preview = "プレビューを表示 / 前面へ"
-output = "出力"
+output = "出力: Spout2"
+camera = "カメラ"
 window_preview = "ウィンドウプレビュー"
 spout_preview = "Spout2 + プレビュー"
 spout_only = "Spout2 のみ"
 spout_resolution = "Spout2 解像度 %{width} x %{height}"
 spout_output_size = "Spout2 出力: %{width} x %{height}"
 spout_output_default = "Spout2 出力: レンダラー既定"
-profile = "プロファイル"
-save_output_profile = "現在の出力を保存"
-restore_output_profile = "出力を復元"
-save_window_profile = "現在のウィンドウを保存"
-restore_window_profile = "ウィンドウを復元"
+save_output_profile = "出力をプロファイルへ保存"
+save_window_profile = "位置とサイズをプロファイルへ保存"
+restore_window_profile = "位置とサイズをプロファイルから復元"
+save_camera_profile = "プロファイルへ保存"
+restore_camera_profile = "プロファイルから復元"
+save_wardrobe_profile = "現在の衣装をプロファイルへ保存"
 wardrobe = "ワードローブ"
 base_wardrobe = "Base"
 vrc_menu = "UNAnimator"
@@ -63,18 +65,20 @@ scene_loading = "読み込み中"
 		"en-US",
 		r#"
 show_focus_preview = "Show / Focus Preview"
-output = "Output"
+output = "Output: Spout2"
+camera = "Camera"
 window_preview = "Window Preview"
 spout_preview = "Spout2 + Preview"
 spout_only = "Spout2 Only"
 spout_resolution = "Spout2 %{width} x %{height}"
 spout_output_size = "Spout2 output: %{width} x %{height}"
 spout_output_default = "Spout2 output: renderer default"
-profile = "Profile"
-save_output_profile = "Save Current Output"
-restore_output_profile = "Restore Output"
-save_window_profile = "Save Current Window"
-restore_window_profile = "Restore Window"
+save_output_profile = "Save Output to Profile"
+save_window_profile = "Save Position and Size to Profile"
+restore_window_profile = "Restore Position and Size from Profile"
+save_camera_profile = "Save to Profile"
+restore_camera_profile = "Restore from Profile"
+save_wardrobe_profile = "Save Current Outfit to Profile"
 wardrobe = "Wardrobe"
 base_wardrobe = "Base"
 vrc_menu = "UNAnimator"
@@ -104,9 +108,11 @@ pub(crate) enum RendererTrayAction {
 	SetSpoutOnly,
 	SetSpoutResolution { width: u32, height: u32 },
 	SaveOutputToProfile,
-	RestoreOutputFromProfile,
 	SaveWindowToProfile,
 	RestoreWindowFromProfile,
+	SaveCameraToProfile,
+	RestoreCameraFromProfile,
+	SaveWardrobeToProfile,
 	SetAlwaysOnTop(bool),
 	SetInputPassthrough(bool),
 	SetCurrentWardrobeDynamics(bool),
@@ -291,6 +297,10 @@ impl TrayText {
 		self.msg("output")
 	}
 
+	fn camera(&self) -> Cow<'static, str> {
+		self.msg("camera")
+	}
+
 	fn window_preview(&self) -> Cow<'static, str> {
 		self.msg("window_preview")
 	}
@@ -315,16 +325,8 @@ impl TrayText {
 		self.msg("spout_output_default")
 	}
 
-	fn profile(&self) -> Cow<'static, str> {
-		self.msg("profile")
-	}
-
 	fn save_output_profile(&self) -> Cow<'static, str> {
 		self.msg("save_output_profile")
-	}
-
-	fn restore_output_profile(&self) -> Cow<'static, str> {
-		self.msg("restore_output_profile")
 	}
 
 	fn save_window_profile(&self) -> Cow<'static, str> {
@@ -333,6 +335,18 @@ impl TrayText {
 
 	fn restore_window_profile(&self) -> Cow<'static, str> {
 		self.msg("restore_window_profile")
+	}
+
+	fn save_camera_profile(&self) -> Cow<'static, str> {
+		self.msg("save_camera_profile")
+	}
+
+	fn restore_camera_profile(&self) -> Cow<'static, str> {
+		self.msg("restore_camera_profile")
+	}
+
+	fn save_wardrobe_profile(&self) -> Cow<'static, str> {
+		self.msg("save_wardrobe_profile")
 	}
 
 	fn wardrobe(&self) -> Cow<'static, str> {
@@ -536,6 +550,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	let text = TrayText::resolve();
 	let menu = Menu::new();
 	let mut actions = HashMap::new();
+	let profile_enabled = opts.manifest_path.is_some();
 
 	append_header(&menu, opts, snapshot, &text);
 	append_separator(&menu);
@@ -597,44 +612,16 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		snapshot.spout_available,
 		RendererTrayAction::SetSpoutResolution { width: 1920, height: 1080 },
 	);
-	append_submenu(&menu, &output);
-
-	let profile_enabled = opts.manifest_path.is_some();
-	let profile = Submenu::with_id("renderer:profile", text.profile(), profile_enabled);
+	append_separator(&output);
 	append_menu_item(
-		&profile,
+		&output,
 		&mut actions,
-		"profile:save_output",
+		"output:save_profile",
 		text.save_output_profile(),
 		profile_enabled,
 		RendererTrayAction::SaveOutputToProfile,
 	);
-	append_menu_item(
-		&profile,
-		&mut actions,
-		"profile:restore_output",
-		text.restore_output_profile(),
-		profile_enabled,
-		RendererTrayAction::RestoreOutputFromProfile,
-	);
-	append_separator(&profile);
-	append_menu_item(
-		&profile,
-		&mut actions,
-		"profile:save_window",
-		text.save_window_profile(),
-		profile_enabled && snapshot.window_position.is_some(),
-		RendererTrayAction::SaveWindowToProfile,
-	);
-	append_menu_item(
-		&profile,
-		&mut actions,
-		"profile:restore_window",
-		text.restore_window_profile(),
-		profile_enabled,
-		RendererTrayAction::RestoreWindowFromProfile,
-	);
-	append_submenu(&menu, &profile);
+	append_submenu(&menu, &output);
 
 	append_wardrobe_menu(&menu, &mut actions, opts, snapshot, &text);
 	append_vrc_menu_actions(&menu, &mut actions, opts, snapshot, &text);
@@ -673,17 +660,52 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 		snapshot.transparent_window,
 		RendererTrayAction::SetInputPassthrough(!snapshot.input_passthrough),
 	);
+	append_separator(&window);
+	append_menu_item(
+		&window,
+		&mut actions,
+		"window:save_profile",
+		text.save_window_profile(),
+		profile_enabled && snapshot.window_position.is_some(),
+		RendererTrayAction::SaveWindowToProfile,
+	);
+	append_menu_item(
+		&window,
+		&mut actions,
+		"window:restore_profile",
+		text.restore_window_profile(),
+		profile_enabled,
+		RendererTrayAction::RestoreWindowFromProfile,
+	);
 	append_submenu(&menu, &window);
 
 	append_separator(&menu);
+	let camera = Submenu::with_id("renderer:camera", text.camera(), true);
 	append_menu_item(
-		&menu,
+		&camera,
 		&mut actions,
 		"camera:reset",
 		text.reset_camera(),
 		true,
 		RendererTrayAction::ResetCamera,
 	);
+	append_menu_item(
+		&camera,
+		&mut actions,
+		"camera:restore_profile",
+		text.restore_camera_profile(),
+		profile_enabled,
+		RendererTrayAction::RestoreCameraFromProfile,
+	);
+	append_menu_item(
+		&camera,
+		&mut actions,
+		"camera:save_profile",
+		text.save_camera_profile(),
+		profile_enabled && snapshot.camera.is_some(),
+		RendererTrayAction::SaveCameraToProfile,
+	);
+	append_submenu(&menu, &camera);
 	append_menu_item(
 		&menu,
 		&mut actions,
@@ -968,6 +990,15 @@ fn append_wardrobe_menu(
 			action,
 		);
 	}
+	append_separator(&wardrobe);
+	append_menu_item(
+		&wardrobe,
+		actions,
+		"wardrobe:save_profile",
+		text.save_wardrobe_profile(),
+		opts.manifest_path.is_some(),
+		RendererTrayAction::SaveWardrobeToProfile,
+	);
 	append_submenu(menu, &wardrobe);
 }
 
@@ -1193,6 +1224,14 @@ pub(crate) struct TrayWindowProfileState {
 	pub(crate) inner_size: Option<[u32; 2]>,
 }
 
+pub(crate) struct TrayCameraProfileState {
+	pub(crate) target: Option<[f32; 3]>,
+	pub(crate) longitude_deg: Option<f32>,
+	pub(crate) latitude_deg: Option<f32>,
+	pub(crate) radius: Option<f32>,
+	pub(crate) diagonal_fov_deg: Option<f32>,
+}
+
 pub(crate) fn output_profile_state_from_snapshot(snapshot: &RendererRuntimeSnapshot) -> TrayOutputProfileState {
 	TrayOutputProfileState {
 		spout_enabled: snapshot.spout_enabled,
@@ -1266,33 +1305,39 @@ pub(crate) fn save_window_state_to_profile(manifest_path: &Path, state: &TrayWin
 	write_profile_manifest(manifest_path, &manifest)
 }
 
-pub(crate) fn read_output_state_from_profile(manifest_path: &Path) -> Result<TrayOutputProfileState, String> {
-	let manifest = read_profile_manifest(manifest_path)?;
-	let root = manifest
-		.as_table()
-		.ok_or_else(|| format!("manifest {} root must be a table", manifest_path.display()))?;
-	let output_table = root.get("output").and_then(toml::Value::as_table);
-	let spout2_table = output_table
-		.and_then(|output| output.get("spout2"))
-		.and_then(toml::Value::as_table)
-		.or_else(|| root.get("spout").and_then(toml::Value::as_table));
-	let spout2_table = spout2_table.ok_or_else(|| format!("manifest {} has no [output.spout2]", manifest_path.display()))?;
-	let window_table = root.get("window").and_then(toml::Value::as_table);
-	Ok(TrayOutputProfileState {
-		spout_enabled: spout2_table.get("enabled").and_then(toml::Value::as_bool).unwrap_or(false),
-		spout_name: spout2_table
-			.get("name")
-			.and_then(toml::Value::as_str)
-			.map(str::trim)
-			.filter(|name| !name.is_empty())
-			.map(ToOwned::to_owned),
-		spout_width: read_profile_u32(spout2_table, "width"),
-		spout_height: read_profile_u32(spout2_table, "height"),
-		minimized: window_table
-			.and_then(|window| window.get("minimized"))
-			.and_then(toml::Value::as_bool)
-			.unwrap_or(false),
-	})
+pub(crate) fn save_camera_state_to_profile(manifest_path: &Path, state: &gpu::CameraStateSnapshot) -> Result<(), String> {
+	let mut manifest = read_profile_manifest(manifest_path)?;
+	let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+	let camera_table = root
+		.entry("camera".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [camera] must be a table".to_string())?;
+	camera_table.insert(
+		"target".to_string(),
+		toml::Value::Array(state.target.iter().map(|value| toml::Value::Float(f64::from(*value))).collect()),
+	);
+	camera_table.insert("longitude_deg".to_string(), toml::Value::Float(f64::from(state.longitude_deg)));
+	camera_table.insert("latitude_deg".to_string(), toml::Value::Float(f64::from(state.latitude_deg)));
+	camera_table.insert("radius".to_string(), toml::Value::Float(f64::from(state.radius)));
+	camera_table.insert(
+		"diagonal_fov_deg".to_string(),
+		toml::Value::Float(f64::from(state.diagonal_fov_deg)),
+	);
+	write_profile_manifest(manifest_path, &manifest)
+}
+
+pub(crate) fn save_wardrobe_state_to_profile(manifest_path: &Path, active_set: Option<&str>, base_set: Option<&str>) -> Result<(), String> {
+	let mut manifest = read_profile_manifest(manifest_path)?;
+	let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+	let active = active_set.map(str::trim).filter(|set_id| !set_id.is_empty());
+	let base = base_set.map(str::trim).filter(|set_id| !set_id.is_empty());
+	if active.is_none() || active == base {
+		root.remove("wardrobe_set");
+	} else if let Some(active) = active {
+		root.insert("wardrobe_set".to_string(), toml::Value::String(active.to_string()));
+	}
+	write_profile_manifest(manifest_path, &manifest)
 }
 
 pub(crate) fn read_window_state_from_profile(manifest_path: &Path) -> Result<TrayWindowProfileState, String> {
@@ -1323,6 +1368,33 @@ pub(crate) fn read_window_state_from_profile(manifest_path: &Path) -> Result<Tra
 	})
 }
 
+pub(crate) fn read_camera_state_from_profile(manifest_path: &Path) -> Result<TrayCameraProfileState, String> {
+	let manifest = read_profile_manifest(manifest_path)?;
+	let root = manifest
+		.as_table()
+		.ok_or_else(|| format!("manifest {} root must be a table", manifest_path.display()))?;
+	let camera_table = root
+		.get("camera")
+		.and_then(toml::Value::as_table)
+		.ok_or_else(|| format!("manifest {} has no [camera]", manifest_path.display()))?;
+	let state = TrayCameraProfileState {
+		target: read_profile_f32_array3(camera_table, "target"),
+		longitude_deg: read_profile_f32(camera_table, "longitude_deg"),
+		latitude_deg: read_profile_f32(camera_table, "latitude_deg"),
+		radius: read_profile_f32(camera_table, "radius"),
+		diagonal_fov_deg: read_profile_f32(camera_table, "diagonal_fov_deg"),
+	};
+	if state.target.is_none()
+		&& state.longitude_deg.is_none()
+		&& state.latitude_deg.is_none()
+		&& state.radius.is_none()
+		&& state.diagonal_fov_deg.is_none()
+	{
+		return Err(format!("manifest {} has no camera state", manifest_path.display()));
+	}
+	Ok(state)
+}
+
 fn read_profile_manifest(manifest_path: &Path) -> Result<toml::Value, String> {
 	let text = fs::read_to_string(manifest_path).map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
 	let table = toml::from_str::<toml::Table>(&text).map_err(|error| format!("parse {}: {error}", manifest_path.display()))?;
@@ -1346,6 +1418,30 @@ fn read_profile_i32(table: &toml::map::Map<String, toml::Value>, key: &str) -> O
 		.get(key)
 		.and_then(toml::Value::as_integer)
 		.and_then(|value| i32::try_from(value).ok())
+}
+
+fn read_profile_f32(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<f32> {
+	table.get(key).and_then(|value| match value {
+		toml::Value::Float(value) => Some(*value as f32),
+		toml::Value::Integer(value) => Some(*value as f32),
+		_ => None,
+	})
+}
+
+fn read_profile_f32_array3(table: &toml::map::Map<String, toml::Value>, key: &str) -> Option<[f32; 3]> {
+	let values = table.get(key)?.as_array()?;
+	let [x, y, z] = values.as_slice() else {
+		return None;
+	};
+	Some([toml_value_f32(x)?, toml_value_f32(y)?, toml_value_f32(z)?])
+}
+
+fn toml_value_f32(value: &toml::Value) -> Option<f32> {
+	match value {
+		toml::Value::Float(value) => Some(*value as f32),
+		toml::Value::Integer(value) => Some(*value as f32),
+		_ => None,
+	}
 }
 
 fn menu_wardrobe_label(candidate: &gpu::RuntimeMenuWardrobeCandidateStatus) -> String {
@@ -2254,7 +2350,8 @@ mod tests {
 	fn tray_text_localizes_primary_runtime_labels() {
 		let text = TrayText::ja();
 		assert_eq!(text.show_focus_preview(), "プレビューを表示 / 前面へ");
-		assert_eq!(text.output(), "出力");
+		assert_eq!(text.output(), "出力: Spout2");
+		assert_eq!(text.camera(), "カメラ");
 		assert_eq!(text.wardrobe(), "ワードローブ");
 		assert_eq!(text.vrc_menu(), "UNAnimator");
 		assert_eq!(text.quit_renderer(), "この Renderer を終了");

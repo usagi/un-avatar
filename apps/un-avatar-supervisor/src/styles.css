@@ -3662,6 +3662,24 @@ dd {
 	font-size: 12px;
 }
 
+.wardrobe-transition-settings {
+	display: grid;
+	grid-template-columns: minmax(160px, 1fr) minmax(140px, 220px);
+	gap: 8px;
+}
+
+.wardrobe-transition-settings label {
+	display: grid;
+	gap: 4px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.wardrobe-transition-settings select,
+.wardrobe-transition-settings input {
+	width: 100%;
+}
+
 .wardrobe-set-list {
 	display: grid;
 	gap: 6px;

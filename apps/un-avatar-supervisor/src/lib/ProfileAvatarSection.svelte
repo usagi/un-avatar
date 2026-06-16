@@ -526,6 +526,37 @@
 				<span>{$_("profiles.editor.wardrobe")}</span>
 				<small>{$_("profiles.editor.wardrobe_profile_hint")}</small>
 			</div>
+			<div class="wardrobe-transition-settings">
+				<label>
+					<span>{$_("profiles.editor.wardrobe_changing_anchor")}</span>
+					<select
+						value={setting.wardrobe_billboard_anchor || "neck"}
+						disabled={busy}
+						onchange={(event) =>
+							onUpdateSettingValue("wardrobe.transition.billboard_anchor", (event.currentTarget as HTMLSelectElement).value)}
+					>
+						<option value="head">Head</option>
+						<option value="neck">Neck</option>
+						<option value="spine">Spine</option>
+					</select>
+				</label>
+				<label>
+					<span>{$_("profiles.editor.wardrobe_changing_y_offset")}</span>
+					<input
+						type="number"
+						min="-1000"
+						max="1000"
+						step="1"
+						value={setting.wardrobe_billboard_y_offset_mm ?? 0}
+						disabled={busy}
+						onchange={(event) =>
+							onUpdateSettingValue(
+								"wardrobe.transition.billboard_y_offset_mm",
+								Number((event.currentTarget as HTMLInputElement).value),
+							)}
+					/>
+				</label>
+			</div>
 			<div class="wardrobe-set-list">
 				{#each wardrobeRows as set (set.id)}
 					<div class="wardrobe-set-row">

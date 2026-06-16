@@ -57,6 +57,14 @@ pub(crate) struct RendererManifest {
 pub(crate) struct WardrobeManifest {
 	pub shortcuts: Option<Vec<WardrobeShortcutManifest>>,
 	pub bindings: Option<Vec<WardrobeBindingManifest>>,
+	pub transition: Option<WardrobeTransitionManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeTransitionManifest {
+	pub billboard_anchor: Option<String>,
+	pub billboard_y_offset_mm: Option<f32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -127,6 +135,25 @@ fn wardrobe_bindings_from_manifest(wardrobe: WardrobeManifest) -> Vec<WardrobeBi
 		});
 	}
 	out
+}
+
+fn normalize_wardrobe_billboard_anchor(value: &str) -> Option<String> {
+	let normalized = value.trim().to_ascii_lowercase();
+	match normalized.as_str() {
+		"head" | "neck" | "spine" => Some(normalized),
+		_ => None,
+	}
+}
+
+impl WardrobeTransitionManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(anchor) = self.billboard_anchor.as_deref().and_then(normalize_wardrobe_billboard_anchor) {
+			opts.wardrobe_billboard_anchor = anchor;
+		}
+		if let Some(offset_mm) = self.billboard_y_offset_mm.filter(|value| value.is_finite()) {
+			opts.wardrobe_billboard_y_offset_m = (offset_mm / 1000.0).clamp(-1.0, 1.0);
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -551,7 +578,10 @@ impl RendererManifest {
 		if let Some(set_id) = self.wardrobe_set {
 			opts.wardrobe_set = Some(set_id);
 		}
-		if let Some(wardrobe) = self.wardrobe {
+		if let Some(mut wardrobe) = self.wardrobe {
+			if let Some(transition) = wardrobe.transition.take() {
+				transition.apply_to(opts);
+			}
 			opts.wardrobe_bindings = wardrobe_bindings_from_manifest(wardrobe);
 		}
 		if let Some(path) = self.icon_path {
@@ -1440,6 +1470,10 @@ bindings = [
   { set_id = "noble2", kind = "midi_note", device = "Launchkey Mini", channel = 1, note = 60 },
 ]
 
+[wardrobe.transition]
+billboard_anchor = "spine"
+billboard_y_offset_mm = 35.0
+
 [profile]
 id = "mizuki-copy"
 
@@ -1621,6 +1655,8 @@ constraint_iterations = 6
 		assert_eq!(opts.wardrobe_bindings[2].device.as_deref(), Some("Launchkey Mini"));
 		assert_eq!(opts.wardrobe_bindings[2].channel, Some(1));
 		assert_eq!(opts.wardrobe_bindings[2].note, Some(60));
+		assert_eq!(opts.wardrobe_billboard_anchor, "spine");
+		assert_eq!(opts.wardrobe_billboard_y_offset_m, 0.035);
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
