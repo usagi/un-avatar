@@ -131,6 +131,11 @@ fn changing_word(local_ndc: vec2<f32>) -> f32 {
 	return m;
 }
 
+fn ping_pong01(value: f32) -> f32 {
+	let f = fract(value);
+	return 1.0 - abs(f * 2.0 - 1.0);
+}
+
 fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<f32>, rect_half_size: vec2<f32>) -> vec4<f32> {
 	let rect_half = max(rect_half_size, vec2(0.18, 0.24));
 	let local_ndc = (ndc - rect_center) / rect_half;
@@ -155,6 +160,15 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 	let booth_edge = rounded_rect_line(rect_p, rect_half_p * 0.98, 0.17, 0.014);
 	let inner = rounded_rect_line(rect_p, rect_half_p * 0.74, 0.13, 0.004) * rect_mask;
 	let stage = soft_disc(vec2(local_ndc.x * 0.58, local_ndc.y * 1.25 + 0.42), 0.28);
+	let orbit_p = vec2(local_ndc.x * 0.88, local_ndc.y * 1.12 - 0.02);
+	let orbit_r = length(orbit_p);
+	let orbit_angle = atan2(orbit_p.y, orbit_p.x);
+	let tau = 6.28318530718;
+	let orbit_sweep = fract(orbit_angle / tau + t * 0.42);
+	let orbit_arc = ring_mask(orbit_r, 0.56 + 0.018 * sin(t * 2.6), 0.012)
+		* smoothstep(0.00, 0.10, orbit_sweep)
+		* smoothstep(0.36, 0.12, orbit_sweep)
+		* rect_mask;
 
 	let hanger_hook = ring_mask(length((local_ndc - vec2(0.0, 0.40)) * vec2(1.0, 1.45)), 0.105, 0.012)
 		* smoothstep(-0.02, 0.18, local_ndc.y - 0.40);
@@ -167,14 +181,20 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 	let sleeve_r = segment_mask(local_ndc, vec2(0.24, 0.10), vec2(0.42, -0.04), 0.070);
 	let garment = clamp(hanger_hook + hanger_top + hanger_l + hanger_r + shirt_body + sleeve_l + sleeve_r, 0.0, 1.0) * rect_mask;
 
-	let word = changing_word(local_ndc) * rect_mask;
-	let dot_phase = fract(t * 1.8);
-	let dot1 = soft_disc(local_ndc - vec2(0.43, -0.48), 0.025) * smoothstep(0.00, 0.12, dot_phase);
-	let dot2 = soft_disc(local_ndc - vec2(0.50, -0.48), 0.025) * smoothstep(0.22, 0.34, dot_phase);
-	let dot3 = soft_disc(local_ndc - vec2(0.57, -0.48), 0.025) * smoothstep(0.44, 0.56, dot_phase);
+	let word = changing_word(local_ndc) * rect_mask * (0.78 + 0.22 * sin(t * 5.0));
+	let dot1_bounce = ping_pong01(t * 1.9 + 0.00);
+	let dot2_bounce = ping_pong01(t * 1.9 + 0.18);
+	let dot3_bounce = ping_pong01(t * 1.9 + 0.36);
+	let dot1 = soft_disc(local_ndc - vec2(0.43, -0.50 + dot1_bounce * 0.045), 0.025) * (0.35 + dot1_bounce * 0.90);
+	let dot2 = soft_disc(local_ndc - vec2(0.50, -0.50 + dot2_bounce * 0.045), 0.025) * (0.35 + dot2_bounce * 0.90);
+	let dot3 = soft_disc(local_ndc - vec2(0.57, -0.50 + dot3_bounce * 0.045), 0.025) * (0.35 + dot3_bounce * 0.90);
 	let dots = (dot1 + dot2 + dot3) * rect_mask;
 
-	let sweep = line_mask(local_ndc.y + local_ndc.x * 0.16 - 0.62 + fract(t * 0.22) * 1.24, 0.020) * rect_mask;
+	let sweep = line_mask(local_ndc.y + local_ndc.x * 0.16 - 0.72 + fract(t * 0.36) * 1.44, 0.020) * rect_mask;
+	let garment_shine = line_mask(local_ndc.x * 0.72 + local_ndc.y * 0.18 - 0.48 + fract(t * 0.58) * 0.96, 0.035)
+		* smoothstep(0.40, 0.05, abs(local_ndc.x))
+		* smoothstep(0.35, 0.02, abs(local_ndc.y + 0.04))
+		* rect_mask;
 	let sparkle_a = sparkle(local_ndc - vec2(-0.58, 0.42 + sin(t * 1.7) * 0.035), 0.055);
 	let sparkle_b = sparkle(local_ndc - vec2(0.62, 0.30 + sin(t * 1.3 + 1.2) * 0.035), 0.047);
 	let sparkle_c = sparkle(local_ndc - vec2(-0.48, -0.30 + sin(t * 1.9 + 2.1) * 0.030), 0.040);
@@ -186,10 +206,10 @@ fn wardrobe_splash_color(ndc: vec2<f32>, aspect: f32, t: f32, rect_center: vec2<
 	let halo = soft_disc(vec2(local_ndc.x * 0.76, local_ndc.y * 1.10 - 0.04), 0.34 + pulse * 0.028) * rect_mask;
 	let lace = line_mask(fract((local_ndc.x * 0.42 - local_ndc.y * 0.30) * 8.0 + t * 0.24) - 0.5, 0.018) * booth * 0.12;
 
-	let glow = stage * 0.18 + halo * 0.25 + booth_edge * 0.85 + inner * 0.20 + garment * 1.20 + word * 1.35 + dots * 1.15 + sweep * 0.42 + sparkles * 0.80 + lace * 0.18;
-	let pastel = mint * (booth_edge * 0.55 + garment * 0.70 + sparkle_b * 0.80 + dots * 0.95)
+	let glow = stage * 0.18 + halo * 0.25 + orbit_arc * 1.15 + booth_edge * 0.85 + inner * 0.20 + garment * 1.20 + garment_shine * 1.40 + word * 1.35 + dots * 1.15 + sweep * 0.42 + sparkles * 0.80 + lace * 0.18;
+	let pastel = mint * (booth_edge * 0.55 + garment * 0.70 + garment_shine * 0.90 + sparkle_b * 0.80 + dots * 0.95)
 		+ peach * (word * 0.78 + sparkle_a * 0.75 + sparkle_c * 0.70)
-		+ sky * (hanger_hook * 0.80 + inner * 0.35 + sweep * 0.45)
+		+ sky * (hanger_hook * 0.80 + inner * 0.35 + sweep * 0.45 + orbit_arc * 0.85)
 		+ cream * (sparkle_e * 0.95 + stage * 0.10);
 	let color = base * (0.54 + vignette * 0.18) * rect_mask + vec3(0.040, 0.020, 0.060) * booth + pastel + vec3(0.06, 0.07, 0.12) * glow;
 	let alpha = clamp((0.88 * rect_mask + glow * 0.12) * feather, 0.0, 1.0);

@@ -3690,6 +3690,29 @@ pub struct CameraStateSnapshot {
 	pub diagonal_fov_deg: f32,
 }
 
+impl CameraStateSnapshot {
+	pub(crate) fn wardrobe_billboard_rect(self, aspect_wh: f32) -> ([f32; 2], [f32; 2]) {
+		let aspect = aspect_wh.max(0.01);
+		let target = Vec3::from_array(self.target);
+		let lon = self.longitude_deg.to_radians();
+		let lat = self.latitude_deg.to_radians();
+		let cos_lat = lat.cos();
+		let radius = self.radius.max(0.05);
+		let cam_pos = target + Vec3::new(radius * cos_lat * lon.sin(), radius * lat.sin(), -radius * cos_lat * lon.cos());
+		let fovy = vertical_fov_from_diagonal(self.diagonal_fov_deg.to_radians(), aspect);
+		let view_proj =
+			Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * Mat4::look_at_rh(cam_pos, target, Vec3::Y);
+		let face_world = target + Vec3::Y * (radius * 0.12).clamp(0.16, 0.36);
+		let clip = view_proj * face_world.extend(1.0);
+		if clip.w.abs() <= 0.0001 {
+			return ([0.0, 0.0], [0.34, 0.34]);
+		}
+		let ndc = clip.truncate() / clip.w;
+		let half = (0.34 / radius.sqrt()).clamp(0.18, 0.34);
+		([ndc.x.clamp(-0.72, 0.72), ndc.y.clamp(-0.62, 0.72)], [half, half])
+	}
+}
+
 struct ScreenGrabTarget {
 	width: u32,
 	height: u32,

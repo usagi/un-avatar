@@ -100,13 +100,10 @@ const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
-const WARDROBE_TRANSITION_PRE_APPLY_SPLASH_MS: u32 = 900;
 const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
 const SPLASH_FULL_RECT_CENTER: [f32; 2] = [0.0, 0.0];
 const SPLASH_FULL_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
-const WARDROBE_SPLASH_RECT_CENTER: [f32; 2] = [0.50, 0.05];
-const WARDROBE_SPLASH_RECT_HALF_SIZE: [f32; 2] = [0.30, 0.30];
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -2286,25 +2283,23 @@ impl AvatarApp {
 
 	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
+		let (rect_center, rect_half_size) = transition.saved_camera.wardrobe_billboard_rect(self.output_aspect_wh());
 		matches!(
 			transition.phase,
-			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::SplashHold
+			WardrobeTransitionPhase::Exit | WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::SplashHold
 		)
 		.then_some(gpu::StartupSplashFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
 			progress: -1.0,
 			phase: 5.0,
-			rect_center: WARDROBE_SPLASH_RECT_CENTER,
-			rect_half_size: WARDROBE_SPLASH_RECT_HALF_SIZE,
+			rect_center,
+			rect_half_size,
 		})
 	}
 
 	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		(matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed)
-			&& Instant::now().saturating_duration_since(transition.phase_started_at)
-				>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_PRE_APPLY_SPLASH_MS)))
-		.then(|| transition.set_id.clone())
+		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then(|| transition.set_id.clone())
 	}
 
 	fn finish_wardrobe_apply_after_render(&mut self, result: WardrobeApplyFrameResult) {
@@ -3307,6 +3302,11 @@ impl AvatarApp {
 		} else {
 			(self.opts.window_width.max(1), self.opts.window_height.max(1))
 		}
+	}
+
+	fn output_aspect_wh(&self) -> f32 {
+		let (width, height) = self.startup_texture_target_size();
+		width.max(1) as f32 / height.max(1) as f32
 	}
 
 	fn document_attach_options(&self) -> DocumentAttachOptions {
