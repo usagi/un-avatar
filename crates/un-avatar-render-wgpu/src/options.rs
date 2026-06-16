@@ -529,8 +529,12 @@ pub struct AvatarWindowOptions {
 	pub wardrobe_bindings: Vec<WardrobeBindingOptions>,
 	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
 	pub animator_action_ids: Vec<String>,
+	/// Profile-selected UNAnimator action modes keyed by action id.
+	pub animator_action_modes: BTreeMap<String, String>,
 	/// Optional per-action parameter value used when a profile wants ON to mean e.g. 0.45 instead of the exported value.
 	pub animator_action_values: BTreeMap<String, f32>,
+	/// Renderer-global UNAnimator input bindings. Active only while this renderer process is running.
+	pub animator_bindings: Vec<AnimatorActionBindingOptions>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
 	pub icon_path: Option<PathBuf>,
 	/// Windows taskbar grouping identity. Manifest profiles set this per profile so Windows does not
@@ -681,6 +685,16 @@ pub struct WardrobeBindingOptions {
 	pub note: Option<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnimatorActionBindingOptions {
+	pub action_id: String,
+	pub kind: WardrobeBindingKind,
+	pub binding: String,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
 impl Default for AvatarWindowOptions {
 	fn default() -> Self {
 		Self {
@@ -704,7 +718,9 @@ impl Default for AvatarWindowOptions {
 			wardrobe_set: None,
 			wardrobe_bindings: Vec::new(),
 			animator_action_ids: Vec::new(),
+			animator_action_modes: BTreeMap::new(),
 			animator_action_values: BTreeMap::new(),
+			animator_bindings: Vec::new(),
 			icon_path: None,
 			app_user_model_id: None,
 			show_fps_in_title: true,

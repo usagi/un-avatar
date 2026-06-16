@@ -5,8 +5,9 @@ use serde::Deserialize;
 use crate::{
 	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
-		AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
-		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions, WardrobeBindingKind, WardrobeBindingOptions,
+		AnimatorActionBindingOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook,
+		ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
+		WardrobeBindingKind, WardrobeBindingOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -133,6 +134,7 @@ fn wardrobe_bindings_from_manifest(wardrobe: WardrobeManifest) -> Vec<WardrobeBi
 pub(crate) struct AnimatorManifest {
 	pub action_ids: Option<Vec<String>>,
 	pub actions: Option<Vec<AnimatorActionManifest>>,
+	pub bindings: Option<Vec<AnimatorBindingManifest>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -143,6 +145,17 @@ pub(crate) struct AnimatorActionManifest {
 	pub mode: Option<String>,
 	/// Optional parameter value to send when activating this action.
 	pub value: Option<f32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorBindingManifest {
+	pub action_id: Option<String>,
+	pub kind: Option<String>,
+	pub binding: Option<String>,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -661,12 +674,60 @@ impl AnimatorManifest {
 			if !ids.iter().any(|existing| existing == &id) {
 				ids.push(id.clone());
 			}
+			opts.animator_action_modes.insert(id.clone(), mode);
 			if let Some(value) = action.value.filter(|value| value.is_finite()) {
 				opts.animator_action_values.insert(id, value);
 			}
 		}
+		for id in &ids {
+			opts.animator_action_modes.entry(id.clone()).or_insert_with(|| "toggle".to_string());
+		}
 		opts.animator_action_ids = ids;
+		opts.animator_bindings = self
+			.bindings
+			.unwrap_or_default()
+			.into_iter()
+			.filter_map(animator_binding_from_manifest)
+			.collect();
 	}
+}
+
+fn animator_binding_from_manifest(binding: AnimatorBindingManifest) -> Option<AnimatorActionBindingOptions> {
+	let action_id = binding.action_id?.trim().to_string();
+	if action_id.is_empty() {
+		return None;
+	}
+	let kind = match binding
+		.kind
+		.unwrap_or_else(|| "keyboard".to_string())
+		.trim()
+		.to_ascii_lowercase()
+		.as_str()
+	{
+		"keyboard" => WardrobeBindingKind::Keyboard,
+		"midi_note" | "midinote" | "midi note" => WardrobeBindingKind::MidiNote,
+		_ => return None,
+	};
+	let binding_text = binding.binding.unwrap_or_default().trim().to_string();
+	let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+	let note = binding.note.filter(|note| *note <= 127);
+	if kind == WardrobeBindingKind::Keyboard && binding_text.is_empty() {
+		return None;
+	}
+	if kind == WardrobeBindingKind::MidiNote && (channel.is_none() || note.is_none()) {
+		return None;
+	}
+	Some(AnimatorActionBindingOptions {
+		action_id,
+		kind,
+		binding: binding_text,
+		device: binding
+			.device
+			.map(|device| device.trim().to_string())
+			.filter(|device| !device.is_empty()),
+		channel,
+		note,
+	})
 }
 
 impl ProfileManifest {
@@ -1413,6 +1474,18 @@ value = 0.45
 id = "animator:0:0:debug_hidden:0"
 mode = "off"
 
+[[animator.bindings]]
+action_id = "animator:0:0:beam:0"
+kind = "keyboard"
+binding = "F8"
+
+[[animator.bindings]]
+action_id = "expression:angry"
+kind = "midi_note"
+device = "Launchkey Mini"
+channel = 1
+note = 61
+
 [window]
 width = 640
 height = 360
@@ -1558,7 +1631,22 @@ constraint_iterations = 6
 			opts.animator_action_ids,
 			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]
 		);
+		assert_eq!(
+			opts.animator_action_modes.get("animator:0:0:hat_off:0").map(String::as_str),
+			Some("toggle")
+		);
+		assert_eq!(
+			opts.animator_action_modes.get("animator:0:0:beam:0").map(String::as_str),
+			Some("one_shot")
+		);
 		assert_eq!(opts.animator_action_values.get("animator:0:0:beam:0").copied(), Some(0.45));
+		assert_eq!(opts.animator_bindings.len(), 2);
+		assert_eq!(opts.animator_bindings[0].action_id, "animator:0:0:beam:0");
+		assert_eq!(opts.animator_bindings[0].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.animator_bindings[0].binding, "F8");
+		assert_eq!(opts.animator_bindings[1].action_id, "expression:angry");
+		assert_eq!(opts.animator_bindings[1].kind, WardrobeBindingKind::MidiNote);
+		assert_eq!(opts.animator_bindings[1].note, Some(61));
 		assert!(opts.spout.enabled);
 		assert_eq!(opts.spout.name, "UN Avatar Spout2");
 		assert_eq!(opts.spout.width, Some(1920));

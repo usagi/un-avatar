@@ -6108,6 +6108,38 @@ impl GpuState {
 		})
 	}
 
+	pub(crate) fn deactivate_runtime_action(&mut self, action_id: &str) -> Result<RuntimeActionActivation, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let doc_arc = Arc::clone(doc_arc);
+		let action = {
+			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			let Some(actions) = doc.runtime_model().runtime_actions() else {
+				return Err("document has no runtime actions".to_string());
+			};
+			actions
+				.actions
+				.iter()
+				.find(|action| action.id == action_id)
+				.cloned()
+				.ok_or_else(|| "runtime action not found".to_string())?
+		};
+		for effect in action.effects {
+			if let UnaRuntimeActionEffect::ExpressionWeight { name, .. } = effect {
+				self.set_expression_override(&name, 0.0);
+			}
+		}
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		doc.runtime_model_mut().set_last_action_id(None);
+		drop(doc);
+		Ok(RuntimeActionActivation {
+			action_id: action_id.to_string(),
+			active_wardrobe_set: None,
+			parameter_values: BTreeMap::new(),
+		})
+	}
+
 	pub(crate) fn scene_build_context(&self) -> GpuSceneBuildContext {
 		GpuSceneBuildContext {
 			device: self.device.clone(),

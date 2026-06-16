@@ -637,7 +637,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	append_submenu(&menu, &profile);
 
 	append_wardrobe_menu(&menu, &mut actions, opts, snapshot, &text);
-	append_vrc_menu_actions(&menu, &mut actions, snapshot, &text);
+	append_vrc_menu_actions(&menu, &mut actions, opts, snapshot, &text);
 
 	if snapshot.dynamics_group_count > 0 {
 		let dynamics = Submenu::with_id("renderer:dynamics", text.unphysics(), true);
@@ -701,6 +701,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 fn append_vrc_menu_actions(
 	menu: &Menu,
 	actions: &mut HashMap<String, RendererTrayAction>,
+	opts: &AvatarWindowOptions,
 	snapshot: &RendererRuntimeSnapshot,
 	text: &TrayText,
 ) {
@@ -727,8 +728,9 @@ fn append_vrc_menu_actions(
 	let vrc_menu = Submenu::with_id("renderer:vrc_menu", text.vrc_menu(), true);
 	if entries.is_empty() {
 		for (index, action) in fallback_entries.into_iter().enumerate() {
-			let active = action.current_condition_state.as_deref() == Some("active");
+			let active = fallback_action_active(snapshot, action);
 			let label = fallback_action_label(action);
+			let action_id = action.action_id.clone();
 			let action = if let (Some(name), Some(value)) = (&action.parameter_name, action.parameter_value) {
 				let raw = fallback_action_last_label(action);
 				let polarity = animator_toggle_polarity(&raw);
@@ -747,7 +749,7 @@ fn append_vrc_menu_actions(
 				&vrc_menu,
 				actions,
 				format!("vrc_menu:{index}"),
-				check_label(truncate_label(&label, 56), active),
+				check_label(animator_label_with_shortcut(truncate_label(&label, 56), opts, &action_id), active),
 				true,
 				action,
 			);
@@ -761,7 +763,10 @@ fn append_vrc_menu_actions(
 				&vrc_menu,
 				actions,
 				format!("vrc_menu:{index}"),
-				check_label(truncate_label(&menu_action_label(candidate), 56), active),
+				check_label(
+					animator_label_with_shortcut(truncate_label(&menu_action_label(candidate), 56), opts, &candidate.action_id),
+					active,
+				),
 				true,
 				RendererTrayAction::SetParameter {
 					name: candidate.parameter_name.clone(),
@@ -885,12 +890,19 @@ fn fallback_action_preferred(current: &gpu::RuntimeActionStatus, next: &gpu::Run
 }
 
 fn runtime_action_active(snapshot: &RendererRuntimeSnapshot, action_id: &str) -> bool {
+	if snapshot.active_profile_animator_actions.iter().any(|active| active == action_id) {
+		return true;
+	}
 	snapshot
 		.runtime_actions
 		.iter()
 		.find(|action| action.action_id == action_id)
 		.and_then(|action| action.current_condition_state.as_deref())
 		== Some("active")
+}
+
+fn fallback_action_active(snapshot: &RendererRuntimeSnapshot, action: &gpu::RuntimeActionStatus) -> bool {
+	runtime_action_active(snapshot, &action.action_id)
 }
 
 fn menu_candidate_active(snapshot: &RendererRuntimeSnapshot, candidate: &gpu::RuntimeMenuActionCandidateStatus) -> bool {
@@ -967,6 +979,20 @@ fn wardrobe_label_with_shortcut(label: String, opts: &AvatarWindowOptions, set_i
 		.find(|shortcut| shortcut.set_id.trim() == set_id)
 		.map(|shortcut| shortcut.binding.trim())
 		.filter(|shortcut| !shortcut.is_empty())
+	else {
+		return label;
+	};
+	format!("{label} ({shortcut})")
+}
+
+fn animator_label_with_shortcut(label: String, opts: &AvatarWindowOptions, action_id: &str) -> String {
+	let Some(shortcut) = opts
+		.animator_bindings
+		.iter()
+		.filter(|binding| binding.kind == crate::WardrobeBindingKind::Keyboard)
+		.find(|binding| binding.action_id.trim() == action_id)
+		.map(|binding| binding.binding.trim())
+		.filter(|binding| !binding.is_empty())
 	else {
 		return label;
 	};
@@ -1372,7 +1398,7 @@ fn tray_icon_id() -> String {
 
 fn menu_key(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> String {
 	format!(
-		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+		"{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
 		snapshot.scene_state,
 		snapshot.spout_available,
 		snapshot.spout_enabled,
@@ -1388,12 +1414,13 @@ fn menu_key(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) -> S
 		snapshot.base_wardrobe_set.as_deref().unwrap_or(""),
 		menu_action_signature(snapshot),
 		wardrobe_menu_signature(snapshot),
+		snapshot.active_profile_animator_actions.join(","),
 		wardrobe_shortcut_signature(opts)
 	)
 }
 
 fn wardrobe_shortcut_signature(opts: &AvatarWindowOptions) -> String {
-	let mut signature = format!("bindings:{}", opts.wardrobe_bindings.len());
+	let mut signature = format!("bindings:{}:{}", opts.wardrobe_bindings.len(), opts.animator_bindings.len());
 	for shortcut in &opts.wardrobe_bindings {
 		signature.push('|');
 		signature.push_str(&signature_field(shortcut.set_id.trim()));
@@ -1409,6 +1436,22 @@ fn wardrobe_shortcut_signature(opts: &AvatarWindowOptions) -> String {
 		));
 		signature.push(':');
 		signature.push_str(&signature_field(&shortcut.note.map(|value| value.to_string()).unwrap_or_default()));
+	}
+	for binding in &opts.animator_bindings {
+		signature.push('|');
+		signature.push_str(&signature_field(binding.action_id.trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(&format!("{:?}", binding.kind)));
+		signature.push(':');
+		signature.push_str(&signature_field(binding.binding.trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(binding.device.as_deref().unwrap_or("").trim()));
+		signature.push(':');
+		signature.push_str(&signature_field(
+			&binding.channel.map(|value| value.to_string()).unwrap_or_default(),
+		));
+		signature.push(':');
+		signature.push_str(&signature_field(&binding.note.map(|value| value.to_string()).unwrap_or_default()));
 	}
 	signature
 }
@@ -1943,6 +1986,37 @@ mod tests {
 			actions.get("renderer:vrc_menu:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:hat"
 		));
+	}
+
+	#[test]
+	fn vrc_menu_profile_animator_action_shows_binding_and_active_check() {
+		let mut opts = AvatarWindowOptions::default();
+		opts.animator_bindings = vec![crate::AnimatorActionBindingOptions {
+			action_id: "expression:angry".to_string(),
+			kind: crate::WardrobeBindingKind::Keyboard,
+			binding: "F8".to_string(),
+			device: None,
+			channel: None,
+			note: None,
+		}];
+		let mut status = snapshot();
+		status.active_profile_animator_actions = vec!["expression:angry".to_string()];
+		status.runtime_actions = vec![gpu::RuntimeActionStatus {
+			action_id: "expression:angry".to_string(),
+			label: "Expression / Angry".to_string(),
+			effect_count: 1,
+			expression_menu_path: Some("Expressions/Angry".to_string()),
+			available: true,
+			..Default::default()
+		}];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(matches!(
+			actions.get("renderer:vrc_menu:0"),
+			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "expression:angry"
+		));
+		assert!(menu_key(&opts, &status).contains("expression:angry"));
 	}
 
 	#[test]

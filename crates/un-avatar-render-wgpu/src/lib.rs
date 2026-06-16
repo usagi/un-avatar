@@ -29,7 +29,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
 	cell::Cell,
-	collections::{BTreeMap, VecDeque},
+	collections::{BTreeMap, BTreeSet, VecDeque},
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
@@ -46,10 +46,10 @@ pub use gpu::FrameTimings;
 use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
 pub use mesh_pass::{AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshLoadOpts};
 pub use options::{
-	AaMode, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions,
-	DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend, SpoutWindowOptions,
-	SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
-	TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
+	AaMode, AnimatorActionBindingOptions, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook,
+	ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend,
+	SpoutWindowOptions, SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference,
+	TextureMipmapFilter, TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
 };
 use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
@@ -248,6 +248,10 @@ enum RendererControlEvent {
 		wardrobe_set_id: Option<String>,
 		parameter_name: Option<String>,
 		parameter_value: Option<f32>,
+		result: CommandResultSlot,
+	},
+	ActivateProfileAnimatorAction {
+		action_id: String,
 		result: CommandResultSlot,
 	},
 	SetParameter {
@@ -1222,6 +1226,7 @@ struct AvatarApp {
 	#[cfg(windows)]
 	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
 	wardrobe_midi: Option<WardrobeMidiRuntime>,
+	active_profile_animator_actions: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1536,6 +1541,7 @@ impl AvatarApp {
 			#[cfg(windows)]
 			wardrobe_hotkeys: None,
 			wardrobe_midi: None,
+			active_profile_animator_actions: BTreeSet::new(),
 		}
 	}
 
@@ -1786,16 +1792,22 @@ impl AvatarApp {
 			}
 			RendererTrayAction::ActivateAction(action_id) => {
 				let result = Arc::new(Mutex::new(None));
-				let _ = self.event_proxy.send_event(RendererControlEvent::ActivateAction {
-					action_id: Some(action_id),
-					supervisor_command: None,
-					expression_menu_path: None,
-					menu_path: None,
-					wardrobe_set_id: None,
-					parameter_name: None,
-					parameter_value: None,
-					result,
-				});
+				if self.opts.animator_action_modes.contains_key(&action_id) {
+					let _ = self
+						.event_proxy
+						.send_event(RendererControlEvent::ActivateProfileAnimatorAction { action_id, result });
+				} else {
+					let _ = self.event_proxy.send_event(RendererControlEvent::ActivateAction {
+						action_id: Some(action_id),
+						supervisor_command: None,
+						expression_menu_path: None,
+						menu_path: None,
+						wardrobe_set_id: None,
+						parameter_name: None,
+						parameter_value: None,
+						result,
+					});
+				}
 			}
 			RendererTrayAction::OpenSupervisor => {
 				if let Err(error) = renderer_tray::open_supervisor(self.opts.manifest_path.as_deref()) {
@@ -1810,6 +1822,72 @@ impl AvatarApp {
 				event_loop.exit();
 			}
 		}
+	}
+
+	fn activate_profile_animator_action(&mut self, action_id: &str) -> Result<(), String> {
+		let mode = self
+			.opts
+			.animator_action_modes
+			.get(action_id)
+			.map(String::as_str)
+			.unwrap_or("toggle");
+		let active = self.active_profile_animator_actions.contains(action_id)
+			|| self
+				.runtime_status
+				.as_ref()
+				.and_then(|status| status.lock().ok())
+				.is_some_and(|status| {
+					status
+						.runtime_actions
+						.iter()
+						.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
+				});
+		if mode == "toggle" && active {
+			let parameter = self.runtime_status.as_ref().and_then(|status| {
+				status.lock().ok().and_then(|status| {
+					status
+						.runtime_actions
+						.iter()
+						.find(|action| action.action_id == action_id)
+						.and_then(|action| action.parameter_name.as_ref().zip(action.parameter_value))
+						.map(|(name, value)| (name.clone(), value))
+				})
+			});
+			let activation = if let Some((name, value)) = parameter {
+				let inactive_value = if value.abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON {
+					1.0
+				} else {
+					0.0
+				};
+				let activation = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
+					None => return Err("renderer is not initialized".to_string()),
+				};
+				self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
+				activation
+			} else {
+				match self.gpu.as_mut() {
+					Some(gpu) => Some(gpu.deactivate_runtime_action(action_id)?),
+					None => return Err("renderer is not initialized".to_string()),
+				}
+			};
+			self.active_profile_animator_actions.remove(action_id);
+			if let Some(activation) = activation.as_ref() {
+				self.apply_runtime_activation_status(activation);
+			}
+			self.request_redraw();
+			return Ok(());
+		}
+		let outcome = match self.gpu.as_mut() {
+			Some(gpu) => gpu.activate_runtime_action(Some(action_id), None, None, None, None),
+			None => Err("renderer is not initialized".to_string()),
+		}?;
+		if mode == "toggle" {
+			self.active_profile_animator_actions.insert(action_id.to_string());
+		}
+		self.apply_runtime_activation_status(&outcome);
+		self.request_redraw();
+		Ok(())
 	}
 
 	#[cfg(windows)]
@@ -2061,6 +2139,7 @@ impl AvatarApp {
 				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
 				status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 				status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
+				status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
 				status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
 				status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
 				status.runtime_action_restore_baseline_candidates =
@@ -3321,6 +3400,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(outcome.map(|_| ()));
 				}
 			}
+			RendererControlEvent::ActivateProfileAnimatorAction { action_id, result } => {
+				let outcome = self.activate_profile_animator_action(&action_id);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
 			RendererControlEvent::SetParameter { name, value, result } => {
 				let outcome = match self.gpu.as_mut() {
 					Some(gpu) => gpu.set_runtime_parameter(&name, value),
@@ -3881,8 +3966,12 @@ struct WardrobeMidiRuntime {
 }
 
 impl WardrobeMidiRuntime {
-	fn start(bindings: &[WardrobeBindingOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
-		let bindings = wardrobe_midi_note_bindings(bindings);
+	fn start(
+		wardrobe_bindings: &[WardrobeBindingOptions],
+		animator_bindings: &[AnimatorActionBindingOptions],
+		proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Option<Self> {
+		let bindings = midi_note_bindings(wardrobe_bindings, animator_bindings);
 		if bindings.is_empty() {
 			return None;
 		}
@@ -3944,10 +4033,20 @@ impl WardrobeMidiRuntime {
 						for binding in &port_bindings {
 							if binding.channel == note_event.channel && binding.note == note_event.note {
 								let result = Arc::new(Mutex::new(None));
-								let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
-									set_id: binding.set_id.clone(),
-									result,
-								});
+								match &binding.action {
+									InputBindingAction::WardrobeSet(set_id) => {
+										let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+											set_id: set_id.clone(),
+											result,
+										});
+									}
+									InputBindingAction::AnimatorAction(action_id) => {
+										let _ = proxy.send_event(RendererControlEvent::ActivateProfileAnimatorAction {
+											action_id: action_id.clone(),
+											result,
+										});
+									}
+								}
 							}
 						}
 					}
@@ -3955,7 +4054,7 @@ impl WardrobeMidiRuntime {
 				(),
 			) {
 				Ok(connection) => {
-					eprintln!("un-avatar-renderer: listening for wardrobe MIDI bindings on `{port_name_for_callback}`");
+					eprintln!("un-avatar-renderer: listening for MIDI bindings on `{port_name_for_callback}`");
 					connections.push(connection);
 				}
 				Err(error) => eprintln!("un-avatar-renderer: connect MIDI input `{port_name}` failed: {error}"),
@@ -3970,14 +4069,23 @@ impl WardrobeMidiRuntime {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WardrobeMidiNoteBinding {
-	set_id: String,
+	action: InputBindingAction,
 	device: Option<String>,
 	channel: u8,
 	note: u8,
 }
 
-fn wardrobe_midi_note_bindings(bindings: &[WardrobeBindingOptions]) -> Vec<WardrobeMidiNoteBinding> {
-	bindings
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InputBindingAction {
+	WardrobeSet(String),
+	AnimatorAction(String),
+}
+
+fn midi_note_bindings(
+	wardrobe_bindings: &[WardrobeBindingOptions],
+	animator_bindings: &[AnimatorActionBindingOptions],
+) -> Vec<WardrobeMidiNoteBinding> {
+	let wardrobe = wardrobe_bindings
 		.iter()
 		.filter(|binding| binding.kind == WardrobeBindingKind::MidiNote)
 		.filter_map(|binding| {
@@ -3987,7 +4095,7 @@ fn wardrobe_midi_note_bindings(bindings: &[WardrobeBindingOptions]) -> Vec<Wardr
 				return None;
 			}
 			Some(WardrobeMidiNoteBinding {
-				set_id: binding.set_id.trim().to_string(),
+				action: InputBindingAction::WardrobeSet(binding.set_id.trim().to_string()),
 				device: binding
 					.device
 					.as_ref()
@@ -3996,8 +4104,29 @@ fn wardrobe_midi_note_bindings(bindings: &[WardrobeBindingOptions]) -> Vec<Wardr
 				channel,
 				note,
 			})
-		})
-		.collect()
+		});
+	let animator = animator_bindings
+		.iter()
+		.filter(|binding| binding.kind == WardrobeBindingKind::MidiNote)
+		.filter_map(|binding| {
+			let action_id = binding.action_id.trim();
+			let channel = binding.channel?;
+			let note = binding.note?;
+			if action_id.is_empty() || !(1..=16).contains(&channel) || note > 127 {
+				return None;
+			}
+			Some(WardrobeMidiNoteBinding {
+				action: InputBindingAction::AnimatorAction(action_id.to_string()),
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			})
+		});
+	wardrobe.chain(animator).collect()
 }
 
 fn midi_device_matches(expected: Option<&str>, port_name: &str) -> bool {
@@ -4048,8 +4177,12 @@ struct WardrobeHotkeyRuntime {
 
 #[cfg(windows)]
 impl WardrobeHotkeyRuntime {
-	fn start(bindings: &[WardrobeBindingOptions], proxy: EventLoopProxy<RendererControlEvent>) -> Option<Self> {
-		let registrations = wardrobe_hotkey_registrations(bindings);
+	fn start(
+		wardrobe_bindings: &[WardrobeBindingOptions],
+		animator_bindings: &[AnimatorActionBindingOptions],
+		proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Option<Self> {
+		let registrations = global_hotkey_registrations(wardrobe_bindings, animator_bindings);
 		if registrations.is_empty() {
 			return None;
 		}
@@ -4061,7 +4194,7 @@ impl WardrobeHotkeyRuntime {
 				handle: Some(handle),
 			}),
 			_ => {
-				eprintln!("un-avatar-renderer: wardrobe global hotkey thread did not start");
+				eprintln!("un-avatar-renderer: global hotkey thread did not start");
 				None
 			}
 		}
@@ -4091,44 +4224,69 @@ impl Drop for WardrobeHotkeyRuntime {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WardrobeHotkeyRegistration {
 	id: i32,
-	set_id: String,
+	action: InputBindingAction,
 	shortcut: String,
 	modifiers: windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS,
 	virtual_key: u32,
 }
 
 #[cfg(windows)]
-fn wardrobe_hotkey_registrations(bindings: &[WardrobeBindingOptions]) -> Vec<WardrobeHotkeyRegistration> {
+fn global_hotkey_registrations(
+	wardrobe_bindings: &[WardrobeBindingOptions],
+	animator_bindings: &[AnimatorActionBindingOptions],
+) -> Vec<WardrobeHotkeyRegistration> {
 	let mut out = Vec::new();
-	for binding in bindings {
-		if binding.kind != WardrobeBindingKind::Keyboard {
-			continue;
-		}
-		let binding_text = binding.binding.trim();
-		if binding_text.is_empty() {
-			continue;
-		}
-		match parse_windows_hotkey(binding_text) {
-			Ok((modifiers, virtual_key)) => {
-				if out
-					.iter()
-					.any(|existing: &WardrobeHotkeyRegistration| existing.modifiers.0 == modifiers.0 && existing.virtual_key == virtual_key)
-				{
-					eprintln!("un-avatar-renderer: duplicate wardrobe global hotkey ignored: {binding_text}");
-					continue;
-				}
-				out.push(WardrobeHotkeyRegistration {
-					id: 0x554E_5700_i32.saturating_add(out.len() as i32),
-					set_id: binding.set_id.trim().to_string(),
-					shortcut: binding_text.to_string(),
-					modifiers,
-					virtual_key,
-				});
-			}
-			Err(error) => eprintln!("un-avatar-renderer: invalid wardrobe global hotkey `{binding_text}`: {error}"),
-		}
+	for binding in wardrobe_bindings {
+		push_global_hotkey_registration(
+			&mut out,
+			InputBindingAction::WardrobeSet(binding.set_id.trim().to_string()),
+			binding.kind.clone(),
+			binding.binding.trim(),
+		);
+	}
+	for binding in animator_bindings {
+		push_global_hotkey_registration(
+			&mut out,
+			InputBindingAction::AnimatorAction(binding.action_id.trim().to_string()),
+			binding.kind.clone(),
+			binding.binding.trim(),
+		);
 	}
 	out
+}
+
+#[cfg(windows)]
+fn push_global_hotkey_registration(
+	out: &mut Vec<WardrobeHotkeyRegistration>,
+	action: InputBindingAction,
+	kind: WardrobeBindingKind,
+	binding_text: &str,
+) {
+	if kind != WardrobeBindingKind::Keyboard || binding_text.is_empty() {
+		return;
+	}
+	if matches!(&action, InputBindingAction::AnimatorAction(id) | InputBindingAction::WardrobeSet(id) if id.trim().is_empty()) {
+		return;
+	}
+	match parse_windows_hotkey(binding_text) {
+		Ok((modifiers, virtual_key)) => {
+			if out
+				.iter()
+				.any(|existing: &WardrobeHotkeyRegistration| existing.modifiers.0 == modifiers.0 && existing.virtual_key == virtual_key)
+			{
+				eprintln!("un-avatar-renderer: duplicate global hotkey ignored: {binding_text}");
+				return;
+			}
+			out.push(WardrobeHotkeyRegistration {
+				id: 0x554E_5700_i32.saturating_add(out.len() as i32),
+				action,
+				shortcut: binding_text.to_string(),
+				modifiers,
+				virtual_key,
+			});
+		}
+		Err(error) => eprintln!("un-avatar-renderer: invalid global hotkey `{binding_text}`: {error}"),
+	}
 }
 
 #[cfg(windows)]
@@ -4238,14 +4396,11 @@ fn wardrobe_hotkey_thread(
 		for registration in registrations {
 			match RegisterHotKey(None, registration.id, registration.modifiers, registration.virtual_key) {
 				Ok(()) => {
-					eprintln!(
-						"un-avatar-renderer: registered wardrobe global hotkey `{}` for set `{}`",
-						registration.shortcut, registration.set_id
-					);
+					eprintln!("un-avatar-renderer: registered global hotkey `{}`", registration.shortcut);
 					active.push(registration);
 				}
 				Err(error) => eprintln!(
-					"un-avatar-renderer: register wardrobe global hotkey `{}` failed: {error}",
+					"un-avatar-renderer: register global hotkey `{}` failed: {error}",
 					registration.shortcut
 				),
 			}
@@ -4258,10 +4413,20 @@ fn wardrobe_hotkey_thread(
 				let id = message.wParam.0 as i32;
 				if let Some(registration) = active.iter().find(|registration| registration.id == id) {
 					let result = Arc::new(Mutex::new(None));
-					let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
-						set_id: registration.set_id.clone(),
-						result,
-					});
+					match &registration.action {
+						InputBindingAction::WardrobeSet(set_id) => {
+							let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+								set_id: set_id.clone(),
+								result,
+							});
+						}
+						InputBindingAction::AnimatorAction(action_id) => {
+							let _ = proxy.send_event(RendererControlEvent::ActivateProfileAnimatorAction {
+								action_id: action_id.clone(),
+								result,
+							});
+						}
+					}
 				}
 			} else {
 				let _ = TranslateMessage(&message);
@@ -4621,6 +4786,8 @@ struct RendererRuntimeSnapshot {
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_actions: Vec<gpu::RuntimeActionStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	active_profile_animator_actions: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_action_target_write_collisions: Vec<un_avatar_core::UnaEvaluationTargetWriteCollision>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	runtime_action_restore_readiness: Vec<un_avatar_core::UnaEvaluationRestoreReadiness>,
@@ -4866,6 +5033,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		runtime_parameter_conflicts: Vec::new(),
 		wardrobe_actions: Vec::new(),
 		runtime_actions: Vec::new(),
+		active_profile_animator_actions: Vec::new(),
 		runtime_action_target_write_collisions: Vec::new(),
 		runtime_action_restore_readiness: Vec::new(),
 		runtime_action_restore_baseline_candidates: Vec::new(),
@@ -5474,8 +5642,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
 	renderer_tray::install_event_handlers(event_proxy.clone());
 	#[cfg(windows)]
-	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, event_proxy.clone());
-	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, event_proxy.clone());
+	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
+	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
 	if opts.runtime_bus_key.is_none() {
 		if let Some(address) = opts.runtime_control_address {
 			start_runtime_control_server(address, event_proxy.clone());
@@ -5779,7 +5947,9 @@ pub fn run_cli() -> Result<(), RunError> {
 		wardrobe_set: cli.wardrobe_set,
 		wardrobe_bindings: Vec::new(),
 		animator_action_ids: Vec::new(),
+		animator_action_modes: Default::default(),
 		animator_action_values: Default::default(),
+		animator_bindings: Vec::new(),
 		icon_path: cli.icon,
 		app_user_model_id: None,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),

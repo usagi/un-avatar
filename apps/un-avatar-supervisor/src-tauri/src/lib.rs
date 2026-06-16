@@ -1040,6 +1040,34 @@ impl Default for AnimatorActionSetting {
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
+struct AnimatorBindingSetting {
+	action_id: String,
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	binding: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	device: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	channel: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	note: Option<u8>,
+}
+
+impl Default for AnimatorBindingSetting {
+	fn default() -> Self {
+		Self {
+			action_id: String::new(),
+			kind: "keyboard".to_string(),
+			binding: None,
+			device: None,
+			channel: None,
+			note: None,
+		}
+	}
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
 struct WardrobeShortcutSetting {
 	set_id: String,
 	shortcut: String,
@@ -1293,6 +1321,7 @@ struct AvatarSetting {
 	wardrobe_shortcuts: Vec<WardrobeShortcutSetting>,
 	wardrobe_bindings: Vec<WardrobeBindingSetting>,
 	animator_actions: Vec<AnimatorActionSetting>,
+	animator_bindings: Vec<AnimatorBindingSetting>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion_vmc_enabled: bool,
@@ -1813,6 +1842,7 @@ struct ManifestWindow {
 struct ManifestAnimator {
 	action_ids: Option<Vec<String>>,
 	actions: Option<Vec<ManifestAnimatorAction>>,
+	bindings: Option<Vec<ManifestAnimatorBinding>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1821,6 +1851,17 @@ struct ManifestAnimatorAction {
 	id: Option<String>,
 	mode: Option<String>,
 	value: Option<f64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimatorBinding {
+	action_id: Option<String>,
+	kind: Option<String>,
+	binding: Option<String>,
+	device: Option<String>,
+	channel: Option<u8>,
+	note: Option<u8>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2170,6 +2211,58 @@ fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec
 		}
 	}
 	actions
+}
+
+fn manifest_animator_binding_settings(animator: Option<&ManifestAnimator>) -> Vec<AnimatorBindingSetting> {
+	let Some(animator) = animator else {
+		return Vec::new();
+	};
+	animator
+		.bindings
+		.iter()
+		.flatten()
+		.filter_map(|binding| {
+			let action_id = binding.action_id.as_deref().unwrap_or("").trim();
+			if action_id.is_empty() {
+				return None;
+			}
+			let kind = normalize_wardrobe_binding_kind(binding.kind.as_deref().unwrap_or("keyboard"));
+			if kind == "keyboard" {
+				let value = binding.binding.as_deref().unwrap_or("").trim();
+				if value.is_empty() {
+					return None;
+				}
+				Some(AnimatorBindingSetting {
+					action_id: action_id.to_string(),
+					kind,
+					binding: Some(value.to_string()),
+					device: None,
+					channel: None,
+					note: None,
+				})
+			} else if kind == "midi_note" {
+				let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+				let note = binding.note.filter(|note| *note <= 127);
+				if channel.is_none() || note.is_none() {
+					return None;
+				}
+				Some(AnimatorBindingSetting {
+					action_id: action_id.to_string(),
+					kind,
+					binding: None,
+					device: binding
+						.device
+						.as_ref()
+						.map(|device| device.trim().to_string())
+						.filter(|device| !device.is_empty()),
+					channel,
+					note,
+				})
+			} else {
+				None
+			}
+		})
+		.collect()
 }
 
 fn manifest_wardrobe_shortcut_settings(wardrobe: Option<&ManifestWardrobe>) -> Vec<WardrobeShortcutSetting> {
@@ -5660,6 +5753,57 @@ fn apply_animator_setting_value(manifest: &mut toml::Value, field: &str, value: 
 			}
 			Ok(())
 		}
+		"animator.bindings" => {
+			let bindings: Vec<AnimatorBindingSetting> =
+				serde_json::from_value(value).map_err(|e| format!("animator.bindings must be a binding array: {e}"))?;
+			let mut out = Vec::new();
+			for binding in bindings {
+				let action_id = binding.action_id.trim();
+				let kind = normalize_wardrobe_binding_kind(&binding.kind);
+				if action_id.is_empty() {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("action_id".to_string(), toml::Value::String(action_id.to_string()));
+				table.insert("kind".to_string(), toml::Value::String(kind.clone()));
+				if kind == "keyboard" {
+					let binding_value = binding.binding.as_deref().unwrap_or("").trim();
+					if binding_value.is_empty() {
+						continue;
+					}
+					table.insert("binding".to_string(), toml::Value::String(binding_value.to_string()));
+				} else if kind == "midi_note" {
+					let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+					let note = binding.note.filter(|note| *note <= 127);
+					let (Some(channel), Some(note)) = (channel, note) else {
+						continue;
+					};
+					if let Some(device) = binding.device.as_deref().map(str::trim).filter(|device| !device.is_empty()) {
+						table.insert("device".to_string(), toml::Value::String(device.to_string()));
+					}
+					table.insert("channel".to_string(), toml::Value::Integer(i64::from(channel)));
+					table.insert("note".to_string(), toml::Value::Integer(i64::from(note)));
+				}
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(animator) = root.get_mut("animator").and_then(toml::Value::as_table_mut) {
+					animator.remove("bindings");
+					if animator.is_empty() {
+						root.remove("animator");
+					}
+				}
+			} else {
+				let animator = root
+					.entry("animator".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "animator must be a table".to_string())?;
+				animator.insert("bindings".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
 		_ => Err(format!("unsupported animator setting field: {field}")),
 	}
 }
@@ -8673,6 +8817,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
 	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
+	let animator_bindings = manifest_animator_binding_settings(manifest.animator.as_ref());
 	let wardrobe_shortcuts = manifest_wardrobe_shortcut_settings(manifest.wardrobe.as_ref());
 	let wardrobe_bindings = manifest_wardrobe_binding_settings(manifest.wardrobe.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
@@ -8716,6 +8861,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		wardrobe_shortcuts,
 		wardrobe_bindings,
 		animator_actions,
+		animator_bindings,
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
 		motion_vmc_enabled: motion.motion_vmc_enabled,
@@ -14104,6 +14250,68 @@ id = "test"
 				.and_then(|table| table.get("note"))
 				.and_then(toml::Value::as_integer),
 			Some(60)
+		);
+	}
+
+	#[test]
+	fn animator_bindings_write_keyboard_and_midi_note_entries() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"animator.bindings",
+			serde_json::json!([
+				{ "action_id": "expression:angry", "kind": "keyboard", "binding": "F8" },
+				{ "action_id": "expression:joy", "kind": "midi_note", "device": "Launchkey", "channel": 1, "note": 61 },
+				{ "action_id": "broken", "kind": "midi_note", "channel": 17, "note": 60 }
+			]),
+		)
+		.unwrap();
+
+		let bindings = manifest
+			.get("animator")
+			.and_then(toml::Value::as_table)
+			.and_then(|animator| animator.get("bindings"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(bindings.len(), 2);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("action_id"))
+				.and_then(toml::Value::as_str),
+			Some("expression:angry")
+		);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("binding"))
+				.and_then(toml::Value::as_str),
+			Some("F8")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("midi_note")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("note"))
+				.and_then(toml::Value::as_integer),
+			Some(61)
 		);
 	}
 

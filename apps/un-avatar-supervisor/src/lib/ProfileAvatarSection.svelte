@@ -2,6 +2,7 @@
 	import { invoke } from "@tauri-apps/api/core";
 	import type {
 		AnimatorActionMode,
+		AnimatorBindingSetting,
 		AvatarFileSetting,
 		ProfileSettingValue,
 		UnavatarAnimatorActionCandidate,
@@ -42,7 +43,9 @@
 	const animatorLoadLimit = 2000;
 	const animatorLoadTimeoutMs = 12000;
 	let keyboardCaptureSetId: string | null = null;
+	let keyboardCaptureActionId: string | null = null;
 	let midiCaptureSetId: string | null = null;
+	let midiCaptureActionId: string | null = null;
 	let midiCaptureError = "";
 	let midiCaptureRequestId = 0;
 
@@ -180,7 +183,9 @@
 
 	function animatorSelectedDetails(id: string): string {
 		const candidate = animatorCandidateFor(id);
-		if (!candidate) return $_("profiles.editor.unanimator_selected_unresolved");
+		if (!candidate) {
+			return `${selectedModeFor(id)} / ${selectedValueFor(id).toFixed(2)}`;
+		}
 		return `${candidate.controller} / ${candidate.effect_count} effects / ${candidate.condition_count} conditions`;
 	}
 
@@ -246,6 +251,24 @@
 		);
 	}
 
+	function animatorShortcutFor(actionId: string): string {
+		return (
+			setting.animator_bindings.find((binding) => binding.action_id === actionId && binding.kind === "keyboard")?.binding ?? ""
+		);
+	}
+
+	function animatorMidiBindingFor(actionId: string): AnimatorBindingSetting {
+		return (
+			setting.animator_bindings.find((binding) => binding.action_id === actionId && binding.kind === "midi_note") ?? {
+				action_id: actionId,
+				kind: "midi_note",
+				device: "",
+				channel: 1,
+				note: null,
+			}
+		);
+	}
+
 	async function updateWardrobeDefault(setId: string): Promise<void> {
 		await onUpdateSettingValue("wardrobe_set", setId);
 	}
@@ -283,6 +306,39 @@
 		await onUpdateSettingValue("wardrobe.bindings", next);
 	}
 
+	async function updateAnimatorShortcut(actionId: string, shortcut: string): Promise<void> {
+		const normalized = shortcut.trim();
+		const next: AnimatorBindingSetting[] = setting.animator_bindings.filter(
+			(item) => !(item.action_id === actionId && item.kind === "keyboard")
+		);
+		if (normalized) {
+			next.push({ action_id: actionId, kind: "keyboard", binding: normalized });
+		}
+		await onUpdateSettingValue("animator.bindings", next);
+	}
+
+	async function updateAnimatorMidi(actionId: string, patch: Partial<AnimatorBindingSetting>): Promise<void> {
+		const current = animatorMidiBindingFor(actionId);
+		const nextBinding: AnimatorBindingSetting = {
+			...current,
+			...patch,
+			action_id: actionId,
+			kind: "midi_note",
+		};
+		const next = setting.animator_bindings.filter((item) => !(item.action_id === actionId && item.kind === "midi_note"));
+		const channel = Number(nextBinding.channel ?? 0);
+		const note = Number(nextBinding.note ?? -1);
+		if (channel >= 1 && channel <= 16 && note >= 0 && note <= 127) {
+			next.push({
+				...nextBinding,
+				device: nextBinding.device?.trim() || null,
+				channel,
+				note,
+			});
+		}
+		await onUpdateSettingValue("animator.bindings", next);
+	}
+
 	async function captureWardrobeMidi(setId: string): Promise<void> {
 		if (!hasTauriRuntime()) return;
 		const requestId = ++midiCaptureRequestId;
@@ -306,9 +362,33 @@
 		}
 	}
 
+	async function captureAnimatorMidi(actionId: string): Promise<void> {
+		if (!hasTauriRuntime()) return;
+		const requestId = ++midiCaptureRequestId;
+		midiCaptureActionId = actionId;
+		midiCaptureError = "";
+		try {
+			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000 });
+			if (requestId !== midiCaptureRequestId) return;
+			await updateAnimatorMidi(actionId, {
+				device: result.device,
+				channel: result.channel,
+				note: result.note,
+			});
+		} catch (error) {
+			if (requestId !== midiCaptureRequestId) return;
+			midiCaptureError = String(error);
+		} finally {
+			if (requestId === midiCaptureRequestId) {
+				midiCaptureActionId = null;
+			}
+		}
+	}
+
 	function cancelWardrobeMidiCapture(): void {
 		midiCaptureRequestId += 1;
 		midiCaptureSetId = null;
+		midiCaptureActionId = null;
 	}
 
 	function formatCapturedKeyboardEvent(event: KeyboardEvent): string {
@@ -330,13 +410,20 @@
 		event.stopPropagation();
 		if (event.key === "Escape") {
 			keyboardCaptureSetId = null;
+			keyboardCaptureActionId = null;
 			return;
 		}
 		const binding = formatCapturedKeyboardEvent(event);
 		if (!binding || ["Ctrl", "Alt", "Shift", "Win"].includes(binding)) return;
 		const setId = keyboardCaptureSetId;
+		const actionId = keyboardCaptureActionId;
 		keyboardCaptureSetId = null;
-		await updateWardrobeShortcut(setId, binding);
+		keyboardCaptureActionId = null;
+		if (setId !== null) {
+			await updateWardrobeShortcut(setId, binding);
+		} else if (actionId !== null) {
+			await updateAnimatorShortcut(actionId, binding);
+		}
 	}
 </script>
 
@@ -519,6 +606,58 @@
 										onchange={(event) => updateAnimatorActionValue(action.id, Number((event.currentTarget as HTMLInputElement).value))}
 									/>
 								</div>
+								<div class="animator-binding-row">
+									<div class="binding-input-row">
+										<input
+											value={animatorShortcutFor(action.id)}
+											placeholder={$_("profiles.editor.wardrobe_shortcut_placeholder")}
+											disabled={busy}
+											onchange={(event) => updateAnimatorShortcut(action.id, (event.currentTarget as HTMLInputElement).value)}
+										/>
+										<button
+											type="button"
+											class="icon-button binding-capture-button"
+											disabled={busy}
+											title={$_("profiles.editor.binding_capture")}
+											onclick={() => (keyboardCaptureActionId = action.id)}><Keyboard size={15} /></button
+										>
+									</div>
+									<div class="wardrobe-midi-binding">
+										<span>{$_("profiles.editor.wardrobe_midi_note")}</span>
+										<input
+											value={animatorMidiBindingFor(action.id).device ?? ""}
+											placeholder={$_("profiles.editor.wardrobe_midi_device")}
+											disabled={busy}
+											onchange={(event) => updateAnimatorMidi(action.id, { device: (event.currentTarget as HTMLInputElement).value })}
+										/>
+										<input
+											type="number"
+											min="1"
+											max="16"
+											value={animatorMidiBindingFor(action.id).channel ?? 1}
+											disabled={busy}
+											aria-label={$_("profiles.editor.wardrobe_midi_channel")}
+											onchange={(event) => updateAnimatorMidi(action.id, { channel: Number((event.currentTarget as HTMLInputElement).value) })}
+										/>
+										<input
+											type="number"
+											min="0"
+											max="127"
+											value={animatorMidiBindingFor(action.id).note ?? ""}
+											placeholder={$_("profiles.editor.wardrobe_midi_note_number")}
+											disabled={busy}
+											aria-label={$_("profiles.editor.wardrobe_midi_note_number")}
+											onchange={(event) => updateAnimatorMidi(action.id, { note: Number((event.currentTarget as HTMLInputElement).value) })}
+										/>
+										<button
+											type="button"
+											class="icon-button binding-capture-button"
+											disabled={busy || midiCaptureSetId !== null || midiCaptureActionId !== null}
+											title={$_("profiles.editor.midi_capture")}
+											onclick={() => captureAnimatorMidi(action.id)}><SlidersHorizontal size={15} /></button
+										>
+									</div>
+								</div>
 							</div>
 						{/each}
 					</div>
@@ -633,14 +772,19 @@
 	{/if}
 </section>
 
-{#if keyboardCaptureSetId !== null}
+{#if keyboardCaptureSetId !== null || keyboardCaptureActionId !== null}
 	<div class="binding-capture-backdrop" role="presentation">
 		<div class="binding-capture-modal" role="dialog" aria-modal="true">
 			<Keyboard size={24} />
 			<strong>{$_("profiles.editor.binding_capture_title")}</strong>
 			<span>{$_("profiles.editor.binding_capture_hint")}</span>
-			<button type="button" class="field-button" onclick={() => (keyboardCaptureSetId = null)}
-				>{$_("profiles.editor.cancel")}</button
+			<button
+				type="button"
+				class="field-button"
+				onclick={() => {
+					keyboardCaptureSetId = null;
+					keyboardCaptureActionId = null;
+				}}>{$_("profiles.editor.cancel")}</button
 			>
 		</div>
 	</div>
@@ -650,7 +794,7 @@
 	<div class="profile-inline-note profile-inline-note-warning">{midiCaptureError}</div>
 {/if}
 
-{#if midiCaptureSetId !== null}
+{#if midiCaptureSetId !== null || midiCaptureActionId !== null}
 	<div class="binding-capture-backdrop" role="presentation">
 		<div class="binding-capture-modal" role="dialog" aria-modal="true">
 			<SlidersHorizontal size={24} />

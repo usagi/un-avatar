@@ -54,6 +54,7 @@ let avatarSettings = [
 		wardrobe_shortcuts: [],
 		wardrobe_bindings: [],
 		animator_actions: [],
+		animator_bindings: [],
 		vmc_address: "0.0.0.0:39539",
 		vmc_port: 39539,
 		motion_vmc_enabled: true,
@@ -170,6 +171,7 @@ let avatarSettings = [
 		wardrobe_shortcuts: [],
 		wardrobe_bindings: [],
 		animator_actions: [],
+		animator_bindings: [],
 		vmc_address: "0.0.0.0:39540",
 		vmc_port: 39540,
 		motion_vmc_enabled: true,
@@ -460,6 +462,9 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "animator.actions") {
 					(setting as unknown as { animator_actions: unknown[] }).animator_actions = (args.value as unknown[]) ?? [];
+				}
+				if (setting && field === "animator.bindings") {
+					(setting as unknown as { animator_bindings: unknown[] }).animator_bindings = (args.value as unknown[]) ?? [];
 				}
 				if (setting && field === "environment.color.exposure") {
 					setting.color_exposure = Number(args.value ?? 0);
