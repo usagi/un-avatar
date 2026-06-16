@@ -115,6 +115,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_parameter",
 	"set_dynamics_enabled",
 	"set_animator_profile",
+	"set_input_bindings",
 	"set_expression_override",
 	"clear_expression_overrides",
 	"set_look_at",
@@ -276,6 +277,20 @@ struct AnimatorProfileBindingControl {
 	note: Option<u8>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct WardrobeProfileBindingControl {
+	set_id: String,
+	kind: String,
+	#[serde(default)]
+	binding: Option<String>,
+	#[serde(default)]
+	device: Option<String>,
+	#[serde(default)]
+	channel: Option<u8>,
+	#[serde(default)]
+	note: Option<u8>,
+}
+
 #[allow(clippy::large_enum_variant)]
 enum RendererControlEvent {
 	Shutdown,
@@ -349,6 +364,11 @@ enum RendererControlEvent {
 	SetAnimatorProfile {
 		actions: Vec<AnimatorProfileActionControl>,
 		bindings: Vec<AnimatorProfileBindingControl>,
+		result: CommandResultSlot,
+	},
+	SetInputBindings {
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
 		result: CommandResultSlot,
 	},
 	SceneState {
@@ -554,6 +574,12 @@ enum RendererControlCommand {
 		actions: Vec<AnimatorProfileActionControl>,
 		#[serde(default)]
 		bindings: Vec<AnimatorProfileBindingControl>,
+	},
+	SetInputBindings {
+		#[serde(default)]
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		#[serde(default)]
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -773,6 +799,7 @@ impl RendererControlCommand {
 			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
 			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
+			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -1024,6 +1051,97 @@ fn normalize_input_binding_kind_runtime(value: &str) -> WardrobeBindingKind {
 		"midi_note" | "midi" | "note" => WardrobeBindingKind::MidiNote,
 		_ => WardrobeBindingKind::Keyboard,
 	}
+}
+
+fn wardrobe_bindings_from_runtime_controls(bindings: Vec<WardrobeProfileBindingControl>) -> Vec<WardrobeBindingOptions> {
+	let mut out = Vec::new();
+	for binding in bindings {
+		let set_id = binding.set_id.trim().to_string();
+		let kind = normalize_input_binding_kind_runtime(&binding.kind);
+		match kind {
+			WardrobeBindingKind::Keyboard => {
+				let binding_text = binding.binding.as_deref().map(str::trim).unwrap_or("");
+				if binding_text.is_empty() {
+					continue;
+				}
+				out.push(WardrobeBindingOptions {
+					set_id,
+					kind,
+					binding: binding_text.to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				});
+			}
+			WardrobeBindingKind::MidiNote => {
+				let (Some(channel), Some(note)) = (binding.channel, binding.note) else {
+					continue;
+				};
+				if !(1..=16).contains(&channel) || note > 127 {
+					continue;
+				}
+				out.push(WardrobeBindingOptions {
+					set_id,
+					kind,
+					binding: String::new(),
+					device: binding.device.and_then(|device| {
+						let device = device.trim().to_string();
+						(!device.is_empty()).then_some(device)
+					}),
+					channel: Some(channel),
+					note: Some(note),
+				});
+			}
+		}
+	}
+	out
+}
+
+fn animator_bindings_from_runtime_controls(bindings: Vec<AnimatorProfileBindingControl>) -> Vec<AnimatorActionBindingOptions> {
+	let mut out = Vec::new();
+	for binding in bindings {
+		let action_id = binding.action_id.trim();
+		if action_id.is_empty() {
+			continue;
+		}
+		let kind = normalize_input_binding_kind_runtime(&binding.kind);
+		match kind {
+			WardrobeBindingKind::Keyboard => {
+				let binding_text = binding.binding.as_deref().map(str::trim).unwrap_or("");
+				if binding_text.is_empty() {
+					continue;
+				}
+				out.push(AnimatorActionBindingOptions {
+					action_id: action_id.to_string(),
+					kind,
+					binding: binding_text.to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				});
+			}
+			WardrobeBindingKind::MidiNote => {
+				let (Some(channel), Some(note)) = (binding.channel, binding.note) else {
+					continue;
+				};
+				if !(1..=16).contains(&channel) || note > 127 {
+					continue;
+				}
+				out.push(AnimatorActionBindingOptions {
+					action_id: action_id.to_string(),
+					kind,
+					binding: String::new(),
+					device: binding.device.and_then(|device| {
+						let device = device.trim().to_string();
+						(!device.is_empty()).then_some(device)
+					}),
+					channel: Some(channel),
+					note: Some(note),
+				});
+			}
+		}
+	}
+	out
 }
 
 fn ease_animator_transition(t: f32, curve: AnimatorTransitionCurve) -> f32 {
@@ -2225,49 +2343,7 @@ impl AvatarApp {
 			}
 		}
 
-		let mut next_bindings = Vec::new();
-		for binding in bindings {
-			let action_id = binding.action_id.trim();
-			if action_id.is_empty() {
-				continue;
-			}
-			let kind = normalize_input_binding_kind_runtime(&binding.kind);
-			match kind {
-				WardrobeBindingKind::Keyboard => {
-					let binding_text = binding.binding.as_deref().map(str::trim).unwrap_or("");
-					if binding_text.is_empty() {
-						continue;
-					}
-					next_bindings.push(AnimatorActionBindingOptions {
-						action_id: action_id.to_string(),
-						kind,
-						binding: binding_text.to_string(),
-						device: None,
-						channel: None,
-						note: None,
-					});
-				}
-				WardrobeBindingKind::MidiNote => {
-					let (Some(channel), Some(note)) = (binding.channel, binding.note) else {
-						continue;
-					};
-					if !(1..=16).contains(&channel) || note > 127 {
-						continue;
-					}
-					next_bindings.push(AnimatorActionBindingOptions {
-						action_id: action_id.to_string(),
-						kind,
-						binding: String::new(),
-						device: binding.device.and_then(|device| {
-							let device = device.trim().to_string();
-							(!device.is_empty()).then_some(device)
-						}),
-						channel: Some(channel),
-						note: Some(note),
-					});
-				}
-			}
-		}
+		let next_bindings = animator_bindings_from_runtime_controls(bindings);
 
 		let enabled: BTreeSet<_> = action_ids.iter().cloned().collect();
 		self.active_profile_animator_actions.retain(|id| enabled.contains(id));
@@ -2281,6 +2357,22 @@ impl AvatarApp {
 		}
 		self.restart_input_binding_runtimes();
 		self.update_runtime_profile_animator_actions();
+		#[cfg(windows)]
+		{
+			self.last_renderer_tray_refresh_at = None;
+			self.refresh_renderer_tray();
+		}
+		Ok(())
+	}
+
+	fn apply_input_bindings_runtime(
+		&mut self,
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
+	) -> Result<(), String> {
+		self.opts.wardrobe_bindings = wardrobe_bindings_from_runtime_controls(wardrobe_bindings);
+		self.opts.animator_bindings = animator_bindings_from_runtime_controls(animator_bindings);
+		self.restart_input_binding_runtimes();
 		#[cfg(windows)]
 		{
 			self.last_renderer_tray_refresh_at = None;
@@ -4020,6 +4112,16 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 			RendererControlEvent::SetAnimatorProfile { actions, bindings, result } => {
 				let outcome = self.apply_animator_profile_runtime(actions, bindings);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetInputBindings {
+				wardrobe_bindings,
+				animator_bindings,
+				result,
+			} => {
+				let outcome = self.apply_input_bindings_runtime(wardrobe_bindings, animator_bindings);
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome);
 				}
@@ -5977,6 +6079,10 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 		Ok(RendererControlCommand::SetAnimatorProfile { actions, bindings }) => {
 			dispatch_set_animator_profile_command(proxy, actions, bindings)
 		}
+		Ok(RendererControlCommand::SetInputBindings {
+			wardrobe_bindings,
+			animator_bindings,
+		}) => dispatch_set_input_bindings_command(proxy, wardrobe_bindings, animator_bindings),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -6034,6 +6140,23 @@ fn dispatch_set_animator_profile_command(
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_animator_profile")
+}
+
+fn dispatch_set_input_bindings_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+	animator_bindings: Vec<AnimatorProfileBindingControl>,
+) -> String {
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetInputBindings {
+		wardrobe_bindings,
+		animator_bindings,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_input_bindings")
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
@@ -8252,6 +8375,27 @@ mod tests {
 		assert_eq!(bindings[1].device.as_deref(), Some("Pad"));
 		assert_eq!(bindings[1].channel, Some(1));
 		assert_eq!(bindings[1].note, Some(36));
+	}
+
+	#[test]
+	fn parses_json_set_input_bindings_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_input_bindings","wardrobe_bindings":[{"set_id":"","kind":"keyboard","binding":"F21"},{"set_id":"field_drape","kind":"keyboard","binding":"F22"}],"animator_bindings":[{"action_id":"expression:angry","kind":"keyboard","binding":"F23"}]}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetInputBindings {
+			wardrobe_bindings,
+			animator_bindings,
+		} = command
+		else {
+			panic!("expected set_input_bindings command");
+		};
+		assert_eq!(wardrobe_bindings.len(), 2);
+		assert_eq!(wardrobe_bindings[0].set_id, "");
+		assert_eq!(wardrobe_bindings[0].binding.as_deref(), Some("F21"));
+		assert_eq!(wardrobe_bindings[1].set_id, "field_drape");
+		assert_eq!(animator_bindings.len(), 1);
+		assert_eq!(animator_bindings[0].binding.as_deref(), Some("F23"));
 	}
 
 	#[test]

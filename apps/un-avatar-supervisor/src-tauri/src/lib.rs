@@ -1254,6 +1254,10 @@ enum RendererControlCommand {
 		actions: Vec<AnimatorActionSetting>,
 		bindings: Vec<AnimatorBindingSetting>,
 	},
+	SetInputBindings {
+		wardrobe_bindings: Vec<WardrobeBindingSetting>,
+		animator_bindings: Vec<AnimatorBindingSetting>,
+	},
 	SetAvatarOutline {
 		policy: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -5519,6 +5523,11 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply UNAnimator profile to running renderers",
 			apply_animator_profile_to_matching_renderers,
 		),
+		(
+			"wardrobe.bindings",
+			"apply input bindings to running renderers",
+			apply_input_bindings_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -8533,6 +8542,17 @@ fn apply_animator_profile_to_matching_renderers(setting: &AvatarSetting, state: 
 		&RendererControlCommand::SetAnimatorProfile {
 			actions: setting.animator_actions.clone(),
 			bindings: setting.animator_bindings.clone(),
+		},
+	)
+}
+
+fn apply_input_bindings_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetInputBindings {
+			wardrobe_bindings: setting.wardrobe_bindings.clone(),
+			animator_bindings: setting.animator_bindings.clone(),
 		},
 	)
 }
