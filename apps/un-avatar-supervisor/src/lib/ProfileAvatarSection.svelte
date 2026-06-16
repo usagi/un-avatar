@@ -255,19 +255,27 @@
 			</div>
 			{#if animatorPanelOpen}
 				<div class="animator-profile-browser">
-					<div class="animator-load-row">
-						<button type="button" class="field-button" disabled={busy || animatorBusy} onclick={() => refreshAnimatorPage()}
+					<form
+						class="animator-search-row"
+						onsubmit={(event) => {
+							event.preventDefault();
+							void refreshAnimatorPage();
+						}}
+					>
+						<label class="animator-search-field"
+							><Search size={15} /><input
+								value={animatorQuery}
+								placeholder={$_("profiles.editor.unanimator_search")}
+								oninput={(event) => setAnimatorQuery((event.currentTarget as HTMLInputElement).value)}
+							/></label
+						>
+						<button type="submit" class="field-button" disabled={busy || animatorBusy}
 							><RefreshCw size={15} />{$_("profiles.editor.unanimator_load_candidates")}</button
 						>
+					</form>
+					<div class="animator-load-row">
 						<span>{$_("profiles.editor.unanimator_load_hint")}</span>
 					</div>
-					<label class="animator-search-field"
-						><Search size={15} /><input
-							value={animatorQuery}
-							placeholder={$_("profiles.editor.unanimator_search")}
-							oninput={(event) => setAnimatorQuery((event.currentTarget as HTMLInputElement).value)}
-						/></label
-					>
 					<div class="animator-search-hints">
 						<span>{$_("profiles.editor.unanimator_search_hint")}</span>
 						<button type="button" onclick={() => setAnimatorQuery("expression")}>expression</button>

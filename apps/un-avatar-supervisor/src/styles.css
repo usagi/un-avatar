@@ -3682,6 +3682,17 @@ dd {
 	font-size: 12px;
 }
 
+.animator-search-row {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+}
+
+.animator-search-row .field-button {
+	white-space: nowrap;
+}
+
 .animator-search-field {
 	display: grid;
 	grid-template-columns: auto minmax(0, 1fr);
