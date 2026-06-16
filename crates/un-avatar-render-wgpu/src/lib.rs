@@ -99,6 +99,8 @@ const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
+const WARDROBE_TRANSITION_EXIT_MS: u32 = 1100;
+const WARDROBE_TRANSITION_ENTER_MS: u32 = 1100;
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -221,6 +223,29 @@ struct ActiveAnimatorTransition {
 	started_at: Instant,
 	duration: Duration,
 	curve: AnimatorTransitionCurve,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WardrobeTransitionPhase {
+	Exit,
+	SplashPrimed,
+	Enter,
+}
+
+struct WardrobeTransitionState {
+	set_id: String,
+	result: CommandResultSlot,
+	saved_camera: gpu::CameraStateSnapshot,
+	phase: WardrobeTransitionPhase,
+	phase_started_at: Instant,
+	started_at: Instant,
+}
+
+struct WardrobeApplyFrameResult {
+	outcome: Result<(), String>,
+	active_set_id: Option<String>,
+	active_asset_groups: Vec<String>,
+	asset_upload_plan: WardrobeAssetUploadPlan,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -930,6 +955,33 @@ fn patched_camera_state(mut state: gpu::CameraStateSnapshot, patch: CameraStateP
 	state
 }
 
+fn camera_state_patch_from_snapshot(state: gpu::CameraStateSnapshot) -> CameraStatePatch {
+	CameraStatePatch {
+		target: Some(state.target),
+		longitude_deg: Some(state.longitude_deg),
+		latitude_deg: Some(state.latitude_deg),
+		radius: Some(state.radius),
+		diagonal_fov_deg: Some(state.diagonal_fov_deg),
+	}
+}
+
+fn wardrobe_exit_camera_patch(state: gpu::CameraStateSnapshot) -> CameraStatePatch {
+	let yaw = state.longitude_deg.to_radians();
+	let right = [yaw.cos(), 0.0, -yaw.sin()];
+	let shift = (state.radius * 0.95).clamp(0.45, 2.5);
+	CameraStatePatch {
+		target: Some([
+			state.target[0] + right[0] * shift,
+			state.target[1] + 0.08,
+			state.target[2] + right[2] * shift,
+		]),
+		longitude_deg: Some(state.longitude_deg + 8.0),
+		latitude_deg: Some((state.latitude_deg + 2.0).clamp(-89.0, 89.0)),
+		radius: Some((state.radius * 0.92).max(0.05)),
+		diagonal_fov_deg: Some((state.diagonal_fov_deg * 0.96).clamp(1.0, 160.0)),
+	}
+}
+
 fn ease_camera_transition(t: f32, easing: CameraTransitionEasing) -> f32 {
 	let t = t.clamp(0.0, 1.0);
 	match easing {
@@ -1332,6 +1384,7 @@ struct AvatarApp {
 	close_hotkey: Option<CloseHotkey>,
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
+	wardrobe_transition: Option<WardrobeTransitionState>,
 	#[cfg(windows)]
 	renderer_tray: Option<renderer_tray::RendererTray>,
 	#[cfg(windows)]
@@ -1648,6 +1701,7 @@ impl AvatarApp {
 			close_hotkey,
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
+			wardrobe_transition: None,
 			#[cfg(windows)]
 			renderer_tray: None,
 			#[cfg(windows)]
@@ -2012,6 +2066,110 @@ impl AvatarApp {
 		self.apply_runtime_activation_status(&outcome);
 		self.request_redraw();
 		Ok(())
+	}
+
+	fn start_wardrobe_transition(&mut self, set_id: String, result: CommandResultSlot) {
+		if self.wardrobe_transition.is_some() {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Err("wardrobe transition already running".to_string()));
+			}
+			return;
+		}
+		let Some(saved_camera) = self.gpu.as_ref().map(GpuState::camera_state_snapshot) else {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Err("renderer is not initialized".to_string()));
+			}
+			return;
+		};
+		let now = Instant::now();
+		self.wardrobe_transition = Some(WardrobeTransitionState {
+			set_id,
+			result,
+			saved_camera,
+			phase: WardrobeTransitionPhase::Exit,
+			phase_started_at: now,
+			started_at: now,
+		});
+		self.enqueue_camera_transition(
+			wardrobe_exit_camera_patch(saved_camera),
+			CameraTransitionOptions {
+				duration_ms: WARDROBE_TRANSITION_EXIT_MS,
+				easing: CameraTransitionEasing::EaseOutCubic,
+				mode: CameraTransitionMode::Replace,
+			},
+		);
+		self.request_redraw();
+	}
+
+	fn update_wardrobe_transition_before_frame(&mut self, now: Instant) {
+		let Some(transition) = self.wardrobe_transition.as_mut() else {
+			return;
+		};
+		match transition.phase {
+			WardrobeTransitionPhase::Exit
+				if now.saturating_duration_since(transition.phase_started_at)
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_EXIT_MS)) =>
+			{
+				transition.phase = WardrobeTransitionPhase::SplashPrimed;
+				transition.phase_started_at = now;
+				self.request_redraw();
+			}
+			WardrobeTransitionPhase::Enter
+				if now.saturating_duration_since(transition.phase_started_at)
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_ENTER_MS)) =>
+			{
+				self.wardrobe_transition = None;
+				self.request_redraw();
+			}
+			_ => {}
+		}
+	}
+
+	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::StartupSplashFrame> {
+		let transition = self.wardrobe_transition.as_ref()?;
+		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then_some(gpu::StartupSplashFrame {
+			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
+			progress: -1.0,
+			phase: 5.0,
+		})
+	}
+
+	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
+		let transition = self.wardrobe_transition.as_ref()?;
+		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then(|| transition.set_id.clone())
+	}
+
+	fn finish_wardrobe_apply_after_render(&mut self, result: WardrobeApplyFrameResult) {
+		let saved_camera = self.wardrobe_transition.as_ref().map(|transition| transition.saved_camera);
+		let success = result.outcome.is_ok();
+		if let Some(transition) = self.wardrobe_transition.as_ref() {
+			if let Ok(mut guard) = transition.result.lock() {
+				*guard = Some(result.outcome.clone());
+			}
+		}
+		if success {
+			self.update_runtime_wardrobe_set(result.active_set_id);
+			self.update_runtime_asset_groups(result.active_asset_groups);
+			self.update_runtime_wardrobe_asset_upload(result.asset_upload_plan);
+			self.update_runtime_resolver_cache_key_deferred();
+		}
+		if let Some(saved_camera) = saved_camera {
+			if let Some(transition) = self.wardrobe_transition.as_mut() {
+				transition.phase = WardrobeTransitionPhase::Enter;
+				transition.phase_started_at = Instant::now();
+			}
+			self.enqueue_camera_transition(
+				camera_state_patch_from_snapshot(saved_camera),
+				CameraTransitionOptions {
+					duration_ms: WARDROBE_TRANSITION_ENTER_MS,
+					easing: CameraTransitionEasing::EaseOutCubic,
+					mode: CameraTransitionMode::Replace,
+				},
+			);
+		} else {
+			self.wardrobe_transition = None;
+		}
+		self.request_redraw();
 	}
 
 	fn apply_animator_profile_runtime(
@@ -3189,10 +3347,8 @@ impl AvatarApp {
 		}
 		self.advance_camera_transition(now);
 		self.advance_animator_transitions(now);
+		self.update_wardrobe_transition_before_frame(now);
 		let preview_window_output_enabled = self.preview_window_output_enabled();
-		let Some(gpu) = self.gpu.as_mut() else {
-			return false;
-		};
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
 		let startup_splash = if let Some(progress) = self.startup_progress.as_ref() {
@@ -3207,39 +3363,64 @@ impl AvatarApp {
 				progress: -1.0,
 				phase: 9.0,
 			})
-		};
-		let Some(mut timings) = gpu.render_frame(
-			win.as_ref(),
-			self.opts.clear_color,
-			wall_clamped,
-			startup_splash,
-			preview_window_output_enabled,
-		) else {
-			win.request_redraw();
-			return false;
-		};
-		let (parameter_updates, runtime_parameter_activations) = {
-			let t_contact0 = Instant::now();
-			let parameter_updates = match gpu.apply_contact_parameter_emissions() {
-				Ok(parameter_updates) => parameter_updates,
-				Err(err) => {
-					eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
-					BTreeMap::new()
-				}
+		}
+		.or_else(|| self.wardrobe_splash_frame(now));
+		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
+		let render_work = {
+			let Some(gpu) = self.gpu.as_mut() else {
+				return false;
 			};
-			timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
-			let t_action0 = Instant::now();
-			let activations = match gpu.evaluate_runtime_parameter_actions() {
-				Ok(activations) => activations,
-				Err(err) => {
-					eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
-					Vec::new()
-				}
+			let Some(mut timings) = gpu.render_frame(
+				win.as_ref(),
+				self.opts.clear_color,
+				wall_clamped,
+				startup_splash,
+				preview_window_output_enabled,
+			) else {
+				win.request_redraw();
+				return false;
 			};
-			timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
-			(parameter_updates, activations)
+			let wardrobe_apply_result = wardrobe_apply_after_render_set_id.map(|set_id| {
+				let outcome = gpu.apply_wardrobe_set(&set_id);
+				WardrobeApplyFrameResult {
+					active_set_id: outcome.as_ref().ok().and_then(|_| gpu.active_wardrobe_set()),
+					active_asset_groups: if outcome.is_ok() { gpu.active_asset_groups() } else { Vec::new() },
+					asset_upload_plan: if outcome.is_ok() {
+						gpu.wardrobe_asset_upload_plan()
+					} else {
+						WardrobeAssetUploadPlan::default()
+					},
+					outcome,
+				}
+			});
+			let (parameter_updates, runtime_parameter_activations) = {
+				let t_contact0 = Instant::now();
+				let parameter_updates = match gpu.apply_contact_parameter_emissions() {
+					Ok(parameter_updates) => parameter_updates,
+					Err(err) => {
+						eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
+						BTreeMap::new()
+					}
+				};
+				timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
+				let t_action0 = Instant::now();
+				let activations = match gpu.evaluate_runtime_parameter_actions() {
+					Ok(activations) => activations,
+					Err(err) => {
+						eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
+						Vec::new()
+					}
+				};
+				timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
+				(parameter_updates, activations)
+			};
+			(timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_result)
 		};
+		let (mut timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_result) = render_work;
 		timings.cpu_total_ms = now.elapsed().as_secs_f32() * 1000.0;
+		if let Some(result) = wardrobe_apply_result {
+			self.finish_wardrobe_apply_after_render(result);
+		}
 		if !parameter_updates.is_empty() {
 			self.update_runtime_parameters(parameter_updates);
 		}
@@ -3720,23 +3901,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 			}
 			RendererControlEvent::SetWardrobe { set_id, result } => {
-				let outcome = match self.gpu.as_mut() {
-					Some(gpu) => gpu.apply_wardrobe_set(&set_id),
-					None => Err("renderer is not initialized".to_string()),
-				};
-				if outcome.is_ok() {
-					let active_set_id = self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set());
-					self.update_runtime_wardrobe_set(active_set_id);
-					self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
-					self.update_runtime_wardrobe_asset_upload(
-						self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default(),
-					);
-					self.update_runtime_resolver_cache_key_deferred();
-					self.request_redraw();
-				}
-				if let Ok(mut guard) = result.lock() {
-					*guard = Some(outcome);
-				}
+				self.start_wardrobe_transition(set_id, result);
 			}
 			RendererControlEvent::ActivateAction {
 				action_id,
@@ -5849,7 +6014,7 @@ fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, s
 	if proxy.send_event(event).is_err() {
 		return "err event-loop-closed".to_string();
 	}
-	wait_command_result(result, Duration::from_secs(2), "set_wardrobe")
+	wait_command_result(result, Duration::from_secs(10), "set_wardrobe")
 }
 
 fn dispatch_activate_action_command(
@@ -6796,10 +6961,11 @@ mod tests {
 	#[cfg(windows)]
 	use super::parse_windows_hotkey;
 	use super::{
-		avatar_outline_from_control, compact_window_title_status, initial_runtime_snapshot, parse_midi_note_event,
-		parse_renderer_control_command, resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server,
-		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
-		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
+		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, resolve_activate_action_from_menu_path,
+		runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch, AvatarOutlineKind, AvatarOutlinePolicy,
+		AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent,
+		WardrobeAssetUploadPlan, SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -8007,6 +8173,29 @@ mod tests {
 			panic!("expected set_wardrobe command");
 		};
 		assert_eq!(set_id, "field_drape");
+	}
+
+	#[test]
+	fn wardrobe_exit_camera_patch_moves_target_sideways_and_restore_patch_roundtrips() {
+		let state = gpu::CameraStateSnapshot {
+			target: [0.0, 1.2, 0.0],
+			longitude_deg: 0.0,
+			latitude_deg: 5.0,
+			radius: 1.5,
+			diagonal_fov_deg: 35.0,
+		};
+		let exit = wardrobe_exit_camera_patch(state);
+		assert!(exit.target.unwrap()[0] > 1.0);
+		assert!(exit.target.unwrap()[1] > state.target[1]);
+		assert!(exit.radius.unwrap() < state.radius);
+
+		let restore = camera_state_patch_from_snapshot(state);
+		let restored = patched_camera_state(state, restore);
+		assert_eq!(restored.target, state.target);
+		assert_eq!(restored.longitude_deg, state.longitude_deg);
+		assert_eq!(restored.latitude_deg, state.latitude_deg);
+		assert_eq!(restored.radius, state.radius);
+		assert_eq!(restored.diagonal_fov_deg, state.diagonal_fov_deg);
 	}
 
 	#[test]
