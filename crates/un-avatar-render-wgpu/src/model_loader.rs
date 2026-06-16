@@ -1,6 +1,8 @@
 use std::{path::Path, sync::Arc, time::Instant};
 
-use un_avatar_core::{ImportReport, ReportSeverity, UnaDocument};
+use un_avatar_core::{
+	ImportReport, ReportSeverity, UnaDocument, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
+};
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, GltfImporter, WardrobeApplyReport};
 use un_avatar_io_vrm::{
@@ -320,6 +322,7 @@ fn load_document_inner(
 			}
 			let step_started = Instant::now();
 			let mut document = res.document;
+			add_enabled_expression_runtime_actions(&mut document, enabled_animator_action_ids);
 			apply_requested_wardrobe_set(&mut document, wardrobe_set);
 			if profile {
 				log_import_profile_step(path, "apply_wardrobe_set", step_started);
@@ -335,6 +338,57 @@ fn load_document_inner(
 		}
 		Err(e) => Err(format!("model import: {e}")),
 	}
+}
+
+fn add_enabled_expression_runtime_actions(document: &mut UnaDocument, enabled_animator_action_ids: &[String]) {
+	let Some(catalog) = document.expression_catalog.as_ref() else {
+		return;
+	};
+	let enabled = enabled_animator_action_ids
+		.iter()
+		.map(|id| id.trim())
+		.filter(|id| id.starts_with("expression:"))
+		.collect::<std::collections::BTreeSet<_>>();
+	if enabled.is_empty() {
+		return;
+	}
+	let mut actions = document.runtime_actions.take().unwrap_or_default().actions;
+	for preset in &catalog.presets {
+		let id = format!("expression:{}", stable_identifier(&preset.name));
+		if !enabled.contains(id.as_str()) || actions.iter().any(|action| action.id == id) {
+			continue;
+		}
+		actions.push(UnaRuntimeAction {
+			id: id.clone(),
+			label: format!("Expression / {}", preset.name),
+			triggers: vec![
+				UnaRuntimeActionTrigger::SupervisorCommand { command: id },
+				UnaRuntimeActionTrigger::ExpressionMenu {
+					path: format!("Expressions/{}", preset.name),
+				},
+			],
+			conditions: Vec::new(),
+			effects: vec![UnaRuntimeActionEffect::ExpressionWeight {
+				name: preset.name.clone(),
+				weight: 1.0,
+			}],
+		});
+	}
+	if !actions.is_empty() {
+		document.runtime_actions = Some(UnaRuntimeActionSet { actions });
+	}
+}
+
+fn stable_identifier(value: &str) -> String {
+	let mut out = String::with_capacity(value.len());
+	for ch in value.chars() {
+		if ch.is_ascii_alphanumeric() {
+			out.push(ch.to_ascii_lowercase());
+		} else if !out.ends_with('_') {
+			out.push('_');
+		}
+	}
+	out.trim_matches('_').to_string()
 }
 
 #[cfg(test)]
@@ -362,6 +416,39 @@ mod tests {
 		let mut document = UnaDocument::default();
 		assert!(apply_requested_wardrobe_set(&mut document, None).is_none());
 		assert!(apply_requested_wardrobe_set(&mut document, Some("")).is_none());
+	}
+
+	#[test]
+	fn enabled_expression_actions_are_added_to_runtime_actions() {
+		let mut document = UnaDocument {
+			expression_catalog: Some(un_avatar_core::UnaExpressionCatalog {
+				presets: vec![
+					un_avatar_core::UnaExpressionPreset {
+						name: "Happy".to_string(),
+						binds: Vec::new(),
+					},
+					un_avatar_core::UnaExpressionPreset {
+						name: "Blink".to_string(),
+						binds: Vec::new(),
+					},
+				],
+			}),
+			..Default::default()
+		};
+
+		add_enabled_expression_runtime_actions(&mut document, &["expression:happy".to_string()]);
+
+		let actions = document.runtime_actions.as_ref().expect("runtime actions");
+		assert_eq!(actions.actions.len(), 1);
+		assert_eq!(actions.actions[0].id, "expression:happy");
+		assert_eq!(actions.actions[0].label, "Expression / Happy");
+		assert_eq!(
+			actions.actions[0].effects,
+			vec![UnaRuntimeActionEffect::ExpressionWeight {
+				name: "Happy".to_string(),
+				weight: 1.0,
+			}]
+		);
 	}
 
 	#[test]

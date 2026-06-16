@@ -3910,13 +3910,19 @@ fn read_unavatar_animator_action_page(
 		.map(|action| (action.id.as_str(), action.mode.as_str()))
 		.collect::<BTreeMap<_, _>>();
 	let selected_count = selected_modes.len();
-	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
-	let Some(animator) = root
+	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read avatar metadata: {e}"))?;
+	let candidates = if let Some(animator) = root
 		.get("extensions")
 		.and_then(|extensions| extensions.get("UN_avatar"))
 		.and_then(|unavatar| unavatar.get("source"))
 		.and_then(|source| source.get("animator"))
-	else {
+	{
+		unavatar_animator_action_candidates(animator, &selected_modes)
+	} else if let Some(vrm) = root.get("extensions").and_then(|extensions| extensions.get("VRM")) {
+		vrm0_expression_action_candidates(vrm, &selected_modes)
+	} else if let Some(vrm) = root.get("extensions").and_then(|extensions| extensions.get("VRMC_vrm")) {
+		vrm1_expression_action_candidates(vrm, &selected_modes)
+	} else {
 		return Ok(UnavatarAnimatorActionPage {
 			available: false,
 			total_count: 0,
@@ -3928,7 +3934,6 @@ fn read_unavatar_animator_action_page(
 			error: None,
 		});
 	};
-	let candidates = unavatar_animator_action_candidates(animator, &selected_modes);
 	let total_count = candidates.len();
 	let query = query.unwrap_or_default().trim().to_ascii_lowercase();
 	let mut matched = candidates
@@ -4063,6 +4068,120 @@ fn unavatar_animator_action_candidates(
 		}
 	}
 	candidates
+}
+
+fn vrm0_expression_action_candidates(
+	vrm: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(groups) = vrm
+		.get("blendShapeMaster")
+		.or_else(|| vrm.get("blend_shape_master"))
+		.and_then(|master| master.get("blendShapeGroups").or_else(|| master.get("blend_shape_groups")))
+		.and_then(serde_json::Value::as_array)
+	else {
+		return Vec::new();
+	};
+	groups
+		.iter()
+		.filter_map(|group| {
+			let name = group
+				.get("presetName")
+				.or_else(|| group.get("preset_name"))
+				.and_then(serde_json::Value::as_str)
+				.filter(|value| !value.is_empty())
+				.or_else(|| {
+					group
+						.get("name")
+						.and_then(serde_json::Value::as_str)
+						.filter(|value| !value.is_empty())
+				})?;
+			let bind_count = group.get("binds").and_then(serde_json::Value::as_array).map(Vec::len).unwrap_or(0);
+			vrm_expression_action_candidate(name, bind_count, selected_modes)
+		})
+		.collect()
+}
+
+fn vrm1_expression_action_candidates(
+	vrm: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(expressions) = vrm.get("expressions") else {
+		return Vec::new();
+	};
+	let mut candidates = Vec::new();
+	for group_key in ["preset", "custom"] {
+		let Some(group) = expressions.get(group_key).and_then(serde_json::Value::as_object) else {
+			continue;
+		};
+		for (name, expression) in group {
+			let bind_count = expression
+				.get("morphTargetBinds")
+				.or_else(|| expression.get("morph_target_binds"))
+				.and_then(serde_json::Value::as_array)
+				.map(Vec::len)
+				.unwrap_or(0);
+			if let Some(candidate) = vrm_expression_action_candidate(name, bind_count, selected_modes) {
+				candidates.push(candidate);
+			}
+		}
+	}
+	candidates
+}
+
+fn vrm_expression_action_candidate(
+	name: &str,
+	bind_count: usize,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Option<UnavatarAnimatorActionCandidate> {
+	let name = name.trim();
+	if name.is_empty() || !vrm_expression_is_user_action_candidate(name) {
+		return None;
+	}
+	let id = format!("expression:{}", stable_identifier(name));
+	Some(UnavatarAnimatorActionCandidate {
+		id: id.clone(),
+		label: format!("Expression / {name}"),
+		controller: "VRM Expression".to_string(),
+		layer: "Expression".to_string(),
+		state_path: name.to_string(),
+		effect_count: bind_count.max(1),
+		condition_count: 0,
+		selected_mode: selected_modes.get(id.as_str()).copied().unwrap_or("off").to_string(),
+	})
+}
+
+fn vrm_expression_is_user_action_candidate(name: &str) -> bool {
+	let normalized = name.trim().to_ascii_lowercase().replace('-', "_");
+	if normalized.is_empty() {
+		return false;
+	}
+	if matches!(
+		normalized.as_str(),
+		"neutral"
+			| "aa" | "ih"
+			| "ou" | "ee"
+			| "oh" | "blink"
+			| "blink_l"
+			| "blink_r"
+			| "look_up"
+			| "look_down"
+			| "look_left"
+			| "look_right"
+			| "lookup"
+			| "lookdown"
+			| "lookleft"
+			| "lookright"
+			| "jawopen"
+	) {
+		return false;
+	}
+	!normalized.starts_with("jaw_")
+		&& !normalized.starts_with("eye_")
+		&& !normalized.starts_with("mouth_")
+		&& !normalized.starts_with("tongue_")
+		&& !normalized.starts_with("cheek_")
+		&& !normalized.starts_with("brow_")
 }
 
 fn unavatar_animator_motion_effect_count(motion: Option<&serde_json::Value>) -> usize {
@@ -11147,7 +11266,7 @@ mod windows_integration {
 mod tests {
 	use base64::Engine;
 	use std::{
-		collections::BTreeSet,
+		collections::{BTreeMap, BTreeSet},
 		fs,
 		io::{BufRead, BufReader, Cursor, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
@@ -11165,8 +11284,9 @@ mod tests {
 		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
 		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, startup_open_profile_manifest_arg,
 		startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension,
-		AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
-		RendererRuntimeTelemetry, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate, AvatarSetting, AvatarSettingFieldDomain,
+		LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
+		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -13344,6 +13464,34 @@ action_ids = ["animator:old"]
 				.and_then(toml::Value::as_str),
 			Some("one_shot")
 		);
+	}
+
+	#[test]
+	fn vrm_expression_candidates_skip_tracking_driven_presets() {
+		assert!(vrm_expression_is_user_action_candidate("happy"));
+		assert!(vrm_expression_is_user_action_candidate("Angry"));
+		assert!(!vrm_expression_is_user_action_candidate("aa"));
+		assert!(!vrm_expression_is_user_action_candidate("blink"));
+		assert!(!vrm_expression_is_user_action_candidate("lookUp"));
+		assert!(!vrm_expression_is_user_action_candidate("jawOpen"));
+
+		let vrm = serde_json::json!({
+			"blendShapeMaster": {
+				"blendShapeGroups": [
+					{ "name": "Joy", "presetName": "joy", "binds": [{ "mesh": 0 }] },
+					{ "name": "Blink", "presetName": "blink", "binds": [{ "mesh": 0 }] },
+					{ "name": "Aa", "presetName": "aa", "binds": [{ "mesh": 0 }] }
+				]
+			}
+		});
+		let mut selected = BTreeMap::new();
+		selected.insert("expression:joy", "toggle");
+
+		let candidates = vrm0_expression_action_candidates(&vrm, &selected);
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].id, "expression:joy");
+		assert_eq!(candidates[0].selected_mode, "toggle");
 	}
 
 	#[test]

@@ -20,6 +20,7 @@
 	export let onActivate: () => void = () => {};
 
 	$: isUnavatar = (setting.avatar_path ?? "").trim().toLowerCase().endsWith(".unavatar");
+	$: supportsUnanimator = /\.(unavatar|vrm|glb)$/i.test((setting.avatar_path ?? "").trim());
 
 	let animatorPanelOpen = false;
 	let animatorQuery = "";
@@ -43,7 +44,7 @@
 	}
 
 	async function refreshAnimatorPage(): Promise<void> {
-		if (!isUnavatar || !setting.avatar_path || !hasTauriRuntime()) {
+		if (!supportsUnanimator || !setting.avatar_path || !hasTauriRuntime()) {
 			animatorPage = null;
 			return;
 		}
@@ -131,7 +132,7 @@
 			{$_("profiles.editor.wardrobe_unavailable")}{wardrobeOptions?.error ? `: ${wardrobeOptions.error}` : ""}
 		</div>
 	{/if}
-	{#if isUnavatar}
+	{#if supportsUnanimator}
 		<div class="animator-profile-panel">
 			<div class="animator-profile-summary">
 				<div>
