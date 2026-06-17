@@ -1,19 +1,48 @@
-# U.N. Avatar v2 Release Notes Draft
+# U.N. Avatar 2.0.0 Release Notes Draft
 
-This is the working release-note source for the v2.0 release. It records what can be said from current automated / windowless evidence and what still needs real GUI confirmation before publishing.
+U.N. Avatar 2.0.0 is the v2 release focused on bringing VRC / Unity avatar workflows into the standalone U.N. Avatar Renderer while keeping the existing VRM workflow lightweight.
 
-## Release Scope
+## Highlights
 
-- Portable Windows zip is the v2 distribution source of truth. Installer and Authenticode signing are not part of v2.
-- Supervisor Console manages profiles, launch actions, renderer controls, profile icon crop, cache warmup, diagnostics, and packaged profile workflows.
-- Renderer supports VRM / glTF / `.unavatar`, UNMF/Z and VMC/UDP motion input, GPU skinning / morph, UNPhysics / UNDynamics, UNToon material semantics, window preview, screenshots, and Spout2 output.
-- `.unavatar` v2 covers Wardrobe set import, runtime wardrobe hot switch, VRC Expression Menu derived runtime actions, Modular Avatar derived visibility / material / dynamics operations where they can be lowered to renderer actions, and scoped asset residency for heavy wardrobe models.
-- Renderer tray exposes runtime output modes plus Wardrobe and UNAnimator action surfaces from normalized renderer status. Supervisor uses the same renderer control path for matching actions.
-- Unity Exporter can be packaged as a VCC / VPM package from this repository and published beside the portable zip release asset.
+- VRM(0/1), glTF, and `.unavatar` avatars can be rendered from Supervisor-managed profiles.
+- VRC / Unity avatars can be exported from Unity as `.unavatar` packages using U.N. Avatar Exporter.
+- v2 adds lilToon, PhysBone-derived dynamics, Modular Avatar-derived Wardrobe operations, and UNAnimator runtime actions.
+- Wardrobe sets can be switched from Renderer tray or Supervisor while the Renderer is running.
+- Output modes include Window Preview, transparent / click-through windows, screenshots, and Spout2 Sender output.
 
-## Current Verification Evidence
+## How To Use
 
-These commands passed in the release-prep workspace for the recorded candidate package:
+- For VRM: start `un-avatar-supervisor.exe`, create a profile, select a `.vrm`, then launch the Renderer.
+- For VRC / Unity avatars: install U.N. Avatar Exporter in Unity, export the avatar as `.unavatar`, select that `.unavatar` in a Supervisor profile, then launch the Renderer.
+- For Wardrobe: capture `1. Base -> 2. Wardrobe Sets -> 3. Export` in the Unity Exporter, then switch Wardrobe sets from Renderer tray or Supervisor.
+- For motion input: send UNMF/Z from U.N. Motion, or use any app that can send VMC/UDP.
+
+See `README.md` and `docs/v2-getting-started.md` for the user-facing setup flow.
+
+## Known Limitations
+
+- U.N. Avatar v2 is not a complete VRChat client or full VRC SDK runtime implementation.
+- Full Animator graph style frame evaluation is not implemented.
+- Dynamic reactive mesh gating is not implemented; static resolver-compatible mesh operations are diagnostics / static import scope only.
+- PhysBone interaction suffix value emission such as `_IsGrabbed` / `_IsPosed` is not implemented.
+- Direct grabbing / posing evaluator and VRC Constraints solver integration are not implemented.
+- Some Modular Avatar and lilToon behaviors are approximated or diagnostics-only when the authored behavior depends on runtime systems outside the v2 renderer scope.
+- Contacts parameter emission is opt-in and diagnostics-driven; it is not enabled silently by default.
+- Installer, auto-update, and Authenticode signing are outside v2. The Windows portable zip is the v2 distribution source of truth.
+
+## Downloads
+
+- Portable Windows zip: `release-packages/un-avatar-2.0.0.zip`
+- zip SHA-256: `6e703cdc73f2aa807e5bd3a43f00e40cc012a7fe436e2e93f94944c8276c5a41`
+- Portable zip checksum sidecar: `release-packages/un-avatar-2.0.0.zip.sha256.txt`
+- Unity Exporter VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0.zip`
+- VCC zip SHA-256: `f6c6e7e93814c4cc947cac66a3784d7feff6d888db9e55bf39978249624c71af`
+
+Attach both the portable zip and the Unity Exporter VCC package to the same GitHub Release. Commit the generated `docs/vcc/index.json` so VCC can discover the Unity Exporter package.
+
+## Verification
+
+The following commands passed in the release-prep workspace for the recorded candidate package:
 
 ```sh
 npm run check
@@ -28,43 +57,8 @@ cargo xtask ci
 git diff --check
 ```
 
-Generated artifact evidence from the latest successful local packaging run:
+The release tooling verifies required portable zip entries, README-linked docs, Spout2 payload entries unless explicitly skipped, packaged Renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-- `release-packages/un-avatar-2.0.0.zip`
-- zip SHA-256: `6e703cdc73f2aa807e5bd3a43f00e40cc012a7fe436e2e93f94944c8276c5a41`
-- sidecar: `release-packages/un-avatar-2.0.0.zip.sha256.txt`
-- VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0.zip`
-- VCC zip SHA-256: `f6c6e7e93814c4cc947cac66a3784d7feff6d888db9e55bf39978249624c71af`
+Manual release evidence is tracked in `docs/v2-manual-release-checklist.md`. The checklist covers clean unzip smoke, Supervisor profile workflow, Renderer tray, Spout2 modes, Wardrobe hot switching, UNAnimator actions, migration, and final clean-machine checks.
 
-The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
-
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, wardrobe transition billboard frames skipping runtime contact / action evaluation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, explicit Spout2 settings save wording and Supervisor Spout2 profile-save IPC naming, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup state establishment before the first redraw, startup presentation suppression from Spout2 output, delayed Spout2 sender creation until runtime output frames, distinct startup / wardrobe frame roles for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray and Supervisor UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only HIDE labeling, extended function-key binding regression coverage, Supervisor and Renderer tray UNAnimator fixed-cap removal, profile-enabled Animator runtime action import cap expansion, UNAnimator metadata / tracking-control filtering, Supervisor Wardrobe Base active-state resolution, legacy v1 root `spring_bones` manifest input restoration with v2 `[physics.dynamics]` precedence, Renderer tray handoff attaching standalone Renderers to Supervisor runtime management, and dev-mode Supervisor IPC coverage for all literal frontend invoke commands.
-
-## Known Limitations
-
-- U.N. Avatar v2 is not a complete VRChat client or full Animator Controller emulator.
-- Full Animator graph style frame evaluation is not implemented.
-- Dynamic reactive mesh gating is not implemented; static resolver-compatible mesh operations are diagnostics / static import scope only.
-- PhysBone interaction suffix value emission such as `_IsGrabbed` / `_IsPosed` is not implemented.
-- Direct grabbing / posing evaluator and VRC Constraints solver integration are not implemented.
-- Some Modular Avatar and lilToon behaviors are approximated or diagnostics-only when the authored behavior depends on runtime systems outside the v2 renderer scope.
-- Contacts parameter emission is opt-in and diagnostics-driven; it is not enabled silently by default.
-- Installer, auto-update, and Authenticode signing are outside v2.
-
-## Manual Release Checks Still Required
-
-- Real GUI `mizuki-split` wardrobe hot switch from `noble1` and `field_drape` to Base / noble sets, including no black materials, no missing hair / clothing, and UNDynamics still moving after switching.
-- Spout2 Only (HIDE), Spout2 + Preview, Window Preview, hidden preview, preview restore order, OBS / Spout receiver behavior, and startup progress overlay not being published to Spout2 while wardrobe-changing billboard still is.
-- Renderer tray operation from the actual Windows tray UI: output modes, Wardrobe, UNAnimator action toggles, Open Supervisor, and Quit this Renderer.
-- Supervisor `.unavatar` review flow with bounded metadata and real preview imagery.
-- Supervisor profile icon / cache warmup / shortcut / launcher workflow as one user-facing profile preparation path.
-- v1 to v2 migration through actual save / duplicate / thumbnail / path updates, confirming legacy root keys normalize to v2 sections.
-- Final release package download / unzip check on a clean machine or clean Windows user profile.
-
-## Publishing Notes
-
-- Use release tags and titles without a `v` prefix, for example `2.0.0`.
-- Attach both the portable zip and the VCC package zip to the same GitHub Release.
-- Commit the generated `docs/vcc/index.json` so VCC can discover the Unity Exporter package.
-- Publish the portable zip checksum sidecar and include the SHA-256 values in the release text.
-- State the unsupported v2 areas explicitly instead of implying silent VRChat parity.
+State the unsupported v2 areas explicitly in the published release text instead of implying silent VRChat parity.
