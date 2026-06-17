@@ -14571,6 +14571,25 @@ display_name = "Mizuki"
 	}
 
 	#[test]
+	fn static_unity_exporter_gui_uses_contiguous_workflow_numbers() {
+		let exporter_root = repo_root().join("unity").join("un-avatar-unity-exporter").join("Editor");
+		let main_window =
+			fs::read_to_string(exporter_root.join("UNAvatarExporterWindow.cs")).expect("UNAvatarExporterWindow.cs should be readable");
+		let wardrobe_window = fs::read_to_string(exporter_root.join("UNAvatarExporterWindow.Wardrobe.cs"))
+			.expect("UNAvatarExporterWindow.Wardrobe.cs should be readable");
+		assert!(
+			wardrobe_window.contains(r#"EditorGUILayout.LabelField("1. Base", EditorStyles.boldLabel);"#)
+				&& wardrobe_window.contains(r#"EditorGUILayout.LabelField("2. Wardrobe Sets", EditorStyles.boldLabel);"#)
+				&& main_window.contains(r#"EditorGUILayout.LabelField("3. Export", EditorStyles.boldLabel);"#),
+			"Unity Exporter GUI workflow should be numbered 1. Base -> 2. Wardrobe Sets -> 3. Export"
+		);
+		assert!(
+			!main_window.contains(r#"EditorGUILayout.LabelField("4. Export", EditorStyles.boldLabel);"#),
+			"Unity Exporter GUI should not keep the removed third workflow step gap"
+		);
+	}
+
+	#[test]
 	fn static_profile_camera_and_window_sections_keep_runtime_capture_actions() {
 		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src").join("lib");
 		let camera =

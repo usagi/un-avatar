@@ -109,7 +109,7 @@ namespace UNAvatar.UnityExporter
             DrawWardrobeCaptureGui();
 
             EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("4. Export", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("3. Export", EditorStyles.boldLabel);
             using (new EditorGUILayout.HorizontalScope())
             {
                 if (developerMode && GUILayout.Button("Validate", GUILayout.Height(28)))
