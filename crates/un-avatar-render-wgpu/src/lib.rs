@@ -5632,6 +5632,8 @@ fn format_runtime_warning_samples(samples: &[String]) -> String {
 #[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
+	#[serde(default)]
+	pid: u32,
 	protocol: String,
 	control_capabilities: Vec<String>,
 	#[serde(default)]
@@ -5892,6 +5894,7 @@ struct RendererRuntimeSnapshot {
 fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapshot {
 	RendererRuntimeSnapshot {
 		connected: true,
+		pid: std::process::id(),
 		protocol: "local-tcp-json-v2".to_string(),
 		control_capabilities: RENDERER_CONTROL_CAPABILITIES
 			.iter()
@@ -7109,6 +7112,21 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 	}
 }
 
+fn standalone_runtime_bus_key_for_manifest(path: &Path) -> String {
+	format!("un-avatar/runtime/standalone/{:016x}", stable_manifest_path_hash(path))
+}
+
+fn stable_manifest_path_hash(path: &Path) -> u64 {
+	let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let key = canonical.display().to_string().replace('\\', "/").to_ascii_lowercase();
+	let mut hash = 0xcbf2_9ce4_8422_2325u64;
+	for byte in key.as_bytes() {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x1000_0000_01b3);
+	}
+	hash
+}
+
 fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err("skin tone matching dump: --gltf or manifest avatar_path is required".to_string());
@@ -7229,6 +7247,11 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.runtime_bus_key.is_some() {
 		opts.runtime_bus_key = cli.runtime_bus_key;
+	}
+	if opts.runtime_bus_key.is_none() {
+		if let Some(manifest_path) = opts.manifest_path.as_deref() {
+			opts.runtime_bus_key = Some(standalone_runtime_bus_key_for_manifest(manifest_path));
+		}
 	}
 	if cli.audio_link != default.audio_link {
 		opts.audio_link = cli.audio_link;
@@ -7362,6 +7385,7 @@ mod tests {
 	use std::{
 		io::{BufRead, BufReader, Read, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+		path::Path,
 		thread,
 		time::{Duration, Instant},
 	};
@@ -7373,10 +7397,11 @@ mod tests {
 	use super::{
 		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
 		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, renderer_startup_frame_role,
-		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch,
-		wardrobe_set_request_matches_active, wardrobe_transition_frame_role, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions,
-		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan,
-		WardrobeBindingKind, WardrobeBindingOptions, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
+		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, standalone_runtime_bus_key_for_manifest,
+		start_runtime_status_server, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active, wardrobe_transition_frame_role,
+		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
+		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
+		SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -8634,6 +8659,15 @@ mod tests {
 			.get("control_capabilities")
 			.and_then(|value| value.as_array())
 			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_animator_profile"))));
+	}
+
+	#[test]
+	fn standalone_runtime_bus_key_is_stable_for_manifest_path() {
+		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\Mizuki.toml"));
+		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/mizuki.toml"));
+
+		assert!(first.starts_with("un-avatar/runtime/standalone/"));
+		assert_eq!(first, second);
 	}
 
 	#[test]

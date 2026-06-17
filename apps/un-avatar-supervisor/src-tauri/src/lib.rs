@@ -154,7 +154,7 @@ enum QuitBehavior {
 
 struct ManagedRenderer {
 	info: RendererInstance,
-	child: Child,
+	child: Option<Child>,
 	started_at: Instant,
 	runtime_bus_key: String,
 	runtime_status_cache: Arc<Mutex<RendererRuntimeTelemetryCache>>,
@@ -621,6 +621,8 @@ struct TextureRuntimeSummary {
 #[derive(Clone, Deserialize)]
 struct RendererRuntimeTelemetry {
 	connected: bool,
+	#[serde(default)]
+	pid: Option<u32>,
 	#[serde(default)]
 	protocol: Option<String>,
 	#[serde(default)]
@@ -2462,11 +2464,12 @@ pub fn run() {
 	if let Err(error) = update_taskbar_launcher_profile_tasks(&initial_settings) {
 		eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
 	}
-	if let Some(manifest_path) = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
+	let startup_open_profile_manifest = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
 		None
-	}) {
-		if let Ok(setting) = read_avatar_setting(&manifest_path, ProfileStorage::User) {
+	});
+	if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
+		if let Ok(setting) = read_avatar_setting(manifest_path, ProfileStorage::User) {
 			initial_settings.last_selected_setting_id = Some(setting.id);
 		}
 	}
@@ -2510,6 +2513,11 @@ pub fn run() {
 			prewarm_runtime_control_session();
 			if initial_settings.system_tray_enabled {
 				setup_tray(app.handle())?;
+			}
+			if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
+				if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
+					let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
+				}
 			}
 			let window = setup_main_window(app)?;
 			if initial_settings.system_tray_enabled && initial_settings.start_minimized_to_tray {
@@ -3539,7 +3547,11 @@ fn activate_renderer_window(id: u32, state: State<'_, Mutex<SupervisorState>>) -
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	refresh_renderer_states(&mut state, false, None);
 	let renderer = state.renderers.get(&id).ok_or_else(|| format!("renderer not found: {id}"))?;
-	let pid = renderer.info.pid.ok_or_else(|| format!("renderer {id} is not running"))?;
+	let pid = renderer
+		.info
+		.pid
+		.or_else(|| cached_runtime_telemetry(renderer).0.and_then(|telemetry| telemetry.pid))
+		.ok_or_else(|| format!("renderer {id} is not running"))?;
 	// renderer プロセス自身に winit::Window::focus_window() を呼ばせる。
 	// renderer は Supervisor の子プロセスなので Windows のフォアグラウンドポリシー(2) を通常満たし、
 	// PowerShell 経由で別プロセスから SetForegroundWindow するより確実。失敗時のみ PowerShell へフォールバック。
@@ -6603,12 +6615,77 @@ fn launch_renderer_in_state(
 		id,
 		ManagedRenderer {
 			info,
-			child,
+			child: Some(child),
 			started_at: Instant::now(),
 			runtime_bus_key: runtime_bus_key.clone(),
 			runtime_status_cache,
 			runtime_status_stream_stop,
 			stderr_tail,
+			crash_notified: false,
+		},
+	);
+	prewarm_runtime_control_session();
+	Ok(info_for_return)
+}
+
+fn attach_standalone_renderer_manifest_in_state(manifest_path: &Path, state: &Mutex<SupervisorState>) -> Result<RendererInstance, String> {
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let manifest_path_text = manifest_path.display().to_string();
+	{
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+			return Ok(info);
+		}
+	}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+		return Ok(info);
+	}
+	state.next_id = state.next_id.saturating_add(1);
+	let id = state.next_id;
+	let runtime_bus_key = standalone_renderer_runtime_bus_key(&manifest_path);
+	let (runtime_status_cache, runtime_status_stream_stop) =
+		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
+	let info = RendererInstance {
+		id,
+		name: setting.name,
+		state: RendererState::Running,
+		pid: None,
+		uptime_secs: 0,
+		avatar_path: setting.avatar_path,
+		manifest_path: Some(manifest_path_text),
+		vmc_address: setting.vmc_address,
+		vmc_port: setting.vmc_port,
+		motion_vmc_enabled: setting.motion_vmc_enabled,
+		motion_unmotion_enabled: setting.motion_unmotion_enabled,
+		unmotion_zenoh_key: setting.unmotion_zenoh_key,
+		primary_motion_source: setting.primary_motion_source,
+		spout_enabled: setting.spout_enabled,
+		spout_name: setting.spout_name,
+		spout_width: setting.spout_width,
+		spout_height: setting.spout_height,
+		transparent: setting.transparent,
+		input_passthrough: setting.input_passthrough,
+		decorations: setting.decorations,
+		always_on_top: setting.always_on_top,
+		window_width: setting.window_width,
+		window_height: setting.window_height,
+		last_stderr: None,
+		stderr_tail: Vec::new(),
+		exit_code: None,
+	};
+	let info_for_return = info.clone();
+	state.renderers.insert(
+		id,
+		ManagedRenderer {
+			info,
+			child: None,
+			started_at: Instant::now(),
+			runtime_bus_key,
+			runtime_status_cache,
+			runtime_status_stream_stop,
+			stderr_tail: Arc::new(Mutex::new(Vec::new())),
 			crash_notified: false,
 		},
 	);
@@ -7894,13 +7971,19 @@ fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration)
 			continue;
 		};
 		let exited = if graceful_requested {
-			wait_renderer_exit_until(&mut renderer.child, deadline).unwrap_or(false)
+			renderer
+				.child
+				.as_mut()
+				.map(|child| wait_renderer_exit_until(child, deadline).unwrap_or(false))
+				.unwrap_or(true)
 		} else {
 			false
 		};
 		if !exited {
-			let _ = renderer.child.kill();
-			let _ = renderer.child.wait();
+			if let Some(child) = renderer.child.as_mut() {
+				let _ = child.kill();
+				let _ = child.wait();
+			}
 		}
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
@@ -7913,14 +7996,21 @@ fn stop_managed_renderer(id: u32, renderer: &mut ManagedRenderer) -> Result<(), 
 	renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 	let graceful_requested = send_managed_renderer_shutdown(renderer).is_ok();
 	drop_renderer_control_session(renderer);
-	if graceful_requested && wait_renderer_exit(&mut renderer.child, RENDERER_STOP_GRACE_NORMAL)? {
+	if renderer.child.is_none() {
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
 		refresh_renderer_stderr(renderer);
 		return Ok(());
 	}
-	renderer.child.kill().map_err(|e| format!("stop renderer {id}: {e}"))?;
-	let _ = renderer.child.wait();
+	let child = renderer.child.as_mut().expect("checked child above");
+	if graceful_requested && wait_renderer_exit(child, RENDERER_STOP_GRACE_NORMAL)? {
+		renderer.info.state = RendererState::Exited;
+		renderer.info.pid = None;
+		refresh_renderer_stderr(renderer);
+		return Ok(());
+	}
+	child.kill().map_err(|e| format!("stop renderer {id}: {e}"))?;
+	let _ = child.wait();
 	renderer.info.state = RendererState::Exited;
 	renderer.info.pid = None;
 	refresh_renderer_stderr(renderer);
@@ -7977,7 +8067,7 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 	RendererRuntimeStatus {
 		id: info.id,
 		state: info.state.clone(),
-		pid: info.pid,
+		pid: info.pid.or_else(|| telemetry.as_ref().and_then(|telemetry| telemetry.pid)),
 		connected: telemetry.as_ref().is_some_and(|telemetry| telemetry.connected),
 		protocol: telemetry.as_ref().and_then(|telemetry| telemetry.protocol.clone()),
 		control_capabilities: telemetry
@@ -8332,6 +8422,21 @@ fn runtime_session_id() -> &'static str {
 
 fn renderer_runtime_bus_key(renderer_id: u32) -> String {
 	format!("un-avatar/runtime/{}/renderer/{renderer_id}", runtime_session_id())
+}
+
+fn standalone_renderer_runtime_bus_key(manifest_path: &Path) -> String {
+	format!("un-avatar/runtime/standalone/{:016x}", stable_manifest_path_hash(manifest_path))
+}
+
+fn stable_manifest_path_hash(path: &Path) -> u64 {
+	let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let key = canonical.display().to_string().replace('\\', "/").to_ascii_lowercase();
+	let mut hash = 0xcbf2_9ce4_8422_2325u64;
+	for byte in key.as_bytes() {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x1000_0000_01b3);
+	}
+	hash
 }
 
 #[cfg(test)]
@@ -8875,7 +8980,11 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 		if matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed) {
 			continue;
 		}
-		match renderer.child.try_wait() {
+		let Some(child) = renderer.child.as_mut() else {
+			renderer.info.state = RendererState::Running;
+			continue;
+		};
+		match child.try_wait() {
 			Ok(Some(status)) => {
 				renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 				renderer.info.exit_code = status.code();
@@ -9329,6 +9438,9 @@ fn request_open_profile_manifest_in_existing_app(app: &tauri::AppHandle, manifes
 	if let Some(state) = app.try_state::<Mutex<AppRuntimeSettings>>() {
 		let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
 		state.last_selected_setting_id = Some(setting.id.clone());
+	}
+	if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
+		let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
 	}
 	app.emit("profile-open-requested", setting.id)
 		.map_err(|error| format!("emit profile-open-requested: {error}"))
@@ -11998,22 +12110,24 @@ mod tests {
 	};
 
 	use super::{
-		apply_avatar_setting_value, avatar_model_picker_parent, avatar_setting_field_domain, build_launcher_task_specs,
-		data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs, encode_profile_icon_crop_webp,
-		encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, midi_note_on_event, migrate_avatar_manifest_to_v2,
-		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
-		read_unavatar_wardrobe_options, read_vrm_metadata, repo_root, resolve_renderer_window_icon_path, resolve_screenshot_path,
-		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
-		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
-		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
-		vrm_expression_is_user_action_candidate, write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting,
-		AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
-		RendererRuntimeTelemetry, RendererSpoutProfileState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		apply_avatar_setting_value, attach_standalone_renderer_manifest_in_state, avatar_model_picker_parent, avatar_setting_field_domain,
+		build_launcher_task_specs, data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs,
+		encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, midi_note_on_event,
+		migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count,
+		read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
+		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
+		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, standalone_renderer_runtime_bus_key,
+		startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
+		unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate,
+		write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
+		ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, RendererSpoutProfileState,
+		SupervisorState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
 		RendererRuntimeTelemetry {
 			connected: true,
+			pid: Some(std::process::id()),
 			protocol: Some("local-tcp-json-v2".to_string()),
 			control_capabilities: Vec::new(),
 			scene_state: "avatar_scene".to_string(),
@@ -12408,6 +12522,39 @@ mod tests {
 		let manifest = startup_open_profile_manifest_arg(args).unwrap().unwrap();
 
 		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\mizuki-split.toml"));
+	}
+
+	#[test]
+	fn open_profile_manifest_registers_standalone_renderer_without_child_process() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-attach-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let manifest = dir.join("mizuki.toml");
+		std::fs::write(
+			&manifest,
+			r#"
+title = "Mizuki"
+avatar_path = "mizuki.unavatar"
+
+[profile]
+id = "mizuki"
+display_name = "Mizuki"
+"#,
+		)
+		.unwrap();
+		let state = Mutex::new(SupervisorState::default());
+
+		let info = attach_standalone_renderer_manifest_in_state(&manifest, &state).unwrap();
+
+		assert_eq!(info.name, "Mizuki");
+		assert_eq!(info.pid, None);
+		let mut state = state.lock().unwrap();
+		assert_eq!(state.renderers.len(), 1);
+		let renderer = state.renderers.values_mut().next().unwrap();
+		assert!(renderer.child.is_none());
+		assert_eq!(renderer.runtime_bus_key, standalone_renderer_runtime_bus_key(&manifest));
+		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[test]
