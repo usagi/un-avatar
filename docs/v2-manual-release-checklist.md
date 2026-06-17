@@ -5,7 +5,7 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 ## Candidate Build
 
 - Date / operator: 2026-06-17 / Codex local release-prep
-- Git commit: `e17563afa7df`
+- Git commit: `4ff9e72f70bc`
 - Version: `2.0.0-beta-2`
 - Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`
 - Portable zip SHA-256: `01c97cb8814e7af221e4ebff5816cba1baa01cd8744b7f64269219a8881bccba`
