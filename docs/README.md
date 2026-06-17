@@ -18,8 +18,6 @@ v1 公開時点で残す文書の索引。
 | 文書 | 内容 |
 | --- | --- |
 | [`development-guidelines.md`](development-guidelines.md) | ローカル検証、xtask、リリース前確認の基本 |
-| [`v2-release-notes-draft.md`](v2-release-notes-draft.md) | v2.0 release notes の草稿、検証済み範囲、既知制限、手動確認項目 |
-| [`v2-manual-release-checklist.md`](v2-manual-release-checklist.md) | v2.0 実機確認の証跡テンプレート、GUI / tray / Spout2 / migration checklist |
 | [`render-quality-plan.md`](render-quality-plan.md) | AA、texture cache / compression、renderer 品質方針 |
 | [`v2-near-term-plan.md`](v2-near-term-plan.md) | AudioLink 初期対応後の短期作業順、リファクタリング、Wardrobe hot switch 方針 |
 | [`v2-ui-gui-operation-plan.md`](v2-ui-gui-operation-plan.md) | v2 Supervisor / Renderer tray / launcher の UI・GUI 運用設計 |

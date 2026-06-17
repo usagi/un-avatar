@@ -3495,15 +3495,16 @@ fn run_release_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 		eprintln!("release-audit: sha256 failed: {}", zip_path.display());
 		return false;
 	};
-	if !verify_release_notes_hashes(&repo.join("docs").join("v2-release-notes-draft.md"), &portable_hash, &vcc_hash) {
+	let release_work = repo.join("local").join("release-work");
+	if !verify_release_notes_hashes(&release_work.join("v2-release-notes-draft.md"), &portable_hash, &vcc_hash) {
 		return false;
 	}
-	if !verify_release_notes_required_text(&repo.join("docs").join("v2-release-notes-draft.md")) {
+	if !verify_release_notes_required_text(&release_work.join("v2-release-notes-draft.md")) {
 		return false;
 	}
 	if let (Some(portable_doc_path), Some(vcc_doc_path)) = (release_doc_path(repo, &zip_path), release_doc_path(repo, &vcc_zip)) {
 		if !verify_manual_release_checklist_candidate(
-			&repo.join("docs").join("v2-manual-release-checklist.md"),
+			&release_work.join("v2-manual-release-checklist.md"),
 			&version,
 			&portable_doc_path,
 			&portable_hash,
@@ -3581,7 +3582,7 @@ fn print_release_audit_usage() {
 	eprintln!(
 		"cargo xtask release-audit [--version <version>] [--output-dir <path>] [--vcc-dir <path>] [--repo-index <path>] [--skip-spout2]\n\
 	\n\
-	既存の portable zip / .sha256.txt / VCC package zip / docs/vcc/index.json / docs/v2-release-notes-draft.md / docs/v2-manual-release-checklist.md を再ビルドせず検査する。\n\
+	既存の portable zip / .sha256.txt / VCC package zip / docs/vcc/index.json / local/release-work の任意 release notes / manual checklist を再ビルドせず検査する。\n\
 	portable zip 内の README / LICENSE / third-party notices が現行 source と一致し、VCC zip の必須 entry が target/unity/vcc-staging の生成元と一致することも確認する。"
 	);
 }
@@ -4637,7 +4638,7 @@ commands:\n\
   unity-exporter-vcc Unity Exporter の VCC Package Manager 用zip/repo listingを作る\n\
   package      Releaseビルドし、target/package/un-avatar に最小配布レイアウトを作る\n\
 	release-package target/package/un-avatar を release-packages/un-avatar-<version>.zip に固める\n\
-	release-audit   既存 release zip / sidecar / VCC zip / repo listing / release notes / manual checklist の整合を検査\n\
+	release-audit   既存 release zip / sidecar / VCC zip / repo listing と任意 local release-work 証跡の整合を検査\n\
   ci           supervisor frontend check → fmt --check → check --workspace → test --workspace → smoke → render-smoke\n"
 	);
 }
