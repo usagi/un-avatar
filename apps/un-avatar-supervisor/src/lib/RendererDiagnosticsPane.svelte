@@ -317,7 +317,7 @@
 				<dd class="stderr-block">{sampledLines(runtimeStatus.runtime_actions, runtimeActionLabel)}</dd>
 			{/if}
 			{#if runtimeStatus.menu_action_candidates.length}
-				<dt>{$_("renderers.details.diag_vrc_menu_actions")}</dt>
+				<dt>{$_("renderers.details.diag_unanimator_menu_candidates")}</dt>
 				<dd class="stderr-block">
 					{sampledLines(runtimeStatus.menu_action_candidates, menuActionCandidateLabel)}
 				</dd>

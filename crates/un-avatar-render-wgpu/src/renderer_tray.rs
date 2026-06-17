@@ -47,7 +47,7 @@ restore_camera_profile = "プロファイルから復元"
 save_wardrobe_profile = "現在の衣装をプロファイルへ保存"
 wardrobe = "ワードローブ"
 base_wardrobe = "Base"
-vrc_menu = "UNAnimator"
+unanimator = "UNAnimator"
 unphysics = "UNPhysics"
 unphysics_summary = "有効グループ %{enabled} / %{total}"
 dynamics_enabled = "有効"
@@ -83,7 +83,7 @@ restore_camera_profile = "Restore from Profile"
 save_wardrobe_profile = "Save Current Outfit to Profile"
 wardrobe = "Wardrobe"
 base_wardrobe = "Base"
-vrc_menu = "UNAnimator"
+unanimator = "UNAnimator"
 unphysics = "UNPhysics"
 unphysics_summary = "%{enabled} / %{total} effective groups"
 dynamics_enabled = "Enabled"
@@ -360,7 +360,7 @@ impl TrayText {
 	}
 
 	fn unanimator(&self) -> Cow<'static, str> {
-		self.msg("vrc_menu")
+		self.msg("unanimator")
 	}
 
 	fn unphysics(&self) -> Cow<'static, str> {
