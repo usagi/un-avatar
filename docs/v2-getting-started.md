@@ -1,9 +1,29 @@
 # U.N. Avatar v2 Getting Started
 
 この文書は、U.N. Avatar v2 を初めて使う人向けの手順です。
-README は概要、ここでは実際の操作を少し詳しく説明します。
+概要は `README.md`、ここでは実際の操作を説明します。
 
-## VRM を使う場合
+## まず知っておくこと
+
+U.N. Avatar は、アバターを単体 Renderer で表示し、Window Preview や Spout2 で配信ソフトへ出力します。
+
+- VRM は、そのまま Supervisor のプロファイルへ登録して使います。
+- VRC / Unity アバターは、Unity Editor の U.N. Avatar Exporter で `.unavatar` にしてから使います。
+- `.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。
+- Wardrobe は、衣装・小物・見た目プリセットを `.unavatar` に保存し、Renderer 起動後に切り替える機能です。
+
+```text
+VRC / Unity avatar in Unity
+  -> U.N. Avatar Exporter
+  -> .unavatar
+  -> U.N. Avatar Supervisor / Renderer
+  -> Window / Spout2
+  -> OBS or streaming software
+```
+
+U.N. Avatar Renderer は、実行時に Unity Editor や VRChat client を必要としません。
+
+## VRM を使う
 
 1. `un-avatar-supervisor.exe` を起動します。
 2. 左側メニューから `プロファイル` を開きます。
@@ -13,22 +33,11 @@ README は概要、ここでは実際の操作を少し詳しく説明します�
 6. `起動` ボタンで Renderer を起動します。
 7. U.N. Motion や VMC 対応アプリから UNMF/Z または VMC/UDP でモーションを送ります。
 
-## VRC / Unity アバターを使う場合
+## VRC / Unity アバターを使う
 
-VRC 向け Unity アバターは、そのまま Renderer に読み込ませるのではなく、Unity Editor 上の U.N. Avatar Exporter で `.unavatar` にエクスポートして使います。以降、この文書では VRC 向け Unity アバターを `VRC / Unity アバター` と呼びます。
+VRC / Unity アバターは、先に Unity Editor で `.unavatar` を作ります。
 
-```text
-Unity project with VRC / Unity avatar
-  -> U.N. Avatar Exporter
-  -> .unavatar
-  -> U.N. Avatar Supervisor / Renderer
-  -> Window / Spout2
-  -> OBS or streaming software
-```
-
-U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。
-
-## U.N. Avatar Exporter の導入
+### 1. Exporter を導入する
 
 推奨手順:
 
@@ -39,25 +48,31 @@ U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要と
 - Unity Editor の `Window > Package Manager` で `Add package from git URL` を選び、`https://github.com/usagi/un-avatar.git?path=/unity/un-avatar-unity-exporter` を入力してインストールします。
 - Unity Editor の `Window > Package Manager` で `Add package from disk` を選び、U.N. Avatar 配布パッケージの `unity/un-avatar-unity-exporter/package.json` を指定してインストールします。
 
-## `.unavatar` を出力する
-
-`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。
+### 2. `.unavatar` を出力する
 
 1. Unity Editor で `Tools > U.N. Avatar > Exporter .unavatar` を開きます。
 2. `Avatar Root` に Hierarchy からアバターのルート GameObject を指定します。
 3. `Output` に `.unavatar` を出力するパスを設定します。
-4. 操作パネルの `1. Base -> 2. Wardrobe Sets -> 3. Export` の順に操作して `.unavatar` を出力します。
+4. 操作パネルの `1. Base -> 2. Wardrobe Sets -> 3. Export` の順に操作します。
 
-Wardrobe を使わない場合は、Export Mode を `Current to Base Only` にして `3. Export` へ進めます。
+Wardrobe を使わない場合は、Export Mode を `Current to Base Only` にして `3. Export` へ進みます。
+
 Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` と `2. Wardrobe Sets` で衣装や小物などの状態を保存してから `3. Export` で出力します。
 
-## Wardrobe の考え方
+### 3. Supervisor で起動する
 
-Wardrobe は、衣装・小物・見た目プリセットの状態を `.unavatar` に保存し、Renderer 起動後に切り替えるための機能です。
+1. `un-avatar-supervisor.exe` を起動します。
+2. 左側メニューから `プロファイル` を開きます。
+3. `+` ボタンで新しいプロファイルを作ります。
+4. アバターファイルとして出力した `.unavatar` を選びます。
+5. 必要に応じて出力モード、カメラ、モーション入力を設定します。
+6. `起動` ボタンで Renderer を起動します。
 
-`Base` / `Sets` は、Unity の Hierarchy で GameObject の active state や blendshape などを調整した状態を保存します。Renderer では保存された状態を衣装セットとして切り替えられます。
+## Wardrobe を使う
 
-### Base
+Wardrobe を使うと、Renderer を起動したまま衣装や小物の状態を切り替えられます。
+
+### Base を保存する
 
 `Base` は、お着替え元にする基本状態です。
 
@@ -67,7 +82,7 @@ Wardrobe は、衣装・小物・見た目プリセットの状態を `.unavatar
 
 変更したくなったら、同じボタンで再度保存できます。
 
-### Sets
+### Wardrobe Sets を保存する
 
 `Sets` は、お着替えバリエーションです。
 
@@ -79,7 +94,7 @@ Wardrobe は、衣装・小物・見た目プリセットの状態を `.unavatar
 
 Base / Sets の名称ボタン部分をクリックすると、Unity scene のアバター状態を保存済み状態へ切り替えられます。
 
-## Modular Avatar 対応衣装の例
+### Modular Avatar 対応衣装の例
 
 素体に Modular Avatar 対応衣装をぶら下げた Hierarchy では、次のような流れで設定できます。
 
@@ -91,6 +106,19 @@ Base / Sets の名称ボタン部分をクリックすると、Unity scene の�
 6. 別の衣装や小物の状態を作り、さらに Set として保存します。
 
 Modular Avatar 非対応の衣装でも、GameObject active state を使って同じように Wardrobe set として扱えます。
+
+## モーション入力
+
+Renderer 起動後、U.N. Motion から UNMF/Z を送ると表情、姿勢、手足などを動かせます。
+
+U.N. Motion なしでも、VMC/UDP を送信できる既存アプリを使えます。用途に合わせて Supervisor のプロファイルで入力方式を設定してください。
+
+## 困ったとき
+
+- Renderer が起動しない場合は、Supervisor のプロファイルでアバターファイルと出力設定を確認します。
+- VRC / Unity アバターが読み込めない場合は、Unity Editor で `.unavatar` を出力し直します。
+- Wardrobe が期待通りに切り替わらない場合は、Unity Editor で `Base` と `Wardrobe Sets` を保存し直してから再度エクスポートします。
+- Spout2 が見えない場合は、Renderer の出力モードが `Spout2 + Preview` または `Spout2 Only (HIDE)` になっているか確認します。
 
 ## `.unavatar` の扱い
 
