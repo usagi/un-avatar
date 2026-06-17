@@ -7010,7 +7010,7 @@ fn save_renderer_output_to_profile(
 		}
 		let (telemetry, _telemetry_err) = cached_runtime_telemetry(renderer);
 		let telemetry = telemetry.ok_or_else(|| format!("renderer {id} has not reported output state yet"))?;
-		let output = RendererOutputProfileState {
+		let output = RendererSpoutProfileState {
 			spout_enabled: telemetry.spout_enabled,
 			spout_name: telemetry.spout_name.or_else(|| renderer.info.spout_name.clone()),
 			spout_width: telemetry.spout_width.or(telemetry.spout_sender_width).or(renderer.info.spout_width),
@@ -7018,7 +7018,6 @@ fn save_renderer_output_to_profile(
 				.spout_height
 				.or(telemetry.spout_sender_height)
 				.or(renderer.info.spout_height),
-			minimized: telemetry.minimized,
 		};
 		let manifest_path = renderer.info.manifest_path.clone();
 		(output, manifest_path)
@@ -7094,6 +7093,14 @@ struct RendererOutputProfileState {
 	minimized: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererSpoutProfileState {
+	spout_enabled: bool,
+	spout_name: Option<String>,
+	spout_width: Option<u32>,
+	spout_height: Option<u32>,
+}
+
 fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) -> Result<RendererOutputProfileState, String> {
 	let root = manifest
 		.as_table()
@@ -7128,7 +7135,7 @@ fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) 
 	})
 }
 
-fn write_output_state_to_manifest(manifest_path: &Path, output: &RendererOutputProfileState) -> Result<(), String> {
+fn write_output_state_to_manifest(manifest_path: &Path, output: &RendererSpoutProfileState) -> Result<(), String> {
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let output_table = table
@@ -7151,12 +7158,6 @@ fn write_output_state_to_manifest(manifest_path: &Path, output: &RendererOutputP
 	if let Some(height) = output.spout_height {
 		spout2_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
 	}
-	let window_table = table
-		.entry("window".to_string())
-		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
-		.as_table_mut()
-		.ok_or_else(|| "manifest [window] must be a table".to_string())?;
-	window_table.insert("minimized".to_string(), toml::Value::Boolean(output.minimized));
 	write_manifest_value(manifest_path, &manifest)
 }
 
@@ -12005,9 +12006,9 @@ mod tests {
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
 		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
 		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
-		vrm_expression_is_user_action_candidate, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
-		ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, TextureRuntimeSummary,
-		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		vrm_expression_is_user_action_candidate, write_output_state_to_manifest, AvatarManifestSummary, AvatarSetting,
+		AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
+		RendererRuntimeTelemetry, RendererSpoutProfileState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
@@ -14896,6 +14897,54 @@ stiffness = 0.35
 			.and_then(toml::Value::as_table)
 			.and_then(|overrides| overrides.get("Hair"))
 			.is_some());
+	}
+
+	#[test]
+	fn save_renderer_output_profile_writes_only_spout_settings() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-supervisor-output-profile-{}-{}.toml",
+			std::process::id(),
+			line!()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+
+[window]
+minimized = false
+width = 640
+height = 360
+"#,
+		)
+		.unwrap();
+
+		write_output_state_to_manifest(
+			&path,
+			&RendererSpoutProfileState {
+				spout_enabled: true,
+				spout_name: Some("Live".to_string()),
+				spout_width: Some(1920),
+				spout_height: Some(1080),
+			},
+		)
+		.unwrap();
+
+		let saved = fs::read_to_string(&path).unwrap();
+		let manifest: toml::Value = toml::from_str(&saved).unwrap();
+		let spout2 = manifest
+			.get("output")
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout2.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout2.get("name").and_then(toml::Value::as_str), Some("Live"));
+		assert_eq!(spout2.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout2.get("height").and_then(toml::Value::as_integer), Some(1080));
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
+		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
+		let _ = fs::remove_file(path);
 	}
 
 	#[test]

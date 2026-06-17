@@ -1217,7 +1217,6 @@ pub(crate) struct TrayOutputProfileState {
 	pub(crate) spout_name: Option<String>,
 	pub(crate) spout_width: Option<u32>,
 	pub(crate) spout_height: Option<u32>,
-	pub(crate) minimized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1240,7 +1239,6 @@ pub(crate) fn output_profile_state_from_snapshot(snapshot: &RendererRuntimeSnaps
 		spout_name: snapshot.spout_name.clone(),
 		spout_width: snapshot.spout_width.or(snapshot.spout_sender_width),
 		spout_height: snapshot.spout_height.or(snapshot.spout_sender_height),
-		minimized: snapshot.minimized,
 	}
 }
 
@@ -1278,12 +1276,6 @@ pub(crate) fn save_output_state_to_profile(manifest_path: &Path, state: &TrayOut
 		if let Some(height) = state.spout_height {
 			spout2_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
 		}
-		let window_table = table
-			.entry("window".to_string())
-			.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
-			.as_table_mut()
-			.ok_or_else(|| "manifest [window] must be a table".to_string())?;
-		window_table.insert("minimized".to_string(), toml::Value::Boolean(state.minimized));
 	}
 	write_profile_manifest(manifest_path, &manifest)
 }
@@ -1691,6 +1683,53 @@ mod tests {
 
 	fn test_menu_key(snapshot: &RendererRuntimeSnapshot) -> String {
 		menu_key(&AvatarWindowOptions::default(), snapshot)
+	}
+
+	#[test]
+	fn save_output_profile_writes_only_spout_settings() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-renderer-tray-output-profile-{}-{}.toml",
+			std::process::id(),
+			line!()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+
+[window]
+minimized = true
+width = 640
+height = 360
+"#,
+		)
+		.unwrap();
+
+		let result = save_output_state_to_profile(
+			&path,
+			&TrayOutputProfileState {
+				spout_enabled: true,
+				spout_name: Some("Live".to_string()),
+				spout_width: Some(1920),
+				spout_height: Some(1080),
+			},
+		);
+		assert!(result.is_ok(), "{result:?}");
+		let saved = fs::read_to_string(&path).unwrap();
+		let manifest: toml::Value = toml::from_str(&saved).unwrap();
+		let spout2 = manifest
+			.get("output")
+			.and_then(|value| value.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout2.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout2.get("name").and_then(toml::Value::as_str), Some("Live"));
+		assert_eq!(spout2.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout2.get("height").and_then(toml::Value::as_integer), Some(1080));
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
+		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
+		let _ = fs::remove_file(path);
 	}
 
 	#[test]
