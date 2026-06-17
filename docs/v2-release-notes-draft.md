@@ -26,6 +26,7 @@ cargo test -p un-avatar-render-wgpu startup_progress_and_wardrobe_transition_are
 cargo test -p un-avatar-render-wgpu startup_progress_overlay_does_not_embed_wardrobe_transition_art
 cargo test -p un-avatar-supervisor dev_ipc_mock_covers_literal_frontend_invokes
 cargo test -p un-avatar-supervisor static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries
+cargo test -p un-avatar-supervisor static_renderer_wardrobe_menu_resolves_base_active_state
 cargo xtask unity-exporter-vcc --version 2.0.0-beta-2
 cargo xtask release-package --version 2.0.0-beta-2
 cargo xtask release-audit --version 2.0.0-beta-2

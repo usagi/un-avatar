@@ -28,6 +28,13 @@
 	function activate(candidate: RendererRuntimeMenuWardrobeCandidateStatus): void {
 		void onActivateWardrobeMenuCandidate(renderer.id, candidate.action_id, candidate.wardrobe_set_id);
 	}
+
+	function wardrobeSetActive(candidate: RendererRuntimeMenuWardrobeCandidateStatus): boolean {
+		const activeSet = runtimeStatus?.active_wardrobe_set?.trim() ?? "";
+		const baseSet = runtimeStatus?.base_wardrobe_set?.trim() ?? "";
+		const setId = candidate.wardrobe_set_id.trim();
+		return setId === activeSet || (setId === "" && baseSet !== "" && activeSet === baseSet);
+	}
 </script>
 
 {#if candidates.length}
@@ -40,7 +47,7 @@
 			{#each candidates as candidate}
 				<button
 					type="button"
-					class:active={runtimeStatus?.active_wardrobe_set === candidate.wardrobe_set_id}
+					class:active={wardrobeSetActive(candidate)}
 					disabled={busy || !rendererRunning}
 					title={candidateTitle(candidate)}
 					onclick={() => activate(candidate)}

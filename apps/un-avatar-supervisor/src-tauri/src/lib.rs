@@ -14031,6 +14031,31 @@ mod tests {
 	}
 
 	#[test]
+	fn static_renderer_wardrobe_menu_resolves_base_active_state() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererWardrobeMenuControls.svelte"),
+		)
+		.expect("RendererWardrobeMenuControls.svelte should be readable");
+		assert!(
+			source.contains("function wardrobeSetActive") && source.contains("runtimeStatus?.base_wardrobe_set?.trim()"),
+			"Supervisor wardrobe menu should resolve the explicit base set id when deciding the active Base candidate"
+		);
+		assert!(
+			source.contains(r#"setId === "" && baseSet !== "" && activeSet === baseSet"#),
+			"Supervisor wardrobe menu Base candidate should be active when runtime active set resolves to the base set id"
+		);
+		assert!(
+			source.contains("class:active={wardrobeSetActive(candidate)}"),
+			"Supervisor wardrobe menu buttons should use the base-aware active-state helper"
+		);
+	}
+
+	#[test]
 	fn static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries() {
 		let filter_source = fs::read_to_string(
 			repo_root()

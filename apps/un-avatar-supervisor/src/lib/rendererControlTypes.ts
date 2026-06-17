@@ -24,6 +24,7 @@ export type RendererControlsStatus = RuntimeOutputStatusData &
 		| "menu_action_candidates"
 		| "menu_wardrobe_candidates"
 		| "active_wardrobe_set"
+		| "base_wardrobe_set"
 	>;
 
 export type RendererOutputData = OutputLabelData & {
