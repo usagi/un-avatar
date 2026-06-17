@@ -12204,6 +12204,63 @@ mod tests {
 		}
 	}
 
+	fn collect_literal_frontend_invokes_from_source_dir(dir: &Path, out: &mut BTreeSet<String>) {
+		let Ok(entries) = fs::read_dir(dir) else { return };
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.is_dir() {
+				collect_literal_frontend_invokes_from_source_dir(&path, out);
+				continue;
+			}
+			let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+				continue;
+			};
+			if !matches!(ext, "svelte" | "ts") {
+				continue;
+			}
+			let Ok(text) = fs::read_to_string(&path) else {
+				continue;
+			};
+			collect_literal_frontend_invokes_from_text(&text, out);
+		}
+	}
+
+	fn collect_literal_frontend_invokes_from_text(text: &str, out: &mut BTreeSet<String>) {
+		for marker in ["invoke(\"", "invoke('"] {
+			let quote = marker.as_bytes()[marker.len() - 1] as char;
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let command_start = pos + marker.len();
+				let after = &rest[command_start..];
+				let Some(command_end) = after.find(quote) else { break };
+				let command = &after[..command_end];
+				if !command.is_empty() && !command.contains("${") {
+					out.insert(command.to_string());
+				}
+				rest = &after[command_end + quote.len_utf8()..];
+			}
+		}
+	}
+
+	fn collect_dev_ipc_mock_cases_from_text(text: &str) -> BTreeSet<String> {
+		let mut cases = BTreeSet::new();
+		for marker in ["case \"", "case '"] {
+			let quote = marker.as_bytes()[marker.len() - 1] as char;
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let command_start = pos + marker.len();
+				let after = &rest[command_start..];
+				let Some(command_end) = after.find(quote) else { break };
+				let command = &after[..command_end];
+				if !command.is_empty() {
+					cases.insert(command.to_string());
+				}
+				rest = &after[command_end + quote.len_utf8()..];
+			}
+		}
+		cases
+	}
+
 	#[test]
 	fn screenshot_profile_filename_stem_removes_separators() {
 		assert_eq!(screenshot_profile_filename_stem(" model:1 / capture?. "), "model-1-capture");
@@ -13905,6 +13962,26 @@ mod tests {
 		assert!(
 			missing.is_empty(),
 			"supervisor-invoke permission must allow every registered invoke command: {missing:?}"
+		);
+	}
+
+	#[test]
+	fn dev_ipc_mock_covers_literal_frontend_invokes() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src");
+		let mut literal_invokes = BTreeSet::new();
+		collect_literal_frontend_invokes_from_source_dir(&supervisor_src, &mut literal_invokes);
+		assert!(!literal_invokes.is_empty(), "expected literal frontend invoke commands");
+
+		let dev_ipc_mock = fs::read_to_string(supervisor_src.join("dev-ipc-mock.ts")).expect("dev-ipc-mock.ts should be readable");
+		assert!(
+			dev_ipc_mock.contains("unsupported command"),
+			"dev IPC mock should keep an explicit unsupported-command failure path"
+		);
+		let mock_cases = collect_dev_ipc_mock_cases_from_text(&dev_ipc_mock);
+		let missing = literal_invokes.difference(&mock_cases).cloned().collect::<Vec<_>>();
+		assert!(
+			missing.is_empty(),
+			"dev IPC mock must cover every literal frontend invoke command: {missing:?}"
 		);
 	}
 
