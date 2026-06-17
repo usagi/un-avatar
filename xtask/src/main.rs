@@ -2143,6 +2143,13 @@ const RELEASE_PACKAGE_DOCS: &[&str] = &[
 	"docs/v2-ui-gui-operation-plan.md",
 	"docs/development-guidelines.md",
 	"docs/third-party-licenses.md",
+	"docs/assets/v2-getting-started/exporter-workflow.png",
+	"docs/assets/v2-getting-started/exporter-wardrobe-sets.png",
+	"docs/assets/v2-getting-started/supervisor-unavatar-confirm.png",
+	"docs/assets/v2-getting-started/tray-wardrobe-menu.png",
+	"docs/assets/v2-getting-started/obs-spout2-capture.png",
+	"docs/assets/v2-getting-started/wardrobe-switch-demo.webm",
+	"docs/assets/v2-getting-started/wardrobe-switch-demo.mp4",
 ];
 
 fn stage_package_docs(repo: &Path) -> bool {

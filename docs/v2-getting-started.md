@@ -55,6 +55,8 @@ VRC / Unity アバターは、先に Unity Editor で `.unavatar` を作りま�
 3. `Output` に `.unavatar` を出力するパスを設定します。
 4. 操作パネルの `1. Base -> 2. Wardrobe Sets -> 3. Export` の順に操作します。
 
+![Unity Editor の U.N. Avatar Exporter 画面。1 は Tools メニュー、2 は Avatar Root と Output、3 は Base / Wardrobe Sets / Export の操作パネル。](assets/v2-getting-started/exporter-workflow.png)
+
 Wardrobe を使わない場合は、Export Mode を `Current to Base Only` にして `3. Export` へ進みます。
 
 Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` と `2. Wardrobe Sets` で衣装や小物などの状態を保存してから `3. Export` で出力します。
@@ -67,6 +69,8 @@ Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` �
 4. アバターファイルとして出力した `.unavatar` を選びます。
 5. 必要に応じて出力モード、カメラ、モーション入力を設定します。
 6. `起動` ボタンで Renderer を起動します。
+
+![Supervisor の .unavatar 確認画面。1 はプロファイルアイコンに使う切り抜き範囲、2 はズームと位置調整、3 は Wardrobe set 選択、4 は確認して読み込むボタン。](assets/v2-getting-started/supervisor-unavatar-confirm.png)
 
 ## Wardrobe を使う
 
@@ -90,6 +94,8 @@ Wardrobe を使うと、Renderer を起動したまま衣装や小物の状態�
 2. 必要に応じて素体側の衣装や blendshape を調整します。
 3. `Capture Current As Set` で状態を保存します。
 
+![Exporter の Wardrobe 操作。1 は Base 保存、2 は Wardrobe Sets の保存と管理、3 は .unavatar export。](assets/v2-getting-started/exporter-wardrobe-sets.png)
+
 保存済み set は、必要に応じて `Update`、`Duplicate`、`Remove` できます。Set は複数作れます。
 
 Base / Sets の名称ボタン部分をクリックすると、Unity scene のアバター状態を保存済み状態へ切り替えられます。
@@ -107,11 +113,25 @@ Base / Sets の名称ボタン部分をクリックすると、Unity scene の�
 
 Modular Avatar 非対応の衣装でも、GameObject active state を使って同じように Wardrobe set として扱えます。
 
+Renderer 起動後は、Windows tray の Renderer メニューから Wardrobe を切り替えられます。`現在の衣装をプロファイルへ保存` を使うと、次回起動時の既定 Wardrobe set として保存できます。
+
+![Renderer tray の Wardrobe メニュー。1 は Wardrobe メニュー、2 は切り替え候補、3 は現在の衣装をプロファイルへ保存。](assets/v2-getting-started/tray-wardrobe-menu.png)
+
 ## モーション入力
 
 Renderer 起動後、U.N. Motion から UNMF/Z を送ると表情、姿勢、手足などを動かせます。
 
 U.N. Motion なしでも、VMC/UDP を送信できる既存アプリを使えます。用途に合わせて Supervisor のプロファイルで入力方式を設定してください。
+
+## OBS / Spout2 出力
+
+Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` または `Spout2 Only (HIDE)` にします。OBS 側では Spout2 Capture source を追加して、U.N. Avatar の Spout2 sender を選びます。
+
+![OBS の Spout2 Capture 例。1 は配信画面へ入った U.N. Avatar 出力、2 は Spout2 Capture source、3 は source 一覧。](assets/v2-getting-started/obs-spout2-capture.png)
+
+<video src="assets/v2-getting-started/wardrobe-switch-demo.webm" controls muted playsinline width="960"></video>
+
+動画が表示されない場合は、[wardrobe-switch-demo.webm](assets/v2-getting-started/wardrobe-switch-demo.webm) または [wardrobe-switch-demo.mp4](assets/v2-getting-started/wardrobe-switch-demo.mp4) を直接開いてください。
 
 ## 困ったとき
 
