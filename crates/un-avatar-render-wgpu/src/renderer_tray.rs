@@ -899,7 +899,7 @@ fn menu_candidate_preferred(
 	}
 	let current_polarity = animator_toggle_polarity(&menu_candidate_last_label(current));
 	let next_polarity = animator_toggle_polarity(&menu_candidate_last_label(next));
-	next_polarity == Some(AnimatorTogglePolarity::On) && current_polarity != Some(AnimatorTogglePolarity::On)
+	next_polarity == Some(AnimatorTogglePolarity::Off) && current_polarity != Some(AnimatorTogglePolarity::Off)
 }
 
 fn fallback_action_preferred(current: &gpu::RuntimeActionStatus, next: &gpu::RuntimeActionStatus) -> bool {
@@ -910,7 +910,7 @@ fn fallback_action_preferred(current: &gpu::RuntimeActionStatus, next: &gpu::Run
 	}
 	let current_polarity = animator_toggle_polarity(&fallback_action_last_label(current));
 	let next_polarity = animator_toggle_polarity(&fallback_action_last_label(next));
-	next_polarity == Some(AnimatorTogglePolarity::On) && current_polarity != Some(AnimatorTogglePolarity::On)
+	next_polarity == Some(AnimatorTogglePolarity::Off) && current_polarity != Some(AnimatorTogglePolarity::Off)
 }
 
 fn runtime_action_active(snapshot: &RendererRuntimeSnapshot, action_id: &str) -> bool {
@@ -2217,7 +2217,7 @@ mod tests {
 
 		assert!(matches!(
 			actions.get("renderer:unanimator:0"),
-			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && (*value - 1.0).abs() < f32::EPSILON
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && value.abs() < f32::EPSILON
 		));
 		assert!(!actions.contains_key("renderer:unanimator:1"));
 		assert_eq!(menu_action_label(&status.menu_action_candidates[1]), "Object / Hat");
