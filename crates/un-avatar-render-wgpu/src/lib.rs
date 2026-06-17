@@ -3636,10 +3636,14 @@ impl AvatarApp {
 		self.advance_animator_transitions(now);
 		self.update_wardrobe_transition_before_frame(now);
 		let preview_window_output_enabled = self.preview_window_output_enabled();
-		let startup_presentation_active = self.startup_progress.is_some() || self.startup_pending_document || self.startup_failed.is_some();
+		let presentation_policy = if self.startup_progress.is_some() || self.startup_pending_document || self.startup_failed.is_some() {
+			gpu::FramePresentationPolicy::RendererLocalStartup
+		} else {
+			gpu::FramePresentationPolicy::RuntimeOutput
+		};
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
-		let startup_progress_overlay = if let Some(progress) = self.startup_progress.as_ref() {
+		let renderer_local_startup = if let Some(progress) = self.startup_progress.as_ref() {
 			Some(gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
@@ -3666,8 +3670,8 @@ impl AvatarApp {
 				win.as_ref(),
 				self.opts.clear_color,
 				wall_clamped,
-				startup_progress_overlay,
-				startup_presentation_active,
+				renderer_local_startup,
+				presentation_policy,
 				wardrobe_changing_billboard,
 				preview_window_output_enabled,
 			) else {
