@@ -182,23 +182,26 @@ fn default_camera_transition_duration_ms() -> u32 {
 	320
 }
 
-fn rendered_frame_role_for_state(
+fn renderer_startup_frame_role(
 	renderer_startup_overlay: Option<gpu::StartupProgressOverlayFrame>,
 	startup_pending_document: bool,
 	startup_failed: bool,
-	wardrobe_billboard: Option<gpu::WardrobeChangingBillboardFrame>,
-) -> gpu::RenderedFrameRole {
+) -> Option<gpu::RenderedFrameRole> {
 	if renderer_startup_overlay.is_some() || startup_pending_document || startup_failed {
-		gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
+		Some(gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
 			progress_overlay: renderer_startup_overlay,
-		})
-	} else if let Some(billboard) = wardrobe_billboard {
+		}))
+	} else {
+		None
+	}
+}
+
+fn wardrobe_transition_frame_role(wardrobe_billboard: Option<gpu::WardrobeChangingBillboardFrame>) -> Option<gpu::RenderedFrameRole> {
+	wardrobe_billboard.map(|billboard| {
 		gpu::RenderedFrameRole::WardrobeTransition(gpu::WardrobeTransitionPresentation {
 			changing_billboard: billboard,
 		})
-	} else {
-		gpu::RenderedFrameRole::RuntimeAvatar
-	}
+	})
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3674,12 +3677,13 @@ impl AvatarApp {
 				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		};
-		let frame_role = rendered_frame_role_for_state(
+		let frame_role = renderer_startup_frame_role(
 			renderer_startup_overlay,
 			self.startup_pending_document,
 			self.startup_failed.is_some(),
-			self.wardrobe_changing_billboard_frame(now),
-		);
+		)
+		.or_else(|| wardrobe_transition_frame_role(self.wardrobe_changing_billboard_frame(now)))
+		.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -7359,11 +7363,11 @@ mod tests {
 	use super::parse_windows_hotkey;
 	use super::{
 		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
-		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, rendered_frame_role_for_state,
+		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, renderer_startup_frame_role,
 		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch,
-		wardrobe_set_request_matches_active, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing,
-		CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind,
-		WardrobeBindingOptions, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
+		wardrobe_set_request_matches_active, wardrobe_transition_frame_role, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions,
+		CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan,
+		WardrobeBindingKind, WardrobeBindingOptions, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -7407,7 +7411,9 @@ mod tests {
 
 	#[test]
 	fn rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive() {
-		let pending = rendered_frame_role_for_state(None, true, false, Some(test_wardrobe_billboard()));
+		let pending = renderer_startup_frame_role(None, true, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(
 			matches!(
 				pending,
@@ -7416,7 +7422,9 @@ mod tests {
 			"startup-pending frames must remain renderer-local even if a wardrobe billboard is queued"
 		);
 
-		let loading = rendered_frame_role_for_state(Some(test_startup_overlay()), false, false, Some(test_wardrobe_billboard()));
+		let loading = renderer_startup_frame_role(Some(test_startup_overlay()), false, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(
 			matches!(
 				loading,
@@ -7425,7 +7433,9 @@ mod tests {
 			"startup overlay must not be co-rendered with wardrobe billboard output"
 		);
 
-		let failed = rendered_frame_role_for_state(None, false, true, Some(test_wardrobe_billboard()));
+		let failed = renderer_startup_frame_role(None, false, true)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(
 			matches!(
 				failed,
@@ -7434,10 +7444,14 @@ mod tests {
 			"startup failure presentation is renderer-local and must not fall through to wardrobe output"
 		);
 
-		let wardrobe = rendered_frame_role_for_state(None, false, false, Some(test_wardrobe_billboard()));
+		let wardrobe = renderer_startup_frame_role(None, false, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(matches!(wardrobe, gpu::RenderedFrameRole::WardrobeTransition(_)));
 
-		let runtime = rendered_frame_role_for_state(None, false, false, None);
+		let runtime = renderer_startup_frame_role(None, false, false)
+			.or_else(|| wardrobe_transition_frame_role(None))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(matches!(runtime, gpu::RenderedFrameRole::RuntimeAvatar));
 	}
 

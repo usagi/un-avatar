@@ -601,6 +601,28 @@ export function installDevIpcMock(): void {
 			}
 			case "get_native_notification_status":
 				return { permission_state: "unsupported" };
+			case "delete_avatar_setting": {
+				const id = String(args.settingId ?? "");
+				avatarSettings = avatarSettings.filter((setting) => setting.id !== id);
+				return null;
+			}
+			case "clear_app_notifications":
+			case "send_test_native_notification":
+			case "log_frontend_error":
+			case "open_external_url":
+			case "reveal_path":
+			case "reveal_supervisor_logs_dir":
+			case "activate_renderer_window":
+			case "stop_renderer":
+			case "reset_renderer_camera":
+			case "set_renderer_expression_override":
+			case "clear_renderer_expression_overrides":
+			case "activate_renderer_runtime_action":
+			case "set_renderer_runtime_parameter":
+			case "set_renderer_clear_color":
+			case "set_renderer_camera_lock":
+			case "set_renderer_camera_state":
+				return null;
 			case "set_last_selected_setting_id":
 			case "save_renderer_camera_to_profile":
 			case "restore_renderer_camera_from_profile":
