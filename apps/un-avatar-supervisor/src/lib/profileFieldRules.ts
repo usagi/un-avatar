@@ -31,6 +31,7 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field.startsWith("wardrobe.transition.") ||
 		field === "wardrobe.bindings" ||
 		field.startsWith("animator.") ||
+		field.startsWith("output.spout2.") ||
 		field.startsWith("motion.") ||
 		field === DYNAMICS_ENABLED_FIELD ||
 		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||

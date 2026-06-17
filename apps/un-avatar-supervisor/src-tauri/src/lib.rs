@@ -5569,6 +5569,11 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply wardrobe transition settings to running renderers",
 			apply_wardrobe_transition_to_matching_renderers,
 		),
+		(
+			"output.spout2.",
+			"apply Spout2 output settings to running renderers",
+			apply_spout_output_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -8641,6 +8646,19 @@ fn apply_wardrobe_transition_to_matching_renderers(setting: &AvatarSetting, stat
 		&RendererControlCommand::SetWardrobeTransition {
 			billboard_anchor: setting.wardrobe_billboard_anchor.clone(),
 			billboard_y_offset_mm: setting.wardrobe_billboard_y_offset_mm,
+		},
+	)
+}
+
+fn apply_spout_output_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetSpoutOutput {
+			enabled: setting.spout_enabled,
+			name: setting.spout_name.clone(),
+			width: setting.spout_width,
+			height: setting.spout_height,
 		},
 	)
 }
@@ -13994,8 +14012,9 @@ mod tests {
 			field_rules.contains(r#"field.startsWith("wardrobe.transition.")"#)
 				&& field_rules.contains(r#"field === "wardrobe.bindings""#)
 				&& field_rules.contains(r#"field.startsWith("animator.")"#)
+				&& field_rules.contains(r#"field.startsWith("output.spout2.")"#)
 				&& field_rules.contains("canApplyWithoutRestart"),
-			"wardrobe transition, wardrobe bindings, and UNAnimator fields should be classified as live-applicable profile settings"
+			"wardrobe transition, wardrobe bindings, UNAnimator, and Spout2 output fields should be classified as live-applicable profile settings"
 		);
 		assert!(
 			app_svelte.contains("applyRuntimeProfileUpdates"),
@@ -14008,6 +14027,8 @@ mod tests {
 				&& backend.contains("apply_input_bindings_to_matching_renderers")
 				&& backend.contains(r#""animator.""#)
 				&& backend.contains("apply_animator_profile_to_matching_renderers")
+				&& backend.contains(r#""output.spout2.""#)
+				&& backend.contains("apply_spout_output_to_matching_renderers")
 				&& backend.contains("SetWardrobeTransition"),
 			"saved live profile edits must be sent to matching running renderers instead of requiring restart"
 		);
